@@ -51,6 +51,24 @@ class _Target:
     state_key: str
 
 
+@dataclass
+class FileChatRoutesState:
+    active_chats: Dict[str, asyncio.Event]
+    chat_lock: asyncio.Lock
+    turn_lock: asyncio.Lock
+    current_by_target: Dict[str, Dict[str, Any]]
+    current_by_client: Dict[str, Dict[str, Any]]
+    last_by_client: Dict[str, Dict[str, Any]]
+
+    def __init__(self) -> None:
+        self.active_chats = {}
+        self.chat_lock = asyncio.Lock()
+        self.turn_lock = asyncio.Lock()
+        self.current_by_target = {}
+        self.current_by_client = {}
+        self.last_by_client = {}
+
+
 def _state_path(repo_root: Path) -> Path:
     return draft_utils.state_path(repo_root)
 
@@ -205,25 +223,32 @@ def _build_patch(rel_path: str, before: str, after: str) -> str:
 
 def build_file_chat_routes() -> APIRouter:
     router = APIRouter(prefix="/api", tags=["file-chat"])
-    _active_chats: Dict[str, asyncio.Event] = {}
-    _chat_lock = asyncio.Lock()
-    _turn_lock = asyncio.Lock()
-    _current_by_target: Dict[str, Dict[str, Any]] = {}
-    _current_by_client: Dict[str, Dict[str, Any]] = {}
-    _last_by_client: Dict[str, Dict[str, Any]] = {}
+    state = FileChatRoutesState()
 
-    async def _get_or_create_interrupt_event(key: str) -> asyncio.Event:
-        async with _chat_lock:
-            if key not in _active_chats:
-                _active_chats[key] = asyncio.Event()
-            return _active_chats[key]
+    def _get_state(request: Request) -> FileChatRoutesState:
+        if not hasattr(request.app.state, "file_chat_routes_state"):
+            request.app.state.file_chat_routes_state = state
+        return request.app.state.file_chat_routes_state
 
-    async def _clear_interrupt_event(key: str) -> None:
-        async with _chat_lock:
-            _active_chats.pop(key, None)
+    async def _get_or_create_interrupt_event(
+        request: Request, key: str
+    ) -> asyncio.Event:
+        s = _get_state(request)
+        async with s.chat_lock:
+            if key not in s.active_chats:
+                s.active_chats[key] = asyncio.Event()
+            return s.active_chats[key]
 
-    async def _begin_turn_state(target: _Target, client_turn_id: Optional[str]) -> None:
-        async with _turn_lock:
+    async def _clear_interrupt_event(request: Request, key: str) -> None:
+        s = _get_state(request)
+        async with s.chat_lock:
+            s.active_chats.pop(key, None)
+
+    async def _begin_turn_state(
+        request: Request, target: _Target, client_turn_id: Optional[str]
+    ) -> None:
+        s = _get_state(request)
+        async with s.turn_lock:
             state: Dict[str, Any] = {
                 "client_turn_id": client_turn_id or "",
                 "target": target.target,
@@ -232,13 +257,16 @@ def build_file_chat_routes() -> APIRouter:
                 "thread_id": None,
                 "turn_id": None,
             }
-            _current_by_target[target.state_key] = state
+            s.current_by_target[target.state_key] = state
             if client_turn_id:
-                _current_by_client[client_turn_id] = state
+                s.current_by_client[client_turn_id] = state
 
-    async def _update_turn_state(target: _Target, **updates: Any) -> None:
-        async with _turn_lock:
-            state = _current_by_target.get(target.state_key)
+    async def _update_turn_state(
+        request: Request, target: _Target, **updates: Any
+    ) -> None:
+        s = _get_state(request)
+        async with s.turn_lock:
+            state = s.current_by_target.get(target.state_key)
             if not state:
                 return
             for key, value in updates.items():
@@ -247,34 +275,45 @@ def build_file_chat_routes() -> APIRouter:
                 state[key] = value
             cid = state.get("client_turn_id") or ""
             if cid:
-                _current_by_client[cid] = state
+                s.current_by_client[cid] = state
 
-    async def _finalize_turn_state(target: _Target, result: Dict[str, Any]) -> None:
-        async with _turn_lock:
-            state = _current_by_target.pop(target.state_key, None)
+    async def _finalize_turn_state(
+        request: Request, target: _Target, result: Dict[str, Any]
+    ) -> None:
+        s = _get_state(request)
+        async with s.turn_lock:
+            state = s.current_by_target.pop(target.state_key, None)
             cid = ""
             if state:
                 cid = state.get("client_turn_id", "") or ""
             if cid:
-                _current_by_client.pop(cid, None)
-                _last_by_client[cid] = dict(result or {})
+                s.current_by_client.pop(cid, None)
+                s.last_by_client[cid] = dict(result or {})
 
-    async def _active_for_client(client_turn_id: Optional[str]) -> Dict[str, Any]:
+    async def _active_for_client(
+        request: Request, client_turn_id: Optional[str]
+    ) -> Dict[str, Any]:
         if not client_turn_id:
             return {}
-        async with _turn_lock:
-            return dict(_current_by_client.get(client_turn_id, {}))
+        s = _get_state(request)
+        async with s.turn_lock:
+            return dict(s.current_by_client.get(client_turn_id, {}))
 
-    async def _last_for_client(client_turn_id: Optional[str]) -> Dict[str, Any]:
+    async def _last_for_client(
+        request: Request, client_turn_id: Optional[str]
+    ) -> Dict[str, Any]:
         if not client_turn_id:
             return {}
-        async with _turn_lock:
-            return dict(_last_by_client.get(client_turn_id, {}))
+        s = _get_state(request)
+        async with s.turn_lock:
+            return dict(s.last_by_client.get(client_turn_id, {}))
 
     @router.get("/file-chat/active")
-    async def file_chat_active(client_turn_id: Optional[str] = None) -> Dict[str, Any]:
-        current = await _active_for_client(client_turn_id)
-        last = await _last_for_client(client_turn_id)
+    async def file_chat_active(
+        request: Request, client_turn_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        current = await _active_for_client(request, client_turn_id)
+        last = await _last_for_client(request, client_turn_id)
         return {"active": bool(current), "current": current, "last_result": last}
 
     @router.post("/file-chat")
@@ -300,13 +339,14 @@ def build_file_chat_routes() -> APIRouter:
             target.path.parent.mkdir(parents=True, exist_ok=True)
 
         # Concurrency guard per target
-        async with _chat_lock:
-            existing = _active_chats.get(target.state_key)
+        s = _get_state(request)
+        async with s.chat_lock:
+            existing = s.active_chats.get(target.state_key)
             if existing is not None and not existing.is_set():
                 raise HTTPException(status_code=409, detail="File chat already running")
-            _active_chats[target.state_key] = asyncio.Event()
+            s.active_chats[target.state_key] = asyncio.Event()
 
-        await _begin_turn_state(target, client_turn_id)
+        await _begin_turn_state(request, target, client_turn_id)
 
         if stream:
             return StreamingResponse(
@@ -329,6 +369,7 @@ def build_file_chat_routes() -> APIRouter:
 
             async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
                 await _update_turn_state(
+                    request,
                     target,
                     agent=agent_id,
                     thread_id=thread_id,
@@ -348,6 +389,7 @@ def build_file_chat_routes() -> APIRouter:
                 )
             except Exception as exc:
                 await _finalize_turn_state(
+                    request,
                     target,
                     {
                         "status": "error",
@@ -358,10 +400,10 @@ def build_file_chat_routes() -> APIRouter:
                 raise
             result = dict(result or {})
             result["client_turn_id"] = client_turn_id or ""
-            await _finalize_turn_state(target, result)
+            await _finalize_turn_state(request, target, result)
             return result
         finally:
-            await _clear_interrupt_event(target.state_key)
+            await _clear_interrupt_event(request, target.state_key)
 
     async def _stream_file_chat(
         request: Request,
@@ -379,6 +421,7 @@ def build_file_chat_routes() -> APIRouter:
 
             async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
                 await _update_turn_state(
+                    request,
                     target,
                     agent=agent_id,
                     thread_id=thread_id,
@@ -410,7 +453,7 @@ def build_file_chat_routes() -> APIRouter:
                     }
                 result = dict(result or {})
                 result["client_turn_id"] = client_turn_id or ""
-                await _finalize_turn_state(target, result)
+                await _finalize_turn_state(request, target, result)
 
             asyncio.create_task(_finalize())
 
@@ -443,7 +486,7 @@ def build_file_chat_routes() -> APIRouter:
             logger.exception("file chat stream failed")
             yield format_sse("error", {"detail": "File chat failed"})
         finally:
-            await _clear_interrupt_event(target.state_key)
+            await _clear_interrupt_event(request, target.state_key)
 
     async def _execute_file_chat(
         request: Request,
@@ -479,7 +522,9 @@ def build_file_chat_routes() -> APIRouter:
 
         prompt = _build_file_chat_prompt(target=target, message=message, before=before)
 
-        interrupt_event = await _get_or_create_interrupt_event(target.state_key)
+        interrupt_event = await _get_or_create_interrupt_event(
+            request, target.state_key
+        )
         if interrupt_event.is_set():
             return {"status": "interrupted", "detail": "File chat interrupted"}
 
@@ -489,7 +534,7 @@ def build_file_chat_routes() -> APIRouter:
             agent_id = "codex"
 
         thread_key = f"file_chat.{target.state_key}"
-        await _update_turn_state(target, status="running", agent=agent_id)
+        await _update_turn_state(request, target, status="running", agent=agent_id)
 
         if agent_id == "opencode":
             if opencode is None:
@@ -952,8 +997,9 @@ def build_file_chat_routes() -> APIRouter:
         body = await request.json()
         repo_root = _resolve_repo_root(request)
         resolved = _parse_target(repo_root, str(body.get("target") or ""))
-        async with _chat_lock:
-            ev = _active_chats.get(resolved.state_key)
+        s = _get_state(request)
+        async with s.chat_lock:
+            ev = s.active_chats.get(resolved.state_key)
             if ev is None:
                 return {"status": "ok", "detail": "No active chat to interrupt"}
             ev.set()
@@ -977,14 +1023,15 @@ def build_file_chat_routes() -> APIRouter:
         repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
 
-        async with _chat_lock:
-            existing = _active_chats.get(target.state_key)
+        s = _get_state(request)
+        async with s.chat_lock:
+            existing = s.active_chats.get(target.state_key)
             if existing is not None and not existing.is_set():
                 raise HTTPException(
                     status_code=409, detail="Ticket chat already running"
                 )
-            _active_chats[target.state_key] = asyncio.Event()
-        await _begin_turn_state(target, client_turn_id)
+            s.active_chats[target.state_key] = asyncio.Event()
+        await _begin_turn_state(request, target, client_turn_id)
 
         if stream:
             return StreamingResponse(
@@ -1014,10 +1061,10 @@ def build_file_chat_routes() -> APIRouter:
             )
             result = dict(result or {})
             result["client_turn_id"] = client_turn_id or ""
-            await _finalize_turn_state(target, result)
+            await _finalize_turn_state(request, target, result)
             return result
         finally:
-            await _clear_interrupt_event(target.state_key)
+            await _clear_interrupt_event(request, target.state_key)
 
     @router.get("/tickets/{index}/chat/pending")
     async def pending_ticket_patch(index: int, request: Request):
@@ -1087,8 +1134,9 @@ def build_file_chat_routes() -> APIRouter:
     async def interrupt_ticket_chat(index: int, request: Request):
         repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
-        async with _chat_lock:
-            ev = _active_chats.get(target.state_key)
+        s = _get_state(request)
+        async with s.chat_lock:
+            ev = s.active_chats.get(target.state_key)
             if ev is None:
                 return {"status": "ok", "detail": "No active chat to interrupt"}
             ev.set()
