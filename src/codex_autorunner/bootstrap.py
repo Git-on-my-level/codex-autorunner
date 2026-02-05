@@ -308,6 +308,20 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 
 - User uploads arrive in `.codex-autorunner/pma/inbox/`.
 - Send user-facing files by writing to `.codex-autorunner/pma/outbox/`.
+
+## PMA dispatches (user attention)
+
+- Create PMA dispatches by writing Markdown files to:
+  `.codex-autorunner/pma/dispatches/<timestamp>_<id>.md`
+- File format: YAML frontmatter + markdown body.
+- Required frontmatter fields:
+  - `title`: short summary
+  - `priority`: `info` | `warn` | `action`
+  - `created_at`: ISO 8601 timestamp
+  - `source_turn_id`: PMA turn id (for notifications)
+  - `links`: optional list of `{label, href}` objects
+  - `resolved_at`: leave empty/omit until resolved
+- The web UI lists unresolved dispatches; resolve via UI or set `resolved_at`.
 """
 
 

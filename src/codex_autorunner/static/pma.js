@@ -2,7 +2,9 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, confirmModal, resolvePath, getAuthToken, flash } from "./utils.js";
+import { api, confirmModal, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js";
+import { renderMarkdown } from "./messages.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
 import { createDocChat, } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
@@ -55,6 +57,9 @@ let pmaHistoryLoading = false;
 let pmaHistoryInitialized = false;
 const pmaHistoryTurnIds = new Set();
 const pmaHistoryClientTurnIds = new Set();
+let pmaDispatches = [];
+let pmaDispatchSelected = null;
+let pmaDispatchesLoading = false;
 function newClientTurnId() {
     // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
     try {
@@ -66,6 +71,23 @@ function newClientTurnId() {
         // ignore
     }
     return `pma-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+function formatDispatchTimestamp(value) {
+    if (!value)
+        return "–";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime()))
+        return value;
+    return parsed.toLocaleString();
+}
+function resolveDispatchPriority(priority) {
+    const normalized = (priority || "info").toLowerCase();
+    if (normalized === "warn" || normalized === "action")
+        return normalized;
+    return "info";
+}
+function unresolvedDispatchCount(items) {
+    return items.filter((item) => !item.resolved_at).length;
 }
 function loadPendingTurn() {
     try {
@@ -570,7 +592,142 @@ function getElements() {
         docsSaveBtn: document.getElementById("pma-docs-save"),
         docsResetBtn: document.getElementById("pma-docs-reset"),
         docsSnapshotBtn: document.getElementById("pma-docs-snapshot"),
+        dispatchesList: document.getElementById("pma-dispatches-list"),
+        dispatchesDetail: document.getElementById("pma-dispatches-detail"),
+        dispatchesCount: document.getElementById("pma-dispatches-count"),
+        dispatchesRefresh: document.getElementById("pma-dispatches-refresh"),
     };
+}
+function renderDispatchesList(elements) {
+    if (!elements.dispatchesList || !elements.dispatchesDetail || !elements.dispatchesCount)
+        return;
+    const unresolvedCount = unresolvedDispatchCount(pmaDispatches);
+    elements.dispatchesCount.textContent = String(unresolvedCount);
+    elements.dispatchesCount.classList.toggle("hidden", unresolvedCount === 0);
+    if (!pmaDispatches.length) {
+        elements.dispatchesList.innerHTML = '<div class="muted small">No dispatches yet.</div>';
+        elements.dispatchesDetail.innerHTML = '<div class="muted small">Select a dispatch to view details.</div>';
+        return;
+    }
+    const listHtml = pmaDispatches
+        .map((dispatch) => {
+        const priority = resolveDispatchPriority(dispatch.priority);
+        const resolved = Boolean(dispatch.resolved_at);
+        const active = dispatch.id === pmaDispatchSelected;
+        const classes = [
+            "pma-dispatch-item",
+            resolved ? "resolved" : "",
+            active ? "active" : "",
+        ]
+            .filter(Boolean)
+            .join(" ");
+        const title = (dispatch.title || "Untitled dispatch").trim();
+        const createdAt = formatDispatchTimestamp(dispatch.created_at);
+        const status = resolved ? "resolved" : "open";
+        return `
+        <button class="${classes}" type="button" data-dispatch-id="${dispatch.id}">
+          <div class="pma-dispatch-item-title">${title}</div>
+          <div class="pma-dispatch-item-meta">
+            <span>${priority}</span>
+            <span>•</span>
+            <span>${status}</span>
+            <span>•</span>
+            <span>${createdAt}</span>
+          </div>
+        </button>
+      `;
+    })
+        .join("");
+    elements.dispatchesList.innerHTML = listHtml;
+    renderDispatchDetail(elements);
+}
+function renderDispatchDetail(elements) {
+    if (!elements.dispatchesDetail)
+        return;
+    const selected = pmaDispatches.find((item) => item.id === pmaDispatchSelected);
+    if (!selected) {
+        elements.dispatchesDetail.innerHTML = '<div class="muted small">Select a dispatch to view details.</div>';
+        return;
+    }
+    const title = (selected.title || "Untitled dispatch").trim();
+    const priority = resolveDispatchPriority(selected.priority);
+    const createdAt = formatDispatchTimestamp(selected.created_at);
+    const resolvedAt = selected.resolved_at ? formatDispatchTimestamp(selected.resolved_at) : "Open";
+    const body = selected.body?.trim()
+        ? renderMarkdown(selected.body)
+        : '<span class="muted">No message body.</span>';
+    const links = (selected.links || [])
+        .map((link) => {
+        const label = escapeHtml(link.label || link.href || "");
+        const href = escapeHtml(link.href || "#");
+        return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+    })
+        .join("");
+    const linkSection = links
+        ? `<div class="pma-dispatch-detail-links">${links}</div>`
+        : "";
+    const actionButton = selected.resolved_at
+        ? ""
+        : '<button class="primary sm" id="pma-dispatch-resolve-btn">Resolve</button>';
+    elements.dispatchesDetail.innerHTML = `
+    <h3 class="pma-dispatch-detail-title">${title}</h3>
+    <div class="pma-dispatch-detail-meta">
+      <span>${priority}</span>
+      <span>•</span>
+      <span>Created ${createdAt}</span>
+      <span>•</span>
+      <span>${resolvedAt}</span>
+    </div>
+    <div class="pma-dispatch-detail-body">${body}</div>
+    ${linkSection}
+    <div class="pma-dispatch-detail-actions">
+      ${actionButton}
+    </div>
+  `;
+}
+async function refreshPmaDispatches() {
+    if (pmaDispatchesLoading)
+        return;
+    pmaDispatchesLoading = true;
+    try {
+        const payload = (await api("/hub/pma/dispatches?include_resolved=true", {
+            method: "GET",
+        }));
+        pmaDispatches = payload?.items || [];
+        if (!pmaDispatchSelected && pmaDispatches.length) {
+            const firstOpen = pmaDispatches.find((item) => !item.resolved_at);
+            pmaDispatchSelected = (firstOpen || pmaDispatches[0]).id;
+        }
+        else if (pmaDispatchSelected) {
+            const stillExists = pmaDispatches.some((item) => item.id === pmaDispatchSelected);
+            if (!stillExists) {
+                pmaDispatchSelected = pmaDispatches[0]?.id || null;
+            }
+        }
+    }
+    catch {
+        // ignore errors; leave existing data
+    }
+    finally {
+        pmaDispatchesLoading = false;
+        const elements = getElements();
+        renderDispatchesList(elements);
+    }
+}
+async function resolveSelectedDispatch() {
+    const selected = pmaDispatchSelected;
+    if (!selected)
+        return;
+    try {
+        await api(`/hub/pma/dispatches/${encodeURIComponent(selected)}/resolve`, {
+            method: "POST",
+        });
+        await refreshPmaDispatches();
+        flash("Dispatch resolved", "success");
+    }
+    catch {
+        flash("Failed to resolve dispatch", "error");
+    }
 }
 const decoder = new TextDecoder();
 function escapeMarkdownLinkText(text) {
@@ -654,6 +811,7 @@ async function initPMA() {
     await initFileBoxUI();
     await loadPMADocs();
     attachHandlers();
+    attachDispatchHandlers();
     // If we refreshed mid-turn, recover the final output from the server.
     await resumePendingTurn();
     // If the page refreshes/navigates while a turn is running, avoid showing a noisy
@@ -1350,5 +1508,40 @@ function attachHandlers() {
             elements.docsEditor.style.height = `${elements.docsEditor.scrollHeight}px`;
         });
     }
+}
+function attachDispatchHandlers() {
+    const elements = getElements();
+    if (!elements.dispatchesList)
+        return;
+    elements.dispatchesList.addEventListener("click", (event) => {
+        const target = event.target?.closest(".pma-dispatch-item");
+        if (!target)
+            return;
+        const dispatchId = target.dataset.dispatchId;
+        if (!dispatchId)
+            return;
+        pmaDispatchSelected = dispatchId;
+        renderDispatchesList(elements);
+    });
+    elements.dispatchesDetail?.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!target)
+            return;
+        if (target.id === "pma-dispatch-resolve-btn") {
+            void resolveSelectedDispatch();
+        }
+    });
+    elements.dispatchesRefresh?.addEventListener("click", () => {
+        void refreshPmaDispatches();
+    });
+    registerAutoRefresh("pma-dispatches", {
+        callback: async () => {
+            await refreshPmaDispatches();
+        },
+        tabId: null,
+        interval: 15000,
+        refreshOnActivation: true,
+        immediate: true,
+    });
 }
 export { initPMA };

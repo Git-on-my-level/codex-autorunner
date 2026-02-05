@@ -39,6 +39,12 @@ from ....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
+from ....core.pma_dispatches import (
+    find_pma_dispatch_path,
+    list_pma_dispatches,
+    list_pma_dispatches_for_turn,
+    resolve_pma_dispatch,
+)
 from ....core.pma_lane_worker import PmaLaneWorker
 from ....core.pma_lifecycle import PmaLifecycleRouter
 from ....core.pma_queue import PmaQueue, QueueItemState
@@ -249,6 +255,73 @@ def build_pma_routes() -> APIRouter:
             await store.close()
 
         sink_store.mark_delivered(turn_id)
+
+    async def _deliver_dispatches_to_active_sink(
+        *,
+        request: Request,
+        turn_id: Optional[str],
+    ) -> None:
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        hub_root = request.app.state.config.root
+        dispatches = list_pma_dispatches_for_turn(hub_root, turn_id)
+        if not dispatches:
+            return
+
+        sink_store = PmaActiveSinkStore(hub_root)
+        sink = sink_store.load()
+        if not isinstance(sink, dict) or sink.get("kind") != "telegram":
+            return
+
+        chat_id = sink.get("chat_id")
+        thread_id = sink.get("thread_id")
+        if not isinstance(chat_id, int):
+            return
+        if thread_id is not None and not isinstance(thread_id, int):
+            thread_id = None
+
+        state_path = _resolve_telegram_state_path(request)
+        store = TelegramStateStore(state_path)
+        try:
+            for dispatch in dispatches:
+                title = dispatch.title or "PMA dispatch"
+                priority = dispatch.priority or "info"
+                header = f"**PMA dispatch** ({priority})\n{title}"
+                body = dispatch.body.strip()
+                link_lines = []
+                for link in dispatch.links:
+                    label = link.get("label", "")
+                    href = link.get("href", "")
+                    if label and href:
+                        link_lines.append(f"- {label}: {href}")
+                details = "\n".join(
+                    line for line in [body, "\n".join(link_lines)] if line
+                ).strip()
+                message = header
+                if details:
+                    message = f"{header}\n\n{details}"
+
+                chunks = chunk_message(
+                    message, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
+                )
+                for idx, chunk in enumerate(chunks, 1):
+                    record_id = f"pma-dispatch:{dispatch.dispatch_id}:{idx}"
+                    record = OutboxRecord(
+                        record_id=record_id,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        reply_to_message_id=None,
+                        placeholder_message_id=None,
+                        text=chunk,
+                        created_at=now_iso(),
+                        operation="send",
+                        outbox_key=record_id,
+                    )
+                    await store.enqueue_outbox(record)
+        except Exception:
+            logger.exception("Failed to enqueue PMA dispatch to Telegram outbox")
+        finally:
+            await store.close()
 
     async def _persist_state(store: Optional[PmaStateStore]) -> None:
         if store is None:
@@ -537,6 +610,10 @@ def build_pma_routes() -> APIRouter:
             result=result,
             current=current_snapshot,
             lifecycle_event=lifecycle_event,
+            turn_id=delivery_turn_id,
+        )
+        await _deliver_dispatches_to_active_sink(
+            request=request,
             turn_id=delivery_turn_id,
         )
         _get_safety_checker(request).record_chat_result(
@@ -1946,6 +2023,90 @@ def build_pma_routes() -> APIRouter:
             details=details,
         )
         return {"name": name, "status": "ok"}
+
+    @router.get("/dispatches")
+    def list_pma_dispatches_endpoint(
+        request: Request, include_resolved: bool = False, limit: int = 100
+    ) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        dispatches = list_pma_dispatches(
+            hub_root, include_resolved=include_resolved, limit=limit
+        )
+        return {
+            "items": [
+                {
+                    "id": item.dispatch_id,
+                    "title": item.title,
+                    "body": item.body,
+                    "priority": item.priority,
+                    "links": item.links,
+                    "created_at": item.created_at,
+                    "resolved_at": item.resolved_at,
+                    "source_turn_id": item.source_turn_id,
+                }
+                for item in dispatches
+            ]
+        }
+
+    @router.get("/dispatches/{dispatch_id}")
+    def get_pma_dispatch(dispatch_id: str, request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        path = find_pma_dispatch_path(hub_root, dispatch_id)
+        if not path:
+            raise HTTPException(status_code=404, detail="Dispatch not found")
+        # Use list helper to normalize output
+        items = list_pma_dispatches(hub_root, include_resolved=True)
+        match = next((item for item in items if item.dispatch_id == dispatch_id), None)
+        if not match:
+            raise HTTPException(status_code=404, detail="Dispatch not found")
+        return {
+            "dispatch": {
+                "id": match.dispatch_id,
+                "title": match.title,
+                "body": match.body,
+                "priority": match.priority,
+                "links": match.links,
+                "created_at": match.created_at,
+                "resolved_at": match.resolved_at,
+                "source_turn_id": match.source_turn_id,
+            }
+        }
+
+    @router.post("/dispatches/{dispatch_id}/resolve")
+    def resolve_pma_dispatch_endpoint(
+        dispatch_id: str, request: Request
+    ) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        path = find_pma_dispatch_path(hub_root, dispatch_id)
+        if not path:
+            raise HTTPException(status_code=404, detail="Dispatch not found")
+        dispatch, errors = resolve_pma_dispatch(path)
+        if errors or dispatch is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to resolve dispatch: " + "; ".join(errors),
+            )
+        return {
+            "dispatch": {
+                "id": dispatch.dispatch_id,
+                "title": dispatch.title,
+                "body": dispatch.body,
+                "priority": dispatch.priority,
+                "links": dispatch.links,
+                "created_at": dispatch.created_at,
+                "resolved_at": dispatch.resolved_at,
+                "source_turn_id": dispatch.source_turn_id,
+            }
+        }
 
     router._pma_start_lane_worker = _ensure_lane_worker_for_app
     router._pma_stop_lane_worker = _stop_lane_worker_for_app

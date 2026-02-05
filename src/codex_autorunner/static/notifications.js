@@ -2,7 +2,7 @@
 import { api, escapeHtml, openModal, resolvePath } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 let notificationsInitialized = false;
-let notificationItems = [];
+const notificationItemsByRoot = {};
 let activeRoot = null;
 let closeModalFn = null;
 let documentListenerInstalled = false;
@@ -29,10 +29,11 @@ function getRootElements(root) {
     const dropdown = root.querySelector("[data-notifications-dropdown]");
     if (!trigger || !badge || !dropdown)
         return null;
-    return { root, trigger, badge, dropdown };
+    const key = root.getAttribute("data-notifications-root") || "hub";
+    return { root, trigger, badge, dropdown, key };
 }
-function setBadgeCount(count) {
-    const roots = document.querySelectorAll("[data-notifications-root]");
+function setBadgeCount(rootKey, count) {
+    const roots = document.querySelectorAll(`[data-notifications-root="${rootKey}"]`);
     roots.forEach((root) => {
         const elements = getRootElements(root);
         if (!elements)
@@ -42,7 +43,7 @@ function setBadgeCount(count) {
         elements.trigger.setAttribute("aria-label", count > 0 ? `Notifications (${count})` : "Notifications");
     });
 }
-function normalizeItem(item) {
+function normalizeHubItem(item) {
     const repoId = String(item.repo_id || "");
     const repoDisplay = item.repo_display_name || repoId;
     const mode = item.dispatch?.mode || "";
@@ -53,6 +54,7 @@ function normalizeItem(item) {
     const runId = String(item.run_id || "");
     const openUrl = item.open_url || `/repos/${repoId}/?tab=inbox&run_id=${runId}`;
     return {
+        kind: "hub",
         repoId,
         repoDisplay,
         runId,
@@ -63,21 +65,42 @@ function normalizeItem(item) {
         body,
         isHandoff,
         openUrl,
+        pillLabel: isHandoff ? "handoff" : "paused",
     };
+}
+function normalizePmaItem(item) {
+    const title = (item.title || "PMA dispatch").trim();
+    const body = item.body || "";
+    const priority = (item.priority || "info").toLowerCase();
+    const isHandoff = priority === "action";
+    return {
+        kind: "pma",
+        title,
+        body,
+        isHandoff,
+        openUrl: "/?view=pma",
+        pillLabel: priority,
+        priority,
+        links: item.links || [],
+    };
+}
+function getItemsForRoot(rootKey) {
+    return notificationItemsByRoot[rootKey] || [];
 }
 function renderDropdown(root) {
     if (!root)
         return;
-    if (!notificationItems.length) {
+    const items = getItemsForRoot(root.key);
+    if (!items.length) {
         root.dropdown.innerHTML = '<div class="notifications-empty muted small">No pending dispatches</div>';
         return;
     }
-    const html = notificationItems
+    const html = items
         .map((item, index) => {
-        const pill = item.isHandoff ? "handoff" : "paused";
+        const pill = item.pillLabel || (item.isHandoff ? "handoff" : "paused");
         return `
         <button class="notifications-item" type="button" data-index="${index}">
-          <span class="notifications-item-repo">${escapeHtml(item.repoDisplay)}</span>
+          <span class="notifications-item-repo">${escapeHtml(item.repoDisplay || "PMA")}</span>
           <span class="notifications-item-title">${escapeHtml(item.title)}</span>
           <span class="pill pill-small pill-warn notifications-item-pill">${escapeHtml(pill)}</span>
         </button>
@@ -179,30 +202,57 @@ function openNotificationsModal(item, returnFocusTo) {
     if (!modal)
         return;
     closeNotificationsModal();
-    const runLabel = item.seq ? `${item.runId.slice(0, 8)} (#${item.seq})` : item.runId.slice(0, 8);
-    const modeLabel = item.mode ? ` (${item.mode})` : "";
     const body = item.body?.trim() ? escapeHtml(item.body) : '<span class="muted">No message body.</span>';
-    modal.body.innerHTML = `
-    <div class="notifications-modal-meta">
-      <div class="notifications-modal-row">
-        <span class="notifications-modal-label">Repo</span>
-        <span class="notifications-modal-value">${escapeHtml(item.repoDisplay)}</span>
+    if (item.kind === "pma") {
+        const priority = item.priority || "info";
+        const links = (item.links || [])
+            .map((link) => `<a href="${escapeHtml(link.href)}" target="_blank" rel="noopener">${escapeHtml(link.label)}</a>`)
+            .join("");
+        const linkBlock = links ? `<div class="notifications-modal-links">${links}</div>` : "";
+        modal.body.innerHTML = `
+      <div class="notifications-modal-meta">
+        <div class="notifications-modal-row">
+          <span class="notifications-modal-label">Dispatch</span>
+          <span class="notifications-modal-value">${escapeHtml(item.title)}</span>
+        </div>
+        <div class="notifications-modal-row">
+          <span class="notifications-modal-label">Priority</span>
+          <span class="notifications-modal-value">${escapeHtml(priority)}</span>
+        </div>
       </div>
-      <div class="notifications-modal-row">
-        <span class="notifications-modal-label">Run</span>
-        <span class="notifications-modal-value mono">${escapeHtml(runLabel)}</span>
+      <div class="notifications-modal-body">${body}</div>
+      ${linkBlock}
+      <div class="notifications-modal-actions">
+        <a class="primary sm notifications-open-run" href="${escapeHtml(resolvePath(item.openUrl))}">Open PMA</a>
       </div>
-      <div class="notifications-modal-row">
-        <span class="notifications-modal-label">Dispatch</span>
-        <span class="notifications-modal-value">${escapeHtml(item.title)}${escapeHtml(modeLabel)}</span>
+    `;
+    }
+    else {
+        const runId = item.runId || "";
+        const runLabel = item.seq ? `${runId.slice(0, 8)} (#${item.seq})` : runId.slice(0, 8);
+        const modeLabel = item.mode ? ` (${item.mode})` : "";
+        modal.body.innerHTML = `
+      <div class="notifications-modal-meta">
+        <div class="notifications-modal-row">
+          <span class="notifications-modal-label">Repo</span>
+          <span class="notifications-modal-value">${escapeHtml(item.repoDisplay || "")}</span>
+        </div>
+        <div class="notifications-modal-row">
+          <span class="notifications-modal-label">Run</span>
+          <span class="notifications-modal-value mono">${escapeHtml(runLabel)}</span>
+        </div>
+        <div class="notifications-modal-row">
+          <span class="notifications-modal-label">Dispatch</span>
+          <span class="notifications-modal-value">${escapeHtml(item.title)}${escapeHtml(modeLabel)}</span>
+        </div>
       </div>
-    </div>
-    <div class="notifications-modal-body">${body}</div>
-    <div class="notifications-modal-actions">
-      <a class="primary sm notifications-open-run" href="${escapeHtml(resolvePath(item.openUrl))}">Open run</a>
-    </div>
-    <div class="notifications-modal-placeholder">Reply here (coming soon).</div>
-  `;
+      <div class="notifications-modal-body">${body}</div>
+      <div class="notifications-modal-actions">
+        <a class="primary sm notifications-open-run" href="${escapeHtml(resolvePath(item.openUrl))}">Open run</a>
+      </div>
+      <div class="notifications-modal-placeholder">Reply here (coming soon).</div>
+    `;
+    }
     closeModalFn = openModal(modal.overlay, {
         closeOnEscape: true,
         closeOnOverlay: true,
@@ -215,10 +265,28 @@ async function refreshNotifications(_ctx) {
         return;
     isRefreshing = true;
     try {
-        const payload = (await api("/hub/messages", { method: "GET" }));
-        const items = payload?.items || [];
-        notificationItems = items.map(normalizeItem);
-        setBadgeCount(notificationItems.length);
+        let hubPayload = null;
+        let pmaPayload = null;
+        try {
+            hubPayload = (await api("/hub/messages", { method: "GET" }));
+        }
+        catch {
+            hubPayload = null;
+        }
+        try {
+            pmaPayload = (await api("/hub/pma/dispatches?include_resolved=false", {
+                method: "GET",
+            }));
+        }
+        catch {
+            pmaPayload = { items: [] };
+        }
+        const hubItems = (hubPayload?.items || []).map(normalizeHubItem);
+        const pmaItems = (pmaPayload?.items || []).map(normalizePmaItem);
+        notificationItemsByRoot.hub = hubItems;
+        notificationItemsByRoot.pma = pmaItems;
+        setBadgeCount("hub", hubItems.length);
+        setBadgeCount("pma", pmaItems.length);
         if (activeRoot) {
             renderDropdown(activeRoot);
         }
@@ -251,7 +319,8 @@ function attachRoot(root) {
         event.preventDefault();
         event.stopPropagation();
         const index = Number(target.dataset.index || "-1");
-        const item = notificationItems[index];
+        const items = getItemsForRoot(root.key);
+        const item = items[index];
         if (!item)
             return;
         closeDropdown();
