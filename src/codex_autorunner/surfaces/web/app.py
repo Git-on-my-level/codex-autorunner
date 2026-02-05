@@ -1154,7 +1154,14 @@ def create_hub_app(
     raw_config = getattr(context.config, "raw", {})
     pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
     if isinstance(pma_config, dict) and pma_config.get("enabled"):
-        app.include_router(build_pma_routes())
+        pma_router = build_pma_routes()
+        app.include_router(pma_router)
+        app.state.pma_lane_worker_start = getattr(
+            pma_router, "_pma_start_lane_worker", None
+        )
+        app.state.pma_lane_worker_stop = getattr(
+            pma_router, "_pma_stop_lane_worker", None
+        )
     app.include_router(build_hub_filebox_routes())
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
@@ -1496,6 +1503,19 @@ def create_hub_app(
                         )
 
             asyncio.create_task(_opencode_prune_loop())
+        pma_cfg = getattr(app.state.config, "pma", None)
+        if pma_cfg is not None and pma_cfg.enabled:
+            starter = getattr(app.state, "pma_lane_worker_start", None)
+            if starter is not None:
+                try:
+                    await starter(app, "pma:default")
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "PMA lane worker startup failed",
+                        exc,
+                    )
         mount_lock = await _get_mount_lock()
         async with mount_lock:
             for prefix in list(mount_order):
@@ -1536,6 +1556,17 @@ def create_hub_app(
             static_context = getattr(app.state, "static_assets_context", None)
             if static_context is not None:
                 static_context.close()
+            stopper = getattr(app.state, "pma_lane_worker_stop", None)
+            if stopper is not None:
+                try:
+                    await stopper(app, "pma:default")
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "PMA lane worker shutdown failed",
+                        exc,
+                    )
 
     app.router.lifespan_context = lifespan
 

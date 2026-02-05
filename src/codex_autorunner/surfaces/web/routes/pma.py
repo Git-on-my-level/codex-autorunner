@@ -38,6 +38,7 @@ from ....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
+from ....core.pma_lane_worker import PmaLaneWorker
 from ....core.pma_lifecycle import PmaLifecycleRouter
 from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
@@ -69,8 +70,7 @@ def build_pma_routes() -> APIRouter:
     pma_audit_log: Optional[PmaAuditLog] = None
     pma_queue: Optional[PmaQueue] = None
     pma_queue_root: Optional[Path] = None
-    lane_workers: dict[str, asyncio.Task] = {}
-    lane_cancel_events: dict[str, asyncio.Event] = {}
+    lane_workers: dict[str, PmaLaneWorker] = {}
     item_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -376,43 +376,45 @@ def build_pma_routes() -> APIRouter:
         }
 
     async def _ensure_lane_worker(lane_id: str, request: Request) -> None:
-        nonlocal lane_workers, lane_cancel_events
-        if lane_id in lane_workers and not lane_workers[lane_id].done():
+        nonlocal lane_workers
+        existing = lane_workers.get(lane_id)
+        if existing is not None and existing.is_running:
             return
 
-        cancel_event = asyncio.Event()
-        lane_cancel_events[lane_id] = cancel_event
+        async def _on_result(item, result: dict[str, Any]) -> None:
+            result_future = item_futures.get(item.item_id)
+            if result_future and not result_future.done():
+                result_future.set_result(result)
+            item_futures.pop(item.item_id, None)
 
-        async def lane_worker():
-            queue = _get_pma_queue(request)
-            await queue.replay_pending(lane_id)
-            while not cancel_event.is_set():
-                item = await queue.dequeue(lane_id)
-                if item is None:
-                    await queue.wait_for_lane_item(lane_id, cancel_event)
-                    continue
+        queue = _get_pma_queue(request)
+        worker = PmaLaneWorker(
+            lane_id,
+            queue,
+            lambda item: _execute_queue_item(item, request),
+            log=logger,
+            on_result=_on_result,
+        )
+        lane_workers[lane_id] = worker
+        await worker.start()
 
-                if cancel_event.is_set():
-                    await queue.fail_item(item, "cancelled by lane stop")
-                    continue
+    async def _stop_lane_worker(lane_id: str) -> None:
+        worker = lane_workers.get(lane_id)
+        if worker is None:
+            return
+        await worker.stop()
+        lane_workers.pop(lane_id, None)
 
-                result_future = item_futures.get(item.item_id)
-                try:
-                    result = await _execute_queue_item(item, request)
-                    await queue.complete_item(item, result)
-                    if result_future and not result_future.done():
-                        result_future.set_result(result)
-                except Exception as exc:
-                    logger.exception("Failed to process queue item %s", item.item_id)
-                    error_result = {"status": "error", "detail": str(exc)}
-                    await queue.fail_item(item, str(exc))
-                    if result_future and not result_future.done():
-                        result_future.set_result(error_result)
-                finally:
-                    item_futures.pop(item.item_id, None)
+    class _AppRequest:
+        def __init__(self, app: Any) -> None:
+            self.app = app
 
-        task = asyncio.create_task(lane_worker())
-        lane_workers[lane_id] = task
+    async def _ensure_lane_worker_for_app(app: Any, lane_id: str) -> None:
+        await _ensure_lane_worker(lane_id, _AppRequest(app))
+
+    async def _stop_lane_worker_for_app(app: Any, lane_id: str) -> None:
+        _ = app
+        await _stop_lane_worker(lane_id)
 
     async def _execute_queue_item(item: Any, request: Request) -> dict[str, Any]:
         hub_root = request.app.state.config.root
@@ -1045,8 +1047,7 @@ def build_pma_routes() -> APIRouter:
         if result.status != "ok":
             raise HTTPException(status_code=500, detail=result.error)
 
-        if lane_id in lane_cancel_events:
-            lane_cancel_events[lane_id].set()
+        await _stop_lane_worker(lane_id)
 
         await _interrupt_active(request, reason="Lane stopped", source="user_request")
 
@@ -1646,6 +1647,8 @@ def build_pma_routes() -> APIRouter:
         )
         return {"name": name, "status": "ok"}
 
+    router._pma_start_lane_worker = _ensure_lane_worker_for_app
+    router._pma_stop_lane_worker = _stop_lane_worker_for_app
     return router
 
 
