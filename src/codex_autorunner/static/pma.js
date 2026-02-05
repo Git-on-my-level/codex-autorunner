@@ -28,7 +28,6 @@ const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
 let activeContextMaxLines = 200;
 const pmaConfig = {
     idPrefix: "pma-chat",
-    storage: { keyPrefix: "car.pma.", maxMessages: 100, version: 1 },
     limits: {
         eventVisible: 20,
         eventMax: 50,
@@ -45,11 +44,17 @@ let unloadHandlerInstalled = false;
 let currentEventsController = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
 const DEFAULT_PMA_LANE_ID = "pma:default";
+const PMA_HISTORY_LIMIT = 50;
+const PMA_HISTORY_REFRESH_MS = 15000;
 let fileBoxCtrl = null;
 let pendingUploadNames = [];
 let currentDocName = null;
 const docsInfo = new Map();
 let isSavingDoc = false;
+let pmaHistoryLoading = false;
+let pmaHistoryInitialized = false;
+const pmaHistoryTurnIds = new Set();
+const pmaHistoryClientTurnIds = new Set();
 function newClientTurnId() {
     // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
     try {
@@ -144,6 +149,183 @@ function stopTurnEventsStream() {
 }
 function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+function readString(value) {
+    return typeof value === "string" ? value : "";
+}
+function readNumber(value) {
+    if (typeof value !== "number")
+        return null;
+    if (!Number.isFinite(value))
+        return null;
+    return value;
+}
+function normalizeHistoryMeta(raw) {
+    const lifecycleEvent = typeof raw.lifecycle_event === "object" && raw.lifecycle_event !== null
+        ? raw.lifecycle_event
+        : null;
+    const trigger = readString(raw.trigger) || (lifecycleEvent ? "lifecycle_event" : "");
+    return {
+        turnId: readString(raw.turn_id),
+        clientTurnId: readString(raw.client_turn_id),
+        trigger,
+        userPrompt: readString(raw.user_prompt),
+        repoId: readString(raw.repo_id),
+        runId: readString(raw.run_id),
+        eventType: readString(raw.event_type),
+        eventId: readString(raw.event_id),
+        startedAt: readString(raw.started_at),
+        finishedAt: readString(raw.finished_at) || readString(raw.created_at),
+        durationMs: readNumber(raw.duration_ms),
+    };
+}
+function historyEntryTimestamp(entry) {
+    const raw = entry;
+    const stamp = readString(raw.finished_at) ||
+        readString(raw.created_at) ||
+        readString(raw.started_at) ||
+        readString(raw.event_timestamp);
+    const ts = Date.parse(stamp);
+    return Number.isNaN(ts) ? 0 : ts;
+}
+function buildRunArtifactsUrl(repoId, runId) {
+    if (!repoId || !runId)
+        return "";
+    const encodedRepo = encodeURIComponent(repoId);
+    const encodedRun = encodeURIComponent(runId);
+    return resolvePath(`/repos/${encodedRepo}/api/flows/${encodedRun}/artifacts`);
+}
+function buildHistoryFooter(meta) {
+    const contextParts = [];
+    if (meta.repoId)
+        contextParts.push(`repo_id: \`${meta.repoId}\``);
+    if (meta.runId)
+        contextParts.push(`run_id: \`${meta.runId}\``);
+    const artifactsUrl = buildRunArtifactsUrl(meta.repoId, meta.runId);
+    if (artifactsUrl)
+        contextParts.push(`[artifacts](${artifactsUrl})`);
+    if (!contextParts.length)
+        return "";
+    return `\n\n---\n\nContext: ${contextParts.join(" | ")}`;
+}
+function shouldSkipHistoryMeta(meta) {
+    if (meta.turnId && pmaHistoryTurnIds.has(meta.turnId))
+        return true;
+    if (meta.clientTurnId && pmaHistoryClientTurnIds.has(meta.clientTurnId))
+        return true;
+    return false;
+}
+function appendHistoryTranscript(meta, content, options = {}) {
+    if (!pmaChat)
+        return;
+    if (shouldSkipHistoryMeta(meta))
+        return;
+    if (meta.userPrompt) {
+        pmaChat.addUserMessage(meta.userPrompt);
+    }
+    const isAuto = meta.trigger === "lifecycle_event";
+    const footer = buildHistoryFooter(meta);
+    const trimmed = (content || "").trim();
+    const safeFooter = footer ? footer.replace(/^\n\n---\n\n/, "") : "";
+    const combined = trimmed ? `${trimmed}${footer}` : safeFooter;
+    if (combined) {
+        pmaChat.addAssistantMessage(combined, true, {
+            duration: meta.durationMs ? meta.durationMs / 1000 : undefined,
+            tag: isAuto ? "Auto" : undefined,
+        });
+    }
+    if (meta.turnId)
+        pmaHistoryTurnIds.add(meta.turnId);
+    if (meta.clientTurnId)
+        pmaHistoryClientTurnIds.add(meta.clientTurnId);
+    if (options.render !== false) {
+        pmaChat.render();
+        pmaChat.renderMessages();
+    }
+}
+async function fetchPmaTranscript(turnId) {
+    if (!turnId)
+        return null;
+    try {
+        const payload = (await api(`/hub/pma/history/${encodeURIComponent(turnId)}`, {
+            method: "GET",
+        }));
+        return payload || null;
+    }
+    catch {
+        return null;
+    }
+}
+async function loadPMAHistory(options = {}) {
+    if (pmaHistoryLoading || !pmaChat)
+        return;
+    pmaHistoryLoading = true;
+    const limit = options.limit ?? PMA_HISTORY_LIMIT;
+    void options.reason;
+    try {
+        const pending = loadPendingTurn();
+        if (pending?.clientTurnId) {
+            pmaHistoryClientTurnIds.add(pending.clientTurnId);
+        }
+        const payload = (await api(`/hub/pma/history?limit=${limit}`, {
+            method: "GET",
+        }));
+        const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+        if (!pmaHistoryInitialized) {
+            pmaChat.state.messages = [];
+            pmaChat.state.streamText = "";
+            pmaChat.state.error = "";
+            pmaHistoryTurnIds.clear();
+            pmaHistoryClientTurnIds.clear();
+        }
+        const sorted = entries.slice().sort((a, b) => historyEntryTimestamp(a) - historyEntryTimestamp(b));
+        const pendingEntries = sorted.filter((entry) => {
+            const meta = normalizeHistoryMeta(entry);
+            return !shouldSkipHistoryMeta(meta);
+        });
+        for (const entry of pendingEntries) {
+            const entryMeta = normalizeHistoryMeta(entry);
+            const turnId = entryMeta.turnId;
+            const transcript = await fetchPmaTranscript(turnId);
+            const meta = transcript?.metadata
+                ? normalizeHistoryMeta(transcript.metadata)
+                : entryMeta;
+            const content = typeof transcript?.content === "string"
+                ? transcript.content
+                : readString(entry.preview);
+            appendHistoryTranscript(meta, content, { render: false });
+        }
+        if (pendingEntries.length) {
+            pmaChat.render();
+            pmaChat.renderMessages();
+        }
+        pmaHistoryInitialized = true;
+    }
+    catch {
+        // Best-effort; avoid spamming errors on a background refresh.
+    }
+    finally {
+        pmaHistoryLoading = false;
+    }
+}
+async function syncHistoryFromActive(payload) {
+    if (pmaHistoryLoading || !pmaChat)
+        return;
+    const last = (payload.last_result || {});
+    const turnId = readString(last.turn_id);
+    const clientTurnId = readString(last.client_turn_id);
+    if (!turnId)
+        return;
+    if (pmaHistoryTurnIds.has(turnId))
+        return;
+    if (clientTurnId && pmaHistoryClientTurnIds.has(clientTurnId))
+        return;
+    const transcript = await fetchPmaTranscript(turnId);
+    const meta = transcript?.metadata
+        ? normalizeHistoryMeta(transcript.metadata)
+        : normalizeHistoryMeta(last);
+    const content = typeof transcript?.content === "string" ? transcript.content : readString(last.message);
+    appendHistoryTranscript(meta, content);
 }
 async function loadPMADocs() {
     try {
@@ -461,6 +643,7 @@ async function initPMA() {
         if (messages)
             messages.scrollTop = messages.scrollHeight;
     }, 100);
+    await loadPMAHistory({ reason: "initial" });
     initAgentControls({
         agentSelect: elements.agentSelect,
         modelSelect: elements.modelSelect,
@@ -495,9 +678,10 @@ async function initPMA() {
     }
     // Periodically refresh thread info
     setInterval(() => {
+        void loadPMAHistory({ reason: "interval" });
         void loadPMAThreadInfo();
         void fileBoxCtrl?.refresh();
-    }, 30000);
+    }, PMA_HISTORY_REFRESH_MS);
 }
 async function loadPMAThreadInfo() {
     const elements = getElements();
@@ -510,6 +694,7 @@ async function loadPMAThreadInfo() {
         const info = (payload.active && current.thread_id) ? current : last;
         if (!info || !info.thread_id) {
             elements.threadInfo.classList.add("hidden");
+            void syncHistoryFromActive(payload);
             return;
         }
         if (elements.threadInfoAgent) {
@@ -538,6 +723,7 @@ async function loadPMAThreadInfo() {
             }
         }
         elements.threadInfo.classList.remove("hidden");
+        void syncHistoryFromActive(payload);
     }
     catch {
         elements.threadInfo?.classList.add("hidden");
@@ -563,6 +749,7 @@ async function sendMessage() {
     const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
     const clientTurnId = newClientTurnId();
     savePendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
+    pmaHistoryClientTurnIds.add(clientTurnId);
     currentController = new AbortController();
     pmaChat.state.controller = currentController;
     pmaChat.state.status = "running";
