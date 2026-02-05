@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -36,6 +35,7 @@ from ....core.flows.ux_helpers import (
 )
 from ....core.flows.worker_process import FlowWorkerHealth, check_worker_health
 from ....core.runtime import RuntimeContext
+from ....core.safe_paths import SafePathError, validate_single_filename
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....integrations.github.service import GitHubError, GitHubService
@@ -1216,11 +1216,11 @@ You are the first ticket in a new ticket_flow run.
 
         if not (len(seq) == 4 and seq.isdigit()):
             raise HTTPException(status_code=400, detail="Invalid seq")
-        if ".." in file_path or file_path.startswith("/"):
-            raise HTTPException(status_code=400, detail="Invalid file path")
-        filename = os.path.basename(file_path)
-        if filename != file_path:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        try:
+            filename = validate_single_filename(file_path)
+        except SafePathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         input_data = dict(record.input_data or {})
         workspace_root = Path(input_data.get("workspace_root") or repo_root)
