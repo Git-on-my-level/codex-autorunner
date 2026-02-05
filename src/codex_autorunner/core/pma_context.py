@@ -373,7 +373,13 @@ def format_pma_prompt(
     message: str,
     hub_root: Optional[Path] = None,
 ) -> str:
-    snapshot_text = _render_hub_snapshot(snapshot)
+    limits = snapshot.get("limits") or {}
+    snapshot_text = _render_hub_snapshot(
+        snapshot,
+        max_repos=limits.get("max_repos", PMA_MAX_REPOS),
+        max_messages=limits.get("max_messages", PMA_MAX_MESSAGES),
+        max_text_chars=limits.get("max_text_chars", PMA_MAX_TEXT),
+    )
 
     pma_docs: Optional[dict[str, Any]] = None
     if hub_root is not None:
@@ -669,4 +675,9 @@ async def build_hub_snapshot(
         "templates": templates,
         "pma_files": pma_files,
         "lifecycle_events": lifecycle_events,
+        "limits": {
+            "max_repos": max_repos,
+            "max_messages": max_messages,
+            "max_text_chars": max_text_chars,
+        },
     }
