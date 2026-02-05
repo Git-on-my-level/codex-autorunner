@@ -13723,6 +13723,37 @@ button.filebox-delete:hover {
   background: var(--panel);
 }
 
+.pma-view-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.pma-view-tab {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.pma-view-tab:hover {
+  color: var(--text);
+  background: var(--hover-bg);
+}
+
+.pma-view-tab.active {
+  color: var(--text);
+  background: var(--primary-bg);
+  border-color: var(--border);
+}
+
 .pma-inbox-list {
   flex: 1;
   display: flex;
@@ -13940,6 +13971,16 @@ button.filebox-delete:hover {
   align-items: center;
   gap: 8px;
   padding: 8px 0;
+  flex-wrap: wrap;
+}
+
+.pma-docs-history {
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
 }
 
 .pma-docs-actions button:disabled {

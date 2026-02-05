@@ -155,7 +155,12 @@
         <button class="ghost sm" id="pma-scan-repos-btn">Scan repos</button>
       </div>
     </section>
-    <section class="pma-chat-section">
+    <section class="pma-view-tabs" id="pma-view-tabs">
+      <button class="pma-view-tab active" data-view="chat">Chat</button>
+      <button class="pma-view-tab" data-view="dispatches">Dispatches</button>
+      <button class="pma-view-tab" data-view="memory">Memory</button>
+    </section>
+    <section class="pma-chat-section" data-pma-view="chat">
       <div class="pma-chat-main">
         <div class="pma-chat-stream" id="pma-chat-stream">
           <div class="pma-chat-error hidden" id="pma-chat-error"></div>
@@ -197,7 +202,7 @@
         </div>
       </div>
     </section>
-    <section class="pma-dispatches-section" id="pma-dispatches-section">
+    <section class="pma-dispatches-section hidden" id="pma-dispatches-section" data-pma-view="dispatches">
       <div class="pma-dispatches-header">
         <h2>PMA Dispatches</h2>
         <span class="pill pill-small pill-warn" id="pma-dispatches-count">0</span>
@@ -208,14 +213,10 @@
         <div class="pma-dispatches-detail" id="pma-dispatches-detail"></div>
       </div>
     </section>
-    <section class="pma-docs-section hidden" id="pma-docs-section">
+    <section class="pma-docs-section hidden" id="pma-docs-section" data-pma-view="memory">
       <div class="pma-docs-header">
-        <h2>PMA Docs</h2>
-        <div class="pma-docs-tabs">
-          <button class="pma-docs-tab active" data-doc="AGENTS.md">AGENTS</button>
-          <button class="pma-docs-tab" data-doc="active_context.md">Active Context</button>
-          <button class="pma-docs-tab" data-doc="context_log.md">Context Log</button>
-        </div>
+        <h2>PMA Memory</h2>
+        <div class="pma-docs-tabs" id="pma-docs-tabs"></div>
       </div>
       <div class="pma-docs-content">
         <div class="pma-docs-meta" id="pma-docs-meta"></div>
@@ -223,6 +224,10 @@
           <textarea id="pma-docs-editor" class="pma-docs-editor" spellcheck="false"></textarea>
         </div>
         <div class="pma-docs-actions">
+          <select class="pma-docs-history" id="pma-docs-history">
+            <option value="">History (latest first)</option>
+          </select>
+          <button class="ghost sm" id="pma-docs-restore" title="Restore selected version" disabled>Restore</button>
           <button class="ghost sm" id="pma-docs-reset" title="Reset to default">Reset</button>
           <button class="ghost sm" id="pma-docs-snapshot" title="Snapshot active context to log">Snapshot to log</button>
           <button class="primary sm" id="pma-docs-save">Save</button>

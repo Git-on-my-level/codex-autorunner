@@ -1842,11 +1842,18 @@ def build_pma_routes() -> APIRouter:
             reset = bool(body.get("reset", False))
 
         pma_dir = hub_root / ".codex-autorunner" / "pma"
-        active_context_path = pma_dir / "active_context.md"
-        context_log_path = pma_dir / "context_log.md"
+        docs_dir = _pma_docs_dir(hub_root)
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        active_context_path = docs_dir / "active_context.md"
+        context_log_path = docs_dir / "context_log.md"
+        legacy_active_context_path = pma_dir / "active_context.md"
+        legacy_context_log_path = pma_dir / "context_log.md"
 
         try:
-            active_content = active_context_path.read_text(encoding="utf-8")
+            if active_context_path.exists():
+                active_content = active_context_path.read_text(encoding="utf-8")
+            else:
+                active_content = legacy_active_context_path.read_text(encoding="utf-8")
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to read active_context.md: {exc}"
@@ -1868,6 +1875,9 @@ def build_pma_routes() -> APIRouter:
         try:
             with context_log_path.open("a", encoding="utf-8") as f:
                 f.write(snapshot_content)
+            if legacy_context_log_path.exists():
+                with legacy_context_log_path.open("a", encoding="utf-8") as f:
+                    f.write(snapshot_content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to append context_log.md: {exc}"
@@ -1876,6 +1886,10 @@ def build_pma_routes() -> APIRouter:
         if reset:
             try:
                 atomic_write(active_context_path, pma_active_context_content())
+                if legacy_active_context_path.exists():
+                    atomic_write(
+                        legacy_active_context_path, pma_active_context_content()
+                    )
             except Exception as exc:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to reset active_context.md: {exc}"
@@ -1917,6 +1931,55 @@ def build_pma_routes() -> APIRouter:
         "prompt.md": pma_prompt_content,
     }
 
+    def _pma_docs_dir(hub_root: Path) -> Path:
+        return hub_root / ".codex-autorunner" / "pma" / "docs"
+
+    def _pma_legacy_doc_path(hub_root: Path, name: str) -> Path:
+        return hub_root / ".codex-autorunner" / "pma" / name
+
+    def _normalize_doc_name(name: str) -> str:
+        try:
+            return sanitize_filename(name)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid doc name: {name}"
+            ) from exc
+
+    def _sorted_doc_names(docs_dir: Path) -> list[str]:
+        names: set[str] = set()
+        if docs_dir.exists():
+            try:
+                for path in docs_dir.iterdir():
+                    if not path.is_file():
+                        continue
+                    if path.name.startswith("."):
+                        continue
+                    names.add(path.name)
+            except OSError:
+                pass
+        ordered: list[str] = []
+        for doc_name in PMA_DOC_ORDER:
+            if doc_name in names:
+                ordered.append(doc_name)
+        remaining = sorted(name for name in names if name not in ordered)
+        ordered.extend(remaining)
+        return ordered
+
+    def _write_doc_history(
+        hub_root: Path, doc_name: str, content: str
+    ) -> Optional[Path]:
+        docs_dir = _pma_docs_dir(hub_root)
+        history_root = docs_dir / "_history" / doc_name
+        try:
+            history_root.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            history_path = history_root / f"{timestamp}.md"
+            atomic_write(history_path, content)
+            return history_path
+        except Exception:
+            logger.exception("Failed to write PMA doc history for %s", doc_name)
+            return None
+
     @router.get("/docs/default/{name}")
     def get_pma_doc_default(name: str, request: Request) -> dict[str, str]:
         pma_config = _get_pma_config(request)
@@ -1935,10 +1998,16 @@ def build_pma_routes() -> APIRouter:
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
-        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        try:
+            ensure_pma_docs(hub_root)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
+            ) from exc
+        docs_dir = _pma_docs_dir(hub_root)
         result: list[dict[str, Any]] = []
-        for doc_name in PMA_DOC_ORDER:
-            doc_path = pma_dir / doc_name
+        for doc_name in _sorted_doc_names(docs_dir):
+            doc_path = docs_dir / doc_name
             entry: dict[str, Any] = {"name": doc_name}
             if doc_path.exists():
                 entry["exists"] = True
@@ -1969,13 +2038,16 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        if name not in PMA_DOC_SET:
-            raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
+        name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
-        pma_dir = hub_root / ".codex-autorunner" / "pma"
-        doc_path = pma_dir / name
+        docs_dir = _pma_docs_dir(hub_root)
+        doc_path = docs_dir / name
         if not doc_path.exists():
-            raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
+            legacy_path = _pma_legacy_doc_path(hub_root, name)
+            if legacy_path.exists():
+                doc_path = legacy_path
+            else:
+                raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
         try:
             content = doc_path.read_text(encoding="utf-8")
         except Exception as exc:
@@ -1991,7 +2063,15 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        if name not in PMA_DOC_SET:
+        name = _normalize_doc_name(name)
+        hub_root = request.app.state.config.root
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        docs_dir = _pma_docs_dir(hub_root)
+        if (
+            name not in PMA_DOC_SET
+            and not (docs_dir / name).exists()
+            and not (pma_dir / name).exists()
+        ):
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         content = body.get("content", "")
         if not isinstance(content, str):
@@ -2001,16 +2081,21 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=413, detail=f"Content too large (max {MAX_DOC_SIZE} bytes)"
             )
-        hub_root = request.app.state.config.root
-        pma_dir = hub_root / ".codex-autorunner" / "pma"
         pma_dir.mkdir(parents=True, exist_ok=True)
-        doc_path = pma_dir / name
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        doc_path = docs_dir / name
         try:
             atomic_write(doc_path, content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
+        try:
+            if name in PMA_DOC_SET or (pma_dir / name).exists():
+                atomic_write(pma_dir / name, content)
+        except Exception:
+            logger.exception("Failed to update legacy PMA doc %s", name)
+        _write_doc_history(hub_root, name, content)
         details = {
             "name": name,
             "size": len(content.encode("utf-8")),
@@ -2023,6 +2108,66 @@ def build_pma_routes() -> APIRouter:
             details=details,
         )
         return {"name": name, "status": "ok"}
+
+    @router.get("/docs/history/{name}")
+    def list_pma_doc_history(
+        name: str, request: Request, limit: int = 50
+    ) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        name = _normalize_doc_name(name)
+        hub_root = request.app.state.config.root
+        docs_dir = _pma_docs_dir(hub_root)
+        history_dir = docs_dir / "_history" / name
+        entries: list[dict[str, Any]] = []
+        if history_dir.exists():
+            try:
+                for path in sorted(
+                    (p for p in history_dir.iterdir() if p.is_file()),
+                    key=lambda p: p.name,
+                    reverse=True,
+                ):
+                    if len(entries) >= limit:
+                        break
+                    try:
+                        stat = path.stat()
+                        entries.append(
+                            {
+                                "id": path.name,
+                                "size": stat.st_size,
+                                "mtime": datetime.fromtimestamp(
+                                    stat.st_mtime, tz=timezone.utc
+                                ).isoformat(),
+                            }
+                        )
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+        return {"name": name, "entries": entries}
+
+    @router.get("/docs/history/{name}/{version_id}")
+    def get_pma_doc_history(
+        name: str, version_id: str, request: Request
+    ) -> dict[str, str]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        name = _normalize_doc_name(name)
+        version_id = _normalize_doc_name(version_id)
+        hub_root = request.app.state.config.root
+        docs_dir = _pma_docs_dir(hub_root)
+        history_path = docs_dir / "_history" / name / version_id
+        if not history_path.exists():
+            raise HTTPException(status_code=404, detail="History entry not found")
+        try:
+            content = history_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to read history entry: {exc}"
+            ) from exc
+        return {"name": name, "version_id": version_id, "content": content}
 
     @router.get("/dispatches")
     def list_pma_dispatches_endpoint(
