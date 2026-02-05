@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from codex_autorunner.core.filesystem import copy_path
+
 from .frontmatter import parse_markdown_frontmatter
 
 
@@ -73,14 +75,6 @@ def parse_user_reply(path: Path) -> tuple[Optional[UserReply], list[str]]:
 
     # Keep the body as-is, but normalize leading whitespace so it mirrors DISPATCH.md.
     return UserReply(body=body.lstrip("\n"), title=title_str, extra=extra), []
-
-
-def _copy_item(src: Path, dst: Path) -> None:
-    if src.is_dir():
-        shutil.copytree(src, dst)
-    else:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
 
 
 def _list_reply_items(reply_dir: Path) -> list[Path]:
@@ -151,12 +145,12 @@ def dispatch_reply(
     archived: list[Path] = []
     try:
         msg_dest = dest / "USER_REPLY.md"
-        _copy_item(paths.user_reply_path, msg_dest)
+        copy_path(paths.user_reply_path, msg_dest)
         archived.append(msg_dest)
 
         for item in items:
             item_dest = dest / item.name
-            _copy_item(item, item_dest)
+            copy_path(item, item_dest)
             archived.append(item_dest)
     except OSError as exc:
         return None, [f"Failed to archive reply: {exc}"]

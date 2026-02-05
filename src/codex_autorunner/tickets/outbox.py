@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from codex_autorunner.core.filesystem import copy_path
+
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_dispatch_frontmatter
 from .models import Dispatch, DispatchRecord
@@ -57,14 +59,6 @@ def resolve_outbox_paths(
 def ensure_outbox_dirs(paths: OutboxPaths) -> None:
     paths.dispatch_dir.mkdir(parents=True, exist_ok=True)
     paths.dispatch_history_dir.mkdir(parents=True, exist_ok=True)
-
-
-def _copy_item(src: Path, dst: Path) -> None:
-    if src.is_dir():
-        shutil.copytree(src, dst)
-    else:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
 
 
 def _list_dispatch_items(dispatch_dir: Path) -> list[Path]:
@@ -236,13 +230,13 @@ def archive_dispatch(
     try:
         # Archive the dispatch file.
         msg_dest = dest / "DISPATCH.md"
-        _copy_item(paths.dispatch_path, msg_dest)
+        copy_path(paths.dispatch_path, msg_dest)
         archived.append(msg_dest)
 
         # Archive all attachments.
         for item in items:
             item_dest = dest / item.name
-            _copy_item(item, item_dest)
+            copy_path(item, item_dest)
             archived.append(item_dest)
 
     except OSError as exc:
