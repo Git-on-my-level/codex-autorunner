@@ -251,11 +251,22 @@ def archive_dispatch(
 
     # Emit lifecycle event for dispatch creation
     if run_id:
+        dispatch_path = dest / "DISPATCH.md"
+        try:
+            relative_dispatch_path = str(dispatch_path.relative_to(paths.run_dir))
+        except Exception:
+            relative_dispatch_path = str(dispatch_path)
         _emit_lifecycle(
             "dispatch_created",
             repo_id,
             run_id,
             {
+                "repo_id": repo_id,
+                "run_id": run_id,
+                "dispatch_path": relative_dispatch_path,
+                "dispatch_seq": next_seq,
+                "dispatch_mode": dispatch.mode,
+                "dispatch_title": dispatch.title,
                 "seq": next_seq,
                 "mode": dispatch.mode,
                 "title": dispatch.title,

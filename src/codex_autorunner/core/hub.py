@@ -18,6 +18,7 @@ from ..manifest import (
     sanitize_repo_id,
     save_manifest,
 )
+from ..tickets.outbox import set_lifecycle_emitter
 from .archive import archive_worktree_snapshot, build_snapshot_id
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .git_utils import (
@@ -284,6 +285,7 @@ class HubSupervisor:
         self._dispatch_interceptor_task: Optional[asyncio.Task] = None
         self._dispatch_interceptor_stop_event: Optional[threading.Event] = None
         self._dispatch_interceptor_thread: Optional[threading.Thread] = None
+        self._wire_outbox_lifecycle()
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
         self._start_dispatch_interceptor()
@@ -1015,6 +1017,22 @@ class HubSupervisor:
     def shutdown(self) -> None:
         self._stop_lifecycle_event_processor()
         self._stop_dispatch_interceptor()
+        set_lifecycle_emitter(None)
+
+    def _wire_outbox_lifecycle(self) -> None:
+        if not self.hub_config.pma.enabled:
+            set_lifecycle_emitter(None)
+            return
+
+        def _emit_outbox_event(
+            event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+        ) -> None:
+            if event_type == "dispatch_created":
+                self._lifecycle_emitter.emit_dispatch_created(
+                    repo_id, run_id, data=data
+                )
+
+        set_lifecycle_emitter(_emit_outbox_event)
 
     def _start_dispatch_interceptor(self) -> None:
         if not self.hub_config.pma.enabled:
