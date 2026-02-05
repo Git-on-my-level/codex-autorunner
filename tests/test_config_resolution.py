@@ -374,6 +374,26 @@ def test_static_assets_validation_rejects_negative_max_cache_age_days(
         load_hub_config(hub_root)
 
 
+def test_static_assets_validation_allows_null_max_cache_age_days(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "static_assets": {
+                "cache_root": ".codex-autorunner/static-cache",
+                "max_cache_entries": 5,
+                "max_cache_age_days": None,
+            },
+        },
+    )
+
+    load_hub_config(hub_root)
+
+
 def test_housekeeping_validation_rejects_invalid_interval_seconds(
     tmp_path: Path,
 ) -> None:

@@ -2651,8 +2651,14 @@ def _validate_optional_type(
     expected: Union[Type, Tuple[Type, ...]],
     *,
     path: str,
+    allow_none: bool = False,
 ) -> None:
-    if key in mapping and not isinstance(mapping.get(key), expected):
+    if key in mapping:
+        value = mapping.get(key)
+        if value is None and allow_none:
+            return
+        if isinstance(value, expected):
+            return
         type_name = (
             " or ".join(t.__name__ for t in expected)
             if isinstance(expected, tuple)
@@ -2760,16 +2766,28 @@ def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:
     if not isinstance(static_cfg, dict):
         raise ConfigError(f"{scope}.static_assets must be a mapping if provided")
     _validate_optional_type(
-        static_cfg, "cache_root", str, path=f"{scope}.static_assets"
+        static_cfg,
+        "cache_root",
+        str,
+        path=f"{scope}.static_assets",
+        allow_none=True,
     )
     _validate_optional_type(
-        static_cfg, "max_cache_entries", int, path=f"{scope}.static_assets"
+        static_cfg,
+        "max_cache_entries",
+        int,
+        path=f"{scope}.static_assets",
+        allow_none=True,
     )
     _validate_optional_int_ge(
         static_cfg, "max_cache_entries", 0, path=f"{scope}.static_assets"
     )
     _validate_optional_type(
-        static_cfg, "max_cache_age_days", int, path=f"{scope}.static_assets"
+        static_cfg,
+        "max_cache_age_days",
+        int,
+        path=f"{scope}.static_assets",
+        allow_none=True,
     )
     _validate_optional_int_ge(
         static_cfg, "max_cache_age_days", 0, path=f"{scope}.static_assets"
