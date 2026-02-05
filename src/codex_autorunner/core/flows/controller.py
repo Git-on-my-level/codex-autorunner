@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
+from ...manifest import ManifestError, load_manifest
 from ..lifecycle_events import LifecycleEventEmitter
 from ..utils import find_repo_root
 from .definition import FlowDefinition
@@ -46,16 +47,30 @@ class FlowController:
         self.artifacts_root = artifacts_root
         self.store = FlowStore(db_path, durable=durable)
         self._event_listeners: Set[Callable[[FlowEvent], None]] = set()
-        self._lifecycle_event_listeners: Set[Callable[[str, str, str, dict], None]] = (
-            set()
-        )
+        self._lifecycle_event_listeners: Set[
+            Callable[[str, str, str, dict, str], None]
+        ] = set()
         self._lock = asyncio.Lock()
         self._lifecycle_emitter: Optional[LifecycleEventEmitter] = None
+        self._repo_id = ""
         if hub_root is None:
             hub_root = _find_hub_root(db_path.parent.parent if db_path else None)
         if hub_root is not None:
             self._lifecycle_emitter = LifecycleEventEmitter(hub_root)
             self.add_lifecycle_event_listener(self._emit_to_lifecycle_store)
+            self._repo_id = self._resolve_repo_id(hub_root)
+
+    def _resolve_repo_id(self, hub_root: Path) -> str:
+        repo_root = self.db_path.parent.parent if self.db_path else None
+        if repo_root is None:
+            return ""
+        manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+        try:
+            manifest = load_manifest(manifest_path, hub_root)
+        except ManifestError:
+            return ""
+        entry = manifest.get_by_path(hub_root, repo_root)
+        return entry.id if entry else ""
 
     def initialize(self) -> None:
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
@@ -209,38 +224,61 @@ class FlowController:
         self._event_listeners.discard(listener)
 
     def add_lifecycle_event_listener(
-        self, listener: Callable[[str, str, str, dict], None]
+        self, listener: Callable[[str, str, str, dict, str], None]
     ) -> None:
         self._lifecycle_event_listeners.add(listener)
 
     def remove_lifecycle_event_listener(
-        self, listener: Callable[[str, str, str, dict], None]
+        self, listener: Callable[[str, str, str, dict, str], None]
     ) -> None:
         self._lifecycle_event_listeners.discard(listener)
 
     def _emit_lifecycle(
-        self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+        self,
+        event_type: str,
+        repo_id: str,
+        run_id: str,
+        data: Dict[str, Any],
+        origin: str,
     ) -> None:
+        resolved_repo_id = self._repo_id or repo_id
+        payload = data
+        if resolved_repo_id and data.get("repo_id") != resolved_repo_id:
+            payload = dict(data)
+            payload["repo_id"] = resolved_repo_id
         for listener in self._lifecycle_event_listeners:
             try:
-                listener(event_type, repo_id, run_id, data)
+                listener(event_type, resolved_repo_id, run_id, payload, origin)
             except Exception as e:
                 _logger.exception("Error in lifecycle event listener: %s", e)
 
     def _emit_to_lifecycle_store(
-        self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+        self,
+        event_type: str,
+        repo_id: str,
+        run_id: str,
+        data: Dict[str, Any],
+        origin: str,
     ) -> None:
         if self._lifecycle_emitter is None:
             return
         try:
             if event_type == "flow_paused":
-                self._lifecycle_emitter.emit_flow_paused(repo_id, run_id, data=data)
+                self._lifecycle_emitter.emit_flow_paused(
+                    repo_id, run_id, data=data, origin=origin
+                )
             elif event_type == "flow_completed":
-                self._lifecycle_emitter.emit_flow_completed(repo_id, run_id, data=data)
+                self._lifecycle_emitter.emit_flow_completed(
+                    repo_id, run_id, data=data, origin=origin
+                )
             elif event_type == "flow_failed":
-                self._lifecycle_emitter.emit_flow_failed(repo_id, run_id, data=data)
+                self._lifecycle_emitter.emit_flow_failed(
+                    repo_id, run_id, data=data, origin=origin
+                )
             elif event_type == "flow_stopped":
-                self._lifecycle_emitter.emit_flow_stopped(repo_id, run_id, data=data)
+                self._lifecycle_emitter.emit_flow_stopped(
+                    repo_id, run_id, data=data, origin=origin
+                )
         except Exception as exc:
             _logger.exception("Error emitting to lifecycle store: %s", exc)
 

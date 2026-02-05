@@ -309,6 +309,8 @@ export function createDocChat(config) {
                     parts.push(`${msg.meta.steps} steps`);
                 if (msg.meta.duration)
                     parts.push(`${msg.meta.duration.toFixed(1)}s`);
+                if (msg.meta.tag)
+                    parts.push(String(msg.meta.tag));
                 if (state.contextUsagePercent !== null && msg.isFinal) {
                     parts.push(`ctx left ${state.contextUsagePercent}%`);
                 }

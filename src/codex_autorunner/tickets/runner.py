@@ -591,6 +591,7 @@ class TicketRunner:
             ticket_id=current_ticket_id,
             repo_id=self._repo_id,
             run_id=self._run_id,
+            origin="runner",
         )
         if dispatch_errors:
             # Treat as pause: user should fix DISPATCH.md frontmatter. Keep outbox

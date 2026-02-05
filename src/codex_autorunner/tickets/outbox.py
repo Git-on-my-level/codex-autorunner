@@ -11,22 +11,28 @@ from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_dispatch_frontmatter
 from .models import Dispatch, DispatchRecord
 
-_lifecycle_emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]] = None
+_lifecycle_emitter: Optional[Callable[[str, str, str, Dict[str, Any], str], None]] = (
+    None
+)
 
 
 def set_lifecycle_emitter(
-    emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]],
+    emitter: Optional[Callable[[str, str, str, Dict[str, Any], str], None]],
 ) -> None:
     global _lifecycle_emitter
     _lifecycle_emitter = emitter
 
 
 def _emit_lifecycle(
-    event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+    event_type: str,
+    repo_id: str,
+    run_id: str,
+    data: Dict[str, Any],
+    origin: str,
 ) -> None:
     if _lifecycle_emitter:
         try:
-            _lifecycle_emitter(event_type, repo_id, run_id, data)
+            _lifecycle_emitter(event_type, repo_id, run_id, data, origin)
         except Exception:
             pass
 
@@ -191,6 +197,7 @@ def archive_dispatch(
     ticket_id: Optional[str] = None,
     repo_id: str = "",
     run_id: str = "",
+    origin: str = "runner",
 ) -> tuple[Optional[DispatchRecord], list[str]]:
     """Archive current dispatch and attachments to dispatch history.
 
@@ -251,16 +258,28 @@ def archive_dispatch(
 
     # Emit lifecycle event for dispatch creation
     if run_id:
+        dispatch_path = dest / "DISPATCH.md"
+        try:
+            relative_dispatch_path = str(dispatch_path.relative_to(paths.run_dir))
+        except Exception:
+            relative_dispatch_path = str(dispatch_path)
         _emit_lifecycle(
             "dispatch_created",
             repo_id,
             run_id,
             {
+                "repo_id": repo_id,
+                "run_id": run_id,
+                "dispatch_path": relative_dispatch_path,
+                "dispatch_seq": next_seq,
+                "dispatch_mode": dispatch.mode,
+                "dispatch_title": dispatch.title,
                 "seq": next_seq,
                 "mode": dispatch.mode,
                 "title": dispatch.title,
                 "ticket_id": ticket_id,
             },
+            origin,
         )
 
     return (

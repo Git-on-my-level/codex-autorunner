@@ -18,6 +18,7 @@ import httpx
 from ....agents.opencode.client import OpenCodeProtocolError
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.logging_utils import log_event
+from ....core.pma_sink import PmaActiveSinkStore
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.update_paths import resolve_update_paths
@@ -1203,6 +1204,25 @@ class TelegramCommandHandlers(
             message.thread_id,
             apply_pma,
         )
+        try:
+            sink_store = PmaActiveSinkStore(Path(self._hub_root))
+            if enabled:
+                sink_store.set_telegram(
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    topic_key=topic_key(message.chat_id, message.thread_id),
+                )
+            else:
+                sink_store.clear()
+        except Exception:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.pma.active_sink.update_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                enabled=enabled,
+            )
         status = "enabled" if enabled else "disabled"
         if enabled:
             hint = "Use /pma off to exit. Previous repo binding saved."

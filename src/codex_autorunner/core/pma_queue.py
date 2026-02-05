@@ -83,8 +83,10 @@ class PmaQueue:
         self._lane_queues: dict[str, asyncio.Queue[PmaQueueItem]] = {}
         self._lane_locks: dict[str, asyncio.Lock] = {}
         self._lane_events: dict[str, asyncio.Event] = {}
+        self._lane_known_ids: dict[str, set[str]] = {}
         self._replayed_lanes: set[str] = set()
         self._lock = asyncio.Lock()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def _lane_queue_path(self, lane_id: str) -> Path:
         safe_lane_id = lane_id.replace(":", "__COLON__").replace("/", "__SLASH__")
@@ -115,6 +117,21 @@ class PmaQueue:
             self._lane_queues[lane_id] = queue
         return queue
 
+    def _ensure_lane_known_ids(self, lane_id: str) -> set[str]:
+        known = self._lane_known_ids.get(lane_id)
+        if known is None:
+            known = set()
+            self._lane_known_ids[lane_id] = known
+        return known
+
+    def _record_loop(self) -> None:
+        if self._loop is not None:
+            return
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
     async def enqueue(
         self,
         lane_id: str,
@@ -122,6 +139,7 @@ class PmaQueue:
         payload: dict[str, Any],
     ) -> tuple[PmaQueueItem, Optional[str]]:
         async with self._lock:
+            self._record_loop()
             existing = await self._find_by_idempotency_key(lane_id, idempotency_key)
             if existing:
                 if existing.state in (QueueItemState.PENDING, QueueItemState.RUNNING):
@@ -139,10 +157,36 @@ class PmaQueue:
             await self._append_to_file(item)
             queue = self._ensure_lane_queue(lane_id)
             await queue.put(item)
+            self._ensure_lane_known_ids(lane_id).add(item.item_id)
             self._ensure_lane_event(lane_id).set()
             return item, None
 
+    def enqueue_sync(
+        self,
+        lane_id: str,
+        idempotency_key: str,
+        payload: dict[str, Any],
+    ) -> tuple[PmaQueueItem, Optional[str]]:
+        existing = self._find_by_idempotency_key_sync(lane_id, idempotency_key)
+        if existing:
+            if existing.state in (QueueItemState.PENDING, QueueItemState.RUNNING):
+                dedupe_item = PmaQueueItem.create(
+                    lane_id=lane_id,
+                    idempotency_key=idempotency_key,
+                    payload=payload,
+                )
+                dedupe_item.state = QueueItemState.DEDUPED
+                dedupe_item.dedupe_reason = f"duplicate_of_{existing.item_id}"
+                self._append_to_file_sync(dedupe_item)
+                return dedupe_item, f"duplicate of {existing.item_id}"
+
+        item = PmaQueueItem.create(lane_id, idempotency_key, payload)
+        self._append_to_file_sync(item)
+        self._notify_in_memory_enqueue(item)
+        return item, None
+
     async def dequeue(self, lane_id: str) -> Optional[PmaQueueItem]:
+        self._record_loop()
         queue = self._lane_queues.get(lane_id)
         if queue is None or queue.empty():
             return None
@@ -206,11 +250,15 @@ class PmaQueue:
         return cancelled
 
     async def replay_pending(self, lane_id: str) -> int:
+        self._record_loop()
         if lane_id in self._replayed_lanes:
             return 0
         self._replayed_lanes.add(lane_id)
 
         items = await self.list_items(lane_id)
+        known = self._ensure_lane_known_ids(lane_id)
+        for item in items:
+            known.add(item.item_id)
         pending = [item for item in items if item.state == QueueItemState.PENDING]
         if not pending:
             return 0
@@ -222,29 +270,45 @@ class PmaQueue:
         return len(pending)
 
     async def wait_for_lane_item(
-        self, lane_id: str, cancel_event: Optional[asyncio.Event] = None
+        self,
+        lane_id: str,
+        cancel_event: Optional[asyncio.Event] = None,
+        *,
+        poll_interval_seconds: float = 1.0,
     ) -> bool:
+        self._record_loop()
         event = self._ensure_lane_event(lane_id)
         if event.is_set():
             event.clear()
             return True
 
-        wait_tasks = [asyncio.create_task(event.wait())]
-        if cancel_event is not None:
-            wait_tasks.append(asyncio.create_task(cancel_event.wait()))
+        poll_interval = max(0.1, poll_interval_seconds)
+        while True:
+            wait_tasks = [asyncio.create_task(event.wait())]
+            if cancel_event is not None:
+                wait_tasks.append(asyncio.create_task(cancel_event.wait()))
 
-        done, pending = await asyncio.wait(
-            wait_tasks, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
+            try:
+                done, pending = await asyncio.wait(
+                    wait_tasks,
+                    timeout=poll_interval,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for task in wait_tasks:
+                    if not task.done():
+                        task.cancel()
 
-        if cancel_event is not None and cancel_event.is_set():
-            return False
+            if cancel_event is not None and cancel_event.is_set():
+                return False
 
-        if event.is_set():
-            event.clear()
-        return True
+            if event.is_set():
+                event.clear()
+                return True
+
+            added = await self._refresh_lane_from_disk(lane_id)
+            if added:
+                return True
 
     async def list_items(self, lane_id: str) -> list[PmaQueueItem]:
         path = self._lane_queue_path(lane_id)
@@ -253,10 +317,11 @@ class PmaQueue:
 
         items: list[PmaQueueItem] = []
         async with self._ensure_lane_lock(lane_id):
-            try:
-                content = path.read_text(encoding="utf-8")
-            except OSError:
-                return []
+            with file_lock(self._lane_queue_lock_path(lane_id)):
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except OSError:
+                    return []
 
             for line in content.strip().splitlines():
                 line = line.strip()
@@ -269,6 +334,29 @@ class PmaQueue:
                     continue
 
         return items
+
+    async def _refresh_lane_from_disk(self, lane_id: str) -> int:
+        items = await self.list_items(lane_id)
+        if not items:
+            return 0
+
+        known = self._ensure_lane_known_ids(lane_id)
+        new_pending: list[PmaQueueItem] = []
+        for item in items:
+            if item.item_id in known:
+                continue
+            known.add(item.item_id)
+            if item.state == QueueItemState.PENDING:
+                new_pending.append(item)
+
+        if not new_pending:
+            return 0
+
+        queue = self._ensure_lane_queue(lane_id)
+        for item in new_pending:
+            await queue.put(item)
+        self._ensure_lane_event(lane_id).set()
+        return len(new_pending)
 
     async def _find_by_idempotency_key(
         self, lane_id: str, idempotency_key: str
@@ -323,6 +411,67 @@ class PmaQueue:
 
                 if updated:
                     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _append_to_file_sync(self, item: PmaQueueItem) -> None:
+        path = self._lane_queue_path(item.lane_id)
+        with file_lock(self._lane_queue_lock_path(item.lane_id)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(item.to_dict(), separators=(",", ":")) + "\n"
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line)
+
+    def _read_items_sync(self, lane_id: str) -> list[PmaQueueItem]:
+        path = self._lane_queue_path(lane_id)
+        if not path.exists():
+            return []
+
+        items: list[PmaQueueItem] = []
+        with file_lock(self._lane_queue_lock_path(lane_id)):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError:
+                return []
+
+        for line in content.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                items.append(PmaQueueItem.from_dict(data))
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+        return items
+
+    def _find_by_idempotency_key_sync(
+        self, lane_id: str, idempotency_key: str
+    ) -> Optional[PmaQueueItem]:
+        items = self._read_items_sync(lane_id)
+        for item in items:
+            if item.idempotency_key == idempotency_key and item.state in (
+                QueueItemState.PENDING,
+                QueueItemState.RUNNING,
+            ):
+                return item
+        return None
+
+    def _notify_in_memory_enqueue(self, item: PmaQueueItem) -> None:
+        self._ensure_lane_known_ids(item.lane_id).add(item.item_id)
+        queue = self._lane_queues.get(item.lane_id)
+        event = self._lane_events.get(item.lane_id)
+        loop = self._loop
+        if loop is None or loop.is_closed() or queue is None or event is None:
+            return
+
+        def _enqueue() -> None:
+            queue.put_nowait(item)
+            event.set()
+
+        try:
+            loop.call_soon_threadsafe(_enqueue)
+        except RuntimeError:
+            return
 
     async def get_lane_stats(self, lane_id: str) -> dict[str, Any]:
         items = await self.list_items(lane_id)

@@ -486,6 +486,15 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "docs_max_chars": 12_000,
         "active_context_max_lines": 200,
         "context_log_tail_lines": 120,
+        "reactive_enabled": True,
+        "reactive_event_types": [
+            "flow_paused",
+            "flow_failed",
+            "flow_completed",
+            "dispatch_created",
+        ],
+        "reactive_debounce_seconds": 300,
+        "reactive_origin_blocklist": ["pma"],
     },
     "templates": {
         "enabled": True,
@@ -864,6 +873,10 @@ class PmaConfig:
     active_context_max_lines: int = 200
     context_log_tail_lines: int = 120
     dispatch_interception_enabled: bool = False
+    reactive_enabled: bool = True
+    reactive_event_types: List[str] = dataclasses.field(default_factory=list)
+    reactive_debounce_seconds: int = 300
+    reactive_origin_blocklist: List[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -1418,6 +1431,41 @@ def _parse_pma_config(
             defaults.get("dispatch_interception_enabled", False),
         )
     )
+    reactive_enabled = bool(
+        cfg.get("reactive_enabled", defaults.get("reactive_enabled", True))
+    )
+    reactive_event_types_raw = cfg.get(
+        "reactive_event_types", defaults.get("reactive_event_types", [])
+    )
+    if isinstance(reactive_event_types_raw, list):
+        reactive_event_types = [
+            str(value).strip()
+            for value in reactive_event_types_raw
+            if str(value).strip()
+        ]
+    else:
+        reactive_event_types = []
+    reactive_debounce_seconds_raw = cfg.get(
+        "reactive_debounce_seconds", defaults.get("reactive_debounce_seconds", 300)
+    )
+    try:
+        reactive_debounce_seconds = int(reactive_debounce_seconds_raw)
+    except (ValueError, TypeError):
+        reactive_debounce_seconds = 300
+    if reactive_debounce_seconds < 0:
+        reactive_debounce_seconds = 0
+    reactive_origin_blocklist_raw = cfg.get(
+        "reactive_origin_blocklist",
+        defaults.get("reactive_origin_blocklist", ["pma"]),
+    )
+    if isinstance(reactive_origin_blocklist_raw, list):
+        reactive_origin_blocklist = [
+            str(value).strip()
+            for value in reactive_origin_blocklist_raw
+            if str(value).strip()
+        ]
+    else:
+        reactive_origin_blocklist = []
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
@@ -1431,6 +1479,10 @@ def _parse_pma_config(
         active_context_max_lines=active_context_max_lines,
         context_log_tail_lines=context_log_tail_lines,
         dispatch_interception_enabled=dispatch_interception_enabled,
+        reactive_enabled=reactive_enabled,
+        reactive_event_types=reactive_event_types,
+        reactive_debounce_seconds=reactive_debounce_seconds,
+        reactive_origin_blocklist=reactive_origin_blocklist,
     )
 
 

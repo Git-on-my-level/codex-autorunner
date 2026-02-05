@@ -39,9 +39,11 @@ def test_lifecycle_event_store_load_save():
         assert loaded[0].repo_id == "test-repo"
         assert loaded[0].run_id == "run-123"
         assert loaded[0].data == {"test": "data"}
+        assert loaded[0].origin == "system"
         assert loaded[0].processed is False
         assert loaded[1].event_type == LifecycleEventType.DISPATCH_CREATED
         assert loaded[1].data == {"seq": 1}
+        assert loaded[1].origin == "system"
 
 
 def test_lifecycle_event_store_get_unprocessed():
@@ -88,14 +90,17 @@ def test_lifecycle_event_emitter():
         emitter = LifecycleEventEmitter(tmp_path)
 
         emitter.emit_flow_paused("test-repo", "run-1")
-        emitter.emit_flow_completed("test-repo", "run-1")
-        emitter.emit_dispatch_created("test-repo", "run-1")
+        emitter.emit_flow_completed("test-repo", "run-1", origin="runner")
+        emitter.emit_dispatch_created("test-repo", "run-1", origin="user")
 
         events = emitter._store.load()
         assert len(events) == 3
         assert events[0].event_type == LifecycleEventType.FLOW_PAUSED
         assert events[1].event_type == LifecycleEventType.FLOW_COMPLETED
         assert events[2].event_type == LifecycleEventType.DISPATCH_CREATED
+        assert events[0].origin == "system"
+        assert events[1].origin == "runner"
+        assert events[2].origin == "user"
 
 
 def test_lifecycle_event_store_prune():

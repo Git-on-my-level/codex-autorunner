@@ -188,11 +188,18 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
     ca_dir = hub_root / ".codex-autorunner"
     pma_dir = ca_dir / "pma"
     pma_dir.mkdir(parents=True, exist_ok=True)
-    _seed_doc(pma_dir / "prompt.md", force, pma_prompt_content())
-    _seed_doc(pma_dir / "ABOUT_CAR.md", force, pma_about_content())
-    _seed_doc(pma_dir / "AGENTS.md", force, pma_agents_content())
-    _seed_doc(pma_dir / "active_context.md", force, pma_active_context_content())
-    _seed_doc(pma_dir / "context_log.md", force, pma_context_log_content())
+    docs_dir = pma_dir / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    seeds = (
+        ("prompt.md", pma_prompt_content),
+        ("ABOUT_CAR.md", pma_about_content),
+        ("AGENTS.md", pma_agents_content),
+        ("active_context.md", pma_active_context_content),
+        ("context_log.md", pma_context_log_content),
+    )
+    for filename, content_fn in seeds:
+        _seed_doc(pma_dir / filename, force, content_fn())
+        _seed_doc(docs_dir / filename, force, content_fn())
 
 
 def seed_hub_files(hub_root: Path, force: bool = False) -> None:
@@ -308,6 +315,20 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 
 - User uploads arrive in `.codex-autorunner/pma/inbox/`.
 - Send user-facing files by writing to `.codex-autorunner/pma/outbox/`.
+
+## PMA dispatches (user attention)
+
+- Create PMA dispatches by writing Markdown files to:
+  `.codex-autorunner/pma/dispatches/<timestamp>_<id>.md`
+- File format: YAML frontmatter + markdown body.
+- Required frontmatter fields:
+  - `title`: short summary
+  - `priority`: `info` | `warn` | `action`
+  - `created_at`: ISO 8601 timestamp
+  - `source_turn_id`: PMA turn id (for notifications)
+  - `links`: optional list of `{label, href}` objects
+  - `resolved_at`: leave empty/omit until resolved
+- The web UI lists unresolved dispatches; resolve via UI or set `resolved_at`.
 """
 
 

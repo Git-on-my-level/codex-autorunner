@@ -588,11 +588,14 @@ def test_pma_docs_get_nonexistent(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
 
-    # Delete a doc and then try to get it
+    # Delete the doc in both new docs/ and legacy locations, then try to get it
     pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
-    agents_path = pma_dir / "AGENTS.md"
-    if agents_path.exists():
-        agents_path.unlink()
+    docs_agents_path = pma_dir / "docs" / "AGENTS.md"
+    legacy_agents_path = pma_dir / "AGENTS.md"
+    if docs_agents_path.exists():
+        docs_agents_path.unlink()
+    if legacy_agents_path.exists():
+        legacy_agents_path.unlink()
 
     resp = client.get("/hub/pma/docs/AGENTS.md")
     assert resp.status_code == 404
@@ -664,7 +667,9 @@ def test_pma_context_snapshot(hub_env) -> None:
     client = TestClient(app)
 
     pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
-    active_path = pma_dir / "active_context.md"
+    docs_dir = pma_dir / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    active_path = docs_dir / "active_context.md"
     active_content = "# Active Context\n\n- alpha\n- beta\n"
     active_path.write_text(active_content, encoding="utf-8")
 
@@ -675,7 +680,7 @@ def test_pma_context_snapshot(hub_env) -> None:
     assert payload["active_context_line_count"] == len(active_content.splitlines())
     assert payload["reset"] is True
 
-    log_content = (pma_dir / "context_log.md").read_text(encoding="utf-8")
+    log_content = (docs_dir / "context_log.md").read_text(encoding="utf-8")
     assert "## Snapshot:" in log_content
     assert active_content in log_content
     assert active_path.read_text(encoding="utf-8") == pma_active_context_content()
