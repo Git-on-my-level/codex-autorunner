@@ -18,6 +18,7 @@ from ...manifest import load_manifest
 from ...tickets import AgentPool
 from .adapter import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from .helpers import format_public_error
 from .state import parse_topic_key
 
 
@@ -296,8 +297,13 @@ class TelegramTicketFlowBridge:
     def _format_ticket_flow_pause_reason(record: FlowRunRecord) -> str:
         state = record.state or {}
         engine = state.get("ticket_engine") or {}
-        reason = (
+        reason_raw = (
             engine.get("reason") or record.error_message or "Paused without details."
+        )
+        reason = (
+            format_public_error(str(reason_raw))
+            if reason_raw
+            else "Paused without details."
         )
         return f"Reason: {reason}"
 

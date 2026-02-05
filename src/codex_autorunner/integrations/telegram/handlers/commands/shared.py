@@ -11,6 +11,7 @@ import httpx
 from .....agents.opencode.client import OpenCodeProtocolError
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
 from ...adapter import InlineButton, build_inline_keyboard, encode_cancel_callback
+from ...helpers import format_public_error
 
 if TYPE_CHECKING:
     pass
@@ -60,15 +61,15 @@ class SharedHelpers:
                     or payload.get("error")
                 )
                 if isinstance(detail, str) and detail:
-                    return detail
+                    return format_public_error(detail)
             response_text = exc.response.text.strip()
             if response_text:
-                return response_text
+                return format_public_error(response_text)
             return f"Request failed (HTTP {exc.response.status_code})."
         if isinstance(exc, httpx.RequestError):
             detail = str(exc).strip()
             if detail:
-                return detail
+                return format_public_error(detail)
             return "Request failed."
         return None
 
@@ -84,12 +85,12 @@ class SharedHelpers:
         if isinstance(exc, OpenCodeSupervisorError):
             detail = str(exc).strip()
             if detail:
-                return f"OpenCode backend unavailable ({detail})."
+                return f"OpenCode backend unavailable ({format_public_error(detail)})."
             return "OpenCode backend unavailable."
         if isinstance(exc, OpenCodeProtocolError):
             detail = str(exc).strip()
             if detail:
-                return f"OpenCode protocol error: {detail}"
+                return f"OpenCode protocol error: {format_public_error(detail)}"
             return "OpenCode protocol error."
         if isinstance(exc, json.JSONDecodeError):
             return "OpenCode returned invalid JSON."
@@ -100,15 +101,15 @@ class SharedHelpers:
             except Exception:
                 detail = None
             if detail:
-                return f"OpenCode error: {detail}"
+                return f"OpenCode error: {format_public_error(detail)}"
             response_text = exc.response.text.strip()
             if response_text:
-                return f"OpenCode error: {response_text}"
+                return f"OpenCode error: {format_public_error(response_text)}"
             return f"OpenCode request failed (HTTP {exc.response.status_code})."
         if isinstance(exc, httpx.RequestError):
             detail = str(exc).strip()
             if detail:
-                return f"OpenCode request failed: {detail}"
+                return f"OpenCode request failed: {format_public_error(detail)}"
             return "OpenCode request failed."
         return None
 

@@ -81,6 +81,7 @@ from ...helpers import (
     _set_thread_summary,
     _with_conversation_id,
     find_github_links,
+    format_public_error,
     is_interrupt_status,
 )
 from ...state import topic_key as build_topic_key
@@ -340,12 +341,12 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, OpenCodeSupervisorError):
         detail = str(exc).strip()
         if detail:
-            return f"OpenCode backend unavailable ({detail})."
+            return f"OpenCode backend unavailable ({format_public_error(detail)})."
         return "OpenCode backend unavailable."
     if isinstance(exc, OpenCodeProtocolError):
         detail = str(exc).strip()
         if detail:
-            return f"OpenCode protocol error: {detail}"
+            return f"OpenCode protocol error: {format_public_error(detail)}"
         return "OpenCode protocol error."
     if isinstance(exc, json.JSONDecodeError):
         return "OpenCode returned invalid JSON."
@@ -356,15 +357,15 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
         except Exception:
             detail = None
         if detail:
-            return f"OpenCode error: {detail}"
+            return f"OpenCode error: {format_public_error(detail)}"
         response_text = exc.response.text.strip()
         if response_text:
-            return f"OpenCode error: {response_text}"
+            return f"OpenCode error: {format_public_error(response_text)}"
         return f"OpenCode request failed (HTTP {exc.response.status_code})."
     if isinstance(exc, httpx.RequestError):
         detail = str(exc).strip()
         if detail:
-            return f"OpenCode request failed: {detail}"
+            return f"OpenCode request failed: {format_public_error(detail)}"
         return "OpenCode request failed."
     return None
 
@@ -399,15 +400,15 @@ def _format_httpx_exception(exc: Exception) -> Optional[str]:
                 payload.get("detail") or payload.get("message") or payload.get("error")
             )
             if isinstance(detail, str) and detail:
-                return detail
+                return format_public_error(detail)
         response_text = exc.response.text.strip()
         if response_text:
-            return response_text
+            return format_public_error(response_text)
         return f"Request failed (HTTP {exc.response.status_code})."
     if isinstance(exc, httpx.RequestError):
         detail = str(exc).strip()
         if detail:
-            return detail
+            return format_public_error(detail)
         return "Request failed."
     return None
 
@@ -424,10 +425,7 @@ def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
 
 
 def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
-    cleaned = " ".join(detail.split())
-    if len(cleaned) > limit:
-        return f"{cleaned[: limit - 3]}..."
-    return cleaned
+    return format_public_error(detail, limit=limit)
 
 
 def _format_telegram_download_error(exc: Exception) -> Optional[str]:
@@ -435,10 +433,10 @@ def _format_telegram_download_error(exc: Exception) -> Optional[str]:
         if isinstance(current, Exception):
             detail = _format_httpx_exception(current)
             if detail:
-                return _sanitize_error_detail(detail)
+                return format_public_error(detail)
             message = str(current).strip()
             if message and message not in _GENERIC_TELEGRAM_ERRORS:
-                return _sanitize_error_detail(message)
+                return format_public_error(message)
     return None
 
 

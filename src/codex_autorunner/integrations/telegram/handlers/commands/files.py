@@ -15,7 +15,7 @@ from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from ...adapter import TelegramMessage
 from ...config import TelegramMediaCandidate
-from ...helpers import _path_within
+from ...helpers import _path_within, format_public_error
 from ...state import PendingVoiceRecord, TelegramTopicRecord
 from .. import messages as message_handlers
 from .shared import SharedHelpers
@@ -57,10 +57,7 @@ def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
 
 
 def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
-    cleaned = " ".join(detail.split())
-    if len(cleaned) > limit:
-        return f"{cleaned[: limit - 3]}..."
-    return cleaned
+    return format_public_error(detail, limit=limit)
 
 
 @dataclass
@@ -166,10 +163,10 @@ class FilesCommands(SharedHelpers):
             if isinstance(current, Exception):
                 detail = self._format_httpx_exception(current)
                 if detail:
-                    return _sanitize_error_detail(detail)
+                    return format_public_error(detail)
                 message = str(current).strip()
                 if message and message not in _GENERIC_TELEGRAM_ERRORS:
-                    return _sanitize_error_detail(message)
+                    return format_public_error(message)
         return None
 
     def _format_download_failure_response(
@@ -177,7 +174,7 @@ class FilesCommands(SharedHelpers):
     ) -> str:
         base = f"Failed to download {kind}."
         if detail:
-            return f"{base} Reason: {detail}"
+            return f"{base} Reason: {format_public_error(detail)}"
         return base
 
     def _format_media_batch_failure(

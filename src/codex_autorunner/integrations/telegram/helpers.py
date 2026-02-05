@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
+from ...core.redaction import redact_text
 from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
     RepoNotFoundError,
@@ -2183,3 +2184,25 @@ def _format_selection_prompt(base: str, page: int, total_pages: int) -> str:
         return base
     trimmed = base.rstrip(".")
     return f"{trimmed} (page {page + 1}/{total_pages})."
+
+
+def format_public_error(detail: str, *, limit: int = 200) -> str:
+    """Format error detail for public Telegram messages with redaction and truncation.
+
+    This helper ensures all user-visible error text sent via Telegram is:
+    - Short and readable
+    - Redacted for known secret patterns
+    - Does not include raw file contents or stack traces
+
+    Args:
+        detail: Error detail string to format.
+        limit: Maximum length of output (default 200).
+
+    Returns:
+        Formatted error string with secrets redacted and length limited.
+    """
+    normalized = " ".join(detail.split())
+    redacted = redact_text(normalized)
+    if len(redacted) > limit:
+        return f"{redacted[: limit - 3]}..."
+    return redacted
