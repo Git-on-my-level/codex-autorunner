@@ -326,3 +326,92 @@ def test_hub_server_log_rejects_parent_segments(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="server_log.path"):
         load_hub_config(hub_root)
+
+
+def test_static_assets_validation_rejects_negative_max_cache_entries(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "static_assets": {
+                "cache_root": ".codex-autorunner/static-cache",
+                "max_cache_entries": -1,
+                "max_cache_age_days": 30,
+            },
+        },
+    )
+
+    with pytest.raises(
+        ConfigError, match="static_assets.max_cache_entries must be >= 0"
+    ):
+        load_hub_config(hub_root)
+
+
+def test_static_assets_validation_rejects_negative_max_cache_age_days(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "static_assets": {
+                "cache_root": ".codex-autorunner/static-cache",
+                "max_cache_entries": 5,
+                "max_cache_age_days": -1,
+            },
+        },
+    )
+
+    with pytest.raises(
+        ConfigError, match="static_assets.max_cache_age_days must be >= 0"
+    ):
+        load_hub_config(hub_root)
+
+
+def test_housekeeping_validation_rejects_invalid_interval_seconds(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "housekeeping": {
+                "enabled": True,
+                "interval_seconds": 0,
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError, match="housekeeping.interval_seconds must be > 0"):
+        load_hub_config(hub_root)
+
+
+def test_housekeeping_validation_rejects_negative_min_file_age_seconds(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "housekeeping": {
+                "enabled": True,
+                "interval_seconds": 3600,
+                "min_file_age_seconds": -1,
+            },
+        },
+    )
+
+    with pytest.raises(
+        ConfigError, match="housekeeping.min_file_age_seconds must be >= 0"
+    ):
+        load_hub_config(hub_root)

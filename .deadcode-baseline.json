@@ -5,7 +5,6 @@
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:192:GithubIssueRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:196:GithubContextRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:200:GithubPrSyncRequest",
-    "python:function:src/codex_autorunner/core/about_car.py:214:ensure_about_car_file",
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
     "python:function:src/codex_autorunner/core/git_utils.py:156:git_status_porcelain",
@@ -21,6 +20,6 @@
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:138:log_stream",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:171:jsonl_event_stream",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream",
-    "python:function:src/codex_autorunner/tickets/outbox.py:15:set_lifecycle_emitter"
+    "python:function:src/codex_autorunner/tickets/outbox.py:17:set_lifecycle_emitter"
   ]
 }

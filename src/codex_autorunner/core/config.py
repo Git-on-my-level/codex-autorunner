@@ -6,7 +6,7 @@ import os
 import shlex
 from os import PathLike
 from pathlib import Path
-from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
+from typing import IO, Any, Dict, List, Mapping, Optional, Tuple, Type, Union, cast
 
 import yaml
 
@@ -2645,34 +2645,56 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_telegram_bot_config(cfg)
 
 
+def _validate_optional_type(
+    mapping: Dict[str, Any],
+    key: str,
+    expected: Union[Type, Tuple[Type, ...]],
+    *,
+    path: str,
+) -> None:
+    if key in mapping and not isinstance(mapping.get(key), expected):
+        type_name = (
+            " or ".join(t.__name__ for t in expected)
+            if isinstance(expected, tuple)
+            else expected.__name__
+        )
+        raise ConfigError(f"{path}.{key} must be {type_name} if provided")
+
+
+def _validate_optional_int_ge(
+    mapping: Dict[str, Any], key: str, min_value: int, *, path: str
+) -> None:
+    if key in mapping:
+        value = mapping.get(key)
+        if isinstance(value, int) and value < min_value:
+            if min_value == 0:
+                raise ConfigError(f"{path}.{key} must be >= 0")
+            elif min_value == 1:
+                raise ConfigError(f"{path}.{key} must be > 0")
+            else:
+                raise ConfigError(f"{path}.{key} must be >= {min_value}")
+
+
 def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
     housekeeping_cfg = cfg.get("housekeeping")
     if housekeeping_cfg is None:
         return
     if not isinstance(housekeeping_cfg, dict):
         raise ConfigError("housekeeping section must be a mapping if provided")
-    if "enabled" in housekeeping_cfg and not isinstance(
-        housekeeping_cfg.get("enabled"), bool
-    ):
-        raise ConfigError("housekeeping.enabled must be boolean")
-    if "interval_seconds" in housekeeping_cfg and not isinstance(
-        housekeeping_cfg.get("interval_seconds"), int
-    ):
-        raise ConfigError("housekeeping.interval_seconds must be an integer")
-    interval_seconds = housekeeping_cfg.get("interval_seconds")
-    if isinstance(interval_seconds, int) and interval_seconds <= 0:
-        raise ConfigError("housekeeping.interval_seconds must be greater than 0")
-    if "min_file_age_seconds" in housekeeping_cfg and not isinstance(
-        housekeeping_cfg.get("min_file_age_seconds"), int
-    ):
-        raise ConfigError("housekeeping.min_file_age_seconds must be an integer")
-    min_file_age_seconds = housekeeping_cfg.get("min_file_age_seconds")
-    if isinstance(min_file_age_seconds, int) and min_file_age_seconds < 0:
-        raise ConfigError("housekeeping.min_file_age_seconds must be >= 0")
-    if "dry_run" in housekeeping_cfg and not isinstance(
-        housekeeping_cfg.get("dry_run"), bool
-    ):
-        raise ConfigError("housekeeping.dry_run must be boolean")
+    _validate_optional_type(housekeeping_cfg, "enabled", bool, path="housekeeping")
+    _validate_optional_type(
+        housekeeping_cfg, "interval_seconds", int, path="housekeeping"
+    )
+    _validate_optional_int_ge(
+        housekeeping_cfg, "interval_seconds", 1, path="housekeeping"
+    )
+    _validate_optional_type(
+        housekeeping_cfg, "min_file_age_seconds", int, path="housekeeping"
+    )
+    _validate_optional_int_ge(
+        housekeeping_cfg, "min_file_age_seconds", 0, path="housekeeping"
+    )
+    _validate_optional_type(housekeeping_cfg, "dry_run", bool, path="housekeeping")
     rules = housekeeping_cfg.get("rules")
     if rules is not None and not isinstance(rules, list):
         raise ConfigError("housekeeping.rules must be a list if provided")
@@ -2682,10 +2704,9 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     f"housekeeping.rules[{idx}] must be a mapping if provided"
                 )
-            if "name" in rule and not isinstance(rule.get("name"), str):
-                raise ConfigError(
-                    f"housekeeping.rules[{idx}].name must be a string if provided"
-                )
+            _validate_optional_type(
+                rule, "name", str, path=f"housekeeping.rules[{idx}]"
+            )
             if "kind" in rule:
                 kind = rule.get("kind")
                 if not isinstance(kind, str):
@@ -2696,8 +2717,6 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         f"housekeeping.rules[{idx}].kind must be 'directory' or 'file'"
                     )
-            if "path" in rule and not isinstance(rule.get("path"), str):
-                raise ConfigError(f"housekeeping.rules[{idx}].path must be a string")
             if "path" in rule:
                 path_value = rule.get("path")
                 if not isinstance(path_value, str) or not path_value:
@@ -2713,14 +2732,12 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         f"housekeeping.rules[{idx}].path must not contain '..' segments"
                     )
-            if "glob" in rule and not isinstance(rule.get("glob"), str):
-                raise ConfigError(
-                    f"housekeeping.rules[{idx}].glob must be a string if provided"
-                )
-            if "recursive" in rule and not isinstance(rule.get("recursive"), bool):
-                raise ConfigError(
-                    f"housekeeping.rules[{idx}].recursive must be boolean if provided"
-                )
+            _validate_optional_type(
+                rule, "glob", str, path=f"housekeeping.rules[{idx}]"
+            )
+            _validate_optional_type(
+                rule, "recursive", bool, path=f"housekeeping.rules[{idx}]"
+            )
             for key in (
                 "max_files",
                 "max_total_bytes",
@@ -2728,13 +2745,12 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                 "max_bytes",
                 "max_lines",
             ):
-                if key in rule and not isinstance(rule.get(key), int):
-                    raise ConfigError(
-                        f"housekeeping.rules[{idx}].{key} must be an integer if provided"
-                    )
-                value = rule.get(key)
-                if isinstance(value, int) and value < 0:
-                    raise ConfigError(f"housekeeping.rules[{idx}].{key} must be >= 0")
+                _validate_optional_type(
+                    rule, key, int, path=f"housekeeping.rules[{idx}]"
+                )
+                _validate_optional_int_ge(
+                    rule, key, 0, path=f"housekeeping.rules[{idx}]"
+                )
 
 
 def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:
@@ -2743,21 +2759,21 @@ def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:
         return
     if not isinstance(static_cfg, dict):
         raise ConfigError(f"{scope}.static_assets must be a mapping if provided")
-    cache_root = static_cfg.get("cache_root")
-    if cache_root is not None and not isinstance(cache_root, str):
-        raise ConfigError(f"{scope}.static_assets.cache_root must be a string")
-    max_entries = static_cfg.get("max_cache_entries")
-    if max_entries is not None and not isinstance(max_entries, int):
-        raise ConfigError(f"{scope}.static_assets.max_cache_entries must be an integer")
-    if isinstance(max_entries, int) and max_entries < 0:
-        raise ConfigError(f"{scope}.static_assets.max_cache_entries must be >= 0")
-    max_age_days = static_cfg.get("max_cache_age_days")
-    if max_age_days is not None and not isinstance(max_age_days, int):
-        raise ConfigError(
-            f"{scope}.static_assets.max_cache_age_days must be an integer or null"
-        )
-    if isinstance(max_age_days, int) and max_age_days < 0:
-        raise ConfigError(f"{scope}.static_assets.max_cache_age_days must be >= 0")
+    _validate_optional_type(
+        static_cfg, "cache_root", str, path=f"{scope}.static_assets"
+    )
+    _validate_optional_type(
+        static_cfg, "max_cache_entries", int, path=f"{scope}.static_assets"
+    )
+    _validate_optional_int_ge(
+        static_cfg, "max_cache_entries", 0, path=f"{scope}.static_assets"
+    )
+    _validate_optional_type(
+        static_cfg, "max_cache_age_days", int, path=f"{scope}.static_assets"
+    )
+    _validate_optional_int_ge(
+        static_cfg, "max_cache_age_days", 0, path=f"{scope}.static_assets"
+    )
 
 
 def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
