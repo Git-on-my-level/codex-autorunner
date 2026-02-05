@@ -11,7 +11,7 @@ from .store import FlowStore, now_iso
 _logger = logging.getLogger(__name__)
 
 
-LifecycleEventCallback = Optional[Callable[[str, str, str, Dict[str, Any]], None]]
+LifecycleEventCallback = Optional[Callable[[str, str, str, Dict[str, Any], str], None]]
 
 
 class FlowRuntime:
@@ -29,11 +29,16 @@ class FlowRuntime:
         self._stop_check_interval = 0.5
 
     def _emit_lifecycle(
-        self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+        self,
+        event_type: str,
+        repo_id: str,
+        run_id: str,
+        data: Dict[str, Any],
+        origin: str = "runner",
     ) -> None:
         if self.emit_lifecycle_event:
             try:
-                self.emit_lifecycle_event(event_type, repo_id, run_id, data)
+                self.emit_lifecycle_event(event_type, repo_id, run_id, data, origin)
             except Exception as exc:
                 _logger.exception("Error emitting lifecycle event: %s", exc)
 

@@ -39,6 +39,7 @@ from ....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
+from ....core.pma_delivery import deliver_pma_output_to_active_sink
 from ....core.pma_dispatches import (
     find_pma_dispatch_path,
     list_pma_dispatches,
@@ -140,6 +141,12 @@ def build_pma_routes() -> APIRouter:
     def _get_safety_checker(request: Request) -> PmaSafetyChecker:
         nonlocal pma_safety_checker, pma_safety_root, pma_audit_log
         hub_root = request.app.state.config.root
+        supervisor = getattr(request.app.state, "hub_supervisor", None)
+        if supervisor is not None:
+            try:
+                return supervisor.get_pma_safety_checker()
+            except Exception:
+                pass
         if pma_safety_checker is None or pma_safety_root != hub_root:
             raw = getattr(request.app.state.config, "raw", {})
             pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
@@ -205,56 +212,16 @@ def build_pma_routes() -> APIRouter:
             return
 
         hub_root = request.app.state.config.root
-        sink_store = PmaActiveSinkStore(hub_root)
-        sink = sink_store.load()
-        if not isinstance(sink, dict):
-            return
-        if sink.get("kind") != "telegram":
-            return
-
         if not isinstance(turn_id, str) or not turn_id:
             turn_id = _resolve_transcript_turn_id(result, current)
-        last_delivery = sink.get("last_delivery_turn_id")
-        if isinstance(last_delivery, str) and last_delivery == turn_id:
-            return
-
-        chat_id = sink.get("chat_id")
-        thread_id = sink.get("thread_id")
-        if not isinstance(chat_id, int):
-            return
-        if thread_id is not None and not isinstance(thread_id, int):
-            thread_id = None
-
-        chunks = chunk_message(
-            assistant_text, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
-        )
-        if not chunks:
-            return
-
         state_path = _resolve_telegram_state_path(request)
-        store = TelegramStateStore(state_path)
-        try:
-            for idx, chunk in enumerate(chunks, 1):
-                record_id = f"pma:{turn_id}:{idx}"
-                record = OutboxRecord(
-                    record_id=record_id,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    reply_to_message_id=None,
-                    placeholder_message_id=None,
-                    text=chunk,
-                    created_at=now_iso(),
-                    operation="send",
-                    outbox_key=record_id,
-                )
-                await store.enqueue_outbox(record)
-        except Exception:
-            logger.exception("Failed to enqueue PMA output to Telegram outbox")
-            return
-        finally:
-            await store.close()
-
-        sink_store.mark_delivered(turn_id)
+        await deliver_pma_output_to_active_sink(
+            hub_root=hub_root,
+            assistant_text=assistant_text,
+            turn_id=turn_id,
+            lifecycle_event=lifecycle_event,
+            telegram_state_path=state_path,
+        )
 
     async def _deliver_dispatches_to_active_sink(
         *,
@@ -621,6 +588,11 @@ def build_pma_routes() -> APIRouter:
             status=status,
             error=result.get("detail") if status == "error" else None,
         )
+        if lifecycle_event:
+            _get_safety_checker(request).record_reactive_result(
+                status=status,
+                error=result.get("detail") if status == "error" else None,
+            )
 
         await _persist_state(store)
 

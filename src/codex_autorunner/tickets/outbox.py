@@ -11,22 +11,28 @@ from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_dispatch_frontmatter
 from .models import Dispatch, DispatchRecord
 
-_lifecycle_emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]] = None
+_lifecycle_emitter: Optional[Callable[[str, str, str, Dict[str, Any], str], None]] = (
+    None
+)
 
 
 def set_lifecycle_emitter(
-    emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]],
+    emitter: Optional[Callable[[str, str, str, Dict[str, Any], str], None]],
 ) -> None:
     global _lifecycle_emitter
     _lifecycle_emitter = emitter
 
 
 def _emit_lifecycle(
-    event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+    event_type: str,
+    repo_id: str,
+    run_id: str,
+    data: Dict[str, Any],
+    origin: str,
 ) -> None:
     if _lifecycle_emitter:
         try:
-            _lifecycle_emitter(event_type, repo_id, run_id, data)
+            _lifecycle_emitter(event_type, repo_id, run_id, data, origin)
         except Exception:
             pass
 
@@ -191,6 +197,7 @@ def archive_dispatch(
     ticket_id: Optional[str] = None,
     repo_id: str = "",
     run_id: str = "",
+    origin: str = "runner",
 ) -> tuple[Optional[DispatchRecord], list[str]]:
     """Archive current dispatch and attachments to dispatch history.
 
@@ -272,6 +279,7 @@ def archive_dispatch(
                 "title": dispatch.title,
                 "ticket_id": ticket_id,
             },
+            origin,
         )
 
     return (

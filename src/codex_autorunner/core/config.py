@@ -494,6 +494,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "dispatch_created",
         ],
         "reactive_debounce_seconds": 300,
+        "reactive_origin_blocklist": ["pma"],
     },
     "templates": {
         "enabled": True,
@@ -875,6 +876,7 @@ class PmaConfig:
     reactive_enabled: bool = True
     reactive_event_types: List[str] = dataclasses.field(default_factory=list)
     reactive_debounce_seconds: int = 300
+    reactive_origin_blocklist: List[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -1452,6 +1454,18 @@ def _parse_pma_config(
         reactive_debounce_seconds = 300
     if reactive_debounce_seconds < 0:
         reactive_debounce_seconds = 0
+    reactive_origin_blocklist_raw = cfg.get(
+        "reactive_origin_blocklist",
+        defaults.get("reactive_origin_blocklist", ["pma"]),
+    )
+    if isinstance(reactive_origin_blocklist_raw, list):
+        reactive_origin_blocklist = [
+            str(value).strip()
+            for value in reactive_origin_blocklist_raw
+            if str(value).strip()
+        ]
+    else:
+        reactive_origin_blocklist = []
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
@@ -1468,6 +1482,7 @@ def _parse_pma_config(
         reactive_enabled=reactive_enabled,
         reactive_event_types=reactive_event_types,
         reactive_debounce_seconds=reactive_debounce_seconds,
+        reactive_origin_blocklist=reactive_origin_blocklist,
     )
 
 

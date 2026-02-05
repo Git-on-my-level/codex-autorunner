@@ -31,6 +31,7 @@ class LifecycleEvent:
     repo_id: str
     run_id: str
     data: dict[str, Any] = field(default_factory=dict)
+    origin: str = "system"
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -100,11 +101,18 @@ class LifecycleEventStore:
                         import uuid
 
                         event_id = str(uuid.uuid4())
+                    origin_raw = entry.get("origin")
+                    origin = (
+                        str(origin_raw).strip()
+                        if isinstance(origin_raw, str) and origin_raw.strip()
+                        else "system"
+                    )
                     event = LifecycleEvent(
                         event_type=event_type,
                         repo_id=str(entry.get("repo_id", "")),
                         run_id=str(entry.get("run_id", "")),
                         data=dict(entry.get("data", {})),
+                        origin=origin,
                         timestamp=str(entry.get("timestamp", "")),
                         processed=bool(entry.get("processed", False)),
                         event_id=event_id,
@@ -128,6 +136,7 @@ class LifecycleEventStore:
                 "repo_id": event.repo_id,
                 "run_id": event.run_id,
                 "data": event.data,
+                "origin": event.origin,
                 "timestamp": event.timestamp,
                 "processed": event.processed,
             }
@@ -183,57 +192,87 @@ class LifecycleEventEmitter:
         return event.event_id
 
     def emit_flow_paused(
-        self, repo_id: str, run_id: str, *, data: Optional[dict[str, Any]] = None
+        self,
+        repo_id: str,
+        run_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        origin: str = "system",
     ) -> str:
         event = LifecycleEvent(
             event_type=LifecycleEventType.FLOW_PAUSED,
             repo_id=repo_id,
             run_id=run_id,
             data=data or {},
+            origin=origin,
         )
         return self.emit(event)
 
     def emit_flow_completed(
-        self, repo_id: str, run_id: str, *, data: Optional[dict[str, Any]] = None
+        self,
+        repo_id: str,
+        run_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        origin: str = "system",
     ) -> str:
         event = LifecycleEvent(
             event_type=LifecycleEventType.FLOW_COMPLETED,
             repo_id=repo_id,
             run_id=run_id,
             data=data or {},
+            origin=origin,
         )
         return self.emit(event)
 
     def emit_flow_failed(
-        self, repo_id: str, run_id: str, *, data: Optional[dict[str, Any]] = None
+        self,
+        repo_id: str,
+        run_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        origin: str = "system",
     ) -> str:
         event = LifecycleEvent(
             event_type=LifecycleEventType.FLOW_FAILED,
             repo_id=repo_id,
             run_id=run_id,
             data=data or {},
+            origin=origin,
         )
         return self.emit(event)
 
     def emit_flow_stopped(
-        self, repo_id: str, run_id: str, *, data: Optional[dict[str, Any]] = None
+        self,
+        repo_id: str,
+        run_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        origin: str = "system",
     ) -> str:
         event = LifecycleEvent(
             event_type=LifecycleEventType.FLOW_STOPPED,
             repo_id=repo_id,
             run_id=run_id,
             data=data or {},
+            origin=origin,
         )
         return self.emit(event)
 
     def emit_dispatch_created(
-        self, repo_id: str, run_id: str, *, data: Optional[dict[str, Any]] = None
+        self,
+        repo_id: str,
+        run_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        origin: str = "system",
     ) -> str:
         event = LifecycleEvent(
             event_type=LifecycleEventType.DISPATCH_CREATED,
             repo_id=repo_id,
             run_id=run_id,
             data=data or {},
+            origin=origin,
         )
         return self.emit(event)
 

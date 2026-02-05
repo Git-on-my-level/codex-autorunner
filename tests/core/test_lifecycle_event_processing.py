@@ -219,3 +219,80 @@ def test_lifecycle_reactive_debounce(tmp_path: Path) -> None:
         assert lifecycle_event.get("event_type") == "flow_failed"
     finally:
         supervisor.shutdown()
+
+
+def test_lifecycle_reactive_origin_blocklist(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _write_hub_config(
+        hub_root,
+        dispatch_interception=False,
+        extra_lines=["  reactive_origin_blocklist:", "    - pma"],
+    )
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor._stop_lifecycle_event_processor()
+
+    try:
+        supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1", origin="pma")
+        supervisor.process_lifecycle_events()
+
+        store = LifecycleEventStore(hub_root)
+        assert store.get_unprocessed() == []
+        assert _read_queue_items(hub_root) == []
+    finally:
+        supervisor.shutdown()
+
+
+def test_lifecycle_reactive_rate_limit(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _write_hub_config(
+        hub_root,
+        dispatch_interception=False,
+        extra_lines=[
+            "  reactive_debounce_seconds: 0",
+            "  rate_limit_window_seconds: 3600",
+            "  max_actions_per_window: 1",
+        ],
+    )
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor._stop_lifecycle_event_processor()
+
+    try:
+        supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
+        supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-2")
+        supervisor.process_lifecycle_events()
+
+        store = LifecycleEventStore(hub_root)
+        assert store.get_unprocessed() == []
+
+        items = _read_queue_items(hub_root)
+        assert len(items) == 1
+    finally:
+        supervisor.shutdown()
+
+
+def test_lifecycle_reactive_circuit_breaker(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _write_hub_config(
+        hub_root,
+        dispatch_interception=False,
+        extra_lines=[
+            "  circuit_breaker_threshold: 2",
+            "  circuit_breaker_cooldown_seconds: 3600",
+        ],
+    )
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor._stop_lifecycle_event_processor()
+
+    try:
+        checker = supervisor.get_pma_safety_checker()
+        checker.record_reactive_result(status="error", error="boom")
+        checker.record_reactive_result(status="error", error="boom again")
+
+        supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
+        supervisor.process_lifecycle_events()
+
+        store = LifecycleEventStore(hub_root)
+        assert store.get_unprocessed() == []
+        assert _read_queue_items(hub_root) == []
+    finally:
+        supervisor.shutdown()

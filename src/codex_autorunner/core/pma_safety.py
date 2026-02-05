@@ -141,6 +141,45 @@ class PmaSafetyChecker:
 
         return SafetyCheckResult(allowed=True)
 
+    def check_reactive_turn(self, *, key: str = "reactive") -> SafetyCheckResult:
+        if self._is_circuit_breaker_active():
+            return SafetyCheckResult(
+                allowed=False,
+                reason="circuit_breaker_active",
+                details={
+                    "cooldown_remaining_seconds": (
+                        int(
+                            self._circuit_breaker_until
+                            - datetime.now(timezone.utc).timestamp()
+                        )
+                        if self._circuit_breaker_until
+                        else 0
+                    )
+                },
+            )
+
+        if self._config.enable_rate_limit:
+            now = datetime.now(timezone.utc).timestamp()
+            self._action_timestamps[key] = [
+                ts
+                for ts in self._action_timestamps[key]
+                if now - ts < self._config.rate_limit_window_seconds
+            ]
+            if len(self._action_timestamps[key]) >= self._config.max_actions_per_window:
+                return SafetyCheckResult(
+                    allowed=False,
+                    reason="rate_limit_exceeded",
+                    details={
+                        "key": key,
+                        "count": len(self._action_timestamps[key]),
+                        "max_allowed": self._config.max_actions_per_window,
+                        "window_seconds": self._config.rate_limit_window_seconds,
+                    },
+                )
+            self._action_timestamps[key].append(now)
+
+        return SafetyCheckResult(allowed=True)
+
     def record_chat_result(
         self,
         agent: str,
@@ -157,6 +196,25 @@ class PmaSafetyChecker:
                 self._activate_circuit_breaker()
         else:
             key = f"chat:{agent}"
+            self._failure_counts[key] = 0
+
+    def record_reactive_result(
+        self,
+        *,
+        status: str,
+        error: Optional[str] = None,
+        key: str = "reactive",
+    ) -> None:
+        if (
+            status in ("error", "failed", "interrupted")
+            and self._config.enable_circuit_breaker
+        ):
+            self._failure_counts[key] += 1
+            if self._failure_counts[key] >= self._config.circuit_breaker_threshold:
+                self._activate_circuit_breaker()
+                if error:
+                    logger.warning("PMA reactive circuit breaker error: %s", error)
+        else:
             self._failure_counts[key] = 0
 
     def record_action(

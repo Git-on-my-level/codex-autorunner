@@ -1,4 +1,20 @@
 {
   "rules_version": 1,
-  "violations": []
+  "violations": [
+    {
+      "importer": "src/codex_autorunner/core/pma_delivery.py",
+      "imported": "codex_autorunner.integrations.telegram.adapter",
+      "reason": "Core PMA delivery bridges to Telegram sink adapter for reactive outputs."
+    },
+    {
+      "importer": "src/codex_autorunner/core/pma_delivery.py",
+      "imported": "codex_autorunner.integrations.telegram.constants",
+      "reason": "Core PMA delivery needs Telegram constants for sink formatting."
+    },
+    {
+      "importer": "src/codex_autorunner/core/pma_delivery.py",
+      "imported": "codex_autorunner.integrations.telegram.state",
+      "reason": "Core PMA delivery writes Telegram outbox records during reactive runs."
+    }
+  ]
 }

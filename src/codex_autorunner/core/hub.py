@@ -42,6 +42,7 @@ from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
 from .pma_reactive import PmaReactiveStore
+from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
@@ -295,6 +296,7 @@ class HubSupervisor:
         self._dispatch_interceptor_stop_event: Optional[threading.Event] = None
         self._dispatch_interceptor_thread: Optional[threading.Thread] = None
         self._dispatch_interceptor: Optional[PmaDispatchInterceptor] = None
+        self._pma_safety_checker: Optional[PmaSafetyChecker] = None
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
@@ -1022,11 +1024,15 @@ class HubSupervisor:
             return
 
         def _emit_outbox_event(
-            event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+            event_type: str,
+            repo_id: str,
+            run_id: str,
+            data: Dict[str, Any],
+            origin: str,
         ) -> None:
             if event_type == "dispatch_created":
                 self._lifecycle_emitter.emit_dispatch_created(
-                    repo_id, run_id, data=data
+                    repo_id, run_id, data=data, origin=origin
                 )
 
         set_lifecycle_emitter(_emit_outbox_event)
@@ -1155,11 +1161,58 @@ class HubSupervisor:
             lines.append("Dispatch requires attention; check the repo inbox.")
         return "\n".join(lines)
 
+    def get_pma_safety_checker(self) -> PmaSafetyChecker:
+        if self._pma_safety_checker is not None:
+            return self._pma_safety_checker
+
+        raw = getattr(self.hub_config, "raw", {})
+        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
+        if not isinstance(pma_config, dict):
+            pma_config = {}
+
+        def _resolve_int(key: str, fallback: int) -> int:
+            raw_value = pma_config.get(key, fallback)
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            return value if value >= 0 else fallback
+
+        safety_config = PmaSafetyConfig(
+            dedup_window_seconds=_resolve_int("dedup_window_seconds", 300),
+            max_duplicate_actions=_resolve_int("max_duplicate_actions", 3),
+            rate_limit_window_seconds=_resolve_int("rate_limit_window_seconds", 60),
+            max_actions_per_window=_resolve_int("max_actions_per_window", 20),
+            circuit_breaker_threshold=_resolve_int("circuit_breaker_threshold", 5),
+            circuit_breaker_cooldown_seconds=_resolve_int(
+                "circuit_breaker_cooldown_seconds", 600
+            ),
+            enable_dedup=bool(pma_config.get("enable_dedup", True)),
+            enable_rate_limit=bool(pma_config.get("enable_rate_limit", True)),
+            enable_circuit_breaker=bool(pma_config.get("enable_circuit_breaker", True)),
+        )
+        self._pma_safety_checker = PmaSafetyChecker(
+            self.hub_config.root, config=safety_config
+        )
+        return self._pma_safety_checker
+
     def _pma_reactive_gate(self, event: LifecycleEvent) -> tuple[bool, str]:
         pma = self.hub_config.pma
         reactive_enabled = getattr(pma, "reactive_enabled", True)
         if not reactive_enabled:
             return False, "reactive_disabled"
+
+        origin = (event.origin or "").strip().lower()
+        blocked_origins = getattr(pma, "reactive_origin_blocklist", [])
+        if blocked_origins:
+            blocked = {str(value).strip().lower() for value in blocked_origins}
+            if origin and origin in blocked:
+                logger.info(
+                    "Skipping PMA reactive trigger for event %s due to origin=%s",
+                    event.event_id,
+                    origin,
+                )
+                return False, "reactive_origin_blocked"
 
         allowlist = getattr(pma, "reactive_event_types", None)
         if allowlist:
@@ -1172,6 +1225,16 @@ class HubSupervisor:
             store = PmaReactiveStore(self.hub_config.root)
             if not store.check_and_update(key, debounce_seconds):
                 return False, "reactive_debounced"
+
+        safety_checker = self.get_pma_safety_checker()
+        safety_check = safety_checker.check_reactive_turn()
+        if not safety_check.allowed:
+            logger.info(
+                "Blocked PMA reactive trigger for event %s: %s",
+                event.event_id,
+                safety_check.reason,
+            )
+            return False, safety_check.reason or "reactive_blocked"
 
         return True, "reactive_allowed"
 
@@ -1199,6 +1262,7 @@ class HubSupervisor:
                     "run_id": event.run_id,
                     "timestamp": event.timestamp,
                     "data": event.data,
+                    "origin": event.origin,
                 },
             }
             idempotency_key = f"lifecycle:{event.event_id}"

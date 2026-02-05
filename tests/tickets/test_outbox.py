@@ -142,6 +142,7 @@ def test_archive_dispatch_emits_lifecycle_event(tmp_path: Path) -> None:
         assert event.data["dispatch_mode"] == "pause"
         assert event.data["dispatch_title"] == "Needs review"
         assert event.data["dispatch_path"] == "dispatch_history/0003/DISPATCH.md"
+        assert event.origin == "runner"
     finally:
         supervisor.shutdown()
         set_lifecycle_emitter(None)
