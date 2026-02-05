@@ -859,7 +859,10 @@ async def handle_media_message(
                 best = photos[0]
                 try:
                     file_info = await handlers._bot.get_file(best.file_id)
-                    data = await handlers._bot.download_file(file_info.file_path)
+                    data = await handlers._bot.download_file(
+                        file_info.file_path,
+                        max_size_bytes=handlers._config.media.max_image_bytes,
+                    )
                     filename = f"photo_{best.file_id}.jpg"
                     files.append((filename, data))
                 except Exception as exc:
@@ -868,7 +871,10 @@ async def handle_media_message(
         elif message.document:
             try:
                 file_info = await handlers._bot.get_file(message.document.file_id)
-                data = await handlers._bot.download_file(file_info.file_path)
+                data = await handlers._bot.download_file(
+                    file_info.file_path,
+                    max_size_bytes=handlers._config.media.max_file_bytes,
+                )
                 filename = (
                     message.document.file_name or f"document_{message.document.file_id}"
                 )

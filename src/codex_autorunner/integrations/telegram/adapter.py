@@ -1370,7 +1370,7 @@ class TelegramBotClient:
         return bool(result) if isinstance(result, bool) else False
 
     async def download_file(
-        self, file_path: str, max_size_bytes: int = 50 * 1024 * 1024
+        self, file_path: str, max_size_bytes: int = 100 * 1024 * 1024
     ) -> bytes:
         safe_path = file_path.lstrip("/")
         url = f"{self._file_base_url}/{safe_path}"
