@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
+from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.routes import base as base_routes
 from codex_autorunner.routes import flows as flow_routes
 
@@ -195,3 +198,53 @@ def test_get_ticket_by_index_404(tmp_path, monkeypatch):
     with TestClient(app) as client:
         resp = client.get("/api/flows/ticket_flow/tickets/99")
         assert resp.status_code == 404
+
+
+def test_ticket_list_keeps_diff_stats_for_latest_completed_run(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+    rel_ticket_path = ".codex-autorunner/tickets/TICKET-001.md"
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+
+    run_id = str(uuid.uuid4())
+    store.create_flow_run(
+        run_id=run_id, flow_type="ticket_flow", input_data={}, state={}
+    )
+    store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
+    store.create_event(
+        event_id=str(uuid.uuid4()),
+        run_id=run_id,
+        event_type=FlowEventType.DIFF_UPDATED,
+        data={
+            "ticket_id": rel_ticket_path,
+            "insertions": 12,
+            "deletions": 3,
+            "files_changed": 2,
+        },
+    )
+    store.close()
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert len(payload["tickets"]) == 1
+        assert payload["tickets"][0]["path"] == rel_ticket_path
+        assert payload["tickets"][0]["diff_stats"] == {
+            "insertions": 12,
+            "deletions": 3,
+            "files_changed": 2,
+        }
