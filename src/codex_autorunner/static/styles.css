@@ -4194,8 +4194,9 @@ button.icon-btn {
   min-height: 0;
 }
 
-/* Workspace content textarea - dark mode styling */
-#workspace-content {
+/* Workspace/contextspace content textarea - dark mode styling */
+#workspace-content,
+#contextspace-content {
   flex: 1;
   min-height: 300px;
   padding: 10px;
@@ -4209,12 +4210,14 @@ button.icon-btn {
   resize: none;
 }
 
-#workspace-content:focus {
+#workspace-content:focus,
+#contextspace-content:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-#workspace-content::placeholder {
+#workspace-content::placeholder,
+#contextspace-content::placeholder {
   color: var(--muted);
   opacity: 0.6;
 }
