@@ -542,7 +542,7 @@ export function confirmModal(message, options = {}) {
     });
 }
 export function inputModal(message, options = {}) {
-    const { placeholder = "", defaultValue = "", confirmText = "OK", cancelText = "Cancel" } = options;
+    const { placeholder = "", defaultValue = "", confirmText = "OK", cancelText = "Cancel", allowEmpty = false, } = options;
     return new Promise((resolve) => {
         const overlay = document.getElementById("input-modal");
         const messageEl = document.getElementById("input-modal-message");
@@ -576,6 +576,10 @@ export function inputModal(message, options = {}) {
         };
         const onOk = () => {
             const value = inputEl.value.trim();
+            if (allowEmpty) {
+                finalize(value);
+                return;
+            }
             finalize(value || null);
         };
         const onCancel = () => {

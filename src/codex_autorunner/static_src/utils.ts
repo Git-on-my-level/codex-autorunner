@@ -582,10 +582,17 @@ export interface InputModalOptions {
   defaultValue?: string;
   confirmText?: string;
   cancelText?: string;
+  allowEmpty?: boolean;
 }
 
 export function inputModal(message: string, options: InputModalOptions = {}): Promise<string | null> {
-  const { placeholder = "", defaultValue = "", confirmText = "OK", cancelText = "Cancel" } = options;
+  const {
+    placeholder = "",
+    defaultValue = "",
+    confirmText = "OK",
+    cancelText = "Cancel",
+    allowEmpty = false,
+  } = options;
   return new Promise((resolve) => {
     const overlay = document.getElementById("input-modal");
     const messageEl = document.getElementById("input-modal-message");
@@ -622,6 +629,10 @@ export function inputModal(message: string, options: InputModalOptions = {}): Pr
 
     const onOk = () => {
       const value = inputEl.value.trim();
+      if (allowEmpty) {
+        finalize(value);
+        return;
+      }
       finalize(value || null);
     };
 

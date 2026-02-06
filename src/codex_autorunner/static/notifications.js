@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, escapeHtml, openModal, resolvePath } from "./utils.js";
+import { api, confirmModal, escapeHtml, flash, inputModal, openModal, resolvePath } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 let notificationsInitialized = false;
 const notificationItemsByRoot = {};
@@ -197,6 +197,12 @@ function closeNotificationsModal() {
     closeModalFn();
     closeModalFn = null;
 }
+function isSameNotification(a, b) {
+    return (a.kind === b.kind &&
+        a.repoId === b.repoId &&
+        a.runId === b.runId &&
+        a.seq === b.seq);
+}
 function openNotificationsModal(item, returnFocusTo) {
     const modal = getModalElements();
     if (!modal)
@@ -249,9 +255,45 @@ function openNotificationsModal(item, returnFocusTo) {
       <div class="notifications-modal-body">${body}</div>
       <div class="notifications-modal-actions">
         <a class="primary sm notifications-open-run" href="${escapeHtml(resolvePath(item.openUrl))}">Open run</a>
+        ${item.seq ? '<button class="ghost sm notifications-dismiss" type="button">Dismiss</button>' : ""}
       </div>
       <div class="notifications-modal-placeholder">Reply here (coming soon).</div>
     `;
+        const dismissBtn = modal.body.querySelector(".notifications-dismiss");
+        if (dismissBtn && item.seq) {
+            dismissBtn.addEventListener("click", async () => {
+                const confirmed = await confirmModal("Dismiss this inbox item?", {
+                    confirmText: "Dismiss",
+                    danger: false,
+                });
+                if (!confirmed)
+                    return;
+                const reason = await inputModal("Dismiss reason (optional)", {
+                    placeholder: "obsolete, resolved elsewhere, ...",
+                    confirmText: "Dismiss",
+                    allowEmpty: true,
+                });
+                if (reason === null)
+                    return;
+                await api("/hub/messages/dismiss", {
+                    method: "POST",
+                    body: {
+                        repo_id: item.repoId,
+                        run_id: item.runId,
+                        seq: item.seq,
+                        reason,
+                    },
+                });
+                const hubItems = getItemsForRoot("hub").filter((entry) => !isSameNotification(entry, item));
+                notificationItemsByRoot.hub = hubItems;
+                setBadgeCount("hub", hubItems.length);
+                if (activeRoot && activeRoot.key === "hub") {
+                    renderDropdown(activeRoot);
+                }
+                closeNotificationsModal();
+                flash("Dispatch dismissed");
+            });
+        }
     }
     closeModalFn = openModal(modal.overlay, {
         closeOnEscape: true,
