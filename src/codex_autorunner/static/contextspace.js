@@ -162,7 +162,7 @@ async function writeContextspaceContent(path, content) {
         }
         catch (err) {
             const msg = err.message || "";
-            if (!msg.toLowerCase().includes("invalid workspace doc kind")) {
+            if (!msg.toLowerCase().includes("invalid contextspace doc kind")) {
                 throw err;
             }
             // Fallback to generic file write in case detection misfires
@@ -177,6 +177,9 @@ function target() {
     if (!state.target)
         return "contextspace:active_context";
     return `contextspace:${state.target.path}`;
+}
+function contextspaceThreadKey(path) {
+    return `file_chat.contextspace_${(path || "").replace(/\//g, "_")}`;
 }
 function setStatus(text) {
     const { status, statusMobile } = els();
@@ -294,7 +297,7 @@ function openCreateModal(mode) {
     createPath.innerHTML = "";
     const rootOption = document.createElement("option");
     rootOption.value = "";
-    rootOption.textContent = "Workspace (root)";
+    rootOption.textContent = "Contextspace (root)";
     createPath.appendChild(rootOption);
     const folders = listFolderPaths(state.files);
     folders.forEach((path) => {
@@ -430,7 +433,7 @@ async function refreshWorkspaceFile(path, reason = "manual") {
         await workspaceContentRefresh.refresh(async () => ({ path, content: await readWorkspaceContent(path) }), { reason });
     }
     catch (err) {
-        const message = err.message || "Failed to load workspace file";
+        const message = err.message || "Failed to load contextspace file";
         flash(message, "error");
         setStatus(message);
     }
@@ -672,7 +675,7 @@ async function sendChat() {
     chatSend?.setAttribute("disabled", "true");
     chatCancel?.classList.remove("hidden");
     clearTurnEventsStream();
-    const clientTurnId = newClientTurnId("workspace");
+    const clientTurnId = newClientTurnId("contextspace");
     savePendingTurn(CONTEXTSPACE_PENDING_KEY, {
         clientTurnId,
         message,
@@ -770,7 +773,7 @@ async function resetThread() {
     try {
         await api("/api/app-server/threads/reset", {
             method: "POST",
-            body: { key: `file_chat.workspace.${state.target.path}` },
+            body: { key: contextspaceThreadKey(state.target.path) },
         });
         const chatState = workspaceChat.state;
         chatState.messages = [];
@@ -779,7 +782,7 @@ async function resetThread() {
         workspaceChat.clearEvents();
         clearPendingTurnState();
         renderChat();
-        flash("New workspace chat thread", "success");
+        flash("New contextspace chat thread", "success");
     }
     catch (err) {
         flash(err.message || "Failed to reset thread", "error");
@@ -804,7 +807,7 @@ async function loadFiles(defaultPath, reason = "manual") {
 }
 export async function initContextspace() {
     const { generateBtn, uploadBtn, uploadInput, mobileMenuToggle, mobileDropdown, mobileUpload, mobileNewFolder, mobileNewFile, mobileDownload, mobileGenerate, newFolderBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
-    if (!document.getElementById("workspace"))
+    if (!document.getElementById("contextspace"))
         return;
     initAgentControls({
         agentSelect: els().agentSelect,

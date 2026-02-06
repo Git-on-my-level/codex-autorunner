@@ -348,7 +348,7 @@ export class ContextspaceFileBrowser {
         crumbs.className = "file-picker-crumbs";
         const root = document.createElement("button");
         root.type = "button";
-        root.textContent = "Workspace";
+        root.textContent = "Contextspace";
         root.addEventListener("click", () => {
             this.currentPath = "";
             this.render();

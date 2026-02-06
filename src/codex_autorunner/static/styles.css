@@ -7812,7 +7812,7 @@ button.loading::after {
   }
 
   /* Tighten spacing around toolbar */
-  #workspace-content {
+  #contextspace-content {
     margin-bottom: 0;
   }
 
@@ -7828,17 +7828,17 @@ button.loading::after {
     display: none;
   }
 
-  #workspace.panel.active {
+  #contextspace.panel.active {
     display: flex;
     flex-direction: column;
   }
 
-  #workspace .contextspace-main {
+  #contextspace .contextspace-main {
     flex: 1;
     min-height: 0;
   }
 
-  #workspace-content {
+  #contextspace-content {
     min-height: 150px;
     font-size: 14px;
   }

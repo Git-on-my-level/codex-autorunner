@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const INDEX_PATH = resolve("src/codex_autorunner/static/index.html");
+const CONTEXTSPACE_JS_PATH = resolve("src/codex_autorunner/static/contextspace.js");
 
 function fail(message) {
   console.error(message);
@@ -78,6 +79,14 @@ function main() {
       `Expected 1 active panel, found ${activePanels.length}: [${activePanels
         .map((p) => p.id || "(no id)")
         .join(", ")}]`
+    );
+  }
+
+  // 4) Contextspace bootstrap guard should target #contextspace panel.
+  const contextspaceJs = readFileSync(CONTEXTSPACE_JS_PATH, "utf8");
+  if (contextspaceJs.includes('document.getElementById("workspace")')) {
+    fail(
+      'Contextspace bootstrap guard is checking "#workspace"; expected "#contextspace".'
     );
   }
 

@@ -217,7 +217,7 @@ async function writeContextspaceContent(path: string, content: string): Promise<
       return (res[kind] as string) || "";
     } catch (err) {
       const msg = (err as Error).message || "";
-      if (!msg.toLowerCase().includes("invalid workspace doc kind")) {
+      if (!msg.toLowerCase().includes("invalid contextspace doc kind")) {
         throw err;
       }
       // Fallback to generic file write in case detection misfires
@@ -232,6 +232,10 @@ async function writeContextspaceContent(path: string, content: string): Promise<
 function target(): string {
   if (!state.target) return "contextspace:active_context";
   return `contextspace:${state.target.path}`;
+}
+
+function contextspaceThreadKey(path: string): string {
+  return `file_chat.contextspace_${(path || "").replace(/\//g, "_")}`;
 }
 
 function setStatus(text: string): void {
@@ -354,7 +358,7 @@ function openCreateModal(mode: CreateMode): void {
   createPath.innerHTML = "";
   const rootOption = document.createElement("option");
   rootOption.value = "";
-  rootOption.textContent = "Workspace (root)";
+  rootOption.textContent = "Contextspace (root)";
   createPath.appendChild(rootOption);
   const folders = listFolderPaths(state.files);
   folders.forEach((path) => {
@@ -494,7 +498,7 @@ async function refreshWorkspaceFile(path: string, reason: SmartRefreshReason = "
       { reason }
     );
   } catch (err) {
-    const message = (err as Error).message || "Failed to load workspace file";
+    const message = (err as Error).message || "Failed to load contextspace file";
     flash(message, "error");
     setStatus(message);
   } finally {
@@ -743,7 +747,7 @@ async function sendChat(): Promise<void> {
   chatCancel?.classList.remove("hidden");
   clearTurnEventsStream();
 
-  const clientTurnId = newClientTurnId("workspace");
+  const clientTurnId = newClientTurnId("contextspace");
   savePendingTurn(CONTEXTSPACE_PENDING_KEY, {
     clientTurnId,
     message,
@@ -847,7 +851,7 @@ async function resetThread(): Promise<void> {
   try {
     await api("/api/app-server/threads/reset", {
       method: "POST",
-      body: { key: `file_chat.workspace.${state.target.path}` },
+      body: { key: contextspaceThreadKey(state.target.path) },
     });
     const chatState = workspaceChat.state as ChatState;
     chatState.messages = [];
@@ -856,7 +860,7 @@ async function resetThread(): Promise<void> {
     workspaceChat.clearEvents();
     clearPendingTurnState();
     renderChat();
-    flash("New workspace chat thread", "success");
+    flash("New contextspace chat thread", "success");
   } catch (err) {
     flash((err as Error).message || "Failed to reset thread", "error");
   }
@@ -907,7 +911,7 @@ export async function initContextspace(): Promise<void> {
     chatNewThread,
   } = els();
 
-  if (!document.getElementById("workspace")) return;
+  if (!document.getElementById("contextspace")) return;
 
   initAgentControls({
     agentSelect: els().agentSelect,
