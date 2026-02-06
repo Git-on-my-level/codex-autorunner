@@ -111,6 +111,7 @@ logger = logging.getLogger("codex_autorunner.cli")
 
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
+dispatch_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
 repos_app = typer.Typer(add_completion=False)
@@ -432,6 +433,22 @@ def _request_json(
     return data if isinstance(data, dict) else {}
 
 
+def _request_form_json(
+    method: str,
+    url: str,
+    form: Optional[dict] = None,
+    token_env: Optional[str] = None,
+) -> dict:
+    headers = None
+    if token_env:
+        token = _require_auth_token(token_env)
+        headers = {"Authorization": f"Bearer {token}"}
+    response = httpx.request(method, url, data=form, timeout=5.0, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
 def _require_optional_feature(
     *, feature: str, deps: list[tuple[str, str]], extra: Optional[str] = None
 ) -> None:
@@ -442,6 +459,7 @@ def _require_optional_feature(
 
 
 app.add_typer(hub_app, name="hub")
+hub_app.add_typer(dispatch_app, name="dispatch")
 hub_app.add_typer(worktree_app, name="worktree")
 app.add_typer(telegram_app, name="telegram")
 app.add_typer(templates_app, name="templates")
@@ -1687,6 +1705,149 @@ def hub_snapshot(
 
     indent = 2 if pretty else None
     typer.echo(json.dumps(snapshot, indent=indent))
+
+
+@dispatch_app.command("reply")
+def hub_dispatch_reply(
+    repo_id: str = typer.Option(..., "--repo-id", help="Hub repo id"),
+    run_id: str = typer.Option(..., "--run-id", help="Flow run id (UUID)"),
+    message: Optional[str] = typer.Option(None, "--message", help="Reply message body"),
+    message_file: Optional[Path] = typer.Option(
+        None, "--message-file", help="Read reply message body from file"
+    ),
+    resume: bool = typer.Option(
+        True, "--resume/--no-resume", help="Resume run after posting reply"
+    ),
+    idempotency_key: Optional[str] = typer.Option(
+        None, "--idempotency-key", help="Optional key to avoid duplicate replies"
+    ),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(
+        True, "--json/--no-json", help="Emit JSON output (default: true)"
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
+):
+    """Reply to a paused dispatch and optionally resume the run."""
+    config = _require_hub_config(path)
+
+    if bool(message) == bool(message_file):
+        _raise_exit("Provide exactly one of --message or --message-file.")
+
+    raw_message = message
+    if message_file is not None:
+        try:
+            raw_message = message_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            _raise_exit(f"Failed to read message file: {exc}", cause=exc)
+    body = (raw_message or "").strip()
+    if not body:
+        _raise_exit("Reply message cannot be empty.")
+
+    thread_url = _build_server_url(
+        config, f"/repos/{repo_id}/api/messages/threads/{run_id}"
+    )
+    reply_url = _build_server_url(
+        config, f"/repos/{repo_id}/api/messages/{run_id}/reply"
+    )
+    resume_url = _build_server_url(
+        config, f"/repos/{repo_id}/api/flows/{run_id}/resume"
+    )
+
+    marker = None
+    if idempotency_key:
+        marker = f"<!-- car-idempotency-key:{idempotency_key.strip()} -->"
+
+    try:
+        thread = _request_json(
+            "GET", thread_url, token_env=config.server_auth_token_env
+        )
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        _raise_exit(
+            "Failed to query run thread via hub server. Ensure 'car hub serve' is running.",
+            cause=exc,
+        )
+
+    run_status = ((thread.get("run") or {}) if isinstance(thread, dict) else {}).get(
+        "status"
+    )
+    if run_status != "paused":
+        _raise_exit(
+            f"Run {run_id} is not paused-awaiting-input (status={run_status or 'unknown'})."
+        )
+
+    duplicate = False
+    reply_seq = None
+    if marker:
+        replies = thread.get("reply_history", []) if isinstance(thread, dict) else []
+        for entry in replies if isinstance(replies, list) else []:
+            reply = entry.get("reply") if isinstance(entry, dict) else None
+            existing_body = (reply.get("body") or "") if isinstance(reply, dict) else ""
+            if marker in existing_body:
+                duplicate = True
+                reply_seq = entry.get("seq") if isinstance(entry, dict) else None
+                break
+
+    if not duplicate:
+        post_body = body
+        if marker:
+            post_body = f"{body}\n\n{marker}"
+        try:
+            reply_resp = _request_form_json(
+                "POST",
+                reply_url,
+                form={"body": post_body},
+                token_env=config.server_auth_token_env,
+            )
+            reply_seq = reply_resp.get("seq")
+        except (
+            httpx.HTTPError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            OSError,
+        ) as exc:
+            _raise_exit("Failed to post dispatch reply.", cause=exc)
+
+    resumed = False
+    resume_status = None
+    if resume:
+        try:
+            resume_resp = _request_json(
+                "POST", resume_url, payload={}, token_env=config.server_auth_token_env
+            )
+            resumed = True
+            resume_status = resume_resp.get("status")
+        except (
+            httpx.HTTPError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            OSError,
+        ) as exc:
+            _raise_exit("Reply posted but resume failed.", cause=exc)
+
+    payload = {
+        "repo_id": repo_id,
+        "run_id": run_id,
+        "reply_seq": reply_seq,
+        "duplicate": duplicate,
+        "resumed": resumed,
+        "resume_status": resume_status,
+    }
+
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2 if pretty else None))
+        return
+
+    typer.echo(
+        f"Reply {'reused' if duplicate else 'posted'} for run {run_id}"
+        + (f" (seq={reply_seq})" if reply_seq else "")
+    )
+    if resume:
+        typer.echo(f"Run resumed: status={resume_status or 'unknown'}")
 
 
 @telegram_app.command("start")
