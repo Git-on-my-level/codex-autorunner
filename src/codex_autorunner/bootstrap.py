@@ -143,6 +143,7 @@ def seed_repo_files(
 
     ca_dir = repo_root / ".codex-autorunner"
     ca_dir.mkdir(parents=True, exist_ok=True)
+    ensure_hub_car_shim(repo_root, force=force)
 
     gitignore_path = ca_dir / ".gitignore"
     if not gitignore_path.exists() or force:
