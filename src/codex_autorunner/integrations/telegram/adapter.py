@@ -263,6 +263,7 @@ class PageCallback:
 class FlowCallback:
     action: str
     run_id: Optional[str] = None
+    repo_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -752,12 +753,19 @@ def encode_compact_callback(action: str) -> str:
     return data
 
 
-def encode_flow_callback(action: str, run_id: Optional[str] = None) -> str:
+def encode_flow_callback(
+    action: str, run_id: Optional[str] = None, *, repo_id: Optional[str] = None
+) -> str:
     action = str(action or "").strip()
     if not action:
         raise ValueError("flow action required")
+    repo_id = str(repo_id or "").strip() or None
+    if repo_id and not run_id:
+        raise ValueError("flow repo callback requires run_id")
     if run_id:
         data = f"flow:{action}:{run_id}"
+        if repo_id:
+            data = f"{data}:{repo_id}"
     else:
         data = f"flow:{action}"
     _validate_callback_data(data)
@@ -893,12 +901,22 @@ def parse_callback_data(
         return PageCallback(kind=kind, page=int(page))
     if data.startswith("flow:"):
         _, _, rest = data.partition(":")
-        action, sep, run_id = rest.partition(":")
+        action, sep, rest = rest.partition(":")
         if not action:
             return None
-        if sep and not run_id:
+        run_id = None
+        repo_id = None
+        if sep and not rest:
             return None
-        return FlowCallback(action=action, run_id=run_id or None)
+        if sep:
+            run_id, sep2, repo_id_raw = rest.partition(":")
+            if not run_id:
+                return None
+            if sep2 and not repo_id_raw:
+                return None
+            run_id = run_id or None
+            repo_id = repo_id_raw or None
+        return FlowCallback(action=action, run_id=run_id, repo_id=repo_id)
     if data.startswith("flow_run:"):
         _, _, run_id = data.partition(":")
         if not run_id:

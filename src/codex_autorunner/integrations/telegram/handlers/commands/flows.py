@@ -316,12 +316,14 @@ class FlowCommands(SharedHelpers):
         argv = self._parse_command_args(args)
 
         target_repo_root = None
+        target_repo_id: Optional[str] = None
         effective_args = args
 
         if argv:
             resolved = self._resolve_workspace(argv[0])
             if resolved:
                 target_repo_root = Path(resolved[0])
+                target_repo_id = resolved[1]
                 argv = argv[1:]
                 # Reconstruct args for remainder logic (imperfect but sufficient for text commands)
                 effective_args = " ".join(argv)
@@ -370,10 +372,14 @@ class FlowCommands(SharedHelpers):
 
         try:
             if action == "status":
-                await self._handle_flow_status_action(message, repo_root, rest_argv)
+                await self._handle_flow_status_action(
+                    message, repo_root, rest_argv, repo_id=target_repo_id
+                )
                 return
             if action == "runs":
-                await self._handle_flow_runs(message, repo_root, rest_argv)
+                await self._handle_flow_runs(
+                    message, repo_root, rest_argv, repo_id=target_repo_id
+                )
                 return
             if action == "bootstrap":
                 await self._handle_flow_bootstrap(message, repo_root, rest_argv)
@@ -447,6 +453,8 @@ class FlowCommands(SharedHelpers):
         callback: TelegramCallbackQuery,
         repo_root: Path,
         run_id_raw: Optional[str],
+        *,
+        repo_id: Optional[str] = None,
     ) -> None:
         store = _load_flow_store(repo_root)
         try:
@@ -457,7 +465,9 @@ class FlowCommands(SharedHelpers):
                     callback, error, reply_markup={"inline_keyboard": []}
                 )
                 return
-            text, keyboard = self._build_flow_status_card(repo_root, record, store)
+            text, keyboard = self._build_flow_status_card(
+                repo_root, record, store, repo_id=repo_id
+            )
         finally:
             store.close()
         await self._edit_callback_message(callback, text, reply_markup=keyboard)
@@ -469,22 +479,30 @@ class FlowCommands(SharedHelpers):
             return
         key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
         record = await self._store.get_topic(key)
-        if not record or not record.workspace_path:
+        repo_root: Optional[Path] = None
+        if parsed.repo_id:
+            resolved = self._resolve_workspace(parsed.repo_id)
+            if resolved:
+                repo_root = canonicalize_path(Path(resolved[0]))
+        if repo_root is None and record and record.workspace_path:
+            repo_root = canonicalize_path(Path(record.workspace_path))
+        if repo_root is None:
             await self._answer_callback(callback, "No workspace bound")
             await self._edit_callback_message(
                 callback,
-                "No workspace bound. Use /bind to bind this topic to a repo first.",
+                "No workspace bound. Use /flow <repo-id> status, or /bind to bind this topic to a repo first.",
                 reply_markup={"inline_keyboard": []},
             )
             return
 
-        repo_root = canonicalize_path(Path(record.workspace_path))
         action = (parsed.action or "").strip().lower()
         run_id_raw = parsed.run_id
 
         if action in {"refresh", "status"}:
             await self._answer_callback(callback, "Refreshing...")
-            await self._render_flow_status_callback(callback, repo_root, run_id_raw)
+            await self._render_flow_status_callback(
+                callback, repo_root, run_id_raw, repo_id=parsed.repo_id
+            )
             return
 
         error = None
@@ -633,7 +651,9 @@ class FlowCommands(SharedHelpers):
             await self._answer_callback(callback, error)
         elif notice:
             await self._answer_callback(callback, notice)
-        await self._render_flow_status_callback(callback, repo_root, run_id_raw)
+        await self._render_flow_status_callback(
+            callback, repo_root, run_id_raw, repo_id=parsed.repo_id
+        )
 
     def _resolve_run_id_input(
         self, store: FlowStore, raw_run_id: Optional[str]
@@ -763,7 +783,11 @@ class FlowCommands(SharedHelpers):
         return lines
 
     def _build_flow_status_keyboard(
-        self, record: Optional[object], *, health: Optional[FlowWorkerHealth]
+        self,
+        record: Optional[object],
+        *,
+        health: Optional[FlowWorkerHealth],
+        repo_id: Optional[str] = None,
     ) -> Optional[dict[str, object]]:
         if record is None or health is None:
             return None
@@ -775,52 +799,90 @@ class FlowCommands(SharedHelpers):
         if status == FlowRunStatus.PAUSED:
             rows.append(
                 [
-                    InlineButton("Resume", encode_flow_callback("resume", run_id)),
-                    InlineButton("Restart", encode_flow_callback("restart", run_id)),
+                    InlineButton(
+                        "Resume",
+                        encode_flow_callback("resume", run_id, repo_id=repo_id),
+                    ),
+                    InlineButton(
+                        "Restart",
+                        encode_flow_callback("restart", run_id, repo_id=repo_id),
+                    ),
                 ]
             )
             rows.append(
-                [InlineButton("Archive", encode_flow_callback("archive", run_id))]
+                [
+                    InlineButton(
+                        "Archive",
+                        encode_flow_callback("archive", run_id, repo_id=repo_id),
+                    )
+                ]
             )
         elif status.is_terminal():
             rows.append(
                 [
-                    InlineButton("Restart", encode_flow_callback("restart", run_id)),
-                    InlineButton("Archive", encode_flow_callback("archive", run_id)),
+                    InlineButton(
+                        "Restart",
+                        encode_flow_callback("restart", run_id, repo_id=repo_id),
+                    ),
+                    InlineButton(
+                        "Archive",
+                        encode_flow_callback("archive", run_id, repo_id=repo_id),
+                    ),
                 ]
             )
             rows.append(
-                [InlineButton("Refresh", encode_flow_callback("refresh", run_id))]
+                [
+                    InlineButton(
+                        "Refresh",
+                        encode_flow_callback("refresh", run_id, repo_id=repo_id),
+                    )
+                ]
             )
         else:
             if health.status in {"dead", "mismatch", "invalid", "absent"}:
                 rows.append(
                     [
                         InlineButton(
-                            "Recover", encode_flow_callback("recover", run_id)
+                            "Recover",
+                            encode_flow_callback("recover", run_id, repo_id=repo_id),
                         ),
                         InlineButton(
-                            "Refresh", encode_flow_callback("refresh", run_id)
+                            "Refresh",
+                            encode_flow_callback("refresh", run_id, repo_id=repo_id),
                         ),
                     ]
                 )
             elif status == FlowRunStatus.RUNNING:
                 rows.append(
                     [
-                        InlineButton("Stop", encode_flow_callback("stop", run_id)),
                         InlineButton(
-                            "Refresh", encode_flow_callback("refresh", run_id)
+                            "Stop",
+                            encode_flow_callback("stop", run_id, repo_id=repo_id),
+                        ),
+                        InlineButton(
+                            "Refresh",
+                            encode_flow_callback("refresh", run_id, repo_id=repo_id),
                         ),
                     ]
                 )
             else:
                 rows.append(
-                    [InlineButton("Refresh", encode_flow_callback("refresh", run_id))]
+                    [
+                        InlineButton(
+                            "Refresh",
+                            encode_flow_callback("refresh", run_id, repo_id=repo_id),
+                        )
+                    ]
                 )
         return build_inline_keyboard(rows) if rows else None
 
     def _build_flow_status_card(
-        self, repo_root: Path, record: Optional[object], store: Optional[FlowStore]
+        self,
+        repo_root: Path,
+        record: Optional[object],
+        store: Optional[FlowStore],
+        *,
+        repo_id: Optional[str] = None,
     ) -> tuple[str, Optional[dict[str, object]]]:
         if record is None:
             return (
@@ -832,7 +894,9 @@ class FlowCommands(SharedHelpers):
         lines = self._format_flow_status_lines(
             repo_root, record, store, health=health, snapshot=snapshot
         )
-        keyboard = self._build_flow_status_keyboard(record, health=health)
+        keyboard = self._build_flow_status_keyboard(
+            record, health=health, repo_id=repo_id
+        )
         return "\n".join(lines), keyboard
 
     async def _send_flow_help_block(self, message: TelegramMessage) -> None:
@@ -1030,7 +1094,12 @@ class FlowCommands(SharedHelpers):
         )
 
     async def _handle_flow_status_action(
-        self, message: TelegramMessage, repo_root: Path, argv: list[str]
+        self,
+        message: TelegramMessage,
+        repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: Optional[str] = None,
     ) -> None:
         store = _load_flow_store(repo_root)
         try:
@@ -1045,7 +1114,9 @@ class FlowCommands(SharedHelpers):
                     reply_to=message.message_id,
                 )
                 return
-            text, keyboard = self._build_flow_status_card(repo_root, record, store)
+            text, keyboard = self._build_flow_status_card(
+                repo_root, record, store, repo_id=repo_id
+            )
         finally:
             store.close()
         await self._send_message(
@@ -1057,7 +1128,12 @@ class FlowCommands(SharedHelpers):
         )
 
     async def _handle_flow_runs(
-        self, message: TelegramMessage, repo_root: Path, argv: list[str]
+        self,
+        message: TelegramMessage,
+        repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: Optional[str] = None,
     ) -> None:
         limit = 5
         limit_raw = self._first_non_flag(argv)
@@ -1100,7 +1176,9 @@ class FlowCommands(SharedHelpers):
             button_label = f"{short_id} {status_label}"
             button_labels[run.id] = _truncate_text(button_label, 32)
 
-        state = SelectionState(items=items, button_labels=button_labels)
+        state = SelectionState(
+            items=items, button_labels=button_labels, repo_id=repo_id
+        )
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._flow_run_options[key] = state
         self._touch_cache_timestamp("flow_run_options", key)

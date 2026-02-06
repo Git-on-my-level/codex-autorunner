@@ -409,7 +409,8 @@ class TelegramSelectionHandlers:
             return
         self._flow_run_options.pop(key, None)
         await self._handle_flow_callback(
-            callback, FlowCallback(action="status", run_id=parsed.run_id)
+            callback,
+            FlowCallback(action="status", run_id=parsed.run_id, repo_id=state.repo_id),
         )
 
     def _selection_prompt(self, base: str, state: SelectionState) -> str:

@@ -9,6 +9,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     BindCallback,
     CancelCallback,
     CompactCallback,
+    FlowCallback,
     FlowRunCallback,
     PageCallback,
     QuestionCancelCallback,
@@ -37,6 +38,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_bind_callback,
     encode_cancel_callback,
     encode_compact_callback,
+    encode_flow_callback,
     encode_flow_run_callback,
     encode_page_callback,
     encode_question_cancel_callback,
@@ -600,6 +602,16 @@ def test_callback_encoding_and_parsing() -> None:
     flow_run = encode_flow_run_callback("run-123")
     parsed_flow_run = parse_callback_data(flow_run)
     assert parsed_flow_run == FlowRunCallback(run_id="run-123")
+    flow = encode_flow_callback("refresh", "run-123", repo_id="repo-1")
+    parsed_flow = parse_callback_data(flow)
+    assert parsed_flow == FlowCallback(
+        action="refresh", run_id="run-123", repo_id="repo-1"
+    )
+
+
+def test_flow_callback_repo_id_requires_run_id() -> None:
+    with pytest.raises(ValueError, match="requires run_id"):
+        encode_flow_callback("refresh", repo_id="repo-1")
 
 
 def test_build_keyboards() -> None:

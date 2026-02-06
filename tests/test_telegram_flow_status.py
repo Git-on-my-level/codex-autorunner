@@ -193,6 +193,51 @@ async def test_flow_status_action_sends_keyboard(
     assert handler.markups[0] is not None
 
 
+@pytest.mark.anyio
+async def test_flow_status_action_callback_keeps_repo_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FlowStore(tmp_path / ".codex-autorunner" / "flows.db")
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    store.create_flow_run(run_id, "ticket_flow", {})
+    store.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
+    store.close()
+
+    snapshot = {
+        "worker_health": _health(tmp_path),
+        "effective_current_ticket": None,
+        "last_event_seq": None,
+        "last_event_at": None,
+    }
+    monkeypatch.setattr(
+        flows_module,
+        "build_flow_status_snapshot",
+        lambda _root, _record, _store: snapshot,
+    )
+
+    handler = _FlowStatusHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow repo status",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow_status_action(
+        message, tmp_path, argv=[], repo_id="car-wt-3"
+    )
+
+    keyboard = handler.markups[0]
+    assert keyboard is not None
+    callback = keyboard["inline_keyboard"][0][1]["callback_data"]
+    assert callback.endswith(":car-wt-3")
+
+
 class _TopicStoreStub:
     def __init__(self, record: object | None) -> None:
         self._record = record

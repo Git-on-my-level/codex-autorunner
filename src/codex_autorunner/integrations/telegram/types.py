@@ -65,6 +65,7 @@ class SelectionState:
     items: list[tuple[str, str]]
     page: int = 0
     button_labels: Optional[dict[str, str]] = None
+    repo_id: Optional[str] = None
 
 
 @dataclass
