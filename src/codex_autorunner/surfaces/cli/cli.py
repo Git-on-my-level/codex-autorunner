@@ -438,12 +438,21 @@ def _request_form_json(
     url: str,
     form: Optional[dict] = None,
     token_env: Optional[str] = None,
+    *,
+    force_multipart: bool = False,
 ) -> dict:
     headers = None
     if token_env:
         token = _require_auth_token(token_env)
         headers = {"Authorization": f"Bearer {token}"}
-    response = httpx.request(method, url, data=form, timeout=5.0, headers=headers)
+    data = form
+    files = None
+    if force_multipart:
+        data = form or {}
+        files = []
+    response = httpx.request(
+        method, url, data=data, files=files, timeout=5.0, headers=headers
+    )
     response.raise_for_status()
     data = response.json()
     return data if isinstance(data, dict) else {}
@@ -1802,6 +1811,7 @@ def hub_dispatch_reply(
                 reply_url,
                 form={"body": post_body},
                 token_env=config.server_auth_token_env,
+                force_multipart=True,
             )
             reply_seq = reply_resp.get("seq")
         except (
