@@ -202,6 +202,35 @@ def doctor(
             )
         )
 
+    # Check for workspace → contextspace migration
+    workspace_dir = state_root / "workspace"
+    if workspace_dir.exists() and workspace_dir.is_dir():
+        workspace_content = (
+            list(workspace_dir.iterdir()) if workspace_dir.is_dir() else []
+        )
+        if workspace_content:
+            checks.append(
+                DoctorCheck(
+                    name="Workspace migration",
+                    passed=False,
+                    message="Old workspace directory still has content; run migration script",
+                    severity="warning",
+                    check_id=check_id,
+                    fix=f"./scripts/migrate-workspace-to-contextspace.sh --repo {repo_root}",
+                )
+            )
+        else:
+            checks.append(
+                DoctorCheck(
+                    name="Workspace migration",
+                    passed=True,
+                    message="Workspace exists but is empty; consider removing",
+                    severity="info",
+                    check_id=check_id,
+                    fix=f"rmdir {workspace_dir}",
+                )
+            )
+
     # Check for stale locks
     lock_path = state_root / "lock"
     if lock_path.exists():

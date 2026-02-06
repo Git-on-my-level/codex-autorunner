@@ -34,6 +34,10 @@ Telegram is the "on-the-go" and notification hub for CAR. From here you can kick
 ### Project Manager Agent
 The project manager agent (PMA) is a way to use an AI agent to run CAR. For example instead of making/editing tickets in the UI, you can ask the PMA to do it for you. Instead of starting a ticket flow, the PMA can babysit it for you. The PMA can be accessed in the web and in Telegram, and also uses the CAR CLI directly.
 
+## Migration
+
+If you have an existing CAR repo with `.codex-autorunner/workspace/`, see [Migration: workspace → contextspace](docs/migrations/workspace-to-contextspace.md) for the one-time migration step.
+
 ## Quickstart
 
 The fastest way to get started is to pass [this setup guide](docs/AGENT_SETUP_GUIDE.md) to your favorite AI agent. The agent will walk you through installation and configuration interactively based on your environment.
