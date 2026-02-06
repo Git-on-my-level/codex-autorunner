@@ -13,9 +13,9 @@ repo_defaults:
   docs:
     # Paths are relative to the repo root.
     # Note: Absolute paths and ~ expansion are NOT allowed for docs.*
-    active_context: .codex-autorunner/workspace/active_context.md
-    decisions: .codex-autorunner/workspace/decisions.md
-    spec: .codex-autorunner/workspace/spec.md
+    active_context: .codex-autorunner/contextspace/active_context.md
+    decisions: .codex-autorunner/contextspace/decisions.md
+    spec: .codex-autorunner/contextspace/spec.md
 
   codex:
     # Codex CLI binary to invoke.

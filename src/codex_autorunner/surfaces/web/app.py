@@ -317,12 +317,12 @@ def _path_is_allowed_for_file_write(path: str) -> bool:
         return False
     # Canonical allowlist for all AI-assisted file edits via app-server approval:
     # - tickets: .codex-autorunner/tickets/**
-    # - workspace docs: .codex-autorunner/workspace/**
+    # - contextspace docs: .codex-autorunner/contextspace/**
     allowed_prefixes = (
         ".codex-autorunner/tickets/",
-        ".codex-autorunner/workspace/",
+        ".codex-autorunner/contextspace/",
     )
-    if normalized in (".codex-autorunner/tickets", ".codex-autorunner/workspace"):
+    if normalized in (".codex-autorunner/tickets", ".codex-autorunner/contextspace"):
         return True
     return any(
         normalized == prefix.rstrip("/") or normalized.startswith(prefix)

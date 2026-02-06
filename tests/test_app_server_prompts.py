@@ -32,5 +32,5 @@ def test_autorunner_prompt_limits_and_instructions(repo: Path) -> None:
     assert "workspace docs" in prompt or "Workspace docs" in prompt
     assert "Do NOT write files" not in prompt
     assert TRUNCATION_MARKER in prompt
-    assert ".codex-autorunner/workspace/spec.md" in prompt
-    assert ".codex-autorunner/workspace/active_context.md" in prompt
+    assert ".codex-autorunner/contextspace/spec.md" in prompt
+    assert ".codex-autorunner/contextspace/active_context.md" in prompt

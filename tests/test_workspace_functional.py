@@ -33,7 +33,7 @@ def test_workspace_docs_read_write(hub_env, client, repo: Path):
     assert res.json()["active_context"] == test_content
 
     # 3. Verify file was written to the correct location
-    expected_path = repo / ".codex-autorunner" / "workspace" / "active_context.md"
+    expected_path = repo / ".codex-autorunner" / "contextspace" / "active_context.md"
     assert expected_path.exists()
     assert expected_path.read_text() == test_content
 
@@ -46,15 +46,15 @@ def test_workspace_docs_read_write(hub_env, client, repo: Path):
     assert res.status_code == 200
     assert res.json()["decisions"] == test_decisions
     assert (
-        repo / ".codex-autorunner" / "workspace" / "decisions.md"
+        repo / ".codex-autorunner" / "contextspace" / "decisions.md"
     ).read_text() == test_decisions
 
 
 def test_workspace_tree_and_metadata(hub_env, client, repo: Path):
-    ws_dir = repo / ".codex-autorunner" / "workspace"
-    ws_dir.mkdir(parents=True, exist_ok=True)
-    (ws_dir / "loose.txt").write_text("loose")
-    nested_dir = ws_dir / "docs" / "nested"
+    cs_dir = repo / ".codex-autorunner" / "contextspace"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    (cs_dir / "loose.txt").write_text("loose")
+    nested_dir = cs_dir / "docs" / "nested"
     nested_dir.mkdir(parents=True, exist_ok=True)
     (nested_dir / "note.txt").write_text("note")
 
@@ -96,8 +96,8 @@ def test_workspace_upload_download_and_delete(hub_env, client, repo: Path):
     uploaded = res.json()["uploaded"]
     assert {item["path"] for item in uploaded} == {"inbox/hello.txt", "inbox/inner.txt"}
 
-    ws_dir = repo / ".codex-autorunner" / "workspace" / "inbox"
-    assert (ws_dir / "hello.txt").read_text() == "hello world"
+    cs_dir = repo / ".codex-autorunner" / "contextspace" / "inbox"
+    assert (cs_dir / "hello.txt").read_text() == "hello world"
 
     res = client.get(
         f"/repos/{hub_env.repo_id}/api/workspace/download",
@@ -111,7 +111,7 @@ def test_workspace_upload_download_and_delete(hub_env, client, repo: Path):
         params={"path": "inbox/inner.txt"},
     )
     assert res.status_code == 200
-    assert not (ws_dir / "inner.txt").exists()
+    assert not (cs_dir / "inner.txt").exists()
 
     # Traversal should be blocked
     res = client.delete(
@@ -122,10 +122,10 @@ def test_workspace_upload_download_and_delete(hub_env, client, repo: Path):
 
 
 def test_workspace_download_zip_scoped(hub_env, client, repo: Path):
-    ws_dir = repo / ".codex-autorunner" / "workspace"
-    ws_dir.mkdir(parents=True, exist_ok=True)
-    (ws_dir / "root.txt").write_text("root")
-    folder = ws_dir / "folder"
+    cs_dir = repo / ".codex-autorunner" / "contextspace"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    (cs_dir / "root.txt").write_text("root")
+    folder = cs_dir / "folder"
     (folder / "sub").mkdir(parents=True, exist_ok=True)
     (folder / "a.txt").write_text("A")
     (folder / "sub" / "b.txt").write_text("B")
@@ -133,7 +133,7 @@ def test_workspace_download_zip_scoped(hub_env, client, repo: Path):
     outside = repo / "outside.txt"
     outside.write_text("nope")
     # symlink pointing outside workspace should be skipped
-    link = ws_dir / "folder" / "escape"
+    link = cs_dir / "folder" / "escape"
     try:
         link.symlink_to(outside)
     except OSError:
@@ -156,32 +156,32 @@ def test_workspace_download_zip_scoped(hub_env, client, repo: Path):
 
 
 def test_workspace_folder_crud_and_pinned_guard(hub_env, client, repo: Path):
-    ws_dir = repo / ".codex-autorunner" / "workspace"
-    ws_dir.mkdir(parents=True, exist_ok=True)
-    (ws_dir / "active_context.md").write_text("keep")
+    cs_dir = repo / ".codex-autorunner" / "contextspace"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    (cs_dir / "active_context.md").write_text("keep")
 
     res = client.post(
         f"/repos/{hub_env.repo_id}/api/workspace/folder",
         params={"path": "notes"},
     )
     assert res.status_code == 200
-    assert (ws_dir / "notes").is_dir()
+    assert (cs_dir / "notes").is_dir()
 
     # Non-empty delete should fail
-    (ws_dir / "notes" / "tmp.txt").write_text("tmp")
+    (cs_dir / "notes" / "tmp.txt").write_text("tmp")
     res = client.delete(
         f"/repos/{hub_env.repo_id}/api/workspace/folder",
         params={"path": "notes"},
     )
     assert res.status_code == 400
 
-    (ws_dir / "notes" / "tmp.txt").unlink()
+    (cs_dir / "notes" / "tmp.txt").unlink()
     res = client.delete(
         f"/repos/{hub_env.repo_id}/api/workspace/folder",
         params={"path": "notes"},
     )
     assert res.status_code == 200
-    assert not (ws_dir / "notes").exists()
+    assert not (cs_dir / "notes").exists()
 
     # Pinned docs cannot be deleted
     res = client.delete(
@@ -194,11 +194,11 @@ def test_workspace_folder_crud_and_pinned_guard(hub_env, client, repo: Path):
 @pytest.mark.integration
 def test_file_chat_workspace_targets(hub_env, client, repo: Path):
     # Setup workspace docs
-    ws_dir = repo / ".codex-autorunner" / "workspace"
-    ws_dir.mkdir(parents=True, exist_ok=True)
-    (ws_dir / "active_context.md").write_text("Active Context Content")
-    (ws_dir / "decisions.md").write_text("Decisions Content")
-    (ws_dir / "spec.md").write_text("Spec Content")
+    cs_dir = repo / ".codex-autorunner" / "contextspace"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    (cs_dir / "active_context.md").write_text("Active Context Content")
+    (cs_dir / "decisions.md").write_text("Decisions Content")
+    (cs_dir / "spec.md").write_text("Spec Content")
 
     # Test file-chat with all workspace targets
     # We use a loop but only check status code 500 or better to avoid flaky app-server issues in tests
@@ -231,13 +231,13 @@ def test_file_chat_workspace_targets(hub_env, client, repo: Path):
 
 def test_spec_ingest_ticket_generation(hub_env, client, repo: Path):
     # Setup a spec file
-    (repo / ".codex-autorunner" / "workspace").mkdir(parents=True, exist_ok=True)
+    (repo / ".codex-autorunner" / "contextspace").mkdir(parents=True, exist_ok=True)
     spec_content = """
 # Feature: Test
 - [ ] Task 1
 - [ ] Task 2
 """
-    (repo / ".codex-autorunner" / "workspace" / "spec.md").write_text(spec_content)
+    (repo / ".codex-autorunner" / "contextspace" / "spec.md").write_text(spec_content)
 
     # Trigger ingest
     res = client.post(f"/repos/{hub_env.repo_id}/api/workspace/spec/ingest")
@@ -261,11 +261,11 @@ def test_ticket_runner_workspace_doc_injection(hub_env, repo: Path):
     from codex_autorunner.tickets.runner import TicketRunner
 
     # Setup workspace docs
-    ws_dir = repo / ".codex-autorunner" / "workspace"
-    ws_dir.mkdir(parents=True, exist_ok=True)
-    ws_dir.joinpath("active_context.md").write_text("Active Context Content")
-    ws_dir.joinpath("decisions.md").write_text("Decisions Content")
-    ws_dir.joinpath("spec.md").write_text("Spec Content")
+    cs_dir = repo / ".codex-autorunner" / "contextspace"
+    cs_dir.mkdir(parents=True, exist_ok=True)
+    cs_dir.joinpath("active_context.md").write_text("Active Context Content")
+    cs_dir.joinpath("decisions.md").write_text("Decisions Content")
+    cs_dir.joinpath("spec.md").write_text("Spec Content")
 
     # Setup a ticket
     t_dir = repo / ".codex-autorunner" / "tickets"
@@ -308,14 +308,14 @@ def test_ticket_runner_workspace_doc_injection(hub_env, repo: Path):
     )
 
     assert (
-        "Active context [.codex-autorunner/workspace/active_context.md]:\nActive Context Content"
+        "Active context [.codex-autorunner/contextspace/active_context.md]:\nActive Context Content"
         in prompt
     )
     assert (
-        "Decisions [.codex-autorunner/workspace/decisions.md]:\nDecisions Content"
+        "Decisions [.codex-autorunner/contextspace/decisions.md]:\nDecisions Content"
         in prompt
     )
-    assert "Spec [.codex-autorunner/workspace/spec.md]:\nSpec Content" in prompt
+    assert "Spec [.codex-autorunner/contextspace/spec.md]:\nSpec Content" in prompt
 
 
 def test_ticket_runner_workspace_doc_injection_missing(hub_env, repo: Path):
@@ -324,12 +324,12 @@ def test_ticket_runner_workspace_doc_injection_missing(hub_env, repo: Path):
     from codex_autorunner.tickets.models import TicketRunConfig
     from codex_autorunner.tickets.runner import TicketRunner
 
-    # Remove the seeded workspace docs to ensure they are truly missing
-    ws_dir = repo / ".codex-autorunner" / "workspace"
-    if ws_dir.exists():
+    # Remove the seeded contextspace docs to ensure they are truly missing
+    cs_dir = repo / ".codex-autorunner" / "contextspace"
+    if cs_dir.exists():
         import shutil
 
-        shutil.rmtree(ws_dir)
+        shutil.rmtree(cs_dir)
 
     # Setup a ticket
     t_dir = repo / ".codex-autorunner" / "tickets"

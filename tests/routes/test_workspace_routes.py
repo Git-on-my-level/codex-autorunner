@@ -20,9 +20,9 @@ def test_workspace_read_rejects_non_utf8(tmp_path: Path) -> None:
     repo_root.mkdir()
     client = _client_for_repo(repo_root)
 
-    workspace_dir = repo_root / ".codex-autorunner" / "workspace"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    (workspace_dir / "binary.bin").write_bytes(b"\xf3\xff\x00\x01")
+    contextspace_dir = repo_root / ".codex-autorunner" / "contextspace"
+    contextspace_dir.mkdir(parents=True, exist_ok=True)
+    (contextspace_dir / "binary.bin").write_bytes(b"\xf3\xff\x00\x01")
 
     res = client.get("/api/workspace/file", params={"path": "binary.bin"})
     assert res.status_code == 400

@@ -160,21 +160,21 @@ def seed_repo_files(
     if not tickets_dir.exists() or force:
         tickets_dir.mkdir(parents=True, exist_ok=True)
 
-    workspace_dir = ca_dir / "workspace"
-    if not workspace_dir.exists() or force:
-        workspace_dir.mkdir(parents=True, exist_ok=True)
+    contextspace_dir = ca_dir / "contextspace"
+    if not contextspace_dir.exists() or force:
+        contextspace_dir.mkdir(parents=True, exist_ok=True)
 
-    _seed_doc(workspace_dir / "active_context.md", force, sample_todo())
-    _seed_doc(workspace_dir / "decisions.md", force, "")
-    _seed_doc(workspace_dir / "spec.md", force, sample_spec())
+    _seed_doc(contextspace_dir / "active_context.md", force, sample_todo())
+    _seed_doc(contextspace_dir / "decisions.md", force, "")
+    _seed_doc(contextspace_dir / "spec.md", force, sample_spec())
 
     # Seed an always-available briefing doc for interactive Codex sessions.
     ensure_about_car_file_for_repo(
         repo_root,
         doc_paths={
-            "active_context": workspace_dir / "active_context.md",
-            "decisions": workspace_dir / "decisions.md",
-            "spec": workspace_dir / "spec.md",
+            "active_context": contextspace_dir / "active_context.md",
+            "decisions": contextspace_dir / "decisions.md",
+            "spec": contextspace_dir / "spec.md",
         },
         force=force,
     )

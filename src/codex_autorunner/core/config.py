@@ -53,9 +53,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "repo",
     "docs": {
-        "active_context": ".codex-autorunner/workspace/active_context.md",
-        "decisions": ".codex-autorunner/workspace/decisions.md",
-        "spec": ".codex-autorunner/workspace/spec.md",
+        "active_context": ".codex-autorunner/contextspace/active_context.md",
+        "decisions": ".codex-autorunner/contextspace/decisions.md",
+        "spec": ".codex-autorunner/contextspace/spec.md",
     },
     "review": {
         "enabled": True,

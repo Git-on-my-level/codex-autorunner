@@ -14,9 +14,9 @@ def test_about_car_is_seeded(repo: Path):
     text = about_path.read_text(encoding="utf-8")
     assert ABOUT_CAR_GENERATED_MARKER in text
     assert "ABOUT_CAR" in text
-    assert ".codex-autorunner/workspace/active_context.md" in text
-    assert ".codex-autorunner/workspace/decisions.md" in text
-    assert ".codex-autorunner/workspace/spec.md" in text
+    assert ".codex-autorunner/contextspace/active_context.md" in text
+    assert ".codex-autorunner/contextspace/decisions.md" in text
+    assert ".codex-autorunner/contextspace/spec.md" in text
     assert "lint ticket frontmatter" in text.lower()
 
 

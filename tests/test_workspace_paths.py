@@ -23,11 +23,12 @@ def test_rejects_absolute_and_parent_refs(tmp_path: Path) -> None:
 def test_allows_simple_relative_file(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    (repo_root / ".codex-autorunner" / "workspace").mkdir(parents=True)
+    (repo_root / ".codex-autorunner" / "contextspace").mkdir(parents=True)
 
     abs_path, rel = normalize_workspace_rel_path(repo_root, "notes/todo.md")
     assert (
-        abs_path == repo_root / ".codex-autorunner" / "workspace" / "notes" / "todo.md"
+        abs_path
+        == repo_root / ".codex-autorunner" / "contextspace" / "notes" / "todo.md"
     )
     assert rel == "notes/todo.md"
 
@@ -35,12 +36,12 @@ def test_allows_simple_relative_file(tmp_path: Path) -> None:
 def test_blocks_symlink_escape(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    workspace = repo_root / ".codex-autorunner" / "workspace"
-    workspace.mkdir(parents=True)
+    contextspace = repo_root / ".codex-autorunner" / "contextspace"
+    contextspace.mkdir(parents=True)
 
     outside = tmp_path / "outside"
     outside.mkdir()
-    escape = workspace / "link"
+    escape = contextspace / "link"
     escape.symlink_to(outside)
 
     with pytest.raises(ValueError):

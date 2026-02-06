@@ -35,7 +35,7 @@ def _normalize_kind(kind: str) -> WorkspaceDocKind:
 
 
 def workspace_dir(repo_root: Path) -> Path:
-    return repo_root / ".codex-autorunner" / "workspace"
+    return repo_root / ".codex-autorunner" / "contextspace"
 
 
 PINNED_DOC_FILENAMES = {f"{kind}.md" for kind in WORKSPACE_DOC_KINDS}

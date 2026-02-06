@@ -40,7 +40,9 @@ def _seed_draft(repo_root: Path, target_raw: str, before: str, after: str):
 
 def test_pending_returns_hash_and_stale_flag(client: TestClient, hub_env, repo: Path):
     repo_root = repo
-    workspace_path = repo_root / ".codex-autorunner" / "workspace" / "active_context.md"
+    workspace_path = (
+        repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
+    )
     before = "line 1\n"
     after = "line 1\nline 2\n"
     _write_file(workspace_path, before)
@@ -59,7 +61,7 @@ def test_pending_returns_hash_and_stale_flag(client: TestClient, hub_env, repo: 
 
 def test_apply_respects_force_and_clears_draft(client: TestClient, hub_env, repo: Path):
     repo_root = repo
-    workspace_path = repo_root / ".codex-autorunner" / "workspace" / "decisions.md"
+    workspace_path = repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
     before = "original\n"
     draft_after = "drafted\n"
     _write_file(workspace_path, before)
@@ -91,7 +93,7 @@ def test_apply_respects_force_and_clears_draft(client: TestClient, hub_env, repo
 
 def test_workspace_write_invalidates_draft(client: TestClient, hub_env, repo: Path):
     repo_root = repo
-    workspace_path = repo_root / ".codex-autorunner" / "workspace" / "spec.md"
+    workspace_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
     before = "spec v1\n"
     after = "spec v2\n"
     _write_file(workspace_path, before)
