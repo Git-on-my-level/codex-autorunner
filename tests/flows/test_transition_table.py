@@ -27,6 +27,8 @@ def _health(alive: bool) -> SimpleNamespace:
         is_alive=alive,
         status="alive" if alive else "dead",
         artifact_path=None,
+        pid=12345 if not alive else None,
+        message="worker PID not running" if not alive else None,
     )
 
 

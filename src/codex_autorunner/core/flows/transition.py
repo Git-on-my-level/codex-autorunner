@@ -22,12 +22,15 @@ class TransitionDecision:
         Updated state payload (ticket_engine etc.).
     note: Optional[str]
         Reason for the transition (useful for tests/logging).
+    error_message: Optional[str]
+        Concrete error message for terminal failures.
     """
 
     status: FlowRunStatus
     finished_at: Optional[str]
     state: dict[str, Any]
     note: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 def resolve_flow_transition(
@@ -70,8 +73,18 @@ def resolve_flow_transition(
             state = ensure_reason_summary(
                 state, status=new_status, default="Worker died"
             )
+            error_msg = f"Worker died (status={health.status}"
+            if health.pid:
+                error_msg += f", pid={health.pid}"
+            if health.message:
+                error_msg += f", reason: {health.message}"
+            error_msg += ")"
             return TransitionDecision(
-                status=new_status, finished_at=now, state=state, note="worker-dead"
+                status=new_status,
+                finished_at=now,
+                state=state,
+                note="worker-dead",
+                error_message=error_msg,
             )
 
         return TransitionDecision(

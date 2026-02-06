@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from ..locks import FileLockBusy, file_lock
-from .models import FlowRunRecord, FlowRunStatus
+from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import UNSET, FlowStore
 from .transition import resolve_flow_transition
 from .worker_process import FlowWorkerHealth, check_worker_health, clear_worker_metadata
@@ -68,6 +69,7 @@ def reconcile_flow_run(
                 decision.status == record.status
                 and decision.finished_at == record.finished_at
                 and decision.state == (record.state or {})
+                and decision.error_message == record.error_message
             ):
                 return record, False, False
 
@@ -84,7 +86,27 @@ def reconcile_flow_run(
                 status=decision.status,
                 state=decision.state,
                 finished_at=decision.finished_at if decision.finished_at else UNSET,
+                error_message=(
+                    decision.error_message if decision.error_message else UNSET
+                ),
             )
+
+            if decision.status == FlowRunStatus.FAILED and decision.error_message:
+                try:
+                    store.create_event(
+                        event_id=str(uuid.uuid4()),
+                        run_id=record.id,
+                        event_type=FlowEventType.FLOW_FAILED,
+                        data={
+                            "error": decision.error_message,
+                            "reason": decision.note or "reconcile",
+                        },
+                    )
+                except Exception as exc:
+                    (logger or _logger).warning(
+                        "Failed to emit flow_failed event for %s: %s", record.id, exc
+                    )
+
             _ensure_worker_not_stale(health)
             return (updated or record), bool(updated), False
     except FileLockBusy:

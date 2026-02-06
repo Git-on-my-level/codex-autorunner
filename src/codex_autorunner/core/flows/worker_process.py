@@ -47,7 +47,7 @@ def _worker_metadata_path(artifacts_dir: Path) -> Path:
     return artifacts_dir / _WORKER_METADATA_FILENAME
 
 
-def _build_worker_cmd(entrypoint: str, run_id: str) -> list[str]:
+def _build_worker_cmd(entrypoint: str, run_id: str, repo_root: Path) -> list[str]:
     normalized_run_id = _normalized_run_id(run_id)
     return [
         sys.executable,
@@ -55,6 +55,8 @@ def _build_worker_cmd(entrypoint: str, run_id: str) -> list[str]:
         entrypoint,
         "flow",
         "worker",
+        "--repo",
+        str(repo_root),
         "--run-id",
         normalized_run_id,
     ]
@@ -105,11 +107,17 @@ def _cmdline_matches(expected: list[str], actual: list[str]) -> bool:
     return expected_str in actual_str
 
 
-def _write_worker_metadata(path: Path, pid: int, cmd: list[str]) -> None:
+def _write_worker_metadata(
+    path: Path, pid: int, cmd: list[str], repo_root: Path
+) -> None:
+    import time
+
     data = {
         "pid": pid,
         "cmd": cmd,
-        "cwd": os.getcwd(),
+        "repo_root": str(repo_root.resolve()),
+        "spawned_at": time.time(),
+        "parent_pid": os.getppid(),
     }
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     # Also emit a plain PID file for quick inspection.
@@ -181,7 +189,7 @@ def check_worker_health(
             message="worker PID not running",
         )
 
-    expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id)
+    expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id, repo_root)
     actual_cmd = _read_process_cmdline(pid)
     if actual_cmd is None:
         # Can't inspect cmdline; trust the PID check.
@@ -226,12 +234,13 @@ def register_worker_metadata(
     resolved_pid = pid or os.getpid()
     resolved_cmd = cmd or _read_process_cmdline(resolved_pid)
     if not resolved_cmd:
-        resolved_cmd = _build_worker_cmd(entrypoint, normalized_run_id)
+        resolved_cmd = _build_worker_cmd(entrypoint, normalized_run_id, repo_root)
 
     _write_worker_metadata(
         _worker_metadata_path(artifacts_dir),
         resolved_pid,
         resolved_cmd,
+        repo_root,
     )
     return artifacts_dir
 
@@ -255,7 +264,7 @@ def spawn_flow_worker(
     stdout_handle = stdout_path.open("ab")
     stderr_handle = stderr_path.open("ab")
 
-    cmd = _build_worker_cmd(entrypoint, normalized_run_id)
+    cmd = _build_worker_cmd(entrypoint, normalized_run_id, repo_root)
 
     proc = subprocess.Popen(
         cmd,
@@ -264,5 +273,7 @@ def spawn_flow_worker(
         stderr=stderr_handle,
     )
 
-    _write_worker_metadata(_worker_metadata_path(artifacts_dir), proc.pid, cmd)
+    _write_worker_metadata(
+        _worker_metadata_path(artifacts_dir), proc.pid, cmd, repo_root
+    )
     return proc, stdout_handle, stderr_handle
