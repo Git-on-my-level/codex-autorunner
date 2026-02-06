@@ -246,6 +246,19 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Treat this prompt as code: keep it short and stable.
 - See `.codex-autorunner/pma/ABOUT_CAR.md` for operational how-to.
 
+## Ticket planning constraints
+
+- Ticket flow executes `TICKET-###*.md` in ascending numeric order.
+- It repeatedly selects the first ticket with `done != true`, runs that ticket, then advances.
+- Do not create lower-numbered tickets that depend on higher-numbered tickets.
+- If prerequisites are discovered late, split/reorder tickets so prerequisite work appears earlier.
+
+## Ticket agent context (what each turn already gets)
+
+- Current ticket file (`.codex-autorunner/tickets/TICKET-###*.md`).
+- Pinned contextspace docs when present: `active_context.md`, `decisions.md`, `spec.md`.
+- Prior human reply context and previous agent output when available.
+
 ## Worktrees (hub-managed)
 
 - Prefer hub-owned worktrees:
@@ -283,6 +296,19 @@ def pma_notes_content() -> str:
   `car flow ticket_flow status --repo <path> [--run-id <uuid>]`
   `car flow ticket_flow stop --repo <path> [--run-id <uuid>]`
 - See `<repo>/.codex-autorunner/TICKET_FLOW_QUICKSTART.md` for CLI entrypoints + gotchas.
+
+## Ticket flow mechanics (planning constraints)
+
+- Ticket flow is an ordered queue, not a DAG scheduler.
+- It chooses the first not-done ticket by number and runs one agent turn for that ticket.
+- To avoid stuck runs, ensure prerequisites appear in earlier ticket numbers.
+- If a ticket needs context from previous work, persist that context in `.codex-autorunner/contextspace/`.
+
+## Ticket turn prompt context (what agents can read)
+
+- The current ticket file (full markdown, including YAML frontmatter).
+- Pinned contextspace docs when present: `active_context.md`, `decisions.md`, `spec.md`.
+- Reply history from dispatch pauses and previous agent output when present.
 
 ## Worktrees 101 (Hub-managed)
 

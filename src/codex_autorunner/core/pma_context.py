@@ -41,6 +41,17 @@ Web UI map (user perspective):
 - Hub root: `/` (repos list + global notifications).
 - Repo view: `/repos/<repo_id>/` tabs: Tickets | Inbox | Contextspace | Terminal | Analytics | Archive.
   - Tickets: edit queue; Inbox: paused run dispatches; Contextspace: active_context/spec/decisions.
+
+Ticket planning constraints (state machine):
+- Ticket flow processes `.codex-autorunner/tickets/TICKET-###*.md` in ascending numeric order.
+- On each turn it picks the first ticket where `done != true`; when that ticket is completed, it advances to the next.
+- Avoid creating dependency edges from lower-numbered tickets to higher-numbered tickets. That can deadlock the flow.
+- If a later ticket would unblock an earlier one, reorder/split tickets so prerequisites appear earlier.
+
+What each ticket agent turn can already see:
+- The current ticket file (full markdown + frontmatter).
+- Pinned contextspace docs when present: `active_context.md`, `decisions.md`, `spec.md` (truncated).
+- Reply context from prior user dispatches and prior agent output (if present).
 </pma_fastpath>
 """
 

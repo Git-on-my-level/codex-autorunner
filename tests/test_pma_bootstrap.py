@@ -16,12 +16,19 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     prompt_content = prompt_path.read_text(encoding="utf-8")
     assert "Project Management Agent" in prompt_content
     assert "You are the hub-level" in prompt_content
+    assert "Ticket planning constraints" in prompt_content
+    assert "ascending numeric order" in prompt_content
+    assert "active_context.md" in prompt_content
+    assert "decisions.md" in prompt_content
+    assert "spec.md" in prompt_content
 
     about_path = pma_dir / "ABOUT_CAR.md"
     assert about_path.exists()
     about_content = about_path.read_text(encoding="utf-8")
     assert "PMA Operations Guide" in about_content
     assert "Ticket flow" in about_content
+    assert "Ticket flow mechanics (planning constraints)" in about_content
+    assert "Ticket turn prompt context" in about_content
 
 
 def test_pma_config_defaults(tmp_path: Path) -> None:
