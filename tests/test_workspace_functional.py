@@ -200,9 +200,13 @@ def test_file_chat_workspace_targets(hub_env, client, repo: Path):
     (cs_dir / "decisions.md").write_text("Decisions Content")
     (cs_dir / "spec.md").write_text("Spec Content")
 
-    # Test file-chat with all workspace targets
+    # Test file-chat with all contextspace targets
     # We use a loop but only check status code 500 or better to avoid flaky app-server issues in tests
-    for target in ["workspace:active_context", "workspace:decisions", "workspace:spec"]:
+    for target in [
+        "contextspace:active_context",
+        "contextspace:decisions",
+        "contextspace:spec",
+    ]:
         try:
             res = client.post(
                 f"/repos/{hub_env.repo_id}/api/file-chat",
