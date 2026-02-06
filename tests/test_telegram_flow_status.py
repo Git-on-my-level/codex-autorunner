@@ -143,8 +143,9 @@ class _FlowStatusHandler(FlowCommands):
         thread_id: int | None = None,
         reply_to: int | None = None,
         reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
     ) -> None:
-        _ = (thread_id, reply_to)
+        _ = (thread_id, reply_to, parse_mode)
         self.sent.append(text)
         self.markups.append(reply_markup)
 
@@ -224,8 +225,9 @@ class _PMAFlowStatusHandler(FlowCommands):
         thread_id: int | None = None,
         reply_to: int | None = None,
         reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
     ) -> None:
-        _ = (thread_id, reply_to, reply_markup)
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
         self.sent.append(text)
 
 
@@ -335,5 +337,6 @@ async def test_flow_hub_overview_allows_parse_mode_override(
     await handler._send_flow_hub_overview(message)
 
     assert handler.sent
-    # parse_mode override should be propagated without raising TypeError
-    assert handler.sent[0][1] is None
+    assert "`r1`" in handler.sent[0][0]
+    assert "`/flow <repo-id> status`" in handler.sent[0][0]
+    assert handler.sent[0][1] == "Markdown"

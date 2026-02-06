@@ -120,6 +120,10 @@ def _flow_help_lines() -> list[str]:
     ]
 
 
+def _code(value: object) -> str:
+    return f"`{value}`"
+
+
 def _discover_unregistered_worktrees(
     manifest, hub_root: Optional[Path]
 ) -> list[dict[str, object]]:
@@ -362,9 +366,10 @@ class FlowCommands(SharedHelpers):
                 return
             await self._send_message(
                 message.chat_id,
-                "No workspace bound. Use /flow <repo-id> status to inspect a repo without binding, or /bind <repo-id> to attach this topic.",
+                "No workspace bound. Use `/flow <repo-id> status` to inspect a repo without binding, or `/bind <repo-id>` to attach this topic.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
+                parse_mode="Markdown",
             )
             return
 
@@ -701,7 +706,7 @@ class FlowCommands(SharedHelpers):
             total = progress.get("total")
             if isinstance(done, int) and isinstance(total, int) and total >= 0:
                 progress_label = f"{done}/{total}"
-        lines = [f"Run: {run.id}", f"Status: {status_value}"]
+        lines = [f"Run: {_code(run.id)}", f"Status: {status_value}"]
         if progress_label:
             lines.append(f"Tickets: {progress_label}")
         flow_type = getattr(run, "flow_type", None)
@@ -759,7 +764,7 @@ class FlowCommands(SharedHelpers):
             worker_line += f" - {health.message}"
         lines.append(worker_line)
         if status == FlowRunStatus.PAUSED:
-            lines.append("Paused: use /flow reply <message>, then /flow resume.")
+            lines.append("Paused: use `/flow reply <message>`, then `/flow resume`.")
         return lines
 
     def _build_flow_status_keyboard(
@@ -904,6 +909,7 @@ class FlowCommands(SharedHelpers):
 
         def _format_status_line(
             label: str,
+            repo_id: str,
             *,
             status_icon: str,
             status_value: str,
@@ -911,8 +917,14 @@ class FlowCommands(SharedHelpers):
             run_id: Optional[str],
             indent: str = "",
         ) -> str:
-            run_suffix = f" run {run_id}" if run_id else ""
-            return f"{indent}{status_icon} {label}: {status_value} {progress_label}{run_suffix}"
+            run_suffix = f" run {_code(run_id)}" if run_id else ""
+            repo_label = _code(repo_id)
+            if label != repo_id:
+                repo_label += f" ({label})"
+            return (
+                f"{indent}{status_icon} {repo_label}: {status_value} "
+                f"{progress_label}{run_suffix}"
+            )
 
         lines = ["Hub Flow Overview:"]
         groups: dict[str, list[tuple[str, str]]] = {}
@@ -968,6 +980,7 @@ class FlowCommands(SharedHelpers):
                     )
                     status_line = _format_status_line(
                         label,
+                        repo_id,
                         status_icon=status_icon,
                         status_value=active.status.value,
                         progress_label=progress_label,
@@ -981,6 +994,7 @@ class FlowCommands(SharedHelpers):
                     if paused:
                         status_line = _format_status_line(
                             label,
+                            repo_id,
                             status_icon="🔴",
                             status_value="PAUSED",
                             progress_label=progress_label,
@@ -990,6 +1004,7 @@ class FlowCommands(SharedHelpers):
                     else:
                         status_line = _format_status_line(
                             label,
+                            repo_id,
                             status_icon="⚪",
                             status_value="Idle",
                             progress_label=progress_label,
@@ -997,7 +1012,7 @@ class FlowCommands(SharedHelpers):
                             indent=indent,
                         )
             except Exception:
-                status_line = f"{indent}❓ {label}: Error reading state"
+                status_line = f"{indent}❓ {_code(repo_id)}: Error reading state"
             finally:
                 store.close()
 
@@ -1016,17 +1031,17 @@ class FlowCommands(SharedHelpers):
         if extras:
             lines.append("")
             lines.append(
-                "Note: Unregistered worktrees detected. Run 'car hub scan' to register them."
+                "Note: Unregistered worktrees detected. Run `car hub scan` to register them."
             )
         lines.append("")
-        lines.append("Tip: use /flow <repo-id> status for repo details.")
+        lines.append("Tip: use `/flow <repo-id> status` for repo details.")
 
         await self._send_message(
             message.chat_id,
             "\n".join(lines),
             thread_id=message.thread_id,
             reply_to=message.message_id,
-            parse_mode=None,
+            parse_mode="Markdown",
         )
 
     async def _handle_flow_status_action(
@@ -1054,6 +1069,7 @@ class FlowCommands(SharedHelpers):
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=keyboard,
+            parse_mode="Markdown",
         )
 
     async def _handle_flow_runs(
@@ -1112,6 +1128,7 @@ class FlowCommands(SharedHelpers):
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=keyboard,
+            parse_mode="Markdown",
         )
 
     async def _handle_flow_bootstrap(
@@ -1142,9 +1159,10 @@ class FlowCommands(SharedHelpers):
             _spawn_flow_worker(repo_root, active_run.id)
             await self._send_message(
                 message.chat_id,
-                f"Reusing ticket flow run {active_run.id} ({active_run.status.value}).",
+                f"Reusing ticket flow run {_code(active_run.id)} ({active_run.status.value}).",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
+                parse_mode="Markdown",
             )
             return
 
@@ -1252,9 +1270,10 @@ You are the first ticket in a new ticket_flow run.
 
         await self._send_message(
             message.chat_id,
-            f"Started ticket flow run {flow_record.id}.",
+            f"Started ticket flow run {_code(flow_record.id)}.",
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            parse_mode="Markdown",
         )
 
     async def _send_flow_issue_hint(
@@ -1267,14 +1286,15 @@ You are the first ticket in a new ticket_flow run.
         if gh_available:
             repo_label = repo_slug or "your repo"
             gh_status = (
-                f"No ISSUE.md found. Use /flow issue <issue#|url> for {repo_label}, "
-                "or /flow plan <text>."
+                f"No ISSUE.md found. Use `/flow issue <issue#|url>` for {_code(repo_label)}, "
+                "or `/flow plan <text>`."
             )
         await self._send_message(
             message.chat_id,
             gh_status,
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            parse_mode="Markdown",
         )
 
     async def _handle_flow_issue(
@@ -1374,9 +1394,10 @@ You are the first ticket in a new ticket_flow run.
             if record.status != FlowRunStatus.PAUSED:
                 await self._send_message(
                     message.chat_id,
-                    f"Run {record.id} is {record.status.value}, not paused.",
+                    f"Run {_code(record.id)} is {record.status.value}, not paused.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
+                    parse_mode="Markdown",
                 )
                 return
         finally:
@@ -1387,9 +1408,10 @@ You are the first ticket in a new ticket_flow run.
         _spawn_flow_worker(repo_root, updated.id)
         await self._send_message(
             message.chat_id,
-            f"Resumed run {updated.id}.",
+            f"Resumed run {_code(updated.id)}.",
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            parse_mode="Markdown",
         )
 
     def _stop_flow_worker(self, repo_root: Path, run_id: str) -> None:
@@ -1432,9 +1454,10 @@ You are the first ticket in a new ticket_flow run.
             if record.status.is_terminal():
                 await self._send_message(
                     message.chat_id,
-                    f"Run {record.id} is already {record.status.value}.",
+                    f"Run {_code(record.id)} is already {record.status.value}.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
+                    parse_mode="Markdown",
                 )
                 return
         finally:
@@ -1445,9 +1468,10 @@ You are the first ticket in a new ticket_flow run.
         updated = await controller.stop_flow(record.id)
         await self._send_message(
             message.chat_id,
-            f"Stopped run {updated.id} ({updated.status.value}).",
+            f"Stopped run {_code(updated.id)} ({updated.status.value}).",
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            parse_mode="Markdown",
         )
 
     async def _handle_flow_recover(
@@ -1481,13 +1505,14 @@ You are the first ticket in a new ticket_flow run.
             if locked:
                 await self._send_message(
                     message.chat_id,
-                    f"Run {record.id} is locked for reconcile; try again.",
+                    f"Run {_code(record.id)} is locked for reconcile; try again.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
+                    parse_mode="Markdown",
                 )
                 return
             hint = "Recovered" if updated else "No changes needed"
-            lines = [f"{hint} for run {record.id}."]
+            lines = [f"{hint} for run {_code(record.id)}."]
             lines.extend(self._format_flow_status_lines(repo_root, record, store))
         finally:
             store.close()
@@ -1497,6 +1522,7 @@ You are the first ticket in a new ticket_flow run.
             "\n".join(lines),
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            parse_mode="Markdown",
         )
 
     async def _handle_flow_restart(
@@ -1601,9 +1627,10 @@ You are the first ticket in a new ticket_flow run.
 
         await self._send_message(
             message.chat_id,
-            f"Archived run {record.id} ({archived_count} tickets).",
+            f"Archived run {_code(record.id)} ({archived_count} tickets).",
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            parse_mode="Markdown",
         )
 
     async def _handle_reply(self, message: TelegramMessage, args: str) -> None:

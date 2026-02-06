@@ -530,9 +530,9 @@ class TelegramSelectionHandlers:
         lines = [FLOW_RUNS_PICKER_PROMPT]
         for run_id, label in page_items:
             if label:
-                lines.append(f"- {run_id} — {label}")
+                lines.append(f"- `{run_id}` — {label}")
             else:
-                lines.append(f"- {run_id}")
+                lines.append(f"- `{run_id}`")
         base = "\n".join(lines)
         return _format_selection_prompt(base, state.page, total_pages)
 

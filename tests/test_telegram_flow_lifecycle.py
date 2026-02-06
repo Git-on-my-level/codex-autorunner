@@ -51,8 +51,9 @@ class _FlowLifecycleHandler(FlowCommands):
         thread_id: int | None = None,
         reply_to: int | None = None,
         reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
     ) -> None:
-        _ = (thread_id, reply_to, reply_markup)
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
         self.sent.append(text)
 
     def _stop_flow_worker(self, _repo_root: Path, run_id: str) -> None:
@@ -113,7 +114,7 @@ async def test_flow_resume_defaults_latest_paused(
 
     assert controller.resume_calls == [run_new]
     assert spawned == [run_new]
-    assert any(f"Resumed run {run_new}" in text for text in handler.sent)
+    assert any(f"Resumed run `{run_new}`" in text for text in handler.sent)
 
 
 @pytest.mark.anyio
@@ -136,7 +137,7 @@ async def test_flow_stop_defaults_latest_active(
     await handler._handle_flow_stop(_message(), tmp_path, argv=[])
 
     assert controller.stop_calls == [run_running]
-    assert any(f"Stopped run {run_running}" in text for text in handler.sent)
+    assert any(f"Stopped run `{run_running}`" in text for text in handler.sent)
 
 
 @pytest.mark.anyio

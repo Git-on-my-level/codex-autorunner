@@ -43,8 +43,9 @@ class _FlowBootstrapHandler(FlowCommands):
         thread_id: int | None = None,
         reply_to: int | None = None,
         reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
     ) -> None:
-        _ = (thread_id, reply_to, reply_markup)
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
         self.sent.append(text)
 
     async def _prompt_flow_text_input(
