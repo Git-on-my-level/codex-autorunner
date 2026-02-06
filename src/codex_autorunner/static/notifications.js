@@ -270,15 +270,18 @@ function openNotificationsModal(item, returnFocusTo) {
                     return;
                 const reason = await inputModal("Dismiss reason (optional)", {
                     placeholder: "obsolete, resolved elsewhere, ...",
-                    confirmText: "Continue",
+                    confirmText: "Dismiss",
+                    allowEmpty: true,
                 });
+                if (reason === null)
+                    return;
                 await api("/hub/messages/dismiss", {
                     method: "POST",
                     body: {
                         repo_id: item.repoId,
                         run_id: item.runId,
                         seq: item.seq,
-                        reason: reason || "",
+                        reason,
                     },
                 });
                 const hubItems = getItemsForRoot("hub").filter((entry) => !isSameNotification(entry, item));

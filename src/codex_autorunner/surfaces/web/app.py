@@ -1731,6 +1731,18 @@ def create_hub_app(
             **series,
         }
 
+    hub_dismissal_locks: dict[str, asyncio.Lock] = {}
+    hub_dismissal_locks_guard = asyncio.Lock()
+
+    async def _repo_dismissal_lock(repo_root: Path) -> asyncio.Lock:
+        key = str(repo_root.resolve())
+        async with hub_dismissal_locks_guard:
+            lock = hub_dismissal_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                hub_dismissal_locks[key] = lock
+            return lock
+
     @app.get("/hub/messages")
     async def hub_messages(limit: int = 100):
         """Return paused ticket_flow dispatches across all repos.
@@ -1940,16 +1952,18 @@ def create_hub_app(
         if snapshot is None or not snapshot.exists_on_disk:
             raise HTTPException(status_code=404, detail="Repo not found")
 
-        dismissed_at = datetime.now(timezone.utc).isoformat()
-        items = _load_hub_inbox_dismissals(snapshot.path)
-        items[_dismissal_key(run_id, seq)] = {
-            "repo_id": repo_id,
-            "run_id": run_id,
-            "seq": seq,
-            "reason": reason or None,
-            "dismissed_at": dismissed_at,
-        }
-        _save_hub_inbox_dismissals(snapshot.path, items)
+        repo_lock = await _repo_dismissal_lock(snapshot.path)
+        async with repo_lock:
+            dismissed_at = datetime.now(timezone.utc).isoformat()
+            items = _load_hub_inbox_dismissals(snapshot.path)
+            items[_dismissal_key(run_id, seq)] = {
+                "repo_id": repo_id,
+                "run_id": run_id,
+                "seq": seq,
+                "reason": reason or None,
+                "dismissed_at": dismissed_at,
+            }
+            _save_hub_inbox_dismissals(snapshot.path, items)
         return {
             "status": "ok",
             "dismissed": {
