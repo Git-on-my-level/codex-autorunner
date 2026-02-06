@@ -1,10 +1,10 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
-import { fetchWorkspace, ingestSpecToTickets, listTickets, fetchWorkspaceTree, uploadWorkspaceFiles, downloadWorkspaceZip, createWorkspaceFolder, writeWorkspace, } from "./workspaceApi.js";
+import { fetchContextspace, ingestSpecToTickets, listTickets, fetchContextspaceTree, uploadContextspaceFiles, downloadContextspaceZip, createContextspaceFolder, writeContextspace, } from "./contextspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, newClientTurnId, streamTurnEvents, } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
-import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
+import { ContextspaceFileBrowser } from "./contextspaceFileBrowser.js";
 import { createDocChat } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { initDocChatVoice } from "./docChatVoice.js";
@@ -24,13 +24,13 @@ const state = {
     docEditor: null,
     browser: null,
 };
-const WORKSPACE_CHAT_EVENT_LIMIT = 8;
-const WORKSPACE_CHAT_EVENT_MAX = 50;
-const WORKSPACE_PENDING_KEY = "car.workspace.pendingTurn";
+const CONTEXTSPACE_CHAT_EVENT_LIMIT = 8;
+const CONTEXTSPACE_CHAT_EVENT_MAX = 50;
+const CONTEXTSPACE_PENDING_KEY = "car.contextspace.pendingTurn";
 const workspaceChat = createDocChat({
-    idPrefix: "workspace-chat",
-    storage: { keyPrefix: "car-workspace-chat-", maxMessages: 50, version: 1 },
-    limits: { eventVisible: WORKSPACE_CHAT_EVENT_LIMIT, eventMax: WORKSPACE_CHAT_EVENT_MAX },
+    idPrefix: "contextspace-chat",
+    storage: { keyPrefix: "car-contextspace-chat-", maxMessages: 50, version: 1 },
+    limits: { eventVisible: CONTEXTSPACE_CHAT_EVENT_LIMIT, eventMax: CONTEXTSPACE_CHAT_EVENT_MAX },
     styling: {
         eventClass: "doc-chat-event",
         eventTitleClass: "doc-chat-event-title",
@@ -49,8 +49,8 @@ const workspaceChat = createDocChat({
         messageAssistantFinalClass: "final",
     },
 });
-const WORKSPACE_DOC_KINDS = new Set(["active_context", "decisions", "spec"]);
-const WORKSPACE_REFRESH_REASONS = ["initial", "background", "manual"];
+const CONTEXTSPACE_DOC_KINDS = new Set(["active_context", "decisions", "spec"]);
+const CONTEXTSPACE_REFRESH_REASONS = ["initial", "background", "manual"];
 let workspaceRefreshCount = 0;
 let currentTurnEventsController = null;
 function hashString(value) {
@@ -80,57 +80,57 @@ function workspaceTreeSignature(nodes) {
 }
 function els() {
     return {
-        fileList: document.getElementById("workspace-file-list"),
-        fileSelect: document.getElementById("workspace-file-select"),
-        breadcrumbs: document.getElementById("workspace-breadcrumbs"),
-        status: document.getElementById("workspace-status"),
-        statusMobile: document.getElementById("workspace-status-mobile"),
-        uploadBtn: document.getElementById("workspace-upload"),
-        uploadInput: document.getElementById("workspace-upload-input"),
-        mobileMenuToggle: document.getElementById("workspace-mobile-menu-toggle"),
-        mobileDropdown: document.getElementById("workspace-mobile-dropdown"),
-        mobileUpload: document.getElementById("workspace-mobile-upload"),
-        mobileNewFolder: document.getElementById("workspace-mobile-new-folder"),
-        mobileNewFile: document.getElementById("workspace-mobile-new-file"),
-        mobileDownload: document.getElementById("workspace-mobile-download"),
-        mobileGenerate: document.getElementById("workspace-mobile-generate"),
-        newFolderBtn: document.getElementById("workspace-new-folder"),
-        newFileBtn: document.getElementById("workspace-new-file"),
-        downloadAllBtn: document.getElementById("workspace-download-all"),
-        generateBtn: document.getElementById("workspace-generate-tickets"),
-        textarea: document.getElementById("workspace-content"),
-        saveBtn: document.getElementById("workspace-save"),
-        saveBtnMobile: document.getElementById("workspace-save-mobile"),
-        reloadBtn: document.getElementById("workspace-reload"),
-        reloadBtnMobile: document.getElementById("workspace-reload-mobile"),
-        patchMain: document.getElementById("workspace-patch-main"),
-        patchBody: document.getElementById("workspace-patch-body"),
-        patchSummary: document.getElementById("workspace-patch-summary"),
-        patchMeta: document.getElementById("workspace-patch-meta"),
-        patchApply: document.getElementById("workspace-patch-apply"),
-        patchReload: document.getElementById("workspace-patch-reload"),
-        patchDiscard: document.getElementById("workspace-patch-discard"),
-        chatInput: document.getElementById("workspace-chat-input"),
-        chatSend: document.getElementById("workspace-chat-send"),
-        chatCancel: document.getElementById("workspace-chat-cancel"),
-        chatNewThread: document.getElementById("workspace-chat-new-thread"),
-        chatStatus: document.getElementById("workspace-chat-status"),
-        chatError: document.getElementById("workspace-chat-error"),
-        chatMessages: document.getElementById("workspace-chat-history"),
-        chatEvents: document.getElementById("workspace-chat-events"),
-        chatEventsList: document.getElementById("workspace-chat-events-list"),
-        chatEventsToggle: document.getElementById("workspace-chat-events-toggle"),
-        agentSelect: document.getElementById("workspace-chat-agent-select"),
-        modelSelect: document.getElementById("workspace-chat-model-select"),
-        reasoningSelect: document.getElementById("workspace-chat-reasoning-select"),
-        createModal: document.getElementById("workspace-create-modal"),
-        createTitle: document.getElementById("workspace-create-title"),
-        createInput: document.getElementById("workspace-create-name"),
-        createHint: document.getElementById("workspace-create-hint"),
-        createPath: document.getElementById("workspace-create-path"),
-        createClose: document.getElementById("workspace-create-close"),
-        createCancel: document.getElementById("workspace-create-cancel"),
-        createSubmit: document.getElementById("workspace-create-submit"),
+        fileList: document.getElementById("contextspace-file-list"),
+        fileSelect: document.getElementById("contextspace-file-select"),
+        breadcrumbs: document.getElementById("contextspace-breadcrumbs"),
+        status: document.getElementById("contextspace-status"),
+        statusMobile: document.getElementById("contextspace-status-mobile"),
+        uploadBtn: document.getElementById("contextspace-upload"),
+        uploadInput: document.getElementById("contextspace-upload-input"),
+        mobileMenuToggle: document.getElementById("contextspace-mobile-menu-toggle"),
+        mobileDropdown: document.getElementById("contextspace-mobile-dropdown"),
+        mobileUpload: document.getElementById("contextspace-mobile-upload"),
+        mobileNewFolder: document.getElementById("contextspace-mobile-new-folder"),
+        mobileNewFile: document.getElementById("contextspace-mobile-new-file"),
+        mobileDownload: document.getElementById("contextspace-mobile-download"),
+        mobileGenerate: document.getElementById("contextspace-mobile-generate"),
+        newFolderBtn: document.getElementById("contextspace-new-folder"),
+        newFileBtn: document.getElementById("contextspace-new-file"),
+        downloadAllBtn: document.getElementById("contextspace-download-all"),
+        generateBtn: document.getElementById("contextspace-generate-tickets"),
+        textarea: document.getElementById("contextspace-content"),
+        saveBtn: document.getElementById("contextspace-save"),
+        saveBtnMobile: document.getElementById("contextspace-save-mobile"),
+        reloadBtn: document.getElementById("contextspace-reload"),
+        reloadBtnMobile: document.getElementById("contextspace-reload-mobile"),
+        patchMain: document.getElementById("contextspace-patch-main"),
+        patchBody: document.getElementById("contextspace-patch-body"),
+        patchSummary: document.getElementById("contextspace-patch-summary"),
+        patchMeta: document.getElementById("contextspace-patch-meta"),
+        patchApply: document.getElementById("contextspace-patch-apply"),
+        patchReload: document.getElementById("contextspace-patch-reload"),
+        patchDiscard: document.getElementById("contextspace-patch-discard"),
+        chatInput: document.getElementById("contextspace-chat-input"),
+        chatSend: document.getElementById("contextspace-chat-send"),
+        chatCancel: document.getElementById("contextspace-chat-cancel"),
+        chatNewThread: document.getElementById("contextspace-chat-new-thread"),
+        chatStatus: document.getElementById("contextspace-chat-status"),
+        chatError: document.getElementById("contextspace-chat-error"),
+        chatMessages: document.getElementById("contextspace-chat-history"),
+        chatEvents: document.getElementById("contextspace-chat-events"),
+        chatEventsList: document.getElementById("contextspace-chat-events-list"),
+        chatEventsToggle: document.getElementById("contextspace-chat-events-toggle"),
+        agentSelect: document.getElementById("contextspace-chat-agent-select"),
+        modelSelect: document.getElementById("contextspace-chat-model-select"),
+        reasoningSelect: document.getElementById("contextspace-chat-reasoning-select"),
+        createModal: document.getElementById("contextspace-create-modal"),
+        createTitle: document.getElementById("contextspace-create-title"),
+        createInput: document.getElementById("contextspace-create-name"),
+        createHint: document.getElementById("contextspace-create-hint"),
+        createPath: document.getElementById("contextspace-create-path"),
+        createClose: document.getElementById("contextspace-create-close"),
+        createCancel: document.getElementById("contextspace-create-cancel"),
+        createSubmit: document.getElementById("contextspace-create-submit"),
     };
 }
 function workspaceKindFromPath(path) {
@@ -140,7 +140,7 @@ function workspaceKindFromPath(path) {
     const baseName = normalized.split("/").pop() || normalized;
     const match = baseName.match(/^([a-z_]+)\.md$/i);
     const kind = match ? match[1].toLowerCase() : "";
-    if (WORKSPACE_DOC_KINDS.has(kind)) {
+    if (CONTEXTSPACE_DOC_KINDS.has(kind)) {
         return kind;
     }
     return null;
@@ -148,16 +148,16 @@ function workspaceKindFromPath(path) {
 async function readWorkspaceContent(path) {
     const kind = workspaceKindFromPath(path);
     if (kind) {
-        const res = await fetchWorkspace();
+        const res = await fetchContextspace();
         return res[kind] || "";
     }
-    return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`));
+    return (await api(`/api/contextspace/file?path=${encodeURIComponent(path)}`));
 }
-async function writeWorkspaceContent(path, content) {
+async function writeContextspaceContent(path, content) {
     const kind = workspaceKindFromPath(path);
     if (kind) {
         try {
-            const res = await writeWorkspace(kind, content);
+            const res = await writeContextspace(kind, content);
             return res[kind] || "";
         }
         catch (err) {
@@ -168,15 +168,15 @@ async function writeWorkspaceContent(path, content) {
             // Fallback to generic file write in case detection misfires
         }
     }
-    return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
+    return (await api(`/api/contextspace/file?path=${encodeURIComponent(path)}`, {
         method: "PUT",
         body: { content },
     }));
 }
 function target() {
     if (!state.target)
-        return "workspace:active_context";
-    return `workspace:${state.target.path}`;
+        return "contextspace:active_context";
+    return `contextspace:${state.target.path}`;
 }
 function setStatus(text) {
     const { status, statusMobile } = els();
@@ -251,7 +251,7 @@ function updateDownloadButton() {
     const currentPath = state.browser?.getCurrentPath() || "";
     const isRoot = !currentPath;
     const folderName = currentPath.split("/").pop() || "";
-    const download = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+    const download = () => downloadContextspaceZip(isRoot ? undefined : currentPath);
     if (downloadAllBtn) {
         downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
         downloadAllBtn.onclick = download;
@@ -331,11 +331,11 @@ async function handleCreateSubmit() {
     const path = base ? `${base}/${name}` : name;
     try {
         if (createMode === "folder") {
-            await createWorkspaceFolder(path);
+            await createContextspaceFolder(path);
             flash("Folder created", "success");
         }
         else {
-            await writeWorkspaceContent(path, "");
+            await writeContextspaceContent(path, "");
             flash("File created", "success");
         }
         closeCreateModal();
@@ -356,7 +356,7 @@ const workspaceTreeRefresh = createSmartRefresh({
         if (!fileList)
             return;
         if (!state.browser) {
-            state.browser = new WorkspaceFileBrowser({
+            state.browser = new ContextspaceFileBrowser({
                 container: fileList,
                 selectEl: fileSelect,
                 breadcrumbsEl: breadcrumbs,
@@ -367,7 +367,7 @@ const workspaceTreeRefresh = createSmartRefresh({
                 },
                 onPathChange: () => updateDownloadButton(),
                 onRefresh: () => loadFiles(state.target?.path, "manual"),
-                onConfirm: (message) => window.workspaceConfirm?.(message) ?? confirmModal(message),
+                onConfirm: (message) => window.contextspaceConfirm?.(message) ?? confirmModal(message),
             });
         }
         const defaultPath = payload.defaultPath ?? state.target?.path ?? undefined;
@@ -400,7 +400,7 @@ const workspaceContentRefresh = createSmartRefresh({
             statusEl: status,
             onLoad: async () => payload.content,
             onSave: async (content) => {
-                const saved = await writeWorkspaceContent(payload.path, content);
+                const saved = await writeContextspaceContent(payload.path, content);
                 state.content = saved;
                 if (saved !== content) {
                     textarea.value = saved;
@@ -415,7 +415,7 @@ const workspaceContentRefresh = createSmartRefresh({
     },
 });
 async function refreshWorkspaceFile(path, reason = "manual") {
-    if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
+    if (!CONTEXTSPACE_REFRESH_REASONS.includes(reason)) {
         reason = "manual";
     }
     const isInitial = reason === "initial";
@@ -530,7 +530,7 @@ function clearTurnEventsStream() {
 }
 function clearPendingTurnState() {
     clearTurnEventsStream();
-    clearPendingTurn(WORKSPACE_PENDING_KEY);
+    clearPendingTurn(CONTEXTSPACE_PENDING_KEY);
 }
 function maybeStartTurnEventsFromUpdate(update) {
     const meta = update;
@@ -610,7 +610,7 @@ function applyFinalResult(result) {
     }
 }
 async function resumePendingWorkspaceTurn() {
-    const pending = loadPendingTurn(WORKSPACE_PENDING_KEY);
+    const pending = loadPendingTurn(CONTEXTSPACE_PENDING_KEY);
     if (!pending)
         return;
     const chatState = workspaceChat.state;
@@ -673,7 +673,7 @@ async function sendChat() {
     chatCancel?.classList.remove("hidden");
     clearTurnEventsStream();
     const clientTurnId = newClientTurnId("workspace");
-    savePendingTurn(WORKSPACE_PENDING_KEY, {
+    savePendingTurn(CONTEXTSPACE_PENDING_KEY, {
         clientTurnId,
         message,
         startedAtMs: Date.now(),
@@ -786,7 +786,7 @@ async function resetThread() {
     }
 }
 async function loadFiles(defaultPath, reason = "manual") {
-    if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
+    if (!CONTEXTSPACE_REFRESH_REASONS.includes(reason)) {
         reason = "manual";
     }
     const isInitial = reason === "initial";
@@ -794,7 +794,7 @@ async function loadFiles(defaultPath, reason = "manual") {
         setWorkspaceRefreshing(true);
     }
     try {
-        await workspaceTreeRefresh.refresh(async () => ({ tree: await fetchWorkspaceTree(), defaultPath }), { reason });
+        await workspaceTreeRefresh.refresh(async () => ({ tree: await fetchContextspaceTree(), defaultPath }), { reason });
     }
     finally {
         if (!isInitial) {
@@ -802,7 +802,7 @@ async function loadFiles(defaultPath, reason = "manual") {
         }
     }
 }
-export async function initWorkspace() {
+export async function initContextspace() {
     const { generateBtn, uploadBtn, uploadInput, mobileMenuToggle, mobileDropdown, mobileUpload, mobileNewFolder, mobileNewFile, mobileDownload, mobileGenerate, newFolderBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
     if (!document.getElementById("workspace"))
         return;
@@ -812,8 +812,8 @@ export async function initWorkspace() {
         reasoningSelect: els().reasoningSelect,
     });
     await initDocChatVoice({
-        buttonId: "workspace-chat-voice",
-        inputId: "workspace-chat-input",
+        buttonId: "contextspace-chat-voice",
+        inputId: "contextspace-chat-input",
     });
     await maybeShowGenerate();
     await loadFiles(undefined, "initial");
@@ -834,7 +834,7 @@ export async function initWorkspace() {
             return;
         const subdir = state.browser?.getCurrentPath() || "";
         try {
-            await uploadWorkspaceFiles(files, subdir || undefined);
+            await uploadContextspaceFiles(files, subdir || undefined);
             flash(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`, "success");
             await loadFiles(state.target?.path, "manual");
         }
@@ -887,7 +887,7 @@ export async function initWorkspace() {
     mobileDownload?.addEventListener("click", () => {
         closeMobileMenu();
         const currentPath = state.browser?.getCurrentPath() || "";
-        downloadWorkspaceZip(currentPath || undefined);
+        downloadContextspaceZip(currentPath || undefined);
     });
     mobileGenerate?.addEventListener("click", () => {
         closeMobileMenu();
@@ -938,10 +938,10 @@ export async function initWorkspace() {
         }
     });
     // Confirm modal wiring
-    const confirmModal = document.getElementById("workspace-confirm-modal");
-    const confirmText = document.getElementById("workspace-confirm-text");
-    const confirmYes = document.getElementById("workspace-confirm-yes");
-    const confirmCancel = document.getElementById("workspace-confirm-cancel");
+    const confirmModal = document.getElementById("contextspace-confirm-modal");
+    const confirmText = document.getElementById("contextspace-confirm-text");
+    const confirmYes = document.getElementById("contextspace-confirm-yes");
+    const confirmCancel = document.getElementById("contextspace-confirm-cancel");
     let confirmResolver = null;
     const closeConfirm = (result) => {
         if (confirmModal)
@@ -949,7 +949,7 @@ export async function initWorkspace() {
         confirmResolver?.(result);
         confirmResolver = null;
     };
-    window.workspaceConfirm = (message) => new Promise((resolve) => {
+    window.contextspaceConfirm = (message) => new Promise((resolve) => {
         confirmResolver = resolve;
         if (confirmText)
             confirmText.textContent = message;

@@ -1,17 +1,17 @@
 import { api, confirmModal, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import {
-  fetchWorkspace,
+  fetchContextspace,
   ingestSpecToTickets,
   listTickets,
-  WorkspaceKind,
-  WorkspaceNode,
-  fetchWorkspaceTree,
-  uploadWorkspaceFiles,
-  downloadWorkspaceZip,
-  createWorkspaceFolder,
-  writeWorkspace,
-} from "./workspaceApi.js";
+  ContextspaceKind,
+  ContextspaceNode,
+  fetchContextspaceTree,
+  uploadContextspaceFiles,
+  downloadContextspaceZip,
+  createContextspaceFolder,
+  writeContextspace,
+} from "./contextspaceApi.js";
 import {
   applyDraft,
   discardDraft,
@@ -24,7 +24,7 @@ import {
   type FileChatUpdate,
 } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
-import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
+import { ContextspaceFileBrowser } from "./contextspaceFileBrowser.js";
 import { createDocChat, type ChatState } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { initDocChatVoice } from "./docChatVoice.js";
@@ -46,9 +46,9 @@ interface WorkspaceState {
   draft: FileDraft | null;
   loading: boolean;
   hasTickets: boolean;
-  files: WorkspaceNode[];
+  files: ContextspaceNode[];
   docEditor: DocEditor | null;
-  browser: WorkspaceFileBrowser | null;
+  browser: ContextspaceFileBrowser | null;
 }
 
 const state: WorkspaceState = {
@@ -62,12 +62,12 @@ const state: WorkspaceState = {
   browser: null,
 };
 
-const WORKSPACE_CHAT_EVENT_LIMIT = 8;
-const WORKSPACE_CHAT_EVENT_MAX = 50;
-const WORKSPACE_PENDING_KEY = "car.workspace.pendingTurn";
+const CONTEXTSPACE_CHAT_EVENT_LIMIT = 8;
+const CONTEXTSPACE_CHAT_EVENT_MAX = 50;
+const CONTEXTSPACE_PENDING_KEY = "car.contextspace.pendingTurn";
 
 type WorkspaceTreePayload = {
-  tree: WorkspaceNode[];
+  tree: ContextspaceNode[];
   defaultPath?: string | null;
 };
 
@@ -77,9 +77,9 @@ type WorkspaceContentPayload = {
 };
 
 const workspaceChat = createDocChat({
-  idPrefix: "workspace-chat",
-  storage: { keyPrefix: "car-workspace-chat-", maxMessages: 50, version: 1 },
-  limits: { eventVisible: WORKSPACE_CHAT_EVENT_LIMIT, eventMax: WORKSPACE_CHAT_EVENT_MAX },
+  idPrefix: "contextspace-chat",
+  storage: { keyPrefix: "car-contextspace-chat-", maxMessages: 50, version: 1 },
+  limits: { eventVisible: CONTEXTSPACE_CHAT_EVENT_LIMIT, eventMax: CONTEXTSPACE_CHAT_EVENT_MAX },
   styling: {
     eventClass: "doc-chat-event",
     eventTitleClass: "doc-chat-event-title",
@@ -99,8 +99,8 @@ const workspaceChat = createDocChat({
   },
 });
 
-const WORKSPACE_DOC_KINDS = new Set<WorkspaceKind>(["active_context", "decisions", "spec"]);
-const WORKSPACE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
+const CONTEXTSPACE_DOC_KINDS = new Set<ContextspaceKind>(["active_context", "decisions", "spec"]);
+const CONTEXTSPACE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
 let workspaceRefreshCount = 0;
 let currentTurnEventsController: AbortController | null = null;
 
@@ -112,9 +112,9 @@ function hashString(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
-function workspaceTreeSignature(nodes: WorkspaceNode[]): string {
+function workspaceTreeSignature(nodes: ContextspaceNode[]): string {
   const parts: string[] = [];
-  const walk = (list: WorkspaceNode[]): void => {
+  const walk = (list: ContextspaceNode[]): void => {
     list.forEach((node) => {
       parts.push(
         [
@@ -134,68 +134,68 @@ function workspaceTreeSignature(nodes: WorkspaceNode[]): string {
 
 function els() {
   return {
-    fileList: document.getElementById("workspace-file-list") as HTMLElement | null,
-    fileSelect: document.getElementById("workspace-file-select") as HTMLSelectElement | null,
-    breadcrumbs: document.getElementById("workspace-breadcrumbs") as HTMLElement | null,
-    status: document.getElementById("workspace-status"),
-    statusMobile: document.getElementById("workspace-status-mobile"),
-    uploadBtn: document.getElementById("workspace-upload") as HTMLButtonElement | null,
-    uploadInput: document.getElementById("workspace-upload-input") as HTMLInputElement | null,
-    mobileMenuToggle: document.getElementById("workspace-mobile-menu-toggle") as HTMLButtonElement | null,
-    mobileDropdown: document.getElementById("workspace-mobile-dropdown") as HTMLElement | null,
-    mobileUpload: document.getElementById("workspace-mobile-upload") as HTMLButtonElement | null,
-    mobileNewFolder: document.getElementById("workspace-mobile-new-folder") as HTMLButtonElement | null,
-    mobileNewFile: document.getElementById("workspace-mobile-new-file") as HTMLButtonElement | null,
-    mobileDownload: document.getElementById("workspace-mobile-download") as HTMLButtonElement | null,
-    mobileGenerate: document.getElementById("workspace-mobile-generate") as HTMLButtonElement | null,
-    newFolderBtn: document.getElementById("workspace-new-folder") as HTMLButtonElement | null,
-    newFileBtn: document.getElementById("workspace-new-file") as HTMLButtonElement | null,
-    downloadAllBtn: document.getElementById("workspace-download-all") as HTMLButtonElement | null,
-    generateBtn: document.getElementById("workspace-generate-tickets") as HTMLButtonElement | null,
-    textarea: document.getElementById("workspace-content") as HTMLTextAreaElement | null,
-    saveBtn: document.getElementById("workspace-save") as HTMLButtonElement | null,
-    saveBtnMobile: document.getElementById("workspace-save-mobile") as HTMLButtonElement | null,
-    reloadBtn: document.getElementById("workspace-reload") as HTMLButtonElement | null,
-    reloadBtnMobile: document.getElementById("workspace-reload-mobile") as HTMLButtonElement | null,
-    patchMain: document.getElementById("workspace-patch-main") as HTMLElement | null,
-    patchBody: document.getElementById("workspace-patch-body") as HTMLElement | null,
-    patchSummary: document.getElementById("workspace-patch-summary") as HTMLElement | null,
-    patchMeta: document.getElementById("workspace-patch-meta") as HTMLElement | null,
-    patchApply: document.getElementById("workspace-patch-apply") as HTMLButtonElement | null,
-    patchReload: document.getElementById("workspace-patch-reload") as HTMLButtonElement | null,
-    patchDiscard: document.getElementById("workspace-patch-discard") as HTMLButtonElement | null,
-    chatInput: document.getElementById("workspace-chat-input") as HTMLTextAreaElement | null,
-    chatSend: document.getElementById("workspace-chat-send") as HTMLButtonElement | null,
-    chatCancel: document.getElementById("workspace-chat-cancel") as HTMLButtonElement | null,
-    chatNewThread: document.getElementById("workspace-chat-new-thread") as HTMLButtonElement | null,
-    chatStatus: document.getElementById("workspace-chat-status") as HTMLElement | null,
-    chatError: document.getElementById("workspace-chat-error") as HTMLElement | null,
-    chatMessages: document.getElementById("workspace-chat-history") as HTMLElement | null,
-    chatEvents: document.getElementById("workspace-chat-events") as HTMLElement | null,
-    chatEventsList: document.getElementById("workspace-chat-events-list") as HTMLElement | null,
-    chatEventsToggle: document.getElementById("workspace-chat-events-toggle") as HTMLButtonElement | null,
-    agentSelect: document.getElementById("workspace-chat-agent-select") as HTMLSelectElement | null,
-    modelSelect: document.getElementById("workspace-chat-model-select") as HTMLSelectElement | null,
-    reasoningSelect: document.getElementById("workspace-chat-reasoning-select") as HTMLSelectElement | null,
-    createModal: document.getElementById("workspace-create-modal") as HTMLElement | null,
-    createTitle: document.getElementById("workspace-create-title") as HTMLElement | null,
-    createInput: document.getElementById("workspace-create-name") as HTMLInputElement | null,
-    createHint: document.getElementById("workspace-create-hint") as HTMLElement | null,
-    createPath: document.getElementById("workspace-create-path") as HTMLSelectElement | null,
-    createClose: document.getElementById("workspace-create-close") as HTMLButtonElement | null,
-    createCancel: document.getElementById("workspace-create-cancel") as HTMLButtonElement | null,
-    createSubmit: document.getElementById("workspace-create-submit") as HTMLButtonElement | null,
+    fileList: document.getElementById("contextspace-file-list") as HTMLElement | null,
+    fileSelect: document.getElementById("contextspace-file-select") as HTMLSelectElement | null,
+    breadcrumbs: document.getElementById("contextspace-breadcrumbs") as HTMLElement | null,
+    status: document.getElementById("contextspace-status"),
+    statusMobile: document.getElementById("contextspace-status-mobile"),
+    uploadBtn: document.getElementById("contextspace-upload") as HTMLButtonElement | null,
+    uploadInput: document.getElementById("contextspace-upload-input") as HTMLInputElement | null,
+    mobileMenuToggle: document.getElementById("contextspace-mobile-menu-toggle") as HTMLButtonElement | null,
+    mobileDropdown: document.getElementById("contextspace-mobile-dropdown") as HTMLElement | null,
+    mobileUpload: document.getElementById("contextspace-mobile-upload") as HTMLButtonElement | null,
+    mobileNewFolder: document.getElementById("contextspace-mobile-new-folder") as HTMLButtonElement | null,
+    mobileNewFile: document.getElementById("contextspace-mobile-new-file") as HTMLButtonElement | null,
+    mobileDownload: document.getElementById("contextspace-mobile-download") as HTMLButtonElement | null,
+    mobileGenerate: document.getElementById("contextspace-mobile-generate") as HTMLButtonElement | null,
+    newFolderBtn: document.getElementById("contextspace-new-folder") as HTMLButtonElement | null,
+    newFileBtn: document.getElementById("contextspace-new-file") as HTMLButtonElement | null,
+    downloadAllBtn: document.getElementById("contextspace-download-all") as HTMLButtonElement | null,
+    generateBtn: document.getElementById("contextspace-generate-tickets") as HTMLButtonElement | null,
+    textarea: document.getElementById("contextspace-content") as HTMLTextAreaElement | null,
+    saveBtn: document.getElementById("contextspace-save") as HTMLButtonElement | null,
+    saveBtnMobile: document.getElementById("contextspace-save-mobile") as HTMLButtonElement | null,
+    reloadBtn: document.getElementById("contextspace-reload") as HTMLButtonElement | null,
+    reloadBtnMobile: document.getElementById("contextspace-reload-mobile") as HTMLButtonElement | null,
+    patchMain: document.getElementById("contextspace-patch-main") as HTMLElement | null,
+    patchBody: document.getElementById("contextspace-patch-body") as HTMLElement | null,
+    patchSummary: document.getElementById("contextspace-patch-summary") as HTMLElement | null,
+    patchMeta: document.getElementById("contextspace-patch-meta") as HTMLElement | null,
+    patchApply: document.getElementById("contextspace-patch-apply") as HTMLButtonElement | null,
+    patchReload: document.getElementById("contextspace-patch-reload") as HTMLButtonElement | null,
+    patchDiscard: document.getElementById("contextspace-patch-discard") as HTMLButtonElement | null,
+    chatInput: document.getElementById("contextspace-chat-input") as HTMLTextAreaElement | null,
+    chatSend: document.getElementById("contextspace-chat-send") as HTMLButtonElement | null,
+    chatCancel: document.getElementById("contextspace-chat-cancel") as HTMLButtonElement | null,
+    chatNewThread: document.getElementById("contextspace-chat-new-thread") as HTMLButtonElement | null,
+    chatStatus: document.getElementById("contextspace-chat-status") as HTMLElement | null,
+    chatError: document.getElementById("contextspace-chat-error") as HTMLElement | null,
+    chatMessages: document.getElementById("contextspace-chat-history") as HTMLElement | null,
+    chatEvents: document.getElementById("contextspace-chat-events") as HTMLElement | null,
+    chatEventsList: document.getElementById("contextspace-chat-events-list") as HTMLElement | null,
+    chatEventsToggle: document.getElementById("contextspace-chat-events-toggle") as HTMLButtonElement | null,
+    agentSelect: document.getElementById("contextspace-chat-agent-select") as HTMLSelectElement | null,
+    modelSelect: document.getElementById("contextspace-chat-model-select") as HTMLSelectElement | null,
+    reasoningSelect: document.getElementById("contextspace-chat-reasoning-select") as HTMLSelectElement | null,
+    createModal: document.getElementById("contextspace-create-modal") as HTMLElement | null,
+    createTitle: document.getElementById("contextspace-create-title") as HTMLElement | null,
+    createInput: document.getElementById("contextspace-create-name") as HTMLInputElement | null,
+    createHint: document.getElementById("contextspace-create-hint") as HTMLElement | null,
+    createPath: document.getElementById("contextspace-create-path") as HTMLSelectElement | null,
+    createClose: document.getElementById("contextspace-create-close") as HTMLButtonElement | null,
+    createCancel: document.getElementById("contextspace-create-cancel") as HTMLButtonElement | null,
+    createSubmit: document.getElementById("contextspace-create-submit") as HTMLButtonElement | null,
   };
 }
 
-function workspaceKindFromPath(path: string): WorkspaceKind | null {
+function workspaceKindFromPath(path: string): ContextspaceKind | null {
   const normalized = (path || "").replace(/\\/g, "/").trim();
   if (!normalized) return null;
   const baseName = normalized.split("/").pop() || normalized;
   const match = baseName.match(/^([a-z_]+)\.md$/i);
   const kind = match ? match[1].toLowerCase() : "";
-  if (WORKSPACE_DOC_KINDS.has(kind as WorkspaceKind)) {
-    return kind as WorkspaceKind;
+  if (CONTEXTSPACE_DOC_KINDS.has(kind as ContextspaceKind)) {
+    return kind as ContextspaceKind;
   }
   return null;
 }
@@ -203,17 +203,17 @@ function workspaceKindFromPath(path: string): WorkspaceKind | null {
 async function readWorkspaceContent(path: string): Promise<string> {
   const kind = workspaceKindFromPath(path);
   if (kind) {
-    const res = await fetchWorkspace();
+    const res = await fetchContextspace();
     return (res[kind] as string) || "";
   }
-  return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`)) as string;
+  return (await api(`/api/contextspace/file?path=${encodeURIComponent(path)}`)) as string;
 }
 
-async function writeWorkspaceContent(path: string, content: string): Promise<string> {
+async function writeContextspaceContent(path: string, content: string): Promise<string> {
   const kind = workspaceKindFromPath(path);
   if (kind) {
     try {
-      const res = await writeWorkspace(kind, content);
+      const res = await writeContextspace(kind, content);
       return (res[kind] as string) || "";
     } catch (err) {
       const msg = (err as Error).message || "";
@@ -223,15 +223,15 @@ async function writeWorkspaceContent(path: string, content: string): Promise<str
       // Fallback to generic file write in case detection misfires
     }
   }
-  return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
+  return (await api(`/api/contextspace/file?path=${encodeURIComponent(path)}`, {
     method: "PUT",
     body: { content },
   })) as string;
 }
 
 function target(): string {
-  if (!state.target) return "workspace:active_context";
-  return `workspace:${state.target.path}`;
+  if (!state.target) return "contextspace:active_context";
+  return `contextspace:${state.target.path}`;
 }
 
 function setStatus(text: string): void {
@@ -307,7 +307,7 @@ function updateDownloadButton(): void {
   const isRoot = !currentPath;
   const folderName = currentPath.split("/").pop() || "";
 
-  const download = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+  const download = () => downloadContextspaceZip(isRoot ? undefined : currentPath);
 
   if (downloadAllBtn) {
     downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
@@ -326,7 +326,7 @@ function updateDownloadButton(): void {
 type CreateMode = "folder" | "file";
 let createMode: CreateMode | null = null;
 
-function listFolderPaths(nodes: WorkspaceNode[], base = ""): string[] {
+function listFolderPaths(nodes: ContextspaceNode[], base = ""): string[] {
   const paths: string[] = [];
   nodes.forEach((node) => {
     if (node.type !== "folder") return;
@@ -391,10 +391,10 @@ async function handleCreateSubmit(): Promise<void> {
   const path = base ? `${base}/${name}` : name;
   try {
     if (createMode === "folder") {
-      await createWorkspaceFolder(path);
+      await createContextspaceFolder(path);
       flash("Folder created", "success");
     } else {
-      await writeWorkspaceContent(path, "");
+      await writeContextspaceContent(path, "");
       flash("File created", "success");
     }
     closeCreateModal();
@@ -415,7 +415,7 @@ const workspaceTreeRefresh = createSmartRefresh<WorkspaceTreePayload>({
     if (!fileList) return;
 
     if (!state.browser) {
-      state.browser = new WorkspaceFileBrowser({
+      state.browser = new ContextspaceFileBrowser({
         container: fileList,
         selectEl: fileSelect,
         breadcrumbsEl: breadcrumbs,
@@ -427,7 +427,7 @@ const workspaceTreeRefresh = createSmartRefresh<WorkspaceTreePayload>({
         onPathChange: () => updateDownloadButton(),
         onRefresh: () => loadFiles(state.target?.path, "manual"),
         onConfirm: (message) =>
-          (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(
+          (window as unknown as { contextspaceConfirm?: (msg: string) => Promise<boolean> }).contextspaceConfirm?.(
             message
           ) ?? confirmModal(message),
       });
@@ -462,7 +462,7 @@ const workspaceContentRefresh = createSmartRefresh<WorkspaceContentPayload>({
       statusEl: status,
       onLoad: async () => payload.content as string,
       onSave: async (content) => {
-        const saved = await writeWorkspaceContent(payload.path, content);
+        const saved = await writeContextspaceContent(payload.path, content);
         state.content = saved;
         if (saved !== content) {
           textarea.value = saved;
@@ -478,7 +478,7 @@ const workspaceContentRefresh = createSmartRefresh<WorkspaceContentPayload>({
 });
 
 async function refreshWorkspaceFile(path: string, reason: SmartRefreshReason = "manual"): Promise<void> {
-  if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
+  if (!CONTEXTSPACE_REFRESH_REASONS.includes(reason)) {
     reason = "manual";
   }
   const isInitial = reason === "initial";
@@ -596,7 +596,7 @@ function clearTurnEventsStream(): void {
 
 function clearPendingTurnState(): void {
   clearTurnEventsStream();
-  clearPendingTurn(WORKSPACE_PENDING_KEY);
+  clearPendingTurn(CONTEXTSPACE_PENDING_KEY);
 }
 
 function maybeStartTurnEventsFromUpdate(update: FileChatUpdate): void {
@@ -680,7 +680,7 @@ function applyFinalResult(result: Record<string, unknown>): void {
 }
 
 async function resumePendingWorkspaceTurn(): Promise<void> {
-  const pending = loadPendingTurn(WORKSPACE_PENDING_KEY);
+  const pending = loadPendingTurn(CONTEXTSPACE_PENDING_KEY);
   if (!pending) return;
   const chatState = workspaceChat.state as ChatState;
   chatState.status = "running";
@@ -744,7 +744,7 @@ async function sendChat(): Promise<void> {
   clearTurnEventsStream();
 
   const clientTurnId = newClientTurnId("workspace");
-  savePendingTurn(WORKSPACE_PENDING_KEY, {
+  savePendingTurn(CONTEXTSPACE_PENDING_KEY, {
     clientTurnId,
     message,
     startedAtMs: Date.now(),
@@ -863,7 +863,7 @@ async function resetThread(): Promise<void> {
 }
 
 async function loadFiles(defaultPath?: string, reason: SmartRefreshReason = "manual"): Promise<void> {
-  if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
+  if (!CONTEXTSPACE_REFRESH_REASONS.includes(reason)) {
     reason = "manual";
   }
   const isInitial = reason === "initial";
@@ -872,7 +872,7 @@ async function loadFiles(defaultPath?: string, reason: SmartRefreshReason = "man
   }
   try {
     await workspaceTreeRefresh.refresh(
-      async () => ({ tree: await fetchWorkspaceTree(), defaultPath }),
+      async () => ({ tree: await fetchContextspaceTree(), defaultPath }),
       { reason }
     );
   } finally {
@@ -882,7 +882,7 @@ async function loadFiles(defaultPath?: string, reason: SmartRefreshReason = "man
   }
 }
 
-export async function initWorkspace(): Promise<void> {
+export async function initContextspace(): Promise<void> {
   const {
     generateBtn,
     uploadBtn,
@@ -915,8 +915,8 @@ export async function initWorkspace(): Promise<void> {
     reasoningSelect: els().reasoningSelect,
   });
   await initDocChatVoice({
-    buttonId: "workspace-chat-voice",
-    inputId: "workspace-chat-input",
+    buttonId: "contextspace-chat-voice",
+    inputId: "contextspace-chat-input",
   });
 
   await maybeShowGenerate();
@@ -940,7 +940,7 @@ export async function initWorkspace(): Promise<void> {
     if (!files || !files.length) return;
     const subdir = state.browser?.getCurrentPath() || "";
     try {
-      await uploadWorkspaceFiles(files, subdir || undefined);
+      await uploadContextspaceFiles(files, subdir || undefined);
       flash(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`, "success");
       await loadFiles(state.target?.path, "manual");
     } catch (err) {
@@ -994,7 +994,7 @@ export async function initWorkspace(): Promise<void> {
   mobileDownload?.addEventListener("click", () => {
     closeMobileMenu();
     const currentPath = state.browser?.getCurrentPath() || "";
-    downloadWorkspaceZip(currentPath || undefined);
+    downloadContextspaceZip(currentPath || undefined);
   });
   mobileGenerate?.addEventListener("click", () => {
     closeMobileMenu();
@@ -1049,17 +1049,17 @@ export async function initWorkspace(): Promise<void> {
   });
 
   // Confirm modal wiring
-  const confirmModal = document.getElementById("workspace-confirm-modal");
-  const confirmText = document.getElementById("workspace-confirm-text");
-  const confirmYes = document.getElementById("workspace-confirm-yes") as HTMLButtonElement | null;
-  const confirmCancel = document.getElementById("workspace-confirm-cancel") as HTMLButtonElement | null;
+  const confirmModal = document.getElementById("contextspace-confirm-modal");
+  const confirmText = document.getElementById("contextspace-confirm-text");
+  const confirmYes = document.getElementById("contextspace-confirm-yes") as HTMLButtonElement | null;
+  const confirmCancel = document.getElementById("contextspace-confirm-cancel") as HTMLButtonElement | null;
   let confirmResolver: ((val: boolean) => void) | null = null;
   const closeConfirm = (result: boolean) => {
     if (confirmModal) confirmModal.hidden = true;
     confirmResolver?.(result);
     confirmResolver = null;
   };
-  (window as unknown as { workspaceConfirm?: (message: string) => Promise<boolean> }).workspaceConfirm = (message) =>
+  (window as unknown as { contextspaceConfirm?: (message: string) => Promise<boolean> }).contextspaceConfirm = (message) =>
     new Promise<boolean>((resolve) => {
       confirmResolver = resolve;
       if (confirmText) confirmText.textContent = message;

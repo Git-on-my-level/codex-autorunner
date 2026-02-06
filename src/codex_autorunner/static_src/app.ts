@@ -16,7 +16,7 @@ import {
 } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
-import { initWorkspace } from "./workspace.js";
+import { initContextspace } from "./contextspace.js";
 import { initDashboard } from "./dashboard.js";
 import { initArchive } from "./archive.js";
 import { initPMA } from "./pma.js";
@@ -163,7 +163,7 @@ async function initRepoShell(): Promise<void> {
 
   registerTab("tickets", "Tickets");
   registerTab("inbox", "Inbox");
-  registerTab("workspace", "Workspace");
+  registerTab("contextspace", "Contextspace");
   registerTab("terminal", "Terminal");
   // Menu tabs (shown in hamburger menu)
   registerTab("analytics", "Analytics", { menuTab: true, icon: "📊" });
@@ -174,8 +174,8 @@ async function initRepoShell(): Promise<void> {
   const initializedTabs = new Set<string>();
   const lazyInit = (tabId: string): void => {
     if (initializedTabs.has(tabId)) return;
-    if (tabId === "workspace") {
-      initWorkspace();
+    if (tabId === "contextspace") {
+      initContextspace();
     } else if (tabId === "inbox" || tabId === "messages") {
       initMessages();
     } else if (tabId === "analytics") {

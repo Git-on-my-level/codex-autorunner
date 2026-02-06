@@ -25,6 +25,7 @@ from .analytics import build_analytics_routes
 from .app_server import build_app_server_routes
 from .archive import build_archive_routes
 from .base import build_base_routes, build_frontend_routes
+from .contextspace import build_contextspace_routes
 from .file_chat import build_file_chat_routes
 from .filebox import build_filebox_routes
 from .flows import build_flow_routes
@@ -38,7 +39,6 @@ from .templates import build_templates_routes
 from .terminal_images import build_terminal_image_routes
 from .usage import build_usage_routes
 from .voice import build_voice_routes
-from .workspace import build_workspace_routes
 
 
 def build_repo_router(static_dir: Path) -> APIRouter:
@@ -59,7 +59,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_archive_routes())
     router.include_router(build_agents_routes())
     router.include_router(build_app_server_routes())
-    router.include_router(build_workspace_routes())
+    router.include_router(build_contextspace_routes())
     router.include_router(build_flow_routes())
     router.include_router(build_filebox_routes())
     router.include_router(build_file_chat_routes())

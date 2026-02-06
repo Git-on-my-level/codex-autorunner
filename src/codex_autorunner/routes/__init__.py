@@ -15,7 +15,6 @@ from . import (  # noqa: F401
     system,
     usage,
     voice,
-    workspace,
 )
 
 __all__ = [
@@ -33,5 +32,4 @@ __all__ = [
     "system",
     "usage",
     "voice",
-    "workspace",
 ]

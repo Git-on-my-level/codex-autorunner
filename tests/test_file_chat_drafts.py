@@ -40,17 +40,17 @@ def _seed_draft(repo_root: Path, target_raw: str, before: str, after: str):
 
 def test_pending_returns_hash_and_stale_flag(client: TestClient, hub_env, repo: Path):
     repo_root = repo
-    workspace_path = (
+    contextspace_path = (
         repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
     )
     before = "line 1\n"
     after = "line 1\nline 2\n"
-    _write_file(workspace_path, before)
-    _seed_draft(repo_root, "workspace:active_context", before, after)
+    _write_file(contextspace_path, before)
+    _seed_draft(repo_root, "contextspace:active_context", before, after)
 
     res = client.get(
         f"/repos/{hub_env.repo_id}/api/file-chat/pending",
-        params={"target": "workspace:active_context"},
+        params={"target": "contextspace:active_context"},
     )
     assert res.status_code == 200
     data = res.json()
@@ -61,14 +61,18 @@ def test_pending_returns_hash_and_stale_flag(client: TestClient, hub_env, repo: 
 
 def test_apply_respects_force_and_clears_draft(client: TestClient, hub_env, repo: Path):
     repo_root = repo
-    workspace_path = repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    contextspace_path = (
+        repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    )
     before = "original\n"
     draft_after = "drafted\n"
-    _write_file(workspace_path, before)
-    target, draft = _seed_draft(repo_root, "workspace:decisions", before, draft_after)
+    _write_file(contextspace_path, before)
+    target, draft = _seed_draft(
+        repo_root, "contextspace:decisions", before, draft_after
+    )
 
     # Simulate external change to make draft stale
-    _write_file(workspace_path, "external change\n")
+    _write_file(contextspace_path, "external change\n")
 
     res_conflict = client.post(
         f"/repos/{hub_env.repo_id}/api/file-chat/apply",
@@ -81,7 +85,7 @@ def test_apply_respects_force_and_clears_draft(client: TestClient, hub_env, repo
         json={"target": target.target, "force": True},
     )
     assert res_force.status_code == 200
-    assert workspace_path.read_text() == draft["content"]
+    assert contextspace_path.read_text() == draft["content"]
 
     # Draft should be removed
     res_pending = client.get(
@@ -93,22 +97,22 @@ def test_apply_respects_force_and_clears_draft(client: TestClient, hub_env, repo
 
 def test_workspace_write_invalidates_draft(client: TestClient, hub_env, repo: Path):
     repo_root = repo
-    workspace_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    contextspace_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
     before = "spec v1\n"
     after = "spec v2\n"
-    _write_file(workspace_path, before)
-    _seed_draft(repo_root, "workspace:spec", before, after)
+    _write_file(contextspace_path, before)
+    _seed_draft(repo_root, "contextspace:spec", before, after)
 
-    # Direct write through workspace API should invalidate draft
+    # Direct write through contextspace API should invalidate draft
     res = client.put(
-        f"/repos/{hub_env.repo_id}/api/workspace/spec",
+        f"/repos/{hub_env.repo_id}/api/contextspace/spec",
         json={"content": "direct edit\n"},
     )
     assert res.status_code == 200
 
     pending = client.get(
         f"/repos/{hub_env.repo_id}/api/file-chat/pending",
-        params={"target": "workspace:spec"},
+        params={"target": "contextspace:spec"},
     )
     assert pending.status_code == 404
 

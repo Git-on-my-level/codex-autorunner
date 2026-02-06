@@ -17,53 +17,53 @@ class ResponseModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-class WorkspaceWriteRequest(Payload):
+class ContextspaceWriteRequest(Payload):
     content: str = ""
 
 
-class WorkspaceResponse(ResponseModel):
+class ContextspaceResponse(ResponseModel):
     active_context: str
     decisions: str
     spec: str
 
 
-class WorkspaceFileItem(ResponseModel):
+class ContextspaceFileItem(ResponseModel):
     name: str
     path: str
     is_pinned: bool = False
     modified_at: Optional[str] = None
 
 
-class WorkspaceFileListResponse(ResponseModel):
-    files: List[WorkspaceFileItem]
+class ContextspaceFileListResponse(ResponseModel):
+    files: List[ContextspaceFileItem]
 
 
-class WorkspaceNode(ResponseModel):
+class ContextspaceNode(ResponseModel):
     name: str
     path: str
     type: Literal["file", "folder"]
     is_pinned: bool = False
     modified_at: Optional[str] = None
     size: Optional[int] = None
-    children: Optional[List["WorkspaceNode"]] = None
+    children: Optional[List["ContextspaceNode"]] = None
 
 
-WorkspaceNode.model_rebuild()
+ContextspaceNode.model_rebuild()
 
 
-class WorkspaceTreeResponse(ResponseModel):
-    tree: List[WorkspaceNode]
+class ContextspaceTreeResponse(ResponseModel):
+    tree: List[ContextspaceNode]
 
 
-class WorkspaceUploadedItem(ResponseModel):
+class ContextspaceUploadedItem(ResponseModel):
     filename: str
     path: str
     size: int
 
 
-class WorkspaceUploadResponse(ResponseModel):
+class ContextspaceUploadResponse(ResponseModel):
     status: str
-    uploaded: List[WorkspaceUploadedItem]
+    uploaded: List[ContextspaceUploadedItem]
 
 
 class ArchiveSnapshotSummary(ResponseModel):

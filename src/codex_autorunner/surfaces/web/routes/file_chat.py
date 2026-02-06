@@ -1,9 +1,9 @@
 """
-Unified file chat routes: AI-powered editing for tickets and workspace docs.
+Unified file chat routes: AI-powered editing for tickets and contextspace docs.
 
 Targets:
 - ticket:{index} -> .codex-autorunner/tickets/TICKET-###.md
-- workspace:{path} -> .codex-autorunner/contextspace/{path}
+- contextspace:{path} -> .codex-autorunner/contextspace/{path}
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class FileChatError(Exception):
 @dataclass(frozen=True)
 class _Target:
     target: str
-    kind: str  # "ticket" | "workspace"
+    kind: str  # "ticket" | "contextspace"
     id: str  # "001" | "spec"
     path: Path
     rel_path: str
@@ -130,10 +130,10 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             state_key=f"ticket_{idx:03d}",
         )
 
-    if target.lower().startswith("workspace:"):
+    if target.lower().startswith("contextspace:"):
         suffix_raw = target.split(":", 1)[1].strip()
         if not suffix_raw:
-            raise HTTPException(status_code=400, detail="invalid workspace target")
+            raise HTTPException(status_code=400, detail="invalid contextspace target")
 
         # Allow legacy kind-only targets (active_context/decisions/spec)
         if suffix_raw.lower() in CONTEXTSPACE_DOC_KINDS:
@@ -153,8 +153,8 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             else str(path)
         )
         return _Target(
-            target=f"workspace:{rel_suffix}",
-            kind="workspace",
+            target=f"contextspace:{rel_suffix}",
+            kind="contextspace",
             id=rel_suffix,
             path=path,
             rel_path=rel,
@@ -168,12 +168,12 @@ def _build_file_chat_prompt(*, target: _Target, message: str, before: str) -> st
     if target.kind == "ticket":
         file_role_context = (
             f"{format_file_role_addendum('ticket', target.rel_path)}\n"
-            "Edits here change what the ticket flow agent will do; keep YAML "
+            "Edits here change what ticket flow agent will do; keep YAML "
             "frontmatter valid."
         )
-    elif target.kind == "workspace":
+    elif target.kind == "contextspace":
         file_role_context = (
-            f"{format_file_role_addendum('workspace', target.rel_path)}\n"
+            f"{format_file_role_addendum('contextspace', target.rel_path)}\n"
             "These docs act as shared memory across ticket turns."
         )
     else:
@@ -336,8 +336,8 @@ def build_file_chat_routes() -> APIRouter:
         repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, str(target_raw or ""))
 
-        # Ensure target directory exists for workspace docs (write on demand)
-        if target.kind == "workspace":
+        # Ensure target directory exists for contextspace docs (write on demand)
+        if target.kind == "contextspace":
             target.path.parent.mkdir(parents=True, exist_ok=True)
 
         # Concurrency guard per target

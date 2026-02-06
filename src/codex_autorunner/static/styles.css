@@ -4143,7 +4143,7 @@ button.icon-btn {
 }
 
 /* Workspace layout */
-.workspace-header {
+.contextspace-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4152,18 +4152,18 @@ button.icon-btn {
   flex-wrap: wrap;
 }
 
-.workspace-header-left {
+.contextspace-header-left {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.workspace-title {
+.contextspace-title {
   margin: 0;
   font-size: 15px;
 }
 
-.workspace-header-actions {
+.contextspace-header-actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4178,7 +4178,7 @@ button.icon-btn {
   color: var(--error);
 }
 
-.workspace-grid {
+.contextspace-grid {
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 12px;
@@ -4186,7 +4186,7 @@ button.icon-btn {
   min-height: 0;
 }
 
-.workspace-main {
+.contextspace-main {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -4219,7 +4219,7 @@ button.icon-btn {
   opacity: 0.6;
 }
 
-.workspace-file-browser {
+.contextspace-file-browser {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
@@ -4230,20 +4230,20 @@ button.icon-btn {
   max-height: 100%;
 }
 
-.workspace-file-mobile {
+.contextspace-file-mobile {
   display: none;
 }
 
 /* Mobile workspace toolbar - hidden on desktop, shown above compose on mobile */
-.workspace-mobile-toolbar {
+.contextspace-mobile-toolbar {
   display: none;
 }
 
-.workspace-mobile-menu {
+.contextspace-mobile-menu {
   position: relative;
 }
 
-.workspace-mobile-dropdown {
+.contextspace-mobile-dropdown {
   position: absolute;
   right: 0;
   top: 110%;
@@ -4256,7 +4256,7 @@ button.icon-btn {
   z-index: 30;
 }
 
-.workspace-mobile-item {
+.contextspace-mobile-item {
   width: 100%;
   text-align: left;
   padding: 10px 12px;
@@ -4267,13 +4267,13 @@ button.icon-btn {
   font-size: 13px;
 }
 
-.workspace-mobile-item:hover,
-.workspace-mobile-item:active {
+.contextspace-mobile-item:hover,
+.contextspace-mobile-item:active {
   background: rgba(108, 245, 216, 0.1);
 }
 
 /* Mobile file selector button - clean, square aesthetic */
-.workspace-file-btn {
+.contextspace-file-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -4290,18 +4290,18 @@ button.icon-btn {
   letter-spacing: 0.02em;
 }
 
-.workspace-file-btn:hover,
-.workspace-file-btn:focus {
+.contextspace-file-btn:hover,
+.contextspace-file-btn:focus {
   border-color: var(--accent);
   background: rgba(108, 245, 216, 0.05);
   outline: none;
 }
 
-.workspace-file-btn:active {
+.contextspace-file-btn:active {
   background: rgba(108, 245, 216, 0.1);
 }
 
-.workspace-file-btn-name {
+.contextspace-file-btn-name {
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4309,14 +4309,14 @@ button.icon-btn {
   pointer-events: none;
 }
 
-.workspace-mobile-actions {
+.contextspace-mobile-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-left: auto;
 }
 
-.workspace-file-list {
+.contextspace-file-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -4324,7 +4324,7 @@ button.icon-btn {
   max-height: calc(100vh - 220px);
 }
 
-.workspace-file-header {
+.contextspace-file-header {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -4332,7 +4332,7 @@ button.icon-btn {
   padding: 2px 4px;
 }
 
-.workspace-file-row {
+.contextspace-file-row {
   width: 100%;
   text-align: left;
   border: 1px solid transparent;
@@ -4345,25 +4345,25 @@ button.icon-btn {
   transition: border-color 0.1s ease, background 0.1s ease;
 }
 
-.workspace-file-row:hover {
+.contextspace-file-row:hover {
   border-color: var(--border);
 }
 
-.workspace-file-row.pinned {
+.contextspace-file-row.pinned {
   font-weight: 600;
 }
 
-.workspace-file-row.active {
+.contextspace-file-row.active {
   border-color: var(--accent);
   background: rgba(108, 245, 216, 0.08);
 }
 
-.workspace-file-divider {
+.contextspace-file-divider {
   border-top: 1px dashed var(--border);
   margin: 4px 0;
 }
 
-.workspace-breadcrumbs {
+.contextspace-breadcrumbs {
   display: flex;
   align-items: center;
   padding: 6px 10px;
@@ -4374,14 +4374,14 @@ button.icon-btn {
   min-height: 32px;
 }
 
-.workspace-breadcrumbs-inner {
+.contextspace-breadcrumbs-inner {
   display: flex;
   align-items: center;
   gap: 0;
   flex-wrap: wrap;
 }
 
-.workspace-breadcrumbs button {
+.contextspace-breadcrumbs button {
   background: none;
   border: none;
   color: var(--accent-2);
@@ -4390,16 +4390,16 @@ button.icon-btn {
   font-size: 12px;
 }
 
-.workspace-breadcrumbs button:hover {
+.contextspace-breadcrumbs button:hover {
   text-decoration: underline;
 }
 
-.workspace-breadcrumbs span {
+.contextspace-breadcrumbs span {
   color: var(--muted);
   margin: 0 2px;
 }
 
-.workspace-tree-row {
+.contextspace-tree-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4410,17 +4410,17 @@ button.icon-btn {
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 
-.workspace-tree-row:hover {
+.contextspace-tree-row:hover {
   border-color: var(--border);
   background: rgba(255, 255, 255, 0.02);
 }
 
-.workspace-tree-row.active {
+.contextspace-tree-row.active {
   border-color: var(--accent);
   background: rgba(108, 245, 216, 0.08);
 }
 
-.workspace-tree-label {
+.contextspace-tree-label {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -4429,14 +4429,14 @@ button.icon-btn {
   flex: 1;
 }
 
-.workspace-tree-main {
+.contextspace-tree-main {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-.workspace-tree-name {
+.contextspace-tree-name {
   background: none;
   border: none;
   color: var(--text);
@@ -4448,90 +4448,90 @@ button.icon-btn {
   align-items: center;
 }
 
-.workspace-tree-name.pinned {
+.contextspace-tree-name.pinned {
   font-weight: 600;
 }
 
-.workspace-tree-caret,
-.workspace-tree-dot {
+.contextspace-tree-caret,
+.contextspace-tree-dot {
   color: var(--muted);
   width: 14px;
   display: inline-flex;
   justify-content: center;
 }
 
-.workspace-tree-meta {
+.contextspace-tree-meta {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.2;
 }
 
-.workspace-item-actions {
+.contextspace-item-actions {
   display: flex;
   gap: 4px;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
 
-.workspace-tree-row:hover .workspace-item-actions {
+.contextspace-tree-row:hover .contextspace-item-actions {
   opacity: 1;
 }
 
-.workspace-item-actions .danger {
+.contextspace-item-actions .danger {
   color: var(--error);
   border-color: var(--error);
 }
 
-.workspace-download-btn {
+.contextspace-download-btn {
   color: var(--muted);
   opacity: 0.7;
 }
 
-.workspace-download-btn:hover {
+.contextspace-download-btn:hover {
   color: var(--primary);
   opacity: 1;
 }
 
-.workspace-create-dialog {
+.contextspace-create-dialog {
   max-width: 420px;
   width: 90vw;
 }
 
-.workspace-create-actions {
+.contextspace-create-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.workspace-confirm-dialog {
+.contextspace-confirm-dialog {
   max-width: 360px;
 }
 
-.workspace-confirm-actions {
+.contextspace-confirm-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.workspace-path-row {
+.contextspace-path-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 8px 0;
 }
 
-.workspace-path-row .workspace-breadcrumbs {
+.contextspace-path-row .contextspace-breadcrumbs {
   flex: 1;
 }
 
-.workspace-download-all-btn {
+.contextspace-download-all-btn {
   flex-shrink: 0;
   font-size: 1rem;
   padding: 4px 8px;
   opacity: 0.7;
 }
 
-.workspace-download-all-btn:hover {
+.contextspace-download-all-btn:hover {
   opacity: 1;
   color: var(--primary);
 }
@@ -4545,23 +4545,23 @@ button.icon-btn {
 }
 
 @media (max-width: 720px) {
-  .workspace-grid {
+  .contextspace-grid {
     grid-template-columns: 1fr;
   }
 
-  .workspace-file-mobile {
+  .contextspace-file-mobile {
     display: block;
   }
 
-  .workspace-file-list {
+  .contextspace-file-list {
     display: none;
   }
 
-  .workspace-item-actions {
+  .contextspace-item-actions {
     opacity: 1;
   }
 
-  .workspace-breadcrumbs {
+  .contextspace-breadcrumbs {
     padding: 6px 8px;
   }
 }
@@ -7791,11 +7791,11 @@ button.loading::after {
   }
 
   /* Workspace mobile - hide desktop header, show bottom toolbar */
-  .workspace-header-desktop {
+  .contextspace-header-desktop {
     display: none;
   }
 
-  .workspace-mobile-toolbar {
+  .contextspace-mobile-toolbar {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -7803,11 +7803,11 @@ button.loading::after {
     margin: 0;
   }
 
-  .workspace-mobile-menu {
+  .contextspace-mobile-menu {
     margin-left: auto;
   }
 
-  .workspace-mobile-dropdown {
+  .contextspace-mobile-dropdown {
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
   }
 
@@ -7816,15 +7816,15 @@ button.loading::after {
     margin-bottom: 0;
   }
 
-  .workspace-mobile-toolbar+.compose-panel {
+  .contextspace-mobile-toolbar+.compose-panel {
     margin-top: 2px;
   }
 
-  .workspace-grid {
+  .contextspace-grid {
     grid-template-columns: 1fr;
   }
 
-  .workspace-file-browser {
+  .contextspace-file-browser {
     display: none;
   }
 
@@ -7833,7 +7833,7 @@ button.loading::after {
     flex-direction: column;
   }
 
-  #workspace .workspace-main {
+  #workspace .contextspace-main {
     flex: 1;
     min-height: 0;
   }
@@ -11130,7 +11130,7 @@ button.filebox-delete:hover {
   min-height: 0;
 }
 
-.archive-file-browser .workspace-file-list {
+.archive-file-browser .contextspace-file-list {
   max-height: none;
   flex: 1;
 }
@@ -11266,22 +11266,22 @@ button.filebox-delete:hover {
   min-height: 200px;
 }
 
-.archive-tab-files .workspace-grid {
+.archive-tab-files .contextspace-grid {
   height: 100%;
 }
 
-.archive-tab-files .workspace-file-browser {
+.archive-tab-files .contextspace-file-browser {
   max-height: none;
   height: 100%;
 }
 
-.archive-tab-files .workspace-file-list {
+.archive-tab-files .contextspace-file-list {
   max-height: none;
   height: 100%;
   overflow-y: auto;
 }
 
-.archive-tab-files .workspace-main {
+.archive-tab-files .contextspace-main {
   display: flex;
   flex-direction: column;
   min-height: 0;

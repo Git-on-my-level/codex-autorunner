@@ -16,7 +16,7 @@ def client(hub_env):
 
 def test_workspace_docs_read_write(hub_env, client, repo: Path):
     # 1. Read initial state (should be empty or default)
-    res = client.get(f"/repos/{hub_env.repo_id}/api/workspace")
+    res = client.get(f"/repos/{hub_env.repo_id}/api/contextspace")
     assert res.status_code == 200
     data = res.json()
     assert "active_context" in data
@@ -26,7 +26,7 @@ def test_workspace_docs_read_write(hub_env, client, repo: Path):
     # 2. Write to active_context
     test_content = "# Test Context"
     res = client.put(
-        f"/repos/{hub_env.repo_id}/api/workspace/active_context",
+        f"/repos/{hub_env.repo_id}/api/contextspace/active_context",
         json={"content": test_content},
     )
     assert res.status_code == 200
@@ -40,7 +40,7 @@ def test_workspace_docs_read_write(hub_env, client, repo: Path):
     # 4. Write to decisions
     test_decisions = "# Test Decisions"
     res = client.put(
-        f"/repos/{hub_env.repo_id}/api/workspace/decisions",
+        f"/repos/{hub_env.repo_id}/api/contextspace/decisions",
         json={"content": test_decisions},
     )
     assert res.status_code == 200
@@ -58,7 +58,7 @@ def test_workspace_tree_and_metadata(hub_env, client, repo: Path):
     nested_dir.mkdir(parents=True, exist_ok=True)
     (nested_dir / "note.txt").write_text("note")
 
-    res = client.get(f"/repos/{hub_env.repo_id}/api/workspace/tree")
+    res = client.get(f"/repos/{hub_env.repo_id}/api/contextspace/tree")
     assert res.status_code == 200
     tree = res.json()["tree"]
 
@@ -88,7 +88,7 @@ def test_workspace_upload_download_and_delete(hub_env, client, repo: Path):
         ("files", ("inner.txt", b"inner", "text/plain")),
     ]
     res = client.post(
-        f"/repos/{hub_env.repo_id}/api/workspace/upload",
+        f"/repos/{hub_env.repo_id}/api/contextspace/upload",
         data={"subdir": "inbox"},
         files=files,
     )
@@ -100,14 +100,14 @@ def test_workspace_upload_download_and_delete(hub_env, client, repo: Path):
     assert (cs_dir / "hello.txt").read_text() == "hello world"
 
     res = client.get(
-        f"/repos/{hub_env.repo_id}/api/workspace/download",
+        f"/repos/{hub_env.repo_id}/api/contextspace/download",
         params={"path": "inbox/hello.txt"},
     )
     assert res.status_code == 200
     assert res.content == b"hello world"
 
     res = client.delete(
-        f"/repos/{hub_env.repo_id}/api/workspace/file",
+        f"/repos/{hub_env.repo_id}/api/contextspace/file",
         params={"path": "inbox/inner.txt"},
     )
     assert res.status_code == 200
@@ -115,7 +115,7 @@ def test_workspace_upload_download_and_delete(hub_env, client, repo: Path):
 
     # Traversal should be blocked
     res = client.delete(
-        f"/repos/{hub_env.repo_id}/api/workspace/file",
+        f"/repos/{hub_env.repo_id}/api/contextspace/file",
         params={"path": "../secrets.txt"},
     )
     assert res.status_code == 400
@@ -141,7 +141,7 @@ def test_workspace_download_zip_scoped(hub_env, client, repo: Path):
         link = None
 
     res = client.get(
-        f"/repos/{hub_env.repo_id}/api/workspace/download-zip",
+        f"/repos/{hub_env.repo_id}/api/contextspace/download-zip",
         params={"path": "folder"},
     )
     assert res.status_code == 200
@@ -161,7 +161,7 @@ def test_workspace_folder_crud_and_pinned_guard(hub_env, client, repo: Path):
     (cs_dir / "active_context.md").write_text("keep")
 
     res = client.post(
-        f"/repos/{hub_env.repo_id}/api/workspace/folder",
+        f"/repos/{hub_env.repo_id}/api/contextspace/folder",
         params={"path": "notes"},
     )
     assert res.status_code == 200
@@ -170,14 +170,14 @@ def test_workspace_folder_crud_and_pinned_guard(hub_env, client, repo: Path):
     # Non-empty delete should fail
     (cs_dir / "notes" / "tmp.txt").write_text("tmp")
     res = client.delete(
-        f"/repos/{hub_env.repo_id}/api/workspace/folder",
+        f"/repos/{hub_env.repo_id}/api/contextspace/folder",
         params={"path": "notes"},
     )
     assert res.status_code == 400
 
     (cs_dir / "notes" / "tmp.txt").unlink()
     res = client.delete(
-        f"/repos/{hub_env.repo_id}/api/workspace/folder",
+        f"/repos/{hub_env.repo_id}/api/contextspace/folder",
         params={"path": "notes"},
     )
     assert res.status_code == 200
@@ -185,7 +185,7 @@ def test_workspace_folder_crud_and_pinned_guard(hub_env, client, repo: Path):
 
     # Pinned docs cannot be deleted
     res = client.delete(
-        f"/repos/{hub_env.repo_id}/api/workspace/file",
+        f"/repos/{hub_env.repo_id}/api/contextspace/file",
         params={"path": "active_context.md"},
     )
     assert res.status_code == 400
@@ -240,7 +240,7 @@ def test_spec_ingest_ticket_generation(hub_env, client, repo: Path):
     (repo / ".codex-autorunner" / "contextspace" / "spec.md").write_text(spec_content)
 
     # Trigger ingest
-    res = client.post(f"/repos/{hub_env.repo_id}/api/workspace/spec/ingest")
+    res = client.post(f"/repos/{hub_env.repo_id}/api/contextspace/spec/ingest")
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"

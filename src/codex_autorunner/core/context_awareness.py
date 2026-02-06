@@ -24,14 +24,14 @@ ROLE_ADDENDUM_END = "</role addendum>"
 
 
 def format_file_role_addendum(
-    kind: Literal["ticket", "workspace", "other"],
+    kind: Literal["ticket", "contextspace", "other"],
     rel_path: str,
 ) -> str:
     """Format a short role-specific addendum for prompts."""
     if kind == "ticket":
         text = f"This target is a CAR ticket at `{rel_path}`."
-    elif kind == "workspace":
-        text = f"This target is a CAR workspace doc at `{rel_path}`."
+    elif kind == "contextspace":
+        text = f"This target is a CAR contextspace doc at `{rel_path}`."
     elif kind == "other":
         text = f"This target file is `{rel_path}`."
     else:

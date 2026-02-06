@@ -101,7 +101,7 @@ function updateMobileControlsOffset() {
     document.documentElement.style.setProperty("--compose-total-height", `${totalHeight}px`);
 }
 function updateDocComposeOffset() {
-    const composePanel = document.querySelector("#workspace .doc-chat-panel, #workspace .ticket-chat-panel");
+    const composePanel = document.querySelector("#contextspace .doc-chat-panel, #contextspace .ticket-chat-panel");
     if (!composePanel || !isVisible(composePanel))
         return;
     const composeHeight = composePanel.offsetHeight || 0;

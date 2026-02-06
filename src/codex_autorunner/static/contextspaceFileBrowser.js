@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { deleteWorkspaceFile, deleteWorkspaceFolder, downloadWorkspaceFile, downloadWorkspaceZip } from "./workspaceApi.js";
+import { deleteContextspaceFile, deleteContextspaceFolder, downloadContextspaceFile, downloadContextspaceZip } from "./contextspaceApi.js";
 import { confirmModal, flash } from "./utils.js";
-export class WorkspaceFileBrowser {
+export class ContextspaceFileBrowser {
     constructor(options) {
         this.tree = [];
         this.currentPath = "";
@@ -13,8 +13,8 @@ export class WorkspaceFileBrowser {
         this.onPathChange = options.onPathChange;
         this.onRefresh = options.onRefresh ?? (() => { });
         this.onConfirm = options.onConfirm;
-        this.fileBtnEl = document.getElementById("workspace-file-pill");
-        this.fileBtnNameEl = document.getElementById("workspace-file-pill-name");
+        this.fileBtnEl = document.getElementById("contextspace-file-pill");
+        this.fileBtnNameEl = document.getElementById("contextspace-file-pill-name");
         this.modalEl = document.getElementById("file-picker-modal");
         this.modalBodyEl = document.getElementById("file-picker-body");
         this.modalCloseEl = document.getElementById("file-picker-close");
@@ -133,7 +133,7 @@ export class WorkspaceFileBrowser {
         nav.className = "workspace-breadcrumbs-inner";
         const rootBtn = document.createElement("button");
         rootBtn.type = "button";
-        rootBtn.textContent = "Workspace";
+        rootBtn.textContent = "Contextspace";
         rootBtn.addEventListener("click", () => this.navigateTo(""));
         nav.appendChild(rootBtn);
         const parts = this.currentPath ? this.currentPath.split("/") : [];
@@ -159,18 +159,18 @@ export class WorkspaceFileBrowser {
         const renderNodes = (list) => {
             if (this.currentPath) {
                 const upRow = document.createElement("div");
-                upRow.className = "workspace-tree-row workspace-folder-row";
+                upRow.className = "contextspace-tree-row workspace-folder-row";
                 const label = document.createElement("div");
-                label.className = "workspace-tree-label";
+                label.className = "contextspace-tree-label";
                 const main = document.createElement("div");
-                main.className = "workspace-tree-main";
+                main.className = "contextspace-tree-main";
                 const caret = document.createElement("span");
-                caret.className = "workspace-tree-caret";
+                caret.className = "contextspace-tree-caret";
                 caret.textContent = "◂";
                 main.appendChild(caret);
                 const name = document.createElement("button");
                 name.type = "button";
-                name.className = "workspace-tree-name";
+                name.className = "contextspace-tree-name";
                 name.textContent = "Up one level";
                 const navigateUp = () => this.navigateTo(this.parentPath(this.currentPath));
                 name.addEventListener("click", navigateUp);
@@ -187,24 +187,24 @@ export class WorkspaceFileBrowser {
             }
             list.forEach((node) => {
                 const row = document.createElement("div");
-                row.className = `workspace-tree-row ${node.type === "folder" ? "workspace-folder-row" : "workspace-file-row"}`;
+                row.className = `contextspace-tree-row ${node.type === "folder" ? "workspace-folder-row" : "contextspace-file-row"}`;
                 if (node.path === this.selectedPath)
                     row.classList.add("active");
                 row.dataset.path = node.path;
                 row.tabIndex = 0;
                 const label = document.createElement("div");
-                label.className = "workspace-tree-label";
+                label.className = "contextspace-tree-label";
                 const main = document.createElement("div");
-                main.className = "workspace-tree-main";
+                main.className = "contextspace-tree-main";
                 if (node.type === "folder") {
                     const caret = document.createElement("span");
-                    caret.className = "workspace-tree-caret";
+                    caret.className = "contextspace-tree-caret";
                     caret.textContent = "▸";
                     main.appendChild(caret);
                 }
                 const name = document.createElement("button");
                 name.type = "button";
-                name.className = "workspace-tree-name";
+                name.className = "contextspace-tree-name";
                 name.textContent = node.name;
                 if (node.is_pinned)
                     name.classList.add("pinned");
@@ -227,7 +227,7 @@ export class WorkspaceFileBrowser {
                 main.appendChild(name);
                 label.appendChild(main);
                 const meta = document.createElement("span");
-                meta.className = "workspace-tree-meta";
+                meta.className = "contextspace-tree-meta";
                 if (node.type === "file" && node.size != null) {
                     meta.textContent = this.prettySize(node.size);
                 }
@@ -238,17 +238,17 @@ export class WorkspaceFileBrowser {
                 if (meta.textContent)
                     label.appendChild(meta);
                 const actions = document.createElement("div");
-                actions.className = "workspace-item-actions";
+                actions.className = "contextspace-item-actions";
                 // Download button for files
                 if (node.type === "file") {
                     const dlBtn = document.createElement("button");
                     dlBtn.type = "button";
-                    dlBtn.className = "ghost sm workspace-download-btn";
+                    dlBtn.className = "ghost sm contextspace-download-btn";
                     dlBtn.textContent = "⬇";
                     dlBtn.title = `Download ${node.name}`;
                     dlBtn.addEventListener("click", (evt) => {
                         evt.stopPropagation();
-                        downloadWorkspaceFile(node.path);
+                        downloadContextspaceFile(node.path);
                     });
                     actions.appendChild(dlBtn);
                 }
@@ -256,12 +256,12 @@ export class WorkspaceFileBrowser {
                 if (node.type === "folder") {
                     const dlBtn = document.createElement("button");
                     dlBtn.type = "button";
-                    dlBtn.className = "ghost sm workspace-download-btn";
+                    dlBtn.className = "ghost sm contextspace-download-btn";
                     dlBtn.textContent = "⬇";
                     dlBtn.title = `Download ${node.name} as ZIP`;
                     dlBtn.addEventListener("click", (evt) => {
                         evt.stopPropagation();
-                        downloadWorkspaceZip(node.path);
+                        downloadContextspaceZip(node.path);
                     });
                     actions.appendChild(dlBtn);
                 }
@@ -280,7 +280,7 @@ export class WorkspaceFileBrowser {
                         if (!ok)
                             return;
                         try {
-                            await deleteWorkspaceFile(node.path);
+                            await deleteContextspaceFile(node.path);
                             if (this.selectedPath === node.path) {
                                 this.selectedPath = null;
                             }
@@ -307,7 +307,7 @@ export class WorkspaceFileBrowser {
                         if (!ok)
                             return;
                         try {
-                            await deleteWorkspaceFolder(node.path);
+                            await deleteContextspaceFolder(node.path);
                             await this.onRefresh();
                         }
                         catch (err) {
@@ -321,7 +321,7 @@ export class WorkspaceFileBrowser {
                     row.appendChild(actions);
                 row.addEventListener("click", (evt) => {
                     const target = evt.target;
-                    if (target?.closest(".workspace-item-actions"))
+                    if (target?.closest(".contextspace-item-actions"))
                         return;
                     if (target?.closest("button"))
                         return;
@@ -396,16 +396,16 @@ export class WorkspaceFileBrowser {
             // Download button
             const dlBtn = document.createElement("button");
             dlBtn.type = "button";
-            dlBtn.className = "ghost sm workspace-download-btn";
+            dlBtn.className = "ghost sm contextspace-download-btn";
             dlBtn.textContent = "⬇";
             dlBtn.title = node.type === "folder" ? `Download ${node.name} as ZIP` : `Download ${node.name}`;
             dlBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
                 if (node.type === "folder") {
-                    downloadWorkspaceZip(node.path);
+                    downloadContextspaceZip(node.path);
                 }
                 else {
-                    downloadWorkspaceFile(node.path);
+                    downloadContextspaceFile(node.path);
                 }
             });
             actions.appendChild(dlBtn);
@@ -425,10 +425,10 @@ export class WorkspaceFileBrowser {
                         return;
                     try {
                         if (node.type === "folder") {
-                            await deleteWorkspaceFolder(node.path);
+                            await deleteContextspaceFolder(node.path);
                         }
                         else {
-                            await deleteWorkspaceFile(node.path);
+                            await deleteContextspaceFile(node.path);
                             if (this.selectedPath === node.path)
                                 this.selectedPath = null;
                         }

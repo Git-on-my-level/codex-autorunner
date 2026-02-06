@@ -27,20 +27,20 @@ from ....tickets.spec_ingest import (
     ingest_workspace_spec_to_tickets,
 )
 from ..schemas import (
+    ContextspaceFileListResponse,
+    ContextspaceResponse,
+    ContextspaceTreeResponse,
+    ContextspaceUploadResponse,
+    ContextspaceWriteRequest,
     SpecIngestTicketsResponse,
-    WorkspaceFileListResponse,
-    WorkspaceResponse,
-    WorkspaceTreeResponse,
-    WorkspaceUploadResponse,
-    WorkspaceWriteRequest,
 )
 
 
-def build_workspace_routes() -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["workspace"])
+def build_contextspace_routes() -> APIRouter:
+    router = APIRouter(prefix="/api", tags=["contextspace"])
 
-    @router.get("/workspace", response_model=WorkspaceResponse)
-    def get_workspace(request: Request):
+    @router.get("/contextspace", response_model=ContextspaceResponse)
+    def get_contextspace(request: Request):
         repo_root = request.app.state.engine.repo_root
         return {
             "active_context": read_contextspace_doc(repo_root, "active_context"),
@@ -48,8 +48,8 @@ def build_workspace_routes() -> APIRouter:
             "spec": read_contextspace_doc(repo_root, "spec"),
         }
 
-    @router.get("/workspace/file", response_class=PlainTextResponse)
-    def read_workspace(request: Request, path: str):
+    @router.get("/contextspace/file", response_class=PlainTextResponse)
+    def read_contextspace_file_endpoint(request: Request, path: str):
         repo_root = request.app.state.engine.repo_root
         try:
             content = read_contextspace_file(repo_root, path)
@@ -57,8 +57,10 @@ def build_workspace_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return PlainTextResponse(content)
 
-    @router.put("/workspace/file", response_class=PlainTextResponse)
-    def write_workspace(request: Request, payload: WorkspaceWriteRequest, path: str):
+    @router.put("/contextspace/file", response_class=PlainTextResponse)
+    def write_contextspace_file_endpoint(
+        request: Request, payload: ContextspaceWriteRequest, path: str
+    ):
         repo_root = request.app.state.engine.repo_root
         try:
             # Normalize path the same way contextspace helpers do to avoid traversal
@@ -75,11 +77,13 @@ def build_workspace_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return PlainTextResponse(content)
 
-    @router.put("/workspace/{kind}", response_model=WorkspaceResponse)
-    def put_workspace(kind: str, payload: WorkspaceWriteRequest, request: Request):
+    @router.put("/contextspace/{kind}", response_model=ContextspaceResponse)
+    def put_contextspace(
+        kind: str, payload: ContextspaceWriteRequest, request: Request
+    ):
         key = (kind or "").strip().lower()
         if key not in CONTEXTSPACE_DOC_KINDS:
-            raise HTTPException(status_code=400, detail="invalid workspace doc kind")
+            raise HTTPException(status_code=400, detail="invalid contextspace doc kind")
         repo_root = request.app.state.engine.repo_root
         write_contextspace_doc(repo_root, key, payload.content)
         try:
@@ -96,20 +100,20 @@ def build_workspace_routes() -> APIRouter:
             "spec": read_contextspace_doc(repo_root, "spec"),
         }
 
-    @router.get("/workspace/files", response_model=WorkspaceFileListResponse)
+    @router.get("/contextspace/files", response_model=ContextspaceFileListResponse)
     def list_files(request: Request):
         repo_root = request.app.state.engine.repo_root
         files = [asdict(item) for item in list_contextspace_files(repo_root)]
         return {"files": files}
 
-    @router.get("/workspace/tree", response_model=WorkspaceTreeResponse)
-    def get_workspace_tree(request: Request):
+    @router.get("/contextspace/tree", response_model=ContextspaceTreeResponse)
+    def get_contextspace_tree(request: Request):
         repo_root = request.app.state.engine.repo_root
         tree = [asdict(item) for item in list_contextspace_tree(repo_root)]
         return {"tree": tree}
 
-    @router.post("/workspace/upload", response_model=WorkspaceUploadResponse)
-    async def upload_workspace_files(
+    @router.post("/contextspace/upload", response_model=ContextspaceUploadResponse)
+    async def upload_contextspace_files(
         request: Request,
         files: list[UploadFile] = File(...),  # noqa: B008
         subdir: str = Form(""),
@@ -143,14 +147,14 @@ def build_workspace_routes() -> APIRouter:
             dest = target_dir / filename
             dest.write_bytes(
                 data
-            )  # codeql[py/path-injection] dest sits under normalized workspace dir
+            )  # codeql[py/path-injection] dest sits under normalized contextspace dir
             rel_path = dest.relative_to(base).as_posix()
             uploaded.append({"filename": filename, "path": rel_path, "size": len(data)})
 
         return {"status": "ok", "uploaded": uploaded}
 
-    @router.get("/workspace/download")
-    async def download_workspace_file(request: Request, path: str):
+    @router.get("/contextspace/download")
+    async def download_contextspace_file(request: Request, path: str):
         repo_root = request.app.state.engine.repo_root
         try:
             safe_path, _ = normalize_contextspace_rel_path(repo_root, path)
@@ -164,14 +168,14 @@ def build_workspace_routes() -> APIRouter:
             path=safe_path, filename=safe_path.name
         )  # codeql[py/path-injection] safe_path validated by normalize_contextspace_rel_path
 
-    @router.get("/workspace/download-zip")
-    async def download_workspace_zip(request: Request, path: str = ""):
+    @router.get("/contextspace/download-zip")
+    async def download_contextspace_zip(request: Request, path: str = ""):
         repo_root = request.app.state.engine.repo_root
         base = contextspace_dir(repo_root)
         base.mkdir(parents=True, exist_ok=True)
 
         target_dir = base
-        zip_name = "workspace.zip"
+        zip_name = "contextspace.zip"
         if path:
             try:
                 target_dir, _ = normalize_contextspace_rel_path(repo_root, path)
@@ -204,8 +208,8 @@ def build_workspace_routes() -> APIRouter:
             headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
         )
 
-    @router.post("/workspace/folder")
-    async def create_workspace_folder(request: Request, path: str):
+    @router.post("/contextspace/folder")
+    async def create_contextspace_folder(request: Request, path: str):
         repo_root = request.app.state.engine.repo_root
         try:
             safe_path, rel_posix = normalize_contextspace_rel_path(repo_root, path)
@@ -218,8 +222,8 @@ def build_workspace_routes() -> APIRouter:
         safe_path.mkdir(parents=True, exist_ok=True)
         return {"status": "created", "path": rel_posix}
 
-    @router.delete("/workspace/folder")
-    async def delete_workspace_folder(request: Request, path: str):
+    @router.delete("/contextspace/folder")
+    async def delete_contextspace_folder(request: Request, path: str):
         repo_root = request.app.state.engine.repo_root
         try:
             safe_path, rel_posix = normalize_contextspace_rel_path(repo_root, path)
@@ -236,8 +240,8 @@ def build_workspace_routes() -> APIRouter:
         safe_path.rmdir()
         return {"status": "deleted", "path": rel_posix}
 
-    @router.delete("/workspace/file")
-    async def delete_workspace_file(request: Request, path: str):
+    @router.delete("/contextspace/file")
+    async def delete_contextspace_file(request: Request, path: str):
         repo_root = request.app.state.engine.repo_root
         base = contextspace_dir(repo_root)
         try:
@@ -255,8 +259,8 @@ def build_workspace_routes() -> APIRouter:
         safe_path.unlink()  # codeql[py/path-injection] safe_path validated by normalize_contextspace_rel_path
         return {"status": "deleted", "path": rel_posix}
 
-    @router.post("/workspace/spec/ingest", response_model=SpecIngestTicketsResponse)
-    def ingest_workspace_spec(request: Request):
+    @router.post("/contextspace/spec/ingest", response_model=SpecIngestTicketsResponse)
+    def ingest_contextspace_spec(request: Request):
         repo_root = request.app.state.engine.repo_root
         try:
             result = ingest_workspace_spec_to_tickets(repo_root)

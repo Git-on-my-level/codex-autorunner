@@ -469,124 +469,124 @@
           </div>
         </div>
       </section>
-      <section class="panel" id="workspace">
-        <div class="workspace-header workspace-header-desktop">
-          <div class="workspace-header-left">
-            <h3 class="workspace-title">Workspace</h3>
-            <span class="muted small" id="workspace-status"></span>
+      <section class="panel" id="contextspace">
+        <div class="contextspace-header contextspace-header-desktop">
+          <div class="contextspace-header-left">
+            <h3 class="contextspace-title">Contextspace</h3>
+            <span class="muted small" id="contextspace-status"></span>
           </div>
-          <div class="workspace-header-actions">
-            <input type="file" id="workspace-upload-input" multiple hidden />
-            <button class="ghost sm" id="workspace-upload" title="Upload to current folder">Upload</button>
-            <button class="ghost sm" id="workspace-new-folder" title="Create folder">New Folder</button>
-            <button class="ghost sm" id="workspace-new-file" title="Create markdown file">New File</button>
-            <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate
+          <div class="contextspace-header-actions">
+            <input type="file" id="contextspace-upload-input" multiple hidden />
+            <button class="ghost sm" id="contextspace-upload" title="Upload to current folder">Upload</button>
+            <button class="ghost sm" id="contextspace-new-folder" title="Create folder">New Folder</button>
+            <button class="ghost sm" id="contextspace-new-file" title="Create markdown file">New File</button>
+            <button class="ghost sm hidden" id="contextspace-generate-tickets" title="Generate tickets from spec">Generate
               tickets</button>
-            <button class="ghost sm" id="workspace-reload">Reload</button>
-            <button class="primary sm" id="workspace-save">Save</button>
+            <button class="ghost sm" id="contextspace-reload">Reload</button>
+            <button class="primary sm" id="contextspace-save">Save</button>
           </div>
         </div>
-        <div class="workspace-path-row">
-          <nav class="workspace-breadcrumbs" id="workspace-breadcrumbs"></nav>
-          <button class="ghost sm workspace-download-all-btn" id="workspace-download-all"
+        <div class="contextspace-path-row">
+          <nav class="contextspace-breadcrumbs" id="contextspace-breadcrumbs"></nav>
+          <button class="ghost sm contextspace-download-all-btn" id="contextspace-download-all"
             title="Download all as ZIP">⬇</button>
         </div>
-        <div class="workspace-grid">
-          <aside class="workspace-file-browser">
-            <div class="workspace-file-mobile">
-              <select id="workspace-file-select"></select>
+        <div class="contextspace-grid">
+          <aside class="contextspace-file-browser">
+            <div class="contextspace-file-mobile">
+              <select id="contextspace-file-select"></select>
             </div>
-            <div class="workspace-file-list" id="workspace-file-list"></div>
+            <div class="contextspace-file-list" id="contextspace-file-list"></div>
           </aside>
-          <div class="workspace-main">
-            <div class="doc-patch-main hidden" id="workspace-patch-main">
+          <div class="contextspace-main">
+            <div class="doc-patch-main hidden" id="contextspace-patch-main">
               <div class="doc-patch-header">
                 <div class="doc-patch-info">
                   <div class="muted small">Pending draft</div>
-                  <div class="doc-patch-summary" id="workspace-patch-summary"></div>
-                  <div class="doc-patch-meta" id="workspace-patch-meta"></div>
+                  <div class="doc-patch-summary" id="contextspace-patch-summary"></div>
+                  <div class="doc-patch-meta" id="contextspace-patch-meta"></div>
                   <div class="doc-patch-legend">
                     <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
                     <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
                   </div>
                 </div>
                 <div class="doc-patch-actions">
-                  <button class="primary sm" id="workspace-patch-apply">Apply</button>
-                  <button class="ghost sm" id="workspace-patch-reload">Reload</button>
-                  <button class="danger sm" id="workspace-patch-discard">Discard</button>
+                  <button class="primary sm" id="contextspace-patch-apply">Apply</button>
+                  <button class="ghost sm" id="contextspace-patch-reload">Reload</button>
+                  <button class="danger sm" id="contextspace-patch-discard">Discard</button>
                 </div>
               </div>
-              <div class="doc-patch-body" id="workspace-patch-body">(no draft)</div>
+              <div class="doc-patch-body" id="contextspace-patch-body">(no draft)</div>
             </div>
-            <textarea id="workspace-content" spellcheck="false"></textarea>
+            <textarea id="contextspace-content" spellcheck="false"></textarea>
             <!-- Mobile toolbar: file selector + actions, positioned above compose -->
-            <div class="workspace-mobile-toolbar">
-              <button class="workspace-file-btn" id="workspace-file-pill" type="button">
-                <span class="workspace-file-btn-name" id="workspace-file-pill-name">active_context.md</span>
+            <div class="contextspace-mobile-toolbar">
+              <button class="contextspace-file-btn" id="contextspace-file-pill" type="button">
+                <span class="contextspace-file-btn-name" id="contextspace-file-pill-name">active_context.md</span>
               </button>
-              <div class="workspace-mobile-actions">
-                <span class="muted small" id="workspace-status-mobile"></span>
-                <div class="workspace-mobile-menu">
-                  <button class="ghost sm icon-btn" id="workspace-mobile-menu-toggle"
-                    title="Workspace actions">⋯</button>
-                  <div class="workspace-mobile-dropdown hidden" id="workspace-mobile-dropdown">
-                    <button class="workspace-mobile-item" id="workspace-mobile-upload">Upload files</button>
-                    <button class="workspace-mobile-item" id="workspace-mobile-new-folder">New folder</button>
-                    <button class="workspace-mobile-item" id="workspace-mobile-new-file">New file</button>
-                    <button class="workspace-mobile-item" id="workspace-mobile-download">Download ZIP</button>
-                    <button class="workspace-mobile-item hidden" id="workspace-mobile-generate">Generate
+              <div class="contextspace-mobile-actions">
+                <span class="muted small" id="contextspace-status-mobile"></span>
+                <div class="contextspace-mobile-menu">
+                  <button class="ghost sm icon-btn" id="contextspace-mobile-menu-toggle"
+                    title="Contextspace actions">⋯</button>
+                  <div class="contextspace-mobile-dropdown hidden" id="contextspace-mobile-dropdown">
+                    <button class="contextspace-mobile-item" id="contextspace-mobile-upload">Upload files</button>
+                    <button class="contextspace-mobile-item" id="contextspace-mobile-new-folder">New folder</button>
+                    <button class="contextspace-mobile-item" id="contextspace-mobile-new-file">New file</button>
+                    <button class="contextspace-mobile-item" id="contextspace-mobile-download">Download ZIP</button>
+                    <button class="contextspace-mobile-item hidden" id="contextspace-mobile-generate">Generate
                       tickets</button>
                   </div>
                 </div>
-                <button class="ghost sm" id="workspace-reload-mobile" title="Reload">↻</button>
-                <button class="primary sm" id="workspace-save-mobile">Save</button>
+                <button class="ghost sm" id="contextspace-reload-mobile" title="Reload">↻</button>
+                <button class="primary sm" id="contextspace-save-mobile">Save</button>
               </div>
             </div>
             <div class="doc-chat-panel compose-panel">
               <div class="doc-chat-compose">
                 <div class="doc-agent-controls">
-                  <select id="workspace-chat-agent-select" title="Agent"></select>
-                  <select id="workspace-chat-model-select" title="Model"></select>
-                  <select id="workspace-chat-reasoning-select" title="Reasoning"></select>
+                  <select id="contextspace-chat-agent-select" title="Agent"></select>
+                  <select id="contextspace-chat-model-select" title="Model"></select>
+                  <select id="contextspace-chat-reasoning-select" title="Reasoning"></select>
                 </div>
                 <div class="doc-chat-input-row compose-row">
-                  <textarea enterkeyhint="enter" id="workspace-chat-input"
+                  <textarea enterkeyhint="enter" id="contextspace-chat-input"
                     placeholder="Ask AI to edit this workspace doc..." rows="1" spellcheck="false"></textarea>
                   <div class="doc-chat-input-buttons compose-buttons">
-                    <button class="ghost sm voice-button" id="workspace-chat-voice" title="Hold to talk"></button>
-                    <button class="primary sm" id="workspace-chat-send" title="Send">↑</button>
+                    <button class="ghost sm voice-button" id="contextspace-chat-voice" title="Hold to talk"></button>
+                    <button class="primary sm" id="contextspace-chat-send" title="Send">↑</button>
                   </div>
                 </div>
                 <div class="doc-chat-meta">
                   <div class="doc-chat-meta-left">
-                    <span class="muted small" id="workspace-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for
+                    <span class="muted small" id="contextspace-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for
                       newline</span>
                   </div>
                   <div class="doc-chat-meta-right">
-                    <button class="ghost sm hidden doc-chat-cancel-inline" id="workspace-chat-cancel"
+                    <button class="ghost sm hidden doc-chat-cancel-inline" id="contextspace-chat-cancel"
                       title="Cancel">✕</button>
-                    <button class="ghost sm" id="workspace-chat-new-thread" title="Start a new chat thread">New
+                    <button class="ghost sm" id="contextspace-chat-new-thread" title="Start a new chat thread">New
                       thread</button>
-                    <span class="pill pill-idle" id="workspace-chat-status">idle</span>
+                    <span class="pill pill-idle" id="contextspace-chat-status">idle</span>
                   </div>
                 </div>
               </div>
-              <div class="doc-chat-stream" id="workspace-chat-stream">
-                <div class="doc-chat-error hidden" id="workspace-chat-error"></div>
-                <div class="doc-chat-events hidden" id="workspace-chat-events">
+              <div class="doc-chat-stream" id="contextspace-chat-stream">
+                <div class="doc-chat-error hidden" id="contextspace-chat-error"></div>
+                <div class="doc-chat-events hidden" id="contextspace-chat-events">
                   <div class="doc-chat-section-header">
                     <div class="doc-chat-section-title">
                       Agent updates
-                      <span class="doc-chat-count" id="workspace-chat-events-count">0</span>
+                      <span class="doc-chat-count" id="contextspace-chat-events-count">0</span>
                     </div>
-                    <button class="ghost sm hidden" id="workspace-chat-events-toggle">Show more</button>
+                    <button class="ghost sm hidden" id="contextspace-chat-events-toggle">Show more</button>
                   </div>
-                  <div class="doc-chat-events-list" id="workspace-chat-events-list"></div>
+                  <div class="doc-chat-events-list" id="contextspace-chat-events-list"></div>
                 </div>
-                <div class="doc-chat-section-header" id="workspace-chat-history-header">
+                <div class="doc-chat-section-header" id="contextspace-chat-history-header">
                   <div class="doc-chat-section-title">History</div>
                 </div>
-                <div class="doc-chat-history" id="workspace-chat-history"></div>
+                <div class="doc-chat-history" id="contextspace-chat-history"></div>
               </div>
             </div>
           </div>
@@ -1204,44 +1204,44 @@
       </div>
     </div>
   </div>
-  <!-- Workspace Create Modal -->
-  <div class="modal-overlay" hidden="" id="workspace-create-modal">
-    <div aria-describedby="workspace-create-body" aria-labelledby="workspace-create-title" aria-modal="true"
+  <!-- Contextspace Create Modal -->
+  <div class="modal-overlay" hidden="" id="contextspace-create-modal">
+    <div aria-describedby="workspace-create-body" aria-labelledby="contextspace-create-title" aria-modal="true"
       class="modal-dialog workspace-create-dialog" role="dialog" tabindex="-1">
       <div class="modal-header">
-        <span class="label" id="workspace-create-title">Create</span>
-        <button class="file-picker-close" id="workspace-create-close" aria-label="Close">&times;</button>
+        <span class="label" id="contextspace-create-title">Create</span>
+        <button class="file-picker-close" id="contextspace-create-close" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body" id="workspace-create-body">
         <div class="form-group">
-          <label class="muted small" for="workspace-create-name">Name</label>
-          <input id="workspace-create-name" placeholder="my-note.md" type="text" />
-          <span class="form-hint" id="workspace-create-hint">Created under current folder</span>
+          <label class="muted small" for="contextspace-create-name">Name</label>
+          <input id="contextspace-create-name" placeholder="my-note.md" type="text" />
+          <span class="form-hint" id="contextspace-create-hint">Created under current folder</span>
         </div>
         <div class="form-group">
-          <label class="muted small" for="workspace-create-path">Location</label>
-          <select id="workspace-create-path"></select>
+          <label class="muted small" for="contextspace-create-path">Location</label>
+          <select id="contextspace-create-path"></select>
         </div>
       </div>
       <div class="modal-actions workspace-create-actions">
-        <button class="ghost sm" id="workspace-create-cancel">Cancel</button>
-        <button class="primary sm" id="workspace-create-submit">Create</button>
+        <button class="ghost sm" id="contextspace-create-cancel">Cancel</button>
+        <button class="primary sm" id="contextspace-create-submit">Create</button>
       </div>
     </div>
   </div>
-  <!-- Workspace Confirm Modal -->
-  <div class="modal-overlay" hidden="" id="workspace-confirm-modal">
-    <div aria-describedby="workspace-confirm-body" aria-labelledby="workspace-confirm-title" aria-modal="true"
-      class="modal-dialog workspace-confirm-dialog" role="dialog" tabindex="-1">
+  <!-- Contextspace Confirm Modal -->
+  <div class="modal-overlay" hidden="" id="contextspace-confirm-modal">
+    <div aria-describedby="contextspace-confirm-body" aria-labelledby="contextspace-confirm-title" aria-modal="true"
+      class="modal-dialog contextspace-confirm-dialog" role="dialog" tabindex="-1">
       <div class="modal-header">
-        <span class="label" id="workspace-confirm-title">Confirm</span>
+        <span class="label" id="contextspace-confirm-title">Confirm</span>
       </div>
-      <div class="modal-body" id="workspace-confirm-body">
-        <p id="workspace-confirm-text"></p>
+      <div class="modal-body" id="contextspace-confirm-body">
+        <p id="contextspace-confirm-text"></p>
       </div>
-      <div class="modal-actions workspace-confirm-actions">
-        <button class="ghost sm" id="workspace-confirm-cancel">Cancel</button>
-        <button class="primary sm" id="workspace-confirm-yes">Confirm</button>
+      <div class="modal-actions contextspace-confirm-actions">
+        <button class="ghost sm" id="contextspace-confirm-cancel">Cancel</button>
+        <button class="primary sm" id="contextspace-confirm-yes">Confirm</button>
       </div>
     </div>
   </div>

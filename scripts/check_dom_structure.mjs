@@ -60,7 +60,7 @@ function main() {
   }
 
   // Critical panels: ensure exactly one of each key view exists.
-  const expectedPanels = ["analytics", "inbox", "tickets", "workspace", "terminal"];
+  const expectedPanels = ["analytics", "inbox", "tickets", "contextspace", "terminal"];
   for (const id of expectedPanels) {
     const matches = panels.filter((p) => p.id === id);
     if (!matches.length) {

@@ -563,7 +563,7 @@ function renderFileList(): void {
 
   if (fileState.currentPath) {
     const upRow = document.createElement("div");
-    upRow.className = "workspace-tree-row workspace-folder-row";
+    upRow.className = "workspace-tree-row contextspace-folder-row";
     const label = document.createElement("div");
     label.className = "workspace-tree-label";
     const main = document.createElement("div");
@@ -644,7 +644,7 @@ function renderFileList(): void {
     if (node.type === "file") {
       const dlBtn = document.createElement("button");
       dlBtn.type = "button";
-      dlBtn.className = "ghost sm workspace-download-btn";
+      dlBtn.className = "ghost sm contextspace-download-btn";
       dlBtn.textContent = "⬇";
       dlBtn.title = `Download ${node.name}`;
       dlBtn.addEventListener("click", (evt) => {
