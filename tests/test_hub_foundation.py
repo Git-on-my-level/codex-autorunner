@@ -96,7 +96,7 @@ def test_discovery_sanitizes_repo_ids(tmp_path: Path):
     assert repo_entry["display_name"] == "demo#repo"
 
 
-def test_discovery_includes_hub_root_repo(tmp_path: Path):
+def test_discovery_skips_hub_root_repo_by_default(tmp_path: Path):
     hub_root = tmp_path / "hub"
     hub_root.mkdir(parents=True, exist_ok=True)
     (hub_root / ".git").mkdir(parents=True, exist_ok=True)
@@ -104,6 +104,29 @@ def test_discovery_includes_hub_root_repo(tmp_path: Path):
 
     config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     config["hub"]["repos_root"] = "."
+    config_path = hub_root / CONFIG_FILENAME
+    _write_config(config_path, config)
+
+    hub_config = load_hub_config(hub_root)
+    _, records = discover_and_init(hub_config)
+
+    assert not any(r.absolute_path == hub_root.resolve() for r in records)
+
+    manifest_data = yaml.safe_load(
+        (hub_root / ".codex-autorunner" / "manifest.yml").read_text()
+    )
+    assert not any(r["path"] == "." for r in manifest_data["repos"])
+
+
+def test_discovery_includes_hub_root_repo_when_enabled(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    (hub_root / ".git").mkdir(parents=True, exist_ok=True)
+    seed_repo_files(hub_root, force=False, git_required=False)
+
+    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config["hub"]["repos_root"] = "."
+    config["hub"]["include_root_repo"] = True
     config_path = hub_root / CONFIG_FILENAME
     _write_config(config_path, config)
 
@@ -121,6 +144,29 @@ def test_discovery_includes_hub_root_repo(tmp_path: Path):
     )
     root_entry = next(r for r in manifest_data["repos"] if r["path"] == ".")
     assert root_entry["id"] == "hub"
+
+
+def test_discovery_removes_existing_hub_root_repo_when_disabled(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    (hub_root / ".git").mkdir(parents=True, exist_ok=True)
+    seed_repo_files(hub_root, force=False, git_required=False)
+
+    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config["hub"]["repos_root"] = "."
+    config["hub"]["include_root_repo"] = False
+    config_path = hub_root / CONFIG_FILENAME
+    _write_config(config_path, config)
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    manifest.ensure_repo(hub_root, hub_root, repo_id="hub", display_name="hub")
+    save_manifest(hub_root / ".codex-autorunner" / "manifest.yml", manifest, hub_root)
+
+    hub_config = load_hub_config(hub_root)
+    manifest, records = discover_and_init(hub_config)
+
+    assert not any(r.absolute_path == hub_root.resolve() for r in records)
+    assert not any(entry.path.as_posix() == "." for entry in manifest.repos)
 
 
 def test_load_repo_config_uses_nearest_hub_config(tmp_path: Path):

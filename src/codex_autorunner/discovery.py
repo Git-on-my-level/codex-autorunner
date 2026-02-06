@@ -130,15 +130,20 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
     _scan_root(hub_config.worktrees_root, kind="worktree")
 
     root_resolved = hub_config.root.resolve()
-    root_entry = next(
-        (
-            entry
-            for entry in manifest.repos
-            if (hub_config.root / entry.path).resolve() == root_resolved
-        ),
-        None,
-    )
-    if root_entry:
+    root_entries = [
+        entry
+        for entry in manifest.repos
+        if (hub_config.root / entry.path).resolve() == root_resolved
+    ]
+    root_entry = root_entries[0] if root_entries else None
+    if not hub_config.include_root_repo:
+        if root_entries:
+            root_ids = {entry.id for entry in root_entries}
+            manifest.repos = [
+                entry for entry in manifest.repos if entry.id not in root_ids
+            ]
+            seen_ids.difference_update(root_ids)
+    elif root_entry:
         if root_entry.id not in seen_ids:
             _record_repo(root_entry, added=False)
     else:

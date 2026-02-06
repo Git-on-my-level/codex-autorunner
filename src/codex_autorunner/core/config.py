@@ -608,6 +608,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "manifest": ".codex-autorunner/manifest.yml",
         "discover_depth": 1,
         "auto_init_missing": True,
+        # Include the hub root itself as a manifest repo entry (path: ".").
+        "include_root_repo": False,
         "repo_server_inherit": True,
         # Where to pull system updates from (defaults to main upstream)
         "update_repo_url": "https://github.com/Git-on-my-level/codex-autorunner.git",
@@ -992,6 +994,7 @@ class HubConfig:
     manifest_path: Path
     discover_depth: int
     auto_init_missing: bool
+    include_root_repo: bool
     repo_server_inherit: bool
     update_repo_url: str
     update_repo_ref: str
@@ -2060,6 +2063,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         manifest_path=root / hub_cfg["manifest"],
         discover_depth=int(hub_cfg["discover_depth"]),
         auto_init_missing=bool(hub_cfg["auto_init_missing"]),
+        include_root_repo=bool(hub_cfg.get("include_root_repo", False)),
         repo_server_inherit=bool(hub_cfg.get("repo_server_inherit", True)),
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
         update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
@@ -2674,6 +2678,10 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
         raise ConfigError("hub.discover_depth is fixed to 1 for now")
     if not isinstance(hub_cfg.get("auto_init_missing", True), bool):
         raise ConfigError("hub.auto_init_missing must be boolean")
+    if "include_root_repo" in hub_cfg and not isinstance(
+        hub_cfg.get("include_root_repo"), bool
+    ):
+        raise ConfigError("hub.include_root_repo must be boolean")
     if "repo_server_inherit" in hub_cfg and not isinstance(
         hub_cfg.get("repo_server_inherit"), bool
     ):
