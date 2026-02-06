@@ -438,6 +438,90 @@ async def test_thread_start_rejects_mismatched_workspace(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
+async def test_stale_active_thread_is_recovered_during_verification(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_resume_missing_thread"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    new_message = build_message("/new", message_id=11)
+    prompt_message = build_message("hello", message_id=12)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_new(new_message)
+        runtime = service._router.runtime_for(
+            await service._router.resolve_key(
+                bind_message.chat_id, bind_message.thread_id
+            )
+        )
+        await service._handle_normal_message(prompt_message, runtime)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
+        )
+        record = await service._router.get_topic(key)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert record is not None
+    assert record.active_thread_id == "thread-2"
+    assert not any(
+        "Failed to verify the active thread; use /resume or /new." in msg["text"]
+        for msg in fake_bot.messages
+    )
+    assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_new_surfaces_thread_start_errors(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_start_error"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    new_message = build_message("/new", message_id=11)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_new(new_message)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert any(
+        "Failed to start a new thread; check logs for details." in msg["text"]
+        for msg in fake_bot.messages
+    )
+
+
+@pytest.mark.anyio
+async def test_resume_missing_thread_clears_stale_topic_state(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_resume_missing_thread"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    new_message = build_message("/new", message_id=11)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_new(new_message)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
+        )
+        await service._resume_thread_by_id(key, "thread-1")
+        record = await service._router.get_topic(key)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert record is not None
+    assert record.active_thread_id is None
+    assert "thread-1" not in record.thread_ids
+    assert any("Thread no longer exists." in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
 async def test_resume_lists_threads_from_data_shape(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

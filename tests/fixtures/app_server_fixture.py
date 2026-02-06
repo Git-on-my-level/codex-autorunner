@@ -187,6 +187,14 @@ class FixtureServer:
         if method == "thread/start":
             thread_id = f"thread-{self._next_thread}"
             self._next_thread += 1
+            if self._scenario == "thread_start_error":
+                self.send(
+                    {
+                        "id": req_id,
+                        "error": {"code": -32603, "message": "thread start failed"},
+                    }
+                )
+                return
             if self._scenario == "thread_id_key":
                 result = {"threadId": thread_id, "cwd": params.get("cwd")}
             elif self._scenario == "thread_id_snake":
@@ -211,7 +219,14 @@ class FixtureServer:
             return
         if method == "thread/resume":
             thread_id = params.get("threadId")
-            if self._scenario == "thread_list_empty_refresh":
+            if self._scenario == "thread_resume_missing_thread":
+                self.send(
+                    {
+                        "id": req_id,
+                        "error": {"code": -32602, "message": "Thread not found"},
+                    }
+                )
+            elif self._scenario == "thread_list_empty_refresh":
                 self.send(
                     {
                         "id": req_id,
