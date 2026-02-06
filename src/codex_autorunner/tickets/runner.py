@@ -4,9 +4,9 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
-from ..workspace.paths import workspace_doc_path
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
@@ -1028,7 +1028,7 @@ class TicketRunner:
             ("decisions", "Decisions"),
             ("spec", "Spec"),
         ):
-            path = workspace_doc_path(self._workspace_root, key)
+            path = contextspace_doc_path(self._workspace_root, key)
             try:
                 if not path.exists():
                     continue

@@ -3,7 +3,7 @@ Unified file chat routes: AI-powered editing for tickets and workspace docs.
 
 Targets:
 - ticket:{index} -> .codex-autorunner/tickets/TICKET-###.md
-- workspace:{path} -> .codex-autorunner/workspace/{path}
+- workspace:{path} -> .codex-autorunner/contextspace/{path}
 """
 
 from __future__ import annotations
@@ -20,16 +20,16 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ....agents.registry import validate_agent_id
+from ....contextspace.paths import (
+    CONTEXTSPACE_DOC_KINDS,
+    contextspace_doc_path,
+    normalize_contextspace_rel_path,
+)
 from ....core import drafts as draft_utils
 from ....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
 from ....core.state import now_iso
 from ....core.utils import atomic_write, find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
-from ....workspace.paths import (
-    WORKSPACE_DOC_KINDS,
-    normalize_workspace_rel_path,
-    workspace_doc_path,
-)
 from .shared import SSE_HEADERS
 
 FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
@@ -136,12 +136,14 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             raise HTTPException(status_code=400, detail="invalid workspace target")
 
         # Allow legacy kind-only targets (active_context/decisions/spec)
-        if suffix_raw.lower() in WORKSPACE_DOC_KINDS:
-            path = workspace_doc_path(repo_root, suffix_raw)
+        if suffix_raw.lower() in CONTEXTSPACE_DOC_KINDS:
+            path = contextspace_doc_path(repo_root, suffix_raw)
             rel_suffix = f"{suffix_raw}.md"
         else:
             try:
-                path, rel_suffix = normalize_workspace_rel_path(repo_root, suffix_raw)
+                path, rel_suffix = normalize_contextspace_rel_path(
+                    repo_root, suffix_raw
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -156,7 +158,7 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             id=rel_suffix,
             path=path,
             rel_path=rel,
-            state_key=f"workspace_{rel_suffix.replace('/', '_')}",
+            state_key=f"contextspace_{rel_suffix.replace('/', '_')}",
         )
 
     raise HTTPException(status_code=400, detail=f"invalid target: {target}")

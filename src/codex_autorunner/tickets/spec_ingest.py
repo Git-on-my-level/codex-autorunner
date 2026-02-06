@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from ..workspace.paths import read_workspace_doc, workspace_doc_path
+from ..contextspace.paths import contextspace_doc_path, read_contextspace_doc
 from .files import list_ticket_paths, safe_relpath
 
 
@@ -34,8 +34,8 @@ def ingest_workspace_spec_to_tickets(repo_root: Path) -> SpecIngestTicketsResult
     - Writes exactly one bootstrap ticket that asks the agent to break down the spec.
     """
 
-    spec_path = workspace_doc_path(repo_root, "spec")
-    spec_text = read_workspace_doc(repo_root, "spec")
+    spec_path = contextspace_doc_path(repo_root, "spec")
+    spec_text = read_contextspace_doc(repo_root, "spec")
     if not spec_text.strip():
         raise SpecIngestTicketsError(
             f"Workspace spec is missing or empty at {safe_relpath(spec_path, repo_root)}"
