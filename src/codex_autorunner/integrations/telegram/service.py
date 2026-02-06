@@ -1118,7 +1118,10 @@ class TelegramBotService(
 
             if files:
                 for filename, data in files:
-                    dest = reply_paths.reply_dir / filename
+                    safe_name = Path(filename).name
+                    if not safe_name or safe_name in {".", ".."}:
+                        safe_name = "attachment"
+                    dest = reply_paths.reply_dir / safe_name
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     await asyncio.to_thread(dest.write_bytes, data)
 
