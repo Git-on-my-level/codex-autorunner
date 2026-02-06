@@ -320,8 +320,15 @@ def _extract_turn_context(params: dict) -> tuple[Optional[str], Optional[str]]:
 
 
 def _path_is_allowed_for_file_write(path: str) -> bool:
-    normalized = (path or "").strip()
-    if not normalized:
+    raw = (path or "").strip()
+    if not raw:
+        return False
+    # Collapse '..' segments so traversal payloads like
+    # '.codex-autorunner/workspace/../../etc/passwd' are caught.
+    import posixpath
+
+    normalized = posixpath.normpath(raw)
+    if normalized.startswith("/") or normalized.startswith(".."):
         return False
     # Canonical allowlist for all AI-assisted file edits via app-server approval:
     # - tickets: .codex-autorunner/tickets/**
