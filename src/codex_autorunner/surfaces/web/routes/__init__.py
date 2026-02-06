@@ -5,13 +5,13 @@ This package splits monolithic api_routes.py into focused modules:
 - base: Index, WebSocket terminal, and general endpoints
 - agents: Agent harness models and event streaming
 - app_server: App-server thread registry endpoints
-- workspace: Optional workspace docs (active_context/decisions/spec)
+- contextspace: Optional contextspace docs (active_context/decisions/spec)
 - flows: Flow runtime management (start/stop/resume/status/events/artifacts)
 - messages: Inbox/message wrappers over ticket_flow dispatch + reply histories
 - repos: Run control (start/stop/resume/reset)
 - sessions: Terminal session registry endpoints
 - settings: Session settings for autorunner overrides
-- file_chat: Unified file chat (tickets + workspace docs)
+- file_chat: Unified file chat (tickets + contextspace docs)
 - voice: Voice transcription and config
 - terminal_images: Terminal image uploads
 """

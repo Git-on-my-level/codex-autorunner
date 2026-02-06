@@ -176,7 +176,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         },
         "prompts": {
             # NOTE: These keys are legacy names kept for config compatibility.
-            # The workspace cutover uses tickets + workspace docs + unified file chat; only
+            # The workspace cutover uses tickets + contextspace docs + unified file chat; only
             # the "autorunner" prompt is currently used by the app-server prompt builder.
             "doc_chat": {
                 "max_chars": 12000,
@@ -482,7 +482,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "max_repos": 25,
         "max_messages": 10,
         "max_text_chars": 800,
-        # PMA durable workspace docs (hub-level)
+        # PMA durable context docs (hub-level)
         "docs_max_chars": 12_000,
         "active_context_max_lines": 200,
         "context_log_tail_lines": 120,
@@ -868,7 +868,7 @@ class PmaConfig:
     max_repos: int
     max_messages: int
     max_text_chars: int
-    # Hub-level PMA durable workspace docs
+    # Hub-level PMA durable context docs
     docs_max_chars: int = 12_000
     active_context_max_lines: int = 200
     context_log_tail_lines: int = 120

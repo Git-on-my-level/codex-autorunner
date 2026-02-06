@@ -69,7 +69,7 @@ Mapping the conceptual layers to the codebase:
 - **Per-Repo** (under hub, or standalone for CAR development):
   - `.codex-autorunner/`: Canonical runtime state.
     - `tickets/`: Required (`TICKET-###.md`).
-    - `workspace/`: Optional context (`active_context.md`, `decisions.md`, `spec.md`).
+    - `contextspace/`: Optional context (`active_context.md`, `decisions.md`, `spec.md`).
     - `config.yml`: Generated config.
     - `state.sqlite3`, logs, lock.
 - **Global Root** (cross-repo caches):
@@ -78,7 +78,7 @@ Mapping the conceptual layers to the codebase:
 
 ## Execution Loop
 1. **Select Ticket**: Active ticket target under `.codex-autorunner/tickets/`.
-2. **Build Prompt**: From ticket content, workspace docs, and bounded prior run output.
+2. **Build Prompt**: From ticket content, contextspace docs, and bounded prior run output.
 3. **Run**: Execute Codex app-server with streaming logs via OpenCode runtime.
 4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
 

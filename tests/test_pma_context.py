@@ -16,7 +16,7 @@ def _write_hub_config(hub_root: Path, data: dict) -> None:
 
 
 def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
-    """Test that format_pma_prompt with hub_root includes the workspace docs block."""
+    """Test that format_pma_prompt with hub_root includes the PMA docs block."""
     seed_hub_files(tmp_path, force=True)
 
     snapshot = {"test": "data"}
@@ -91,7 +91,7 @@ def test_format_pma_prompt_includes_context_log_tail(tmp_path: Path) -> None:
 
 
 def test_format_pma_prompt_without_hub_root(tmp_path: Path) -> None:
-    """Test that format_pma_prompt without hub_root does not include workspace docs."""
+    """Test that format_pma_prompt without hub_root does not include PMA docs."""
     snapshot = {"test": "data"}
     base_prompt = "Base prompt"
     message = "User message"

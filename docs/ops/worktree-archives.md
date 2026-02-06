@@ -3,7 +3,7 @@
 ## Overview
 When a hub-managed worktree is cleaned up, CAR snapshots the worktree's
 `.codex-autorunner/` artifacts into the base repo. This keeps tickets,
-workspace docs, runs/dispatch history, flow artifacts, and logs available
+contextspace docs, runs/dispatch history, flow artifacts, and logs available
 for later review in the Archive UI.
 
 Archives are local runtime data and are not meant to be committed. The
@@ -18,7 +18,7 @@ Snapshots are stored under the base repo:
     <worktree_repo_id>/
       <snapshot_id>/
         META.json
-        workspace/
+        contextspace/
         tickets/
         runs/
         flows/
@@ -48,7 +48,7 @@ fields such as `file_count`, `total_bytes`, `flow_run_count`, and
 Open the repo web UI and select the **Archive** tab. You can:
 - browse snapshots by worktree ID and timestamp
 - view snapshot metadata and `META.json`
-- open archived files (tickets, workspace, runs, flows, logs) in the
+- open archived files (tickets, contextspace, runs, flows, logs) in the
   archive file viewer
 
 ## Troubleshooting
@@ -69,4 +69,3 @@ Archive size depends on run history, attachments, and logs. Expect small
 snapshots for short-lived worktrees and larger ones for long-lived runs.
 If storage grows quickly, consider a retention rule (for example, keep the
 latest N snapshots per worktree or delete snapshots older than X days).
-

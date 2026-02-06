@@ -10,7 +10,7 @@ TRUNCATION_MARKER = "...[truncated]"
 
 AUTORUNNER_APP_SERVER_TEMPLATE = """You are an autonomous coding assistant operating on a git repository.
 
-Workspace docs (optional; read from disk when useful):
+Contextspace docs (optional; read from disk when useful):
 - Active context: {active_context_path}
 - Decisions: {decisions_path}
 - Spec: {spec_path}

@@ -405,7 +405,7 @@ async def test_previous_ticket_context_included_when_enabled(tmp_path: Path) -> 
     assert len(pool.requests) == 1
     assert "PREVIOUS TICKET CONTEXT (truncated to 16KB" in pool.requests[0].prompt
     assert (
-        "Cross-ticket context should flow through workspace docs"
+        "Cross-ticket context should flow through contextspace docs"
         in pool.requests[0].prompt
     )
     assert "agent: codex\ndone: true" in pool.requests[0].prompt

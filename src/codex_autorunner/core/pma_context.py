@@ -39,8 +39,8 @@ First-turn routine:
 
 Web UI map (user perspective):
 - Hub root: `/` (repos list + global notifications).
-- Repo view: `/repos/<repo_id>/` tabs: Tickets | Inbox | Workspace | Terminal | Analytics | Archive.
-  - Tickets: edit queue; Inbox: paused run dispatches; Workspace: active_context/spec/decisions.
+- Repo view: `/repos/<repo_id>/` tabs: Tickets | Inbox | Contextspace | Terminal | Analytics | Archive.
+  - Tickets: edit queue; Inbox: paused run dispatches; Contextspace: active_context/spec/decisions.
 </pma_fastpath>
 """
 
@@ -60,7 +60,7 @@ def _tail_lines(text: str, max_lines: int) -> str:
 
 
 def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
-    """Load hub-level PMA workspace docs for prompt injection.
+    """Load hub-level PMA context docs for prompt injection.
 
     These docs act as durable memory and working context for PMA.
     """

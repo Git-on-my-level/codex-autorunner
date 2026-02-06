@@ -42,7 +42,7 @@ EXCLUDE_PATTERNS = [
     "docs/archive",  # Archived docs may reference old patterns
     ".codex-autorunner/archive",  # Archived worktree snapshots are historical artifacts
     ".codex-autorunner/runs",  # Run dispatch/history are historical artifacts
-    ".codex-autorunner/workspace/tickets-backup",  # Backup tickets are historical
+    ".codex-autorunner/contextspace/tickets-backup",  # Backup tickets are historical
     ".codex-autorunner/dispatch",  # Dispatch artifacts are historical
     ".codex-autorunner/tickets",  # Ticket files describe what was done and may reference legacy code
     ".codex-autorunner/config.yml",  # Generated runtime config may reference legacy paths

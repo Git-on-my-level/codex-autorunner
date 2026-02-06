@@ -124,8 +124,8 @@ Tickets are the control plane for CAR. They are markdown files with frontmatter 
 
 Agents can also create new tickets to break down complex work.
 
-### Workspace Documents
-These are shared context files in each repo's `.codex-autorunner/workspace/`:
+### Contextspace Documents
+These are shared context files in each repo's `.codex-autorunner/contextspace/`:
 - `active_context.md` — Short-lived context for the current effort
 - `decisions.md` — Durable architectural/product decisions
 - `spec.md` — Requirements specification
@@ -134,7 +134,7 @@ Both you and the agents can read and write these. They're accessible from the we
 
 ### Hub vs Repo
 - **Hub**: The central management layer. Contains a manifest of repositories and provides the web UI, terminal, and coordination features.
-- **Repo**: An individual repository being managed. Each repo has its own `.codex-autorunner/` directory with tickets, workspace docs, and state.
+- **Repo**: An individual repository being managed. Each repo has its own `.codex-autorunner/` directory with tickets, contextspace docs, and state.
 
 ### Agents
 CAR currently supports:
@@ -144,7 +144,7 @@ CAR currently supports:
 CAR passes tickets to agents along with relevant context, and agents execute the work.
 
 ### File System as Truth
-CAR's philosophy is that the file system is the source of truth. Tickets, workspace docs, and all state live on disk. This makes everything inspectable, versionable, and debuggable.
+CAR's philosophy is that the file system is the source of truth. Tickets, contextspace docs, and all state live on disk. This makes everything inspectable, versionable, and debuggable.
 
 ---
 

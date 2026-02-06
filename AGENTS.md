@@ -13,11 +13,11 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - Frontend JS is generated from TypeScript: edit `static_src/*.ts`, not `static/*.js` (run `pnpm run build` after).
 - Runtime/config/state live under `.codex-autorunner/` (not at repo root):
   - Primary work surface: `.codex-autorunner/tickets/TICKET-###.md` (required).
-  - Optional workspace docs (auto-created on write; missing is OK):
-    - `.codex-autorunner/workspace/active_context.md`
-    - `.codex-autorunner/workspace/decisions.md`
-    - `.codex-autorunner/workspace/spec.md`
-  - When asked to update tickets/workspace docs, you MUST update the copies under `.codex-autorunner/`. Do not create new copies elsewhere.
+  - Optional contextspace docs (auto-created on write; missing is OK):
+    - `.codex-autorunner/contextspace/active_context.md`
+    - `.codex-autorunner/contextspace/decisions.md`
+    - `.codex-autorunner/contextspace/spec.md`
+  - When asked to update tickets/contextspace docs, you MUST update the copies under `.codex-autorunner/`. Do not create new copies elsewhere.
   - Document intent (canonical):
     - Tickets: ordered units of work and the main execution surface.
     - active_context: short-lived context for the current effort.

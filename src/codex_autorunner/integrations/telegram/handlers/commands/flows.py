@@ -1227,7 +1227,7 @@ You are the first ticket in a new ticket_flow run.
 - Read `.codex-autorunner/ISSUE.md`. If it is missing:
   - If GitHub is available, ask the user for the issue/PR URL or number and create `.codex-autorunner/ISSUE.md` from it.
   - If GitHub is not available, write `DISPATCH.md` with `mode: pause` asking the user to describe the work (or share a doc). After the reply, create `.codex-autorunner/ISSUE.md` with their input.
-- If helpful, create or update workspace docs under `.codex-autorunner/workspace/`:
+- If helpful, create or update contextspace docs under `.codex-autorunner/contextspace/`:
   - `active_context.md` for current context and links
   - `decisions.md` for decisions/rationale
   - `spec.md` for requirements and constraints

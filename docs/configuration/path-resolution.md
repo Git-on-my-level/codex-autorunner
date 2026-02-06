@@ -18,16 +18,16 @@ All config paths without leading `/` or `~` are interpreted as **relative to the
 
 ```yaml
 docs:
-  spec: .codex-autorunner/workspace/spec.md
-  active_context: .codex-autorunner/workspace/active_context.md
+  spec: .codex-autorunner/contextspace/spec.md
+  active_context: .codex-autorunner/contextspace/active_context.md
 
 log:
   path: .codex-autorunner/codex-autorunner.log
 ```
 
 If repo root is `/repo`, these resolve to:
-- `docs.spec` → `/repo/.codex-autorunner/workspace/spec.md`
-- `docs.active_context` → `/repo/.codex-autorunner/workspace/active_context.md`
+- `docs.spec` → `/repo/.codex-autorunner/contextspace/spec.md`
+- `docs.active_context` → `/repo/.codex-autorunner/contextspace/active_context.md`
 - `log.path` → `/repo/.codex-autorunner/codex-autorunner.log`
 
 
@@ -99,7 +99,7 @@ docs:
 
 ```yaml
 docs:
-  active_context: .codex-autorunner/workspace/active_context.md  # Relative to repo root
+  active_context: .codex-autorunner/contextspace/active_context.md  # Relative to repo root
 ```
 
 ### Empty Paths
@@ -124,9 +124,9 @@ All `docs.*` paths must be **relative to repo root** (no `~` or absolute paths a
 
 ```yaml
 docs:
-  active_context: .codex-autorunner/workspace/active_context.md
-  decisions: .codex-autorunner/workspace/decisions.md
-  spec: .codex-autorunner/workspace/spec.md
+  active_context: .codex-autorunner/contextspace/active_context.md
+  decisions: .codex-autorunner/contextspace/decisions.md
+  spec: .codex-autorunner/contextspace/spec.md
 ```
 
 ### log and server_log

@@ -193,7 +193,7 @@ def test_workspace_folder_crud_and_pinned_guard(hub_env, client, repo: Path):
 
 @pytest.mark.integration
 def test_file_chat_workspace_targets(hub_env, client, repo: Path):
-    # Setup workspace docs
+    # Setup contextspace docs
     cs_dir = repo / ".codex-autorunner" / "contextspace"
     cs_dir.mkdir(parents=True, exist_ok=True)
     (cs_dir / "active_context.md").write_text("Active Context Content")
@@ -260,7 +260,7 @@ def test_ticket_runner_workspace_doc_injection(hub_env, repo: Path):
     from codex_autorunner.tickets.models import TicketRunConfig
     from codex_autorunner.tickets.runner import TicketRunner
 
-    # Setup workspace docs
+    # Setup contextspace docs
     cs_dir = repo / ".codex-autorunner" / "contextspace"
     cs_dir.mkdir(parents=True, exist_ok=True)
     cs_dir.joinpath("active_context.md").write_text("Active Context Content")

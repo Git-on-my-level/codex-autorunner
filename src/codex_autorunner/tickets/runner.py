@@ -1034,7 +1034,7 @@ class TicketRunner:
                     continue
                 content = path.read_text(encoding="utf-8")
             except OSError as exc:
-                _logger.debug("workspace doc read failed for %s: %s", path, exc)
+                _logger.debug("contextspace doc read failed for %s: %s", path, exc)
                 continue
             snippet = (content or "").strip()
             if not snippet:
@@ -1048,7 +1048,7 @@ class TicketRunner:
             )
 
         if workspace_docs:
-            blocks = ["Workspace docs (truncated; skip if not relevant):"]
+            blocks = ["Contextspace docs (truncated; skip if not relevant):"]
             for label, rel, body in workspace_docs:
                 blocks.append(f"{label} [{rel}]:\n{body}")
             workspace_block = "\n\n".join(blocks)
@@ -1057,7 +1057,7 @@ class TicketRunner:
         if previous_ticket_content:
             prev_ticket_block = (
                 "PREVIOUS TICKET CONTEXT (truncated to 16KB; for reference only; do not edit):\n"
-                "Cross-ticket context should flow through workspace docs (active_context.md, decisions.md, spec.md) "
+                "Cross-ticket context should flow through contextspace docs (active_context.md, decisions.md, spec.md) "
                 "rather than implicit previous ticket content. This is included only for legacy compatibility.\n"
                 + previous_ticket_content
             )

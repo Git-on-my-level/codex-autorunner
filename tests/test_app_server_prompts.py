@@ -29,7 +29,7 @@ def test_autorunner_prompt_limits_and_instructions(repo: Path) -> None:
         prev_run_summary=prev,
     )
     assert len(prompt) <= limits.max_chars
-    assert "workspace docs" in prompt or "Workspace docs" in prompt
+    assert "contextspace docs" in prompt or "Contextspace docs" in prompt
     assert "Do NOT write files" not in prompt
     assert TRUNCATION_MARKER in prompt
     assert ".codex-autorunner/contextspace/spec.md" in prompt
