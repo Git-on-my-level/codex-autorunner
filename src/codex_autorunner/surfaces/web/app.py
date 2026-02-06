@@ -212,6 +212,12 @@ def _resolve_workspace_and_runs(
         workspace_root = (repo_root / workspace_root).resolve()
     else:
         workspace_root = workspace_root.resolve()
+    resolved_repo = repo_root.resolve()
+    if not (
+        workspace_root == resolved_repo
+        or str(workspace_root).startswith(str(resolved_repo) + os.sep)
+    ):
+        raise ValueError(f"workspace_root escapes repo boundary: {workspace_root}")
     runs_raw = record_input.get("runs_dir") or ".codex-autorunner/runs"
     runs_dir = Path(runs_raw)
     if not runs_dir.is_absolute():
@@ -312,8 +318,15 @@ def _extract_turn_context(params: dict) -> tuple[Optional[str], Optional[str]]:
 
 
 def _path_is_allowed_for_file_write(path: str) -> bool:
-    normalized = (path or "").strip()
-    if not normalized:
+    raw = (path or "").strip()
+    if not raw:
+        return False
+    # Collapse '..' segments so traversal payloads like
+    # '.codex-autorunner/workspace/../../etc/passwd' are caught.
+    import posixpath
+
+    normalized = posixpath.normpath(raw)
+    if normalized.startswith("/") or normalized.startswith(".."):
         return False
     # Canonical allowlist for all AI-assisted file edits via app-server approval:
     # - tickets: .codex-autorunner/tickets/**
