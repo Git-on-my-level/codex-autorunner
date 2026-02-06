@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import shlex
@@ -6,8 +7,9 @@ import sys
 import threading
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -53,6 +55,7 @@ from ...core.usage import (
     parse_iso_datetime,
 )
 from ...core.utils import (
+    atomic_write,
     build_opencode_supervisor,
     reset_repo_root_context,
     set_repo_root_context,
@@ -71,6 +74,7 @@ from ...manifest import load_manifest
 from ...tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
 from ...tickets.models import Dispatch
 from ...tickets.outbox import parse_dispatch, resolve_outbox_paths
+from ...tickets.replies import resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
 from .middleware import (
@@ -156,6 +160,86 @@ class ServerOverrides:
     allowed_hosts: Optional[list[str]] = None
     allowed_origins: Optional[list[str]] = None
     auth_token_env: Optional[str] = None
+
+
+_HUB_INBOX_DISMISSALS_FILENAME = "hub_inbox_dismissals.json"
+
+
+def _hub_inbox_dismissals_path(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / _HUB_INBOX_DISMISSALS_FILENAME
+
+
+def _dismissal_key(run_id: str, seq: int) -> str:
+    return f"{run_id}:{seq}"
+
+
+def _load_hub_inbox_dismissals(repo_root: Path) -> dict[str, dict[str, Any]]:
+    path = _hub_inbox_dismissals_path(repo_root)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for key, value in items.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        out[key] = dict(value)
+    return out
+
+
+def _save_hub_inbox_dismissals(
+    repo_root: Path, items: dict[str, dict[str, Any]]
+) -> None:
+    path = _hub_inbox_dismissals_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 1, "items": items}
+    atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _resolve_workspace_and_runs(
+    record_input: dict[str, Any], repo_root: Path
+) -> tuple[Path, Path]:
+    workspace_raw = record_input.get("workspace_root")
+    workspace_root = Path(workspace_raw) if workspace_raw else repo_root
+    if not workspace_root.is_absolute():
+        workspace_root = (repo_root / workspace_root).resolve()
+    else:
+        workspace_root = workspace_root.resolve()
+    runs_raw = record_input.get("runs_dir") or ".codex-autorunner/runs"
+    runs_dir = Path(runs_raw)
+    if not runs_dir.is_absolute():
+        runs_dir = (workspace_root / runs_dir).resolve()
+    return workspace_root, runs_dir
+
+
+def _latest_reply_history_seq(
+    repo_root: Path, run_id: str, record_input: dict[str, Any]
+) -> int:
+    workspace_root, runs_dir = _resolve_workspace_and_runs(record_input, repo_root)
+    reply_paths = resolve_reply_paths(
+        workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+    )
+    history_dir = reply_paths.reply_history_dir
+    if not history_dir.exists() or not history_dir.is_dir():
+        return 0
+    latest = 0
+    try:
+        for child in history_dir.iterdir():
+            if not child.is_dir():
+                continue
+            name = child.name
+            if len(name) == 4 and name.isdigit():
+                latest = max(latest, int(name))
+    except OSError:
+        return latest
+    return latest
 
 
 def _app_server_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]:
@@ -1777,6 +1861,7 @@ def create_hub_app(
             for snap in snapshots:
                 if not (snap.initialized and snap.exists_on_disk):
                     continue
+                dismissals = _load_hub_inbox_dismissals(snap.path)
                 repo_root = snap.path
                 db_path = repo_root / ".codex-autorunner" / "flows.db"
                 if not db_path.exists():
@@ -1792,10 +1877,23 @@ def create_hub_app(
                 if not paused:
                     continue
                 for record in paused:
-                    latest = _latest_dispatch(
-                        repo_root, str(record.id), dict(record.input_data or {})
-                    )
+                    record_input = dict(record.input_data or {})
+                    latest = _latest_dispatch(repo_root, str(record.id), record_input)
                     if not latest or not latest.get("dispatch"):
+                        continue
+                    seq = int(latest.get("seq") or 0)
+                    if seq <= 0:
+                        continue
+                    if _dismissal_key(str(record.id), seq) in dismissals:
+                        continue
+                    # Reconcile stale inbox items: if reply history already
+                    # reached this dispatch seq, treat it as resolved.
+                    if (
+                        _latest_reply_history_seq(
+                            repo_root, str(record.id), record_input
+                        )
+                        >= seq
+                    ):
                         continue
                     messages.append(
                         {
@@ -1818,6 +1916,50 @@ def create_hub_app(
 
         items = await asyncio.to_thread(_gather)
         return {"items": items}
+
+    @app.post("/hub/messages/dismiss")
+    async def dismiss_hub_message(payload: dict[str, Any]):
+        repo_id = str(payload.get("repo_id") or "").strip()
+        run_id = str(payload.get("run_id") or "").strip()
+        seq_raw = payload.get("seq")
+        reason_raw = payload.get("reason")
+        reason = str(reason_raw).strip() if isinstance(reason_raw, str) else ""
+        if not repo_id:
+            raise HTTPException(status_code=400, detail="Missing repo_id")
+        if not run_id:
+            raise HTTPException(status_code=400, detail="Missing run_id")
+        try:
+            seq = int(seq_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid seq") from None
+        if seq <= 0:
+            raise HTTPException(status_code=400, detail="Invalid seq")
+
+        snapshots = await asyncio.to_thread(context.supervisor.list_repos)
+        snapshot = next((s for s in snapshots if s.id == repo_id), None)
+        if snapshot is None or not snapshot.exists_on_disk:
+            raise HTTPException(status_code=404, detail="Repo not found")
+
+        dismissed_at = datetime.now(timezone.utc).isoformat()
+        items = _load_hub_inbox_dismissals(snapshot.path)
+        items[_dismissal_key(run_id, seq)] = {
+            "repo_id": repo_id,
+            "run_id": run_id,
+            "seq": seq,
+            "reason": reason or None,
+            "dismissed_at": dismissed_at,
+        }
+        _save_hub_inbox_dismissals(snapshot.path, items)
+        return {
+            "status": "ok",
+            "dismissed": {
+                "repo_id": repo_id,
+                "run_id": run_id,
+                "seq": seq,
+                "reason": reason or None,
+                "dismissed_at": dismissed_at,
+            },
+        }
 
     @app.get("/hub/repos")
     async def list_repos():
