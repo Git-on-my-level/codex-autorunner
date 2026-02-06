@@ -2019,9 +2019,7 @@ def _compose_agent_response(
     if isinstance(final_message, str) and final_message.strip():
         return final_message.strip()
     cleaned = [
-        msg.strip()
-        for msg in (messages or [])
-        if isinstance(msg, str) and msg.strip()
+        msg.strip() for msg in (messages or []) if isinstance(msg, str) and msg.strip()
     ]
     if not cleaned:
         cleaned_errors = [
