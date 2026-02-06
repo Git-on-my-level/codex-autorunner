@@ -19,6 +19,7 @@ class _DummyTurnHandle:
         result = TurnResult(
             turn_id="t-1",
             status="ok",
+            final_message="ok",
             agent_messages=["ok"],
             errors=[],
             raw_events=[],
@@ -123,3 +124,28 @@ async def test_agent_pool_uses_yolo_policy_for_ticket_flow(monkeypatch, tmp_path
     )
 
     assert supervisor.client.thread_start_calls[0]["approvalPolicy"] == "never"
+
+
+def test_parse_app_server_output_policy_default(tmp_path: Path) -> None:
+    app_server_cfg = _parse_app_server_config(
+        None, tmp_path, DEFAULT_REPO_CONFIG["app_server"]
+    )
+    assert app_server_cfg.output.policy == "final_only"
+
+
+def test_parse_app_server_output_policy_override(tmp_path: Path) -> None:
+    app_server_cfg = _parse_app_server_config(
+        {"output": {"policy": "all_agent_messages"}},
+        tmp_path,
+        DEFAULT_REPO_CONFIG["app_server"],
+    )
+    assert app_server_cfg.output.policy == "all_agent_messages"
+
+
+def test_parse_app_server_output_policy_invalid_falls_back(tmp_path: Path) -> None:
+    app_server_cfg = _parse_app_server_config(
+        {"output": {"policy": "invalid"}},
+        tmp_path,
+        DEFAULT_REPO_CONFIG["app_server"],
+    )
+    assert app_server_cfg.output.policy == "final_only"

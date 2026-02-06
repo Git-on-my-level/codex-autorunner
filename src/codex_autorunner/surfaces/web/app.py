@@ -378,6 +378,7 @@ def _build_app_server_supervisor(
         restart_backoff_initial_seconds=config.client.restart_backoff_initial_seconds,
         restart_backoff_max_seconds=config.client.restart_backoff_max_seconds,
         restart_backoff_jitter_ratio=config.client.restart_backoff_jitter_ratio,
+        output_policy=config.output.policy,
         notification_handler=notification_handler,
         approval_handler=approval_handler,
     )

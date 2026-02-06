@@ -106,6 +106,7 @@ class AgentBackendFactory:
                     restart_backoff_initial_seconds=self._config.app_server.client.restart_backoff_initial_seconds,
                     restart_backoff_max_seconds=self._config.app_server.client.restart_backoff_max_seconds,
                     restart_backoff_jitter_ratio=self._config.app_server.client.restart_backoff_jitter_ratio,
+                    output_policy=self._config.app_server.output.policy,
                     notification_handler=notification_handler,
                     logger=self._logger,
                 )
@@ -267,6 +268,7 @@ def build_app_server_supervisor_factory(
             restart_backoff_initial_seconds=config.app_server.client.restart_backoff_initial_seconds,
             restart_backoff_max_seconds=config.app_server.client.restart_backoff_max_seconds,
             restart_backoff_jitter_ratio=config.app_server.client.restart_backoff_jitter_ratio,
+            output_policy=config.app_server.output.policy,
         )
 
     return factory

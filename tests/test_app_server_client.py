@@ -52,6 +52,7 @@ async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
         handle = await client.turn_start(thread["id"], "hi")
         result = await handle.wait()
         assert result.status == "completed"
+        assert result.final_message == "fixture reply"
         assert result.agent_messages == ["fixture reply"]
     finally:
         await client.close()
@@ -65,6 +66,7 @@ async def test_turn_error_notification(tmp_path: Path) -> None:
         handle = await client.turn_start(thread["id"], "hi")
         result = await handle.wait()
         assert result.status == "failed"
+        assert result.final_message == ""
         assert result.agent_messages == []
         assert result.errors == ["Auth required"]
     finally:
@@ -90,7 +92,62 @@ async def test_review_message_dedupes_review_text(tmp_path: Path) -> None:
         handle = await client.review_start(thread["id"], target={"type": "custom"})
         result = await handle.wait()
         assert result.status == "completed"
+        assert result.final_message == "fixture reply"
         assert result.agent_messages == ["fixture reply"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_turn_result_defaults_to_last_agent_message(tmp_path: Path) -> None:
+    client = CodexAppServerClient(
+        fixture_command("multi_agent_messages"),
+        cwd=tmp_path,
+    )
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        handle = await client.turn_start(thread["id"], "hi")
+        result = await handle.wait()
+        assert result.status == "completed"
+        assert result.agent_messages == ["draft reply", "final reply"]
+        assert result.final_message == "final reply"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_turn_result_can_include_all_agent_messages(tmp_path: Path) -> None:
+    client = CodexAppServerClient(
+        fixture_command("multi_agent_messages"),
+        cwd=tmp_path,
+        output_policy="all_agent_messages",
+    )
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        handle = await client.turn_start(thread["id"], "hi")
+        result = await handle.wait()
+        assert result.status == "completed"
+        assert result.agent_messages == ["draft reply", "final reply"]
+        assert result.final_message == "draft reply\n\nfinal reply"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_turn_result_accepts_review_exit_as_final_candidate(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("review_exit_only"),
+        cwd=tmp_path,
+    )
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        handle = await client.turn_start(thread["id"], "hi")
+        result = await handle.wait()
+        assert result.status == "completed"
+        assert result.agent_messages == ["review verdict"]
+        assert result.final_message == "review verdict"
     finally:
         await client.close()
 
@@ -206,6 +263,7 @@ async def test_turn_completed_via_resume_when_completion_missing(
         handle = await client.turn_start(thread["id"], "hi")
         result = await handle.wait(timeout=5)
         assert result.status == "completed"
+        assert result.final_message == "recovered reply"
         assert result.agent_messages == ["recovered reply"]
     finally:
         await client.close()

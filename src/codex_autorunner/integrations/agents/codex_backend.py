@@ -47,6 +47,7 @@ class CodexAppServerBackend(AgentBackend):
         restart_backoff_initial_seconds: Optional[float] = None,
         restart_backoff_max_seconds: Optional[float] = None,
         restart_backoff_jitter_ratio: Optional[float] = None,
+        output_policy: str = "final_only",
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
     ):
@@ -71,6 +72,7 @@ class CodexAppServerBackend(AgentBackend):
         self._restart_backoff_initial_seconds = restart_backoff_initial_seconds
         self._restart_backoff_max_seconds = restart_backoff_max_seconds
         self._restart_backoff_jitter_ratio = restart_backoff_jitter_ratio
+        self._output_policy = output_policy
         self._notification_handler = notification_handler
         self._logger = logger or _logger
 
@@ -102,6 +104,7 @@ class CodexAppServerBackend(AgentBackend):
                 restart_backoff_initial_seconds=self._restart_backoff_initial_seconds,
                 restart_backoff_max_seconds=self._restart_backoff_max_seconds,
                 restart_backoff_jitter_ratio=self._restart_backoff_jitter_ratio,
+                output_policy=self._output_policy,
                 logger=self._logger,
             )
             await self._client.start()
@@ -201,16 +204,18 @@ class CodexAppServerBackend(AgentBackend):
         yield AgentEvent.stream_delta(content=message, delta_type="user_message")
 
         result = await handle.wait(timeout=self._turn_timeout_seconds)
-
-        for msg in result.agent_messages:
-            yield AgentEvent.stream_delta(content=msg, delta_type="assistant_message")
+        final_text = str(getattr(result, "final_message", "") or "")
+        if not final_text.strip():
+            final_text = "\n\n".join(
+                msg.strip()
+                for msg in getattr(result, "agent_messages", [])
+                if isinstance(msg, str) and msg.strip()
+            )
 
         for event_data in result.raw_events:
             yield self._parse_raw_event(event_data)
 
-        yield AgentEvent.message_complete(
-            final_message="\n".join(result.agent_messages)
-        )
+        yield AgentEvent.message_complete(final_message=final_text)
 
     async def run_turn_events(
         self, session_id: str, message: str
@@ -283,11 +288,12 @@ class CodexAppServerBackend(AgentBackend):
                     if get_task in pending_set:
                         get_task.cancel()
                     result = wait_task.result()
-                    for msg in result.agent_messages:
-                        yield OutputDelta(
-                            timestamp=now_iso(),
-                            content=msg,
-                            delta_type="assistant_message",
+                    final_text = str(getattr(result, "final_message", "") or "")
+                    if not final_text.strip():
+                        final_text = "\n\n".join(
+                            msg.strip()
+                            for msg in getattr(result, "agent_messages", [])
+                            if isinstance(msg, str) and msg.strip()
                         )
                     # raw_events already contain the same notifications we streamed
                     # through _event_queue; skipping here avoids double-emitting.
@@ -297,7 +303,7 @@ class CodexAppServerBackend(AgentBackend):
                             yield extra
                     yield Completed(
                         timestamp=now_iso(),
-                        final_message="\n".join(result.agent_messages),
+                        final_message=final_text,
                     )
                     break
 

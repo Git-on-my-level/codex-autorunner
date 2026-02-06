@@ -174,6 +174,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "restart_backoff_max_seconds": 30.0,
             "restart_backoff_jitter_ratio": 0.1,
         },
+        "output": {
+            "policy": "final_only",
+        },
         "prompts": {
             # NOTE: These keys are legacy names kept for config compatibility.
             # The workspace cutover uses tickets + workspace docs + unified file chat; only
@@ -837,6 +840,11 @@ class AppServerClientConfig:
 
 
 @dataclasses.dataclass
+class AppServerOutputConfig:
+    policy: str
+
+
+@dataclasses.dataclass
 class AppServerConfig:
     command: List[str]
     state_root: Path
@@ -849,6 +857,7 @@ class AppServerConfig:
     turn_stall_recovery_min_interval_seconds: Optional[float]
     request_timeout: Optional[float]
     client: AppServerClientConfig
+    output: AppServerOutputConfig
     prompts: AppServerPromptsConfig
 
 
@@ -1231,6 +1240,24 @@ def _parse_app_server_prompts_config(
     )
 
 
+_APP_SERVER_OUTPUT_POLICIES = {"final_only", "all_agent_messages"}
+
+
+def _parse_app_server_output_config(
+    cfg: Optional[Dict[str, Any]],
+    defaults: Optional[Dict[str, Any]],
+) -> AppServerOutputConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    policy_raw = cfg.get("policy", defaults.get("policy"))
+    policy = str(policy_raw).strip().lower() if policy_raw is not None else ""
+    if policy not in _APP_SERVER_OUTPUT_POLICIES:
+        policy = str(defaults.get("policy") or "final_only").strip().lower()
+    if policy not in _APP_SERVER_OUTPUT_POLICIES:
+        policy = "final_only"
+    return AppServerOutputConfig(policy=policy)
+
+
 def _parse_app_server_config(
     cfg: Optional[Dict[str, Any]],
     root: Path,
@@ -1329,6 +1356,9 @@ def _parse_app_server_config(
             value = float(client_defaults.get(key) or 0.0)
         return value
 
+    output_defaults = defaults.get("output")
+    output_cfg_raw = cfg.get("output")
+    output = _parse_app_server_output_config(output_cfg_raw, output_defaults)
     prompt_defaults = defaults.get("prompts")
     prompts = _parse_app_server_prompts_config(cfg.get("prompts"), prompt_defaults)
     return AppServerConfig(
@@ -1354,6 +1384,7 @@ def _parse_app_server_config(
                 "restart_backoff_jitter_ratio", allow_zero=True
             ),
         ),
+        output=output,
         prompts=prompts,
     )
 

@@ -155,6 +155,7 @@ class AgentPool:
             restart_backoff_initial_seconds=app_server_cfg.client.restart_backoff_initial_seconds,
             restart_backoff_max_seconds=app_server_cfg.client.restart_backoff_max_seconds,
             restart_backoff_jitter_ratio=app_server_cfg.client.restart_backoff_jitter_ratio,
+            output_policy=app_server_cfg.output.policy,
             default_approval_decision=default_approval_decision,
         )
         return self._app_server_supervisor
@@ -275,7 +276,11 @@ class AgentPool:
         finally:
             if req.emit_event is not None:
                 self._active_emitters.pop(turn_handle.turn_id, None)
-        text = "\n\n".join(result.agent_messages or []).strip()
+        final_message = str(getattr(result, "final_message", "") or "")
+        if final_message.strip():
+            text = final_message.strip()
+        else:
+            text = "\n\n".join(result.agent_messages or []).strip()
         return AgentTurnResult(
             agent_id=req.agent_id,
             conversation_id=thread_id,

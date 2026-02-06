@@ -2010,12 +2010,19 @@ def _extract_first_bold_span(text: str) -> Optional[str]:
 
 
 def _compose_agent_response(
-    messages: list[str],
+    final_message: Optional[str] = None,
     *,
+    messages: Optional[list[str]] = None,
     errors: Optional[list[str]] = None,
     status: Optional[str] = None,
 ) -> str:
-    cleaned = [msg.strip() for msg in messages if isinstance(msg, str) and msg.strip()]
+    if isinstance(final_message, str) and final_message.strip():
+        return final_message.strip()
+    cleaned = [
+        msg.strip()
+        for msg in (messages or [])
+        if isinstance(msg, str) and msg.strip()
+    ]
     if not cleaned:
         cleaned_errors = [
             err.strip()

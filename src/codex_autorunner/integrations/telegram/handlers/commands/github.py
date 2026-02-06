@@ -494,7 +494,10 @@ class GitHubCommands(SharedHelpers):
     ) -> None:
         """Handle successful Codex review completion."""
         response = _compose_agent_response(
-            result.agent_messages, errors=result.errors, status=result.status
+            getattr(result, "final_message", None),
+            messages=result.agent_messages,
+            errors=result.errors,
+            status=result.status,
         )
         if thread_id and result.agent_messages:
             assistant_preview = _preview_from_text(

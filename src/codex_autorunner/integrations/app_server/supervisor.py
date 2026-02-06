@@ -47,6 +47,7 @@ class WorkspaceAppServerSupervisor:
         restart_backoff_initial_seconds: Optional[float] = None,
         restart_backoff_max_seconds: Optional[float] = None,
         restart_backoff_jitter_ratio: Optional[float] = None,
+        output_policy: str = "final_only",
         default_approval_decision: str = "cancel",
         max_handles: Optional[int] = None,
         idle_ttl_seconds: Optional[float] = None,
@@ -78,6 +79,7 @@ class WorkspaceAppServerSupervisor:
         self._restart_backoff_initial_seconds = restart_backoff_initial_seconds
         self._restart_backoff_max_seconds = restart_backoff_max_seconds
         self._restart_backoff_jitter_ratio = restart_backoff_jitter_ratio
+        self._output_policy = output_policy
         self._default_approval_decision = default_approval_decision
         self._max_handles = max_handles
         self._idle_ttl_seconds = idle_ttl_seconds
@@ -170,6 +172,7 @@ class WorkspaceAppServerSupervisor:
                 restart_backoff_initial_seconds=self._restart_backoff_initial_seconds,
                 restart_backoff_max_seconds=self._restart_backoff_max_seconds,
                 restart_backoff_jitter_ratio=self._restart_backoff_jitter_ratio,
+                output_policy=self._output_policy,
                 notification_handler=self._notification_handler,
                 logger=self._logger,
             )

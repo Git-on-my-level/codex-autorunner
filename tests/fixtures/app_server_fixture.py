@@ -318,6 +318,52 @@ class FixtureServer:
                     }
                 )
                 return
+            if self._scenario == "multi_agent_messages":
+                self.send(
+                    {
+                        "method": "item/completed",
+                        "params": {
+                            "turnId": turn_id,
+                            "item": {"type": "agentMessage", "text": "draft reply"},
+                        },
+                    }
+                )
+                self.send(
+                    {
+                        "method": "item/completed",
+                        "params": {
+                            "turnId": turn_id,
+                            "item": {"type": "agentMessage", "text": "final reply"},
+                        },
+                    }
+                )
+                self.send(
+                    {
+                        "method": "turn/completed",
+                        "params": {"turnId": turn_id, "status": "completed"},
+                    }
+                )
+                return
+            if self._scenario == "review_exit_only":
+                self.send(
+                    {
+                        "method": "item/completed",
+                        "params": {
+                            "turnId": turn_id,
+                            "item": {
+                                "type": "review",
+                                "exitedReviewMode": {"review": "review verdict"},
+                            },
+                        },
+                    }
+                )
+                self.send(
+                    {
+                        "method": "turn/completed",
+                        "params": {"turnId": turn_id, "status": "completed"},
+                    }
+                )
+                return
             self._send_turn_completed(turn_id)
             return
         if method == "review/start":

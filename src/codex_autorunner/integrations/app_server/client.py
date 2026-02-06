@@ -62,6 +62,8 @@ _TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
 _MAX_TURN_RAW_EVENTS = 200
 _INVALID_JSON_PREVIEW_BYTES = 200
+_DEFAULT_OUTPUT_POLICY = "final_only"
+_OUTPUT_POLICIES = {"final_only", "all_agent_messages"}
 
 # Track live clients so tests/cleanup can cancel any background restart tasks.
 _CLIENT_INSTANCES: weakref.WeakSet = weakref.WeakSet()
@@ -108,6 +110,7 @@ class CodexAppServerProtocolError(CodexAppServerError, PermanentError):
 class TurnResult:
     turn_id: str
     status: Optional[str]
+    final_message: str
     agent_messages: list[str]
     errors: list[str]
     raw_events: list[Dict[str, Any]]
@@ -163,6 +166,7 @@ class CodexAppServerClient:
         restart_backoff_initial_seconds: Optional[float] = None,
         restart_backoff_max_seconds: Optional[float] = None,
         restart_backoff_jitter_ratio: Optional[float] = None,
+        output_policy: str = _DEFAULT_OUTPUT_POLICY,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
@@ -217,6 +221,7 @@ class CodexAppServerClient:
             and restart_backoff_jitter_ratio >= 0
             else _RESTART_BACKOFF_JITTER_RATIO
         )
+        self._output_policy = _normalize_output_policy(output_policy)
 
         self._process: Optional[asyncio.subprocess.Process] = None
         self._reader_task: Optional[asyncio.Task] = None
@@ -558,6 +563,9 @@ class CodexAppServerClient:
             state.future.set_result(
                 TurnResult(
                     turn_id=state.turn_id,
+                    final_message=_final_message_for_result(
+                        state, policy=self._output_policy
+                    ),
                     agent_messages=_agent_messages_for_result(state),
                     errors=list(state.errors),
                     raw_events=list(state.raw_events),
@@ -1269,6 +1277,9 @@ class CodexAppServerClient:
                 TurnResult(
                     turn_id=target.turn_id,
                     status=target.status,
+                    final_message=_final_message_for_result(
+                        target, policy=self._output_policy
+                    ),
                     agent_messages=_agent_messages_for_result(target),
                     errors=list(target.errors),
                     raw_events=list(target.raw_events),
@@ -1366,6 +1377,9 @@ class CodexAppServerClient:
                 TurnResult(
                     turn_id=state.turn_id,
                     status=state.status,
+                    final_message=_final_message_for_result(
+                        state, policy=self._output_policy
+                    ),
                     agent_messages=_agent_messages_for_result(state),
                     errors=list(state.errors),
                     raw_events=list(state.raw_events),
@@ -1699,6 +1713,23 @@ def _agent_messages_for_result(state: _TurnState) -> list[str]:
     if state.agent_messages:
         return list(state.agent_messages)
     return _agent_message_deltas_as_list(state.agent_message_deltas)
+
+
+def _normalize_output_policy(policy: Optional[str]) -> str:
+    candidate = str(policy or "").strip().lower()
+    if candidate in _OUTPUT_POLICIES:
+        return candidate
+    return _DEFAULT_OUTPUT_POLICY
+
+
+def _final_message_for_result(state: _TurnState, *, policy: str) -> str:
+    messages = _agent_messages_for_result(state)
+    cleaned = [msg.strip() for msg in messages if isinstance(msg, str) and msg.strip()]
+    if not cleaned:
+        return ""
+    if policy == "all_agent_messages":
+        return "\n\n".join(cleaned)
+    return cleaned[-1]
 
 
 def _extract_status_value(value: Any) -> Optional[str]:
