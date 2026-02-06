@@ -214,6 +214,12 @@ def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecor
     return None
 
 
+def _latest_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
+    if not records:
+        return None
+    return records[0]
+
+
 def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
     try:
         return str(uuid.UUID(str(run_id)))
@@ -784,18 +790,19 @@ You are the first ticket in a new ticket_flow run.
     async def list_ticket_files():
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        # Compute cumulative diff stats per ticket for the active/paused run.
+        # Compute cumulative diff stats per ticket for the latest ticket_flow run.
+        # This keeps ticket-level +/- counters visible after a run reaches COMPLETED.
         runs = _safe_list_flow_runs(
             repo_root, flow_type="ticket_flow", recover_stuck=True
         )
-        active_run = _active_or_paused_run(runs)
+        latest_run = _latest_run(runs)
         diff_by_ticket: dict[str, dict[str, int]] = {}
-        if active_run:
+        if latest_run:
             store = _require_flow_store(repo_root)
             if store is not None:
                 try:
                     events = store.get_events_by_type(
-                        active_run.id, FlowEventType.DIFF_UPDATED
+                        latest_run.id, FlowEventType.DIFF_UPDATED
                     )
                 except Exception:
                     events = []
