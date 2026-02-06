@@ -212,6 +212,14 @@ def _resolve_workspace_and_runs(
         workspace_root = (repo_root / workspace_root).resolve()
     else:
         workspace_root = workspace_root.resolve()
+    resolved_repo = repo_root.resolve()
+    if not (
+        workspace_root == resolved_repo
+        or str(workspace_root).startswith(str(resolved_repo) + os.sep)
+    ):
+        raise ValueError(
+            f"workspace_root escapes repo boundary: {workspace_root}"
+        )
     runs_raw = record_input.get("runs_dir") or ".codex-autorunner/runs"
     runs_dir = Path(runs_raw)
     if not runs_dir.is_absolute():
