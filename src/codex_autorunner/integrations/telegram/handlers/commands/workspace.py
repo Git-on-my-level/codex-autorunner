@@ -1132,7 +1132,25 @@ class WorkspaceCommands(SharedHelpers):
                     reply_to=message.message_id,
                 )
                 return
-            thread = await client.thread_start(record.workspace_path, agent=agent)
+            try:
+                thread = await client.thread_start(record.workspace_path, agent=agent)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.reset.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    workspace_path=record.workspace_path,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to reset thread; check logs for details.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             if not await self._require_thread_workspace(
                 message, record.workspace_path, thread, action="thread_start"
             ):
@@ -1283,7 +1301,25 @@ class WorkspaceCommands(SharedHelpers):
                     reply_to=message.message_id,
                 )
                 return
-            thread = await client.thread_start(record.workspace_path, agent=agent)
+            try:
+                thread = await client.thread_start(record.workspace_path, agent=agent)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.new.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    workspace_path=record.workspace_path,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to start a new thread; check logs for details.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             if not await self._require_thread_workspace(
                 message, record.workspace_path, thread, action="thread_start"
             ):
@@ -2063,6 +2099,34 @@ class WorkspaceCommands(SharedHelpers):
         try:
             result = await client.thread_resume(thread_id)
         except Exception as exc:
+            if self._is_missing_thread_error(exc):
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.resume.missing_thread",
+                    topic_key=key,
+                    thread_id=thread_id,
+                )
+
+                def clear_stale(record: "TelegramTopicRecord") -> None:
+                    if record.active_thread_id == thread_id:
+                        record.active_thread_id = None
+                    if thread_id in record.thread_ids:
+                        record.thread_ids.remove(thread_id)
+                    record.thread_summaries.pop(thread_id, None)
+
+                await self._store.update_topic(key, clear_stale)
+                await self._answer_callback(callback, "Thread missing")
+                await self._finalize_selection(
+                    key,
+                    callback,
+                    _with_conversation_id(
+                        "Thread no longer exists. Cleared stale state; use /new to start a fresh thread.",
+                        chat_id=chat_id,
+                        thread_id=thread_id_val,
+                    ),
+                )
+                return
             log_event(
                 self._logger,
                 logging.WARNING,
