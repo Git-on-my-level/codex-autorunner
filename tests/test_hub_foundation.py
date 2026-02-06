@@ -55,12 +55,11 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
     assert not (repo_dir / ".codex-autorunner" / "config.yml").exists()
     car_shim = repo_dir / "car"
-    assert car_shim.exists()
-    assert car_shim.stat().st_mode & 0o111
-    assert "codex_autorunner.cli" in car_shim.read_text(encoding="utf-8")
+    assert not car_shim.exists()
     local_car_shim = repo_dir / ".codex-autorunner" / "bin" / "car"
     assert local_car_shim.exists()
     assert local_car_shim.stat().st_mode & 0o111
+    assert "codex_autorunner.cli" in local_car_shim.read_text(encoding="utf-8")
     gitignore = (repo_dir / ".codex-autorunner" / ".gitignore").read_text(
         encoding="utf-8"
     )

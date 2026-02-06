@@ -105,16 +105,16 @@ def ensure_hub_car_shim(
     *,
     python_executable: Optional[str] = None,
     force: bool = False,
+    include_root_shim: bool = True,
 ) -> list[Path]:
     """Ensure a hub-local car shim points at the current runtime."""
     python_executable = python_executable or sys.executable
     content = _build_hub_car_shim(python_executable)
     if content and not content.endswith("\n"):
         content += "\n"
-    targets = [
-        hub_root / HUB_CAR_SHIM_ROOT_BASENAME,
-        hub_root / HUB_CAR_SHIM_REL_PATH,
-    ]
+    targets = [hub_root / HUB_CAR_SHIM_REL_PATH]
+    if include_root_shim:
+        targets.insert(0, hub_root / HUB_CAR_SHIM_ROOT_BASENAME)
     written: list[Path] = []
     for path in targets:
         if not _should_refresh_shim(path, content, force=force):
@@ -143,7 +143,7 @@ def seed_repo_files(
 
     ca_dir = repo_root / ".codex-autorunner"
     ca_dir.mkdir(parents=True, exist_ok=True)
-    ensure_hub_car_shim(repo_root, force=force)
+    ensure_hub_car_shim(repo_root, force=force, include_root_shim=False)
 
     gitignore_path = ca_dir / ".gitignore"
     if not gitignore_path.exists() or force:
