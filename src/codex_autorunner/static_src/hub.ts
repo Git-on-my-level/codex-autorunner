@@ -1352,8 +1352,8 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         ? repoId.split("--").pop()
         : repoId;
       const ok = await confirmModal(
-        `Remove worktree "${displayName}"? This will delete the worktree directory and its branch.`,
-        { confirmText: "Remove", danger: true }
+        `Clean up worktree "${displayName}"?\n\nCAR will archive its runtime files for later viewing in the Archive tab, then remove the worktree directory and branch.`,
+        { confirmText: "Archive & remove" }
       );
       if (!ok) return;
       await startHubJob("/hub/jobs/worktrees/cleanup", {
