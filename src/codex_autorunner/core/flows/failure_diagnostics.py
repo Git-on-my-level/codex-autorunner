@@ -115,8 +115,17 @@ def _extract_command_context(
     if store is None:
         return None, None, None
     try:
+        last_seq = store.get_last_event_seq_by_types(
+            run_id, [FlowEventType.APP_SERVER_EVENT]
+        )
+        after_seq = None
+        if limit > 0 and isinstance(last_seq, int):
+            after_seq = max(0, last_seq - limit)
         events = store.get_events_by_type(
-            run_id, FlowEventType.APP_SERVER_EVENT, limit=limit
+            run_id,
+            FlowEventType.APP_SERVER_EVENT,
+            after_seq=after_seq,
+            limit=limit,
         )
     except Exception:
         return None, None, None
