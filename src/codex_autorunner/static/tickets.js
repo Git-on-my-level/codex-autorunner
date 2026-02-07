@@ -78,6 +78,12 @@ function isFlowActiveStatus(status) {
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 let dispatchPanelCollapsed = false;
+const TICKET_FLOW_SPLIT_WIDTH_KEY = "car-ticket-flow-split-width";
+const TICKET_FLOW_SPLIT_HEIGHT_KEY = "car-ticket-flow-split-height";
+const TICKET_FLOW_MIN_PANEL_WIDTH = 180;
+const TICKET_FLOW_MIN_DISPATCH_WIDTH = 260;
+const TICKET_FLOW_MIN_PANEL_HEIGHT = 140;
+const TICKET_FLOW_MIN_DISPATCH_HEIGHT = 170;
 const LAST_SEEN_SEQ_KEY_PREFIX = "car-ticket-flow-last-seq:";
 const EVENT_STREAM_RETRY_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
 const STALE_THRESHOLD_MS = 30000;
@@ -180,6 +186,138 @@ function initDispatchPanelToggle() {
         dispatchPanel.classList.toggle("collapsed", dispatchPanelCollapsed);
         localStorage.setItem(DISPATCH_PANEL_COLLAPSED_KEY, String(dispatchPanelCollapsed));
     });
+}
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+function initTicketFlowSplitter() {
+    const { ticketFlowGrid, ticketFlowSplitter, ticketsPanel } = els();
+    if (!ticketFlowGrid || !ticketFlowSplitter || !ticketsPanel)
+        return;
+    const mobileQuery = window.matchMedia("(max-width: 639px)");
+    let activePointerId = null;
+    let dragStartCoord = 0;
+    let dragStartSize = 0;
+    let isMobileLayout = mobileQuery.matches;
+    const getPanelBounds = () => {
+        const gridRect = ticketFlowGrid.getBoundingClientRect();
+        if (isMobileLayout) {
+            const min = TICKET_FLOW_MIN_PANEL_HEIGHT;
+            const max = Math.max(min, gridRect.height - TICKET_FLOW_MIN_DISPATCH_HEIGHT);
+            return { min, max };
+        }
+        const min = TICKET_FLOW_MIN_PANEL_WIDTH;
+        const max = Math.max(min, gridRect.width - TICKET_FLOW_MIN_DISPATCH_WIDTH);
+        return { min, max };
+    };
+    const updateA11y = (sizePx) => {
+        const { min, max } = getPanelBounds();
+        ticketFlowSplitter.setAttribute("aria-orientation", isMobileLayout ? "horizontal" : "vertical");
+        ticketFlowSplitter.setAttribute("aria-valuemin", String(Math.round(min)));
+        ticketFlowSplitter.setAttribute("aria-valuemax", String(Math.round(max)));
+        ticketFlowSplitter.setAttribute("aria-valuenow", String(Math.round(clamp(sizePx, min, max))));
+    };
+    const applySize = (sizePx) => {
+        const { min, max } = getPanelBounds();
+        const nextSize = clamp(sizePx, min, max);
+        if (isMobileLayout) {
+            ticketFlowGrid.style.setProperty("--ticket-flow-first-height", `${Math.round(nextSize)}px`);
+        }
+        else {
+            ticketFlowGrid.style.setProperty("--ticket-flow-first-width", `${Math.round(nextSize)}px`);
+        }
+        updateA11y(nextSize);
+        return nextSize;
+    };
+    const getStoredSize = () => {
+        const key = isMobileLayout ? TICKET_FLOW_SPLIT_HEIGHT_KEY : TICKET_FLOW_SPLIT_WIDTH_KEY;
+        const raw = localStorage.getItem(key);
+        if (!raw)
+            return null;
+        const parsed = Number.parseFloat(raw);
+        return Number.isFinite(parsed) ? parsed : null;
+    };
+    const applyStoredSize = () => {
+        const stored = getStoredSize();
+        if (stored != null) {
+            applySize(stored);
+            return;
+        }
+        const panelRect = ticketsPanel.getBoundingClientRect();
+        updateA11y(isMobileLayout ? panelRect.height : panelRect.width);
+    };
+    const persistSize = (sizePx) => {
+        const key = isMobileLayout ? TICKET_FLOW_SPLIT_HEIGHT_KEY : TICKET_FLOW_SPLIT_WIDTH_KEY;
+        localStorage.setItem(key, String(Math.round(sizePx)));
+    };
+    const stopDrag = () => {
+        if (activePointerId == null)
+            return;
+        if (ticketFlowSplitter.hasPointerCapture(activePointerId)) {
+            ticketFlowSplitter.releasePointerCapture(activePointerId);
+        }
+        activePointerId = null;
+        ticketFlowGrid.classList.remove("dragging");
+        const panelRect = ticketsPanel.getBoundingClientRect();
+        persistSize(isMobileLayout ? panelRect.height : panelRect.width);
+    };
+    ticketFlowSplitter.addEventListener("pointerdown", (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0)
+            return;
+        event.preventDefault();
+        isMobileLayout = mobileQuery.matches;
+        activePointerId = event.pointerId;
+        dragStartCoord = isMobileLayout ? event.clientY : event.clientX;
+        const panelRect = ticketsPanel.getBoundingClientRect();
+        dragStartSize = isMobileLayout ? panelRect.height : panelRect.width;
+        ticketFlowGrid.classList.add("dragging");
+        ticketFlowSplitter.setPointerCapture(event.pointerId);
+        updateA11y(dragStartSize);
+    });
+    ticketFlowSplitter.addEventListener("pointermove", (event) => {
+        if (event.pointerId !== activePointerId)
+            return;
+        const currentCoord = isMobileLayout ? event.clientY : event.clientX;
+        const delta = currentCoord - dragStartCoord;
+        applySize(dragStartSize + delta);
+    });
+    ticketFlowSplitter.addEventListener("pointerup", (event) => {
+        if (event.pointerId !== activePointerId)
+            return;
+        stopDrag();
+    });
+    ticketFlowSplitter.addEventListener("pointercancel", stopDrag);
+    ticketFlowSplitter.addEventListener("lostpointercapture", stopDrag);
+    ticketFlowSplitter.addEventListener("keydown", (event) => {
+        const step = event.shiftKey ? 24 : 12;
+        let delta = 0;
+        if (!isMobileLayout && event.key === "ArrowLeft")
+            delta = -step;
+        if (!isMobileLayout && event.key === "ArrowRight")
+            delta = step;
+        if (isMobileLayout && event.key === "ArrowUp")
+            delta = -step;
+        if (isMobileLayout && event.key === "ArrowDown")
+            delta = step;
+        if (delta === 0)
+            return;
+        event.preventDefault();
+        const panelRect = ticketsPanel.getBoundingClientRect();
+        const currentSize = isMobileLayout ? panelRect.height : panelRect.width;
+        const nextSize = applySize(currentSize + delta);
+        persistSize(nextSize);
+    });
+    mobileQuery.addEventListener("change", (event) => {
+        isMobileLayout = event.matches;
+        ticketFlowGrid.classList.remove("dragging");
+        activePointerId = null;
+        applyStoredSize();
+    });
+    window.addEventListener("resize", () => {
+        const panelRect = ticketsPanel.getBoundingClientRect();
+        updateA11y(isMobileLayout ? panelRect.height : panelRect.width);
+    });
+    applyStoredSize();
 }
 /**
  * Render mini dispatch items for collapsed panel view.
@@ -739,6 +877,9 @@ function initReasonModal() {
 }
 function els() {
     return {
+        ticketFlowGrid: document.getElementById("ticket-flow-grid"),
+        ticketFlowSplitter: document.getElementById("ticket-flow-splitter"),
+        ticketsPanel: document.getElementById("ticket-flow-tickets-panel"),
         card: document.getElementById("ticket-card"),
         status: document.getElementById("ticket-flow-status"),
         run: document.getElementById("ticket-flow-run"),
@@ -1962,6 +2103,8 @@ export function initTicketFlow() {
     initLiveOutputPanel();
     // Initialize dispatch panel toggle for medium screens
     initDispatchPanelToggle();
+    // Initialize compact draggable splitter between tickets and dispatch
+    initTicketFlowSplitter();
     // Set up scroll listeners for fade indicator
     const ticketList = document.getElementById("ticket-flow-tickets");
     const dispatchHistory = document.getElementById("ticket-dispatch-history");
