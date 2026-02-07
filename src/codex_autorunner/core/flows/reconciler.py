@@ -86,9 +86,7 @@ def reconcile_flow_run(
                 status=decision.status,
                 state=decision.state,
                 finished_at=decision.finished_at if decision.finished_at else UNSET,
-                error_message=(
-                    decision.error_message if decision.error_message else UNSET
-                ),
+                error_message=decision.error_message,
             )
 
             if decision.status == FlowRunStatus.FAILED and decision.error_message:

@@ -129,3 +129,50 @@ def test_dead_worker_metadata_preserves_repo_root(monkeypatch, tmp_path: Path) -
     assert metadata.get("pid") == 12345
     assert metadata.get("spawned_at") is not None
     assert metadata.get("parent_pid") is not None
+
+
+def test_resume_clears_error_message(monkeypatch, tmp_path: Path) -> None:
+    """When a run is resumed after failure, error_message should be cleared."""
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    record = store.create_flow_run(
+        run_id="run-4",
+        flow_type="ticket_flow",
+        input_data={},
+        state={"ticket_engine": {"status": "running"}},
+    )
+    # Simulate a previously failed run that was resumed with stale error_message
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state={"ticket_engine": {"status": "running"}},
+        error_message="Previous error: Worker died (status=dead, pid=12345)",
+    )
+
+    def fake_health_alive(repo_root, run_id):
+        return SimpleNamespace(is_alive=True, status="alive", artifact_path=tmp_path)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        fake_health_alive,
+    )
+
+    # First reconcile should clear the error_message since worker is alive
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.RUNNING
+    assert updated is True
+    assert locked is False
+    assert recovered.error_message is None
+
+    # Second reconcile should be a no-op (error_message already cleared)
+    second_record = store.get_flow_run(record.id)
+    assert second_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, second_record, store)
+
+    assert recovered.status == FlowRunStatus.RUNNING
+    assert updated is False
+    assert locked is False
