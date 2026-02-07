@@ -57,6 +57,18 @@ def test_lint_ticket_frontmatter_preserves_extra() -> None:
     assert fm.extra.get("custom") == {"a": 1}
 
 
+def test_lint_ticket_frontmatter_rejects_depends_on() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        {
+            "agent": "codex",
+            "done": False,
+            "depends_on": ["TICKET-001"],
+        }
+    )
+    assert fm is None
+    assert any("depends_on" in e for e in errors)
+
+
 def test_lint_dispatch_frontmatter_defaults_notify_and_validates_mode() -> None:
     normalized, errors = lint_dispatch_frontmatter({})
     assert errors == []

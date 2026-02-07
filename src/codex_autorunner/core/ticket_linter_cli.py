@@ -15,6 +15,7 @@ _SCRIPT = dedent(
     - Validates ticket filenames (TICKET-<number>[suffix].md, e.g. TICKET-001-foo.md)
     - Parses YAML frontmatter for each .codex-autorunner/tickets/TICKET-*.md
     - Validates required keys: agent (string) and done (bool)
+    - Rejects deprecated keys like depends_on
     - Exits non-zero on any error
     \"\"\"
 
@@ -122,6 +123,11 @@ _SCRIPT = dedent(
 
     def _lint_frontmatter(data: dict[str, Any]) -> List[str]:
         errors: List[str] = []
+
+        if "depends_on" in data:
+            errors.append(
+                "frontmatter.depends_on is no longer supported; order tickets by filename (TICKET-###)."
+            )
 
         agent = data.get("agent")
         if not isinstance(agent, str) or not agent.strip():

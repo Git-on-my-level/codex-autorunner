@@ -2577,31 +2577,6 @@ def _ticket_flow_preflight(engine: RuntimeContext, ticket_dir: Path) -> Prefligh
             )
         )
 
-    depends_on_details: list[str] = []
-    for doc in ticket_docs:
-        if "depends_on" in doc.frontmatter.extra:
-            depends_on_details.append(
-                f"{doc.path.relative_to(doc.path.parent.parent)}: depends_on is present but not enforced by ticket_flow."
-            )
-    if depends_on_details:
-        checks.append(
-            PreflightCheck(
-                check_id="dependencies",
-                status="warning",
-                message="Ticket dependencies are present but not enforced.",
-                fix="Use ticket numbering to enforce order or remove depends_on entries.",
-                details=depends_on_details,
-            )
-        )
-    else:
-        checks.append(
-            PreflightCheck(
-                check_id="dependencies",
-                status="ok",
-                message="No explicit ticket dependencies detected.",
-            )
-        )
-
     return PreflightReport(checks=checks)
 
 

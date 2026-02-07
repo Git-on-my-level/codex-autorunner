@@ -38,6 +38,8 @@ The project manager agent (PMA) is a way to use an AI agent to run CAR. For exam
 
 If you have an existing CAR repo with `.codex-autorunner/workspace/`, see [Migration: workspace → contextspace](docs/migrations/workspace-to-contextspace.md) for the one-time migration step.
 
+If your tickets used `depends_on`, see [Migration: depends_on removal](docs/migrations/depends-on-removal.md).
+
 ## Quickstart
 
 The fastest way to get started is to pass [this setup guide](docs/AGENT_SETUP_GUIDE.md) to your favorite AI agent. The agent will walk you through installation and configuration interactively based on your environment.

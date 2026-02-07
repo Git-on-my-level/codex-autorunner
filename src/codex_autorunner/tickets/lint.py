@@ -45,6 +45,11 @@ def lint_ticket_frontmatter(
 
     extra = {k: v for k, v in data.items()}
 
+    if "depends_on" in data:
+        errors.append(
+            "frontmatter.depends_on is no longer supported; order tickets by filename (TICKET-###)."
+        )
+
     agent_raw = data.get("agent")
     agent = _as_optional_str(agent_raw)
     if not agent:
