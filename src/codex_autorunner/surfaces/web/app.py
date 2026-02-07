@@ -6,7 +6,7 @@ import shlex
 import sys
 import threading
 from contextlib import ExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -167,10 +167,25 @@ class ServerOverrides:
 
 
 _HUB_INBOX_DISMISSALS_FILENAME = "hub_inbox_dismissals.json"
+_DEV_INCLUDE_ROOT_REPO_ENV = "CAR_DEV_INCLUDE_ROOT_REPO"
 
 
 def _hub_inbox_dismissals_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / _HUB_INBOX_DISMISSALS_FILENAME
+
+
+def _env_truthy(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_codex_autorunner_source_tree(root: Path) -> bool:
+    return (
+        (root / "src" / "codex_autorunner" / "__init__.py").exists()
+        and (root / "Makefile").exists()
+        and (root / "pyproject.toml").exists()
+    )
 
 
 def _dismissal_key(run_id: str, seq: int) -> str:
@@ -758,6 +773,15 @@ def _build_hub_context(
     hub_root: Optional[Path], base_path: Optional[str]
 ) -> HubAppContext:
     config = load_hub_config(hub_root or Path.cwd())
+    dev_include_root_repo = _env_truthy(os.getenv(_DEV_INCLUDE_ROOT_REPO_ENV))
+    dev_mode_root_repo_enabled = False
+    if (
+        dev_include_root_repo
+        and not config.include_root_repo
+        and _is_codex_autorunner_source_tree(config.root)
+    ):
+        config = replace(config, include_root_repo=True)
+        dev_mode_root_repo_enabled = True
     normalized_base = (
         _normalize_base_path(base_path)
         if base_path is not None
@@ -779,6 +803,23 @@ def _build_hub_context(
             "Environment overrides active: %s",
             ", ".join(env_overrides),
         )
+    if dev_mode_root_repo_enabled:
+        safe_log(
+            logger,
+            logging.INFO,
+            "Dev mode: enabling hub root repo discovery for source checkout",
+        )
+        try:
+            snapshots = supervisor.list_repos(use_cache=False)
+            if not snapshots:
+                supervisor.scan()
+        except Exception as exc:
+            safe_log(
+                logger,
+                logging.WARNING,
+                "Dev mode root repo bootstrap scan failed",
+                exc=exc,
+            )
     safe_log(
         logger,
         logging.INFO,
