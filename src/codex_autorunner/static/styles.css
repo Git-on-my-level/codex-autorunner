@@ -2512,7 +2512,11 @@ button.icon-btn {
 .ticket-card .ticket-flow-splitter::before {
   content: "";
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 24px;
+  transform: translateX(-50%);
 }
 
 .ticket-card .ticket-flow-splitter-dots {
@@ -3294,6 +3298,15 @@ button.icon-btn {
     justify-content: flex-start;
     align-items: center;
     padding-left: 6px;
+  }
+
+  .ticket-card .ticket-flow-splitter::before {
+    top: 50%;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 24px;
+    transform: translateY(-50%);
   }
 
   .ticket-card .ticket-flow-splitter-dots {

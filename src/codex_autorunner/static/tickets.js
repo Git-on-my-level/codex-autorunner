@@ -199,15 +199,21 @@ function initTicketFlowSplitter() {
     let dragStartCoord = 0;
     let dragStartSize = 0;
     let isMobileLayout = mobileQuery.matches;
+    const getSplitterSize = () => {
+        const raw = getComputedStyle(ticketFlowGrid).getPropertyValue("--ticket-flow-splitter-size");
+        const parsed = Number.parseFloat(raw);
+        return Number.isFinite(parsed) ? parsed : 14;
+    };
     const getPanelBounds = () => {
         const gridRect = ticketFlowGrid.getBoundingClientRect();
+        const splitterSize = getSplitterSize();
         if (isMobileLayout) {
             const min = TICKET_FLOW_MIN_PANEL_HEIGHT;
-            const max = Math.max(min, gridRect.height - TICKET_FLOW_MIN_DISPATCH_HEIGHT);
+            const max = Math.max(min, gridRect.height - splitterSize - TICKET_FLOW_MIN_DISPATCH_HEIGHT);
             return { min, max };
         }
         const min = TICKET_FLOW_MIN_PANEL_WIDTH;
-        const max = Math.max(min, gridRect.width - TICKET_FLOW_MIN_DISPATCH_WIDTH);
+        const max = Math.max(min, gridRect.width - splitterSize - TICKET_FLOW_MIN_DISPATCH_WIDTH);
         return { min, max };
     };
     const updateA11y = (sizePx) => {
@@ -289,6 +295,7 @@ function initTicketFlowSplitter() {
     ticketFlowSplitter.addEventListener("pointercancel", stopDrag);
     ticketFlowSplitter.addEventListener("lostpointercapture", stopDrag);
     ticketFlowSplitter.addEventListener("keydown", (event) => {
+        isMobileLayout = mobileQuery.matches;
         const step = event.shiftKey ? 24 : 12;
         let delta = 0;
         if (!isMobileLayout && event.key === "ArrowLeft")
@@ -314,8 +321,10 @@ function initTicketFlowSplitter() {
         applyStoredSize();
     });
     window.addEventListener("resize", () => {
+        isMobileLayout = mobileQuery.matches;
         const panelRect = ticketsPanel.getBoundingClientRect();
-        updateA11y(isMobileLayout ? panelRect.height : panelRect.width);
+        const currentSize = isMobileLayout ? panelRect.height : panelRect.width;
+        applySize(currentSize);
     });
     applyStoredSize();
 }
