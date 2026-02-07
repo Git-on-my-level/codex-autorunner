@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+from codex_autorunner.agents.opencode import runtime as opencode_runtime
 from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.runtime import (
     collect_opencode_output,
@@ -556,3 +557,55 @@ async def test_collect_output_poll_treats_missing_status_as_idle() -> None:
     assert output.text == ""
     assert output.error is None
     assert client.session_status_calls >= 1
+
+
+@pytest.mark.anyio
+async def test_collect_output_bounds_stall_reconnect_loop(monkeypatch) -> None:
+    statuses: list[dict[str, object]] = []
+    progress_events: list[dict[str, object]] = []
+
+    async def _status_fetcher():
+        statuses.append({"status": {"type": "busy"}})
+        return {"status": {"type": "busy"}}
+
+    async def _part_handler(part_type: str, part: dict[str, object], delta_text):
+        if part_type == "status":
+            progress_events.append(part)
+        return None
+
+    async def _never_event_stream():
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="keepalive", data="{}")
+
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
+        (0.0, 0.0),
+    )
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        2,
+    )
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS",
+        999.0,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _never_event_stream(),
+        session_fetcher=_status_fetcher,
+        part_handler=_part_handler,
+        stall_timeout_seconds=0.001,
+    )
+
+    assert output.text == ""
+    assert output.error is not None
+    assert "opencode_stream_stalled_timeout" in output.error
+    assert len(statuses) >= 1
+    assert any(event.get("type") == "reconnecting" for event in progress_events)
+    assert any(event.get("type") == "stall_timeout" for event in progress_events)

@@ -395,6 +395,7 @@ class AgentPool:
             workspace_path=directory,
             model_payload=model_payload,
             part_handler=_part_handler if req.emit_event is not None else None,
+            stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
         )
 
         if req.emit_event is not None and output.text:

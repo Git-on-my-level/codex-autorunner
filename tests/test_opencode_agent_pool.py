@@ -104,6 +104,7 @@ async def test_opencode_turn_respects_model_override(monkeypatch, tmp_path: Path
             "session_id": session_id,
             "workspace_path": workspace_path,
             "model_payload": model_payload,
+            "stall_timeout_seconds": kwargs.get("stall_timeout_seconds"),
         }
         return OpenCodeTurnOutput(text="ok")
 
@@ -112,7 +113,7 @@ async def test_opencode_turn_respects_model_override(monkeypatch, tmp_path: Path
     )
 
     cfg = SimpleNamespace(
-        app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=None)
+        app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=42.0)
     )
     pool = AgentPool(cfg)  # type: ignore[arg-type]
     pool._opencode_supervisor = supervisor
@@ -130,6 +131,7 @@ async def test_opencode_turn_respects_model_override(monkeypatch, tmp_path: Path
     assert client.prompt_calls[0]["model"] == expected_model
     assert client.prompt_calls[0]["variant"] == "fast"
     assert calls["collect"]["model_payload"] == expected_model
+    assert calls["collect"]["stall_timeout_seconds"] == 42.0
     assert result.text == "ok"
 
 

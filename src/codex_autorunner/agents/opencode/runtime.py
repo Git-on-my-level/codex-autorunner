@@ -39,6 +39,9 @@ OPENCODE_PERMISSION_REJECT = "reject"
 
 _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS = 60.0
 _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 5.0, 10.0)
+_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS = 5
+_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS = 120.0
+_OPENCODE_STREAM_STALL_TIMEOUT_REASON = "opencode_stream_stalled_timeout"
 _OPENCODE_IDLE_STATUS_VALUES = {
     "idle",
     "done",
@@ -1002,9 +1005,97 @@ async def collect_opencode_output_from_events(
     last_relevant_event_at = time.monotonic()
     last_primary_completion_at: Optional[float] = None
     reconnect_attempts = 0
+    reconnect_started_at: Optional[float] = None
     can_reconnect = (
         event_stream_factory is not None and stall_timeout_seconds is not None
     )
+
+    async def _attempt_reconnect(
+        *,
+        now: float,
+        idle_seconds: float,
+        status_type: Optional[str],
+    ) -> bool:
+        nonlocal stream_iter, reconnect_attempts, reconnect_started_at, error, last_relevant_event_at
+        if not can_reconnect:
+            return False
+
+        if reconnect_started_at is None:
+            reconnect_started_at = now
+        stalled_elapsed_seconds = now - reconnect_started_at
+        attempts_exceeded = (
+            reconnect_attempts >= _OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS
+        )
+        elapsed_exceeded = (
+            stalled_elapsed_seconds >= _OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS
+        )
+        if attempts_exceeded or elapsed_exceeded:
+            error = (
+                f"{_OPENCODE_STREAM_STALL_TIMEOUT_REASON}: "
+                f"stalled for {stalled_elapsed_seconds:.1f}s after "
+                f"{reconnect_attempts} reconnect attempts"
+            )
+            log_event(
+                logger,
+                logging.ERROR,
+                "opencode.stream.stalled.timeout",
+                session_id=session_id,
+                idle_seconds=idle_seconds,
+                stalled_elapsed_seconds=stalled_elapsed_seconds,
+                reconnect_attempts=reconnect_attempts,
+                max_reconnect_attempts=_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS,
+                max_stalled_seconds=_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS,
+                status_type=status_type,
+            )
+            if part_handler is not None:
+                await part_handler(
+                    "status",
+                    {
+                        "type": "stall_timeout",
+                        "reason": _OPENCODE_STREAM_STALL_TIMEOUT_REASON,
+                        "idleSeconds": idle_seconds,
+                        "stalledSeconds": stalled_elapsed_seconds,
+                        "attempts": reconnect_attempts,
+                    },
+                    None,
+                )
+            return False
+
+        backoff_index = min(
+            reconnect_attempts,
+            len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
+        )
+        backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
+        reconnect_attempts += 1
+        log_event(
+            logger,
+            logging.WARNING,
+            "opencode.stream.stalled.reconnecting",
+            session_id=session_id,
+            idle_seconds=idle_seconds,
+            backoff_seconds=backoff,
+            status_type=status_type,
+            attempts=reconnect_attempts,
+        )
+        if part_handler is not None:
+            await part_handler(
+                "status",
+                {
+                    "type": "reconnecting",
+                    "idleSeconds": idle_seconds,
+                    "backoffSeconds": backoff,
+                    "attempts": reconnect_attempts,
+                    "maxAttempts": _OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS,
+                    "stalledSeconds": stalled_elapsed_seconds,
+                    "maxStalledSeconds": _OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS,
+                },
+                None,
+            )
+        await _close_stream(stream_iter)
+        await asyncio.sleep(backoff)
+        stream_iter = _new_stream().__aiter__()
+        last_relevant_event_at = now
+        return True
 
     try:
         while True:
@@ -1056,28 +1147,13 @@ async def collect_opencode_output_from_events(
                         status_type=status_type,
                         idle_seconds=idle_seconds,
                     )
-                if not can_reconnect:
-                    break
-                backoff_index = min(
-                    reconnect_attempts,
-                    len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
-                )
-                backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
-                reconnect_attempts += 1
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "opencode.stream.stalled.reconnecting",
-                    session_id=session_id,
+                reconnected = await _attempt_reconnect(
+                    now=now,
                     idle_seconds=idle_seconds,
-                    backoff_seconds=backoff,
                     status_type=status_type,
-                    attempts=reconnect_attempts,
                 )
-                await _close_stream(stream_iter)
-                await asyncio.sleep(backoff)
-                stream_iter = _new_stream().__aiter__()
-                last_relevant_event_at = now
+                if not reconnected:
+                    break
                 continue
             now = time.monotonic()
             raw = event.data or ""
@@ -1098,7 +1174,6 @@ async def collect_opencode_output_from_events(
                     and now - last_relevant_event_at > stall_timeout_seconds
                 ):
                     idle_seconds = now - last_relevant_event_at
-                    last_relevant_event_at = now
                     status_type = None
                     if session_fetcher is not None:
                         try:
@@ -1133,30 +1208,17 @@ async def collect_opencode_output_from_events(
                             status_type=status_type,
                             idle_seconds=idle_seconds,
                         )
-                    if not can_reconnect:
-                        break
-                    backoff_index = min(
-                        reconnect_attempts,
-                        len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
-                    )
-                    backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
-                    reconnect_attempts += 1
-                    log_event(
-                        logger,
-                        logging.WARNING,
-                        "opencode.stream.stalled.reconnecting",
-                        session_id=session_id,
+                    reconnected = await _attempt_reconnect(
+                        now=now,
                         idle_seconds=idle_seconds,
-                        backoff_seconds=backoff,
                         status_type=status_type,
-                        attempts=reconnect_attempts,
                     )
-                    await _close_stream(stream_iter)
-                    await asyncio.sleep(backoff)
-                    stream_iter = _new_stream().__aiter__()
+                    if not reconnected:
+                        break
                 continue
             last_relevant_event_at = now
             reconnect_attempts = 0
+            reconnect_started_at = None
             is_primary_session = event_session_id == session_id
             if event.event == "question.asked":
                 request_id, props = _extract_question_request(payload)
