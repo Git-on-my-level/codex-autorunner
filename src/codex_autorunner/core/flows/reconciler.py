@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..locks import FileLockBusy, file_lock
+from .failure_diagnostics import ensure_failure_payload
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import UNSET, FlowStore
 from .transition import resolve_flow_transition
@@ -81,10 +82,21 @@ def reconcile_flow_run(
                 decision.note or "reconcile",
             )
 
+            state = decision.state
+            if decision.status == FlowRunStatus.FAILED:
+                state = ensure_failure_payload(
+                    state,
+                    record=record,
+                    step_id=record.current_step,
+                    error_message=decision.error_message,
+                    store=store,
+                    note=decision.note,
+                    failed_at=decision.finished_at,
+                )
             updated = store.update_flow_run_status(
                 run_id=record.id,
                 status=decision.status,
-                state=decision.state,
+                state=state,
                 finished_at=decision.finished_at if decision.finished_at else UNSET,
                 error_message=decision.error_message,
             )

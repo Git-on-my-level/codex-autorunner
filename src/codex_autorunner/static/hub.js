@@ -944,8 +944,13 @@ async function loadHubInbox(ctx) {
             ? '<div class="muted">No paused runs</div>'
             : items
                 .map((item) => {
-                const title = item.message?.title || item.message?.mode || "Message";
-                const excerpt = item.message?.body ? item.message.body.slice(0, 160) : "";
+                const dispatch = item.dispatch || item.message || {};
+                const title = dispatch.title || dispatch.mode || "Message";
+                let excerpt = dispatch.body ? dispatch.body.slice(0, 160) : "";
+                if (item.failure_summary) {
+                    const failureLine = `Failure: ${item.failure_summary}`;
+                    excerpt = excerpt ? `${excerpt} · ${failureLine}` : failureLine;
+                }
                 const repoLabel = item.repo_display_name || item.repo_id;
                 const href = item.open_url || `/repos/${item.repo_id}/?tab=messages&run_id=${item.run_id}`;
                 return `

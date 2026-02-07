@@ -157,6 +157,7 @@ function analyticsSummarySignature(data) {
         run?.finished_at ?? "",
         run?.duration_seconds ?? "",
         run?.current_step ?? "",
+        data?.failure_summary ?? "",
         tickets?.todo_count ?? "",
         tickets?.done_count ?? "",
         tickets?.total_count ?? "",
@@ -242,6 +243,7 @@ function renderTicketAnalytics(data) {
     const tickets = data?.tickets;
     const turns = data?.turns;
     const agent = data?.agent;
+    const failureSummary = data?.failure_summary || "";
     const statusEl = document.getElementById("runner-status");
     if (statusEl && run) {
         statusPill(statusEl, run.status || "idle");
@@ -258,6 +260,7 @@ function renderTicketAnalytics(data) {
     const dispatchesEl = document.getElementById("message-dispatches");
     const repliesEl = document.getElementById("message-replies");
     const runIdEl = document.getElementById("last-run-id");
+    const failureEl = document.getElementById("failure-summary");
     if (lastStart)
         lastStart.textContent = formatIso(run?.started_at || null);
     if (lastFinish)
@@ -283,6 +286,8 @@ function renderTicketAnalytics(data) {
         repliesEl.textContent = turns?.replies != null ? String(turns.replies) : "0";
     if (runIdEl)
         runIdEl.textContent = run?.short_id || run?.id || "–";
+    if (failureEl)
+        failureEl.textContent = failureSummary || "–";
     // Diff stats (lines changed)
     const diffStatsEl = document.getElementById("lines-changed");
     if (diffStatsEl) {

@@ -28,6 +28,10 @@ import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 from ....core.filebox import ensure_structure, save_file
+from ....core.flows.failure_diagnostics import (
+    format_failure_summary,
+    get_failure_payload,
+)
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.utils import find_repo_root
@@ -326,6 +330,10 @@ def build_messages_routes() -> APIRouter:
                 run_id=str(record.id),
                 record_input=record_input,
             )
+            failure_payload = get_failure_payload(record)
+            failure_summary = (
+                format_failure_summary(failure_payload) if failure_payload else None
+            )
             conversations.append(
                 {
                     "run_id": record.id,
@@ -339,6 +347,8 @@ def build_messages_routes() -> APIRouter:
                     "dispatch_count": len(dispatch_history),
                     "reply_count": len(reply_history),
                     "ticket_state": _ticket_state_snapshot(record),
+                    "failure": failure_payload,
+                    "failure_summary": failure_summary,
                     "open_url": f"?tab=inbox&run_id={record.id}",
                 }
             )
@@ -376,6 +386,10 @@ def build_messages_routes() -> APIRouter:
         reply_history = _collect_reply_history(
             repo_root=repo_root, run_id=run_id, record_input=input_data
         )
+        failure_payload = get_failure_payload(record)
+        failure_summary = (
+            format_failure_summary(failure_payload) if failure_payload else None
+        )
         return {
             "run": {
                 "id": record.id,
@@ -386,6 +400,8 @@ def build_messages_routes() -> APIRouter:
                 "finished_at": record.finished_at,
                 "current_step": record.current_step,
                 "error_message": record.error_message,
+                "failure": failure_payload,
+                "failure_summary": failure_summary,
             },
             "dispatch_history": dispatch_history,
             "reply_history": reply_history,

@@ -10277,6 +10277,16 @@ button.loading::after {
   position: relative;
 }
 
+.messages-failure-banner {
+  border: 1px solid rgba(232, 94, 92, 0.45);
+  background: rgba(232, 94, 92, 0.12);
+  color: #f3c1bf;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+
 .messages-thread-list.refreshing::after,
 .messages-thread-detail.refreshing::after {
   content: "";

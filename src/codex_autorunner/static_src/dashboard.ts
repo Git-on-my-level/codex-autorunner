@@ -191,6 +191,8 @@ interface AnalyticsRunSummary {
 
 interface AnalyticsSummary {
   run: AnalyticsRunSummary;
+  failure?: Record<string, unknown> | null;
+  failure_summary?: string | null;
   tickets: {
     todo_count: number;
     done_count: number;
@@ -228,6 +230,7 @@ function analyticsSummarySignature(data: AnalyticsSummary | null): string {
     run?.finished_at ?? "",
     run?.duration_seconds ?? "",
     run?.current_step ?? "",
+    data?.failure_summary ?? "",
     tickets?.todo_count ?? "",
     tickets?.done_count ?? "",
     tickets?.total_count ?? "",
@@ -325,6 +328,7 @@ function renderTicketAnalytics(data: AnalyticsSummary | null): void {
   const tickets = data?.tickets;
   const turns = data?.turns;
   const agent = data?.agent;
+  const failureSummary = data?.failure_summary || "";
 
   const statusEl = document.getElementById("runner-status");
   if (statusEl && run) {
@@ -343,6 +347,7 @@ function renderTicketAnalytics(data: AnalyticsSummary | null): void {
   const dispatchesEl = document.getElementById("message-dispatches");
   const repliesEl = document.getElementById("message-replies");
   const runIdEl = document.getElementById("last-run-id");
+  const failureEl = document.getElementById("failure-summary");
 
   if (lastStart) lastStart.textContent = formatIso(run?.started_at || null);
   if (lastFinish) lastFinish.textContent = formatIso(run?.finished_at || null);
@@ -359,6 +364,7 @@ function renderTicketAnalytics(data: AnalyticsSummary | null): void {
   if (dispatchesEl) dispatchesEl.textContent = String(dispatchCount);
   if (repliesEl) repliesEl.textContent = turns?.replies != null ? String(turns.replies) : "0";
   if (runIdEl) runIdEl.textContent = run?.short_id || run?.id || "–";
+  if (failureEl) failureEl.textContent = failureSummary || "–";
 
   // Diff stats (lines changed)
   const diffStatsEl = document.getElementById("lines-changed");

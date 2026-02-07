@@ -172,9 +172,11 @@ function renderThreadItem(thread) {
     const latestDispatch = thread.latest?.dispatch;
     const isHandoff = latestDispatch?.is_handoff || latestDispatch?.mode === "pause";
     const title = latestDispatch?.title || (isHandoff ? "Handoff" : "Dispatch");
-    const subtitle = latestDispatch?.body ? latestDispatch.body.slice(0, 120) : "";
+    let subtitle = latestDispatch?.body ? latestDispatch.body.slice(0, 120) : "";
     const isPaused = thread.status === "paused";
     const isActive = selectedRunId && thread.run_id === selectedRunId;
+    const failureSummary = thread.failure_summary || "";
+    const isFailed = thread.status === "failed" || thread.status === "stopped";
     // Only show action indicator if there's an unreplied handoff (pause)
     // Compare dispatch_seq vs reply_seq to check if user has responded
     const ticketState = thread.ticket_state;
@@ -193,6 +195,10 @@ function renderThreadItem(thread) {
     const statusLabel = status === "paused" && hasUnrepliedHandoff ? "action" : status;
     // Build meta line with timestamp
     const countPart = `${dispatches} dispatch${dispatches !== 1 ? "es" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
+    if (failureSummary && isFailed) {
+        const failureLine = `Failure: ${failureSummary}`;
+        subtitle = subtitle ? `${subtitle} · ${failureLine}` : failureLine;
+    }
     return `
     <button class="messages-thread${isActive ? " active" : ""}" data-run-id="${escapeHtml(thread.run_id)}">
       <div class="messages-thread-header">
@@ -234,6 +240,7 @@ function threadListSignature(conversations) {
             ticketState?.dispatch_seq ?? "",
             ticketState?.reply_seq ?? "",
             ticketState?.status ?? "",
+            thread.failure_summary ?? "",
         ].join("|");
     })
         .join("::");
@@ -261,6 +268,7 @@ function threadDetailSignature(detail) {
         ticketState?.current_ticket ?? "",
         ticketState?.total_turns ?? "",
         ticketState?.ticket_turns ?? "",
+        detail.run?.failure_summary ?? "",
     ].join("|");
 }
 const threadListRefresh = createSmartRefresh({
@@ -765,6 +773,8 @@ function renderThreadDetail(detail, runId, ctx) {
         return;
     const runStatus = (detail.run?.status || "").toString();
     const isPaused = runStatus === "paused";
+    const failureSummary = detail.run?.failure_summary || "";
+    const showFailure = failureSummary && (runStatus === "failed" || runStatus === "stopped");
     const dispatchHistory = detail.dispatch_history || [];
     const replyHistory = detail.reply_history || [];
     const dispatchCount = detail.dispatch_count ?? dispatchHistory.length;
@@ -789,6 +799,7 @@ function renderThreadDetail(detail, runId, ctx) {
     const threadedContent = buildThreadedTimeline(dispatchHistory, replyHistory, runStatus);
     const renderDetail = () => {
         detailEl.innerHTML = `
+      ${showFailure ? `<div class="messages-failure-banner">Failure: ${escapeHtml(failureSummary)}</div>` : ""}
       <div class="messages-thread-history">
         ${threadedContent || '<div class="muted">No dispatches yet</div>'}
       </div>

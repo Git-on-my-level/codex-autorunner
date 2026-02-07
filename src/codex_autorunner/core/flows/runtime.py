@@ -4,6 +4,7 @@ import uuid
 from typing import Any, Callable, Dict, Optional, Set, cast
 
 from .definition import FlowDefinition, StepFn, StepFn2, StepFn3
+from .failure_diagnostics import ensure_failure_payload
 from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
 from .reasons import ensure_reason_summary
 from .store import FlowStore, now_iso
@@ -160,6 +161,15 @@ class FlowRuntime:
                 status=FlowRunStatus.FAILED,
                 error_message=str(e),
             )
+            state = ensure_failure_payload(
+                state,
+                record=record,
+                step_id=record.current_step,
+                error_message=str(e),
+                store=self.store,
+                note="flow_exception",
+                failed_at=now,
+            )
             updated = self.store.update_flow_run_status(
                 run_id=run_id,
                 status=FlowRunStatus.FAILED,
@@ -307,6 +317,15 @@ class FlowRuntime:
                     status=FlowRunStatus.FAILED,
                     error_message=outcome.error,
                 )
+                state = ensure_failure_payload(
+                    state,
+                    record=record,
+                    step_id=step_id,
+                    error_message=outcome.error,
+                    store=self.store,
+                    note="step_failed",
+                    failed_at=now,
+                )
                 updated = self.store.update_flow_run_status(
                     run_id=record.id,
                     status=FlowRunStatus.FAILED,
@@ -392,6 +411,15 @@ class FlowRuntime:
                 dict(record.state or {}),
                 status=FlowRunStatus.FAILED,
                 error_message=str(e),
+            )
+            state = ensure_failure_payload(
+                state,
+                record=record,
+                step_id=step_id,
+                error_message=str(e),
+                store=self.store,
+                note="step_exception",
+                failed_at=now,
             )
             updated = self.store.update_flow_run_status(
                 run_id=record.id,

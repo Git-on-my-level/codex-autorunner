@@ -14,6 +14,10 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter
 
+from ....core.flows.failure_diagnostics import (
+    format_failure_summary,
+    get_failure_payload,
+)
 from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.utils import find_repo_root
@@ -37,11 +41,13 @@ def _select_primary_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]
     if not records:
         return None
     newest = records[0]
-    if (
-        FlowRunStatus(newest.status).is_active()
-        or FlowRunStatus(newest.status).is_paused()
-    ):
+    status = FlowRunStatus(newest.status)
+    if status.is_active() or status.is_paused():
         return newest
+    if status in {FlowRunStatus.FAILED, FlowRunStatus.STOPPED}:
+        failure = get_failure_payload(newest)
+        if failure:
+            return newest
     return None
 
 
@@ -179,6 +185,9 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
     current_ticket: Optional[str] = None
     agent_id: Optional[str] = None
 
+    failure_payload: Optional[dict[str, Any]] = None
+    failure_summary: Optional[str] = None
+
     if run_record:
         run_data = {
             "id": run_record.id,
@@ -245,10 +254,16 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
             except Exception:
                 pass
 
+        failure_payload = get_failure_payload(run_record)
+        if failure_payload:
+            failure_summary = format_failure_summary(failure_payload)
+
     ticket_counts = _ticket_counts(ticket_dir)
 
     return {
         "run": run_data,
+        "failure": failure_payload,
+        "failure_summary": failure_summary,
         "tickets": {
             "todo_count": ticket_counts["todo"],
             "done_count": ticket_counts["done"],

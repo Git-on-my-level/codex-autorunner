@@ -44,6 +44,7 @@ interface ConversationSummary {
   dispatch_count?: number;
   reply_count?: number;
   ticket_state?: TicketState | null;
+  failure_summary?: string | null;
 }
 
 interface ThreadsResponse {
@@ -80,6 +81,7 @@ interface ThreadDetail {
     id: string;
     status?: string;
     created_at?: string | null;
+    failure_summary?: string | null;
   };
   dispatch_history?: DispatchHistoryEntry[];
   reply_history?: ReplyHistoryEntry[];
@@ -263,9 +265,11 @@ function renderThreadItem(thread: ConversationSummary): string {
   const latestDispatch = thread.latest?.dispatch;
   const isHandoff = latestDispatch?.is_handoff || latestDispatch?.mode === "pause";
   const title = latestDispatch?.title || (isHandoff ? "Handoff" : "Dispatch");
-  const subtitle = latestDispatch?.body ? latestDispatch.body.slice(0, 120) : "";
+  let subtitle = latestDispatch?.body ? latestDispatch.body.slice(0, 120) : "";
   const isPaused = thread.status === "paused";
   const isActive = selectedRunId && thread.run_id === selectedRunId;
+  const failureSummary = thread.failure_summary || "";
+  const isFailed = thread.status === "failed" || thread.status === "stopped";
 
   // Only show action indicator if there's an unreplied handoff (pause)
   // Compare dispatch_seq vs reply_seq to check if user has responded
@@ -289,6 +293,11 @@ function renderThreadItem(thread: ConversationSummary): string {
   
   // Build meta line with timestamp
   const countPart = `${dispatches} dispatch${dispatches !== 1 ? "es" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
+
+  if (failureSummary && isFailed) {
+    const failureLine = `Failure: ${failureSummary}`;
+    subtitle = subtitle ? `${subtitle} · ${failureLine}` : failureLine;
+  }
   
   return `
     <button class="messages-thread${isActive ? " active" : ""}" data-run-id="${escapeHtml(thread.run_id)}">
@@ -343,6 +352,7 @@ function threadListSignature(conversations: ConversationSummary[]): string {
         ticketState?.dispatch_seq ?? "",
         ticketState?.reply_seq ?? "",
         ticketState?.status ?? "",
+        thread.failure_summary ?? "",
       ].join("|");
     })
     .join("::");
@@ -371,6 +381,7 @@ function threadDetailSignature(detail: ThreadDetail): string {
     ticketState?.current_ticket ?? "",
     ticketState?.total_turns ?? "",
     ticketState?.ticket_turns ?? "",
+    detail.run?.failure_summary ?? "",
   ].join("|");
 }
 
@@ -906,6 +917,8 @@ function renderThreadDetail(detail: ThreadDetail, runId: string, ctx: { reason: 
   if (!detailEl) return;
   const runStatus = (detail.run?.status || "").toString();
   const isPaused = runStatus === "paused";
+  const failureSummary = detail.run?.failure_summary || "";
+  const showFailure = failureSummary && (runStatus === "failed" || runStatus === "stopped");
   const dispatchHistory = detail.dispatch_history || [];
   const replyHistory = detail.reply_history || [];
   const dispatchCount = detail.dispatch_count ?? dispatchHistory.length;
@@ -939,6 +952,7 @@ function renderThreadDetail(detail: ThreadDetail, runId: string, ctx: { reason: 
 
   const renderDetail = () => {
     detailEl.innerHTML = `
+      ${showFailure ? `<div class="messages-failure-banner">Failure: ${escapeHtml(failureSummary)}</div>` : ""}
       <div class="messages-thread-history">
         ${threadedContent || '<div class="muted">No dispatches yet</div>'}
       </div>

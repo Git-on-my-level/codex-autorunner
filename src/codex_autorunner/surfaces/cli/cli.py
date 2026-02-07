@@ -1648,6 +1648,15 @@ def hub_snapshot(
     def _summarize_repo(repo: dict) -> dict:
         if not isinstance(repo, dict):
             return {}
+        ticket_flow = (
+            repo.get("ticket_flow") if isinstance(repo.get("ticket_flow"), dict) else {}
+        )
+        failure = ticket_flow.get("failure") if isinstance(ticket_flow, dict) else None
+        failure_summary = (
+            ticket_flow.get("failure_summary")
+            if isinstance(ticket_flow, dict)
+            else None
+        )
         return {
             "id": repo.get("id"),
             "display_name": repo.get("display_name"),
@@ -1657,6 +1666,8 @@ def hub_snapshot(
             "last_run_id": repo.get("last_run_id"),
             "last_run_started_at": repo.get("last_run_started_at"),
             "last_run_finished_at": repo.get("last_run_finished_at"),
+            "failure": failure,
+            "failure_summary": failure_summary,
         }
 
     def _summarize_message(msg: dict) -> dict:
