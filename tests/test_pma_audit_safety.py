@@ -143,9 +143,7 @@ def test_pma_safety_checker_reset_circuit_breaker(tmp_path: Path):
     for _ in range(2):
         checker.record_chat_result("codex", "error", error="test error")
     assert not checker.check_chat_start("codex", "test").allowed
-    import time
-
-    time.sleep(1.1)
+    checker._circuit_breaker_until = 1.0
     assert checker.check_chat_start("codex", "test").allowed
     assert checker._failure_counts == {}
     checker.record_chat_result("codex", "error", error="test error")

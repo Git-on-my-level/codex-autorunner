@@ -208,11 +208,11 @@ async def test_outbox_retry_after_honored(
         )
         task = asyncio.create_task(manager.send_message_with_outbox(record))
 
-        await asyncio.sleep(3.5)
+        await asyncio.wait_for(task, timeout=3.0)
         assert task.done()
 
         assert len(attempt_times) == 2
-        # next_attempt_at is stored in whole seconds, allow small slack
+        # next_attempt_at is stored in whole seconds, allow small slack.
         assert attempt_times[1] - attempt_times[0] >= 1.0
     finally:
         await store.close()
@@ -294,7 +294,7 @@ async def test_outbox_per_chat_scheduling(
         await asyncio.sleep(0.2)
         await manager.send_message_with_outbox(record2)
 
-        await asyncio.sleep(2.5)
+        await asyncio.wait_for(task1, timeout=2.0)
         assert task1.done()
 
         assert len(chat1_times) >= 1
