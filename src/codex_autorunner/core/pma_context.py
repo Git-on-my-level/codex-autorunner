@@ -45,8 +45,8 @@ Web UI map (user perspective):
 Ticket planning constraints (state machine):
 - Ticket flow processes `.codex-autorunner/tickets/TICKET-###*.md` in ascending numeric order.
 - On each turn it picks the first ticket where `done != true`; when that ticket is completed, it advances to the next.
-- Avoid creating dependency edges from lower-numbered tickets to higher-numbered tickets. That can deadlock the flow.
-- If a later ticket would unblock an earlier one, reorder/split tickets so prerequisites appear earlier.
+- `depends_on` frontmatter is not supported; filename order is the only execution contract.
+- If prerequisites are discovered late, reorder/split tickets so prerequisite work appears earlier.
 
 What each ticket agent turn can already see:
 - The current ticket file (full markdown + frontmatter).

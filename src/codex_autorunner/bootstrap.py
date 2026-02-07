@@ -250,7 +250,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 
 - Ticket flow executes `TICKET-###*.md` in ascending numeric order.
 - It repeatedly selects the first ticket with `done != true`, runs that ticket, then advances.
-- Do not create lower-numbered tickets that depend on higher-numbered tickets.
+- `depends_on` frontmatter is not supported; filename order is the only execution contract.
 - If prerequisites are discovered late, split/reorder tickets so prerequisite work appears earlier.
 
 ## Ticket agent context (what each turn already gets)
