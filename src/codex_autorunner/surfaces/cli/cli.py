@@ -1732,6 +1732,8 @@ def hub_snapshot(
         title = dispatch.get("title", "")
         truncated_body = (body[:200] + "...") if len(body) > 200 else body
         return {
+            "item_type": msg.get("item_type"),
+            "next_action": msg.get("next_action"),
             "repo_id": msg.get("repo_id"),
             "repo_display_name": msg.get("repo_display_name"),
             "run_id": msg.get("run_id"),

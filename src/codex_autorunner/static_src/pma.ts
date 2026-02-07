@@ -483,6 +483,7 @@ function getElements() {
     chatUploadInput: document.getElementById("pma-chat-upload-input") as HTMLInputElement | null,
     chatUploadBtn: document.getElementById("pma-chat-upload-btn") as HTMLButtonElement | null,
     inboxFiles: document.getElementById("pma-inbox-files"),
+    inboxHint: document.getElementById("pma-inbox-hint"),
     outboxFiles: document.getElementById("pma-outbox-files"),
     outboxRefresh: document.getElementById("pma-outbox-refresh") as HTMLButtonElement | null,
     inboxClear: document.getElementById("pma-inbox-clear") as HTMLButtonElement | null,
@@ -678,6 +679,11 @@ function updateClearButtons(listing: FileBoxListing | null): void {
   const outboxCount = listing?.outbox?.length ?? 0;
   elements.inboxClear.classList.toggle("hidden", inboxCount <= 1);
   elements.outboxClear.classList.toggle("hidden", outboxCount <= 1);
+  if (elements.inboxHint) {
+    const hasInbox = inboxCount > 0;
+    elements.inboxHint.textContent = hasInbox ? "Next: Process uploaded files" : "";
+    elements.inboxHint.classList.toggle("hidden", !hasInbox);
+  }
 }
 
 async function clearPMABox(box: "inbox" | "outbox"): Promise<void> {

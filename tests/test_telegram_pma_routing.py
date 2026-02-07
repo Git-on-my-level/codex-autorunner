@@ -167,7 +167,7 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     snapshot_text = prompt_text.split("<hub_snapshot>\n", 1)[1].split(
         "\n</hub_snapshot>", 1
     )[0]
-    assert "PMA files:" in snapshot_text
+    assert "PMA File Inbox:" in snapshot_text
     assert "- inbox: [input.txt]" in snapshot_text
     assert "- outbox: [output.txt]" in snapshot_text
 

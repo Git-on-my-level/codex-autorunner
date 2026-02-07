@@ -422,6 +422,7 @@ function getElements() {
         chatUploadInput: document.getElementById("pma-chat-upload-input"),
         chatUploadBtn: document.getElementById("pma-chat-upload-btn"),
         inboxFiles: document.getElementById("pma-inbox-files"),
+        inboxHint: document.getElementById("pma-inbox-hint"),
         outboxFiles: document.getElementById("pma-outbox-files"),
         outboxRefresh: document.getElementById("pma-outbox-refresh"),
         inboxClear: document.getElementById("pma-inbox-clear"),
@@ -603,6 +604,11 @@ function updateClearButtons(listing) {
     const outboxCount = listing?.outbox?.length ?? 0;
     elements.inboxClear.classList.toggle("hidden", inboxCount <= 1);
     elements.outboxClear.classList.toggle("hidden", outboxCount <= 1);
+    if (elements.inboxHint) {
+        const hasInbox = inboxCount > 0;
+        elements.inboxHint.textContent = hasInbox ? "Next: Process uploaded files" : "";
+        elements.inboxHint.classList.toggle("hidden", !hasInbox);
+    }
 }
 async function clearPMABox(box) {
     const confirmed = window.confirm(`Clear ${box}? This will delete all files.`);

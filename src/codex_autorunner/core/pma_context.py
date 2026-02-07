@@ -261,8 +261,14 @@ def _render_hub_snapshot(
 
     inbox = snapshot.get("inbox") or []
     if inbox:
-        lines.append("Inbox (paused runs needing attention):")
+        lines.append("Run Dispatches (paused runs needing attention):")
         for item in list(inbox)[: max(0, max_messages)]:
+            item_type = _truncate(
+                str(item.get("item_type", "run_dispatch")), max_field_chars
+            )
+            next_action = _truncate(
+                str(item.get("next_action", "reply_and_resume")), max_field_chars
+            )
             repo_id = _truncate(str(item.get("repo_id", "")), max_field_chars)
             run_id = _truncate(str(item.get("run_id", "")), max_field_chars)
             seq = _truncate(str(item.get("seq", "")), max_field_chars)
@@ -270,8 +276,8 @@ def _render_hub_snapshot(
             mode = _truncate(str(dispatch.get("mode", "")), max_field_chars)
             handoff = bool(dispatch.get("is_handoff"))
             lines.append(
-                f"- repo_id={repo_id} run_id={run_id} seq={seq} mode={mode} "
-                f"handoff={str(handoff).lower()}"
+                f"- type={item_type} next_action={next_action} repo_id={repo_id} "
+                f"run_id={run_id} seq={seq} mode={mode} handoff={str(handoff).lower()}"
             )
             title = dispatch.get("title")
             if title:
@@ -344,15 +350,19 @@ def _render_hub_snapshot(
     pma_files = snapshot.get("pma_files") or {}
     inbox_files = pma_files.get("inbox") or []
     outbox_files = pma_files.get("outbox") or []
+    pma_files_detail = snapshot.get("pma_files_detail") or {}
     if inbox_files or outbox_files:
-        lines.append("PMA files:")
         if inbox_files:
+            lines.append("PMA File Inbox:")
             files = [
                 _truncate(str(name), max_field_chars)
                 for name in list(inbox_files)[: max(0, max_pma_files)]
             ]
             lines.append(f"- inbox: [{', '.join(files)}]")
+            if pma_files_detail.get("inbox"):
+                lines.append("- next_action: process_uploaded_file")
         if outbox_files:
+            lines.append("PMA File Outbox:")
             files = [
                 _truncate(str(name), max_field_chars)
                 for name in list(outbox_files)[: max(0, max_pma_files)]
@@ -575,6 +585,8 @@ def _gather_inbox(
                 continue
             messages.append(
                 {
+                    "item_type": "run_dispatch",
+                    "next_action": "reply_and_resume",
                     "repo_id": snap.id,
                     "repo_display_name": snap.display_name,
                     "run_id": record.id,
@@ -617,6 +629,7 @@ async def build_hub_snapshot(
             "inbox": [],
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
+            "pma_files_detail": {"inbox": [], "outbox": []},
         }
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
@@ -665,6 +678,10 @@ async def build_hub_snapshot(
     templates = _build_templates_snapshot(supervisor, hub_root=hub_root)
 
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
+    pma_files_detail: dict[str, list[dict[str, str]]] = {
+        "inbox": [],
+        "outbox": [],
+    }
     if hub_root:
         try:
             pma_dir = hub_root / ".codex-autorunner" / "pma"
@@ -677,6 +694,15 @@ async def build_hub_snapshot(
                         if f.is_file() and not f.name.startswith(".")
                     ]
                     pma_files[box] = sorted(files)
+                    pma_files_detail[box] = [
+                        {
+                            "item_type": "pma_file",
+                            "next_action": "process_uploaded_file",
+                            "box": box,
+                            "name": name,
+                        }
+                        for name in pma_files[box]
+                    ]
         except Exception:
             pass
 
@@ -685,6 +711,7 @@ async def build_hub_snapshot(
         "inbox": inbox,
         "templates": templates,
         "pma_files": pma_files,
+        "pma_files_detail": pma_files_detail,
         "lifecycle_events": lifecycle_events,
         "limits": {
             "max_repos": max_repos,

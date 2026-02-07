@@ -25,7 +25,7 @@
         <button class="primary sm" id="hub-new-repo">+ New</button>
         <button class="sm" id="hub-scan">Scan</button>
         <button class="ghost sm" id="hub-refresh">Refresh</button>
-        <button class="ghost sm icon-btn notification-bell" id="hub-notification-bell" title="Dispatches">
+        <button class="ghost sm icon-btn notification-bell" id="hub-notification-bell" title="Run Dispatches">
           <svg class="notification-bell-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 9.5a6 6 0 0 1 12 0v3.5l1.6 2.2H4.4L6 13z" />
             <path d="M9.8 18.2a2.2 2.2 0 0 0 4.4 0" />
@@ -59,7 +59,7 @@
     </section>
     <section class="hub-inbox">
       <div class="hub-panel-header">
-        <span class="label">Inbox</span>
+        <span class="label">Run Dispatches</span>
         <div class="hub-panel-actions">
           <button class="ghost sm" id="hub-inbox-refresh">Refresh</button>
         </div>
@@ -106,7 +106,7 @@
         <span class="hub-version" id="pma-version">v–</span>
       </div>
       <div class="hub-hero-actions pma-hero-actions">
-        <button class="ghost sm icon-btn notification-bell" id="pma-notification-bell" title="Dispatches">
+        <button class="ghost sm icon-btn notification-bell" id="pma-notification-bell" title="Run Dispatches">
           <svg class="notification-bell-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 9.5a6 6 0 0 1 12 0v3.5l1.6 2.2H4.4L6 13z" />
             <path d="M9.8 18.2a2.2 2.2 0 0 0 4.4 0" />
@@ -184,12 +184,13 @@
         <div class="pma-chat-compose">
           <div class="pma-attachments-area" id="pma-attachments-area">
             <div class="pma-files-row">
-              <span class="pma-files-label">In</span>
+              <span class="pma-files-label">File Inbox</span>
               <button class="pma-icon-btn-small hidden pma-clear-btn" id="pma-inbox-clear" title="Clear inbox">🗑</button>
               <div class="pma-file-list filebox-list" id="pma-inbox-files"></div>
             </div>
+            <div class="pma-files-hint muted small hidden" id="pma-inbox-hint"></div>
             <div class="pma-files-row">
-              <span class="pma-files-label">Out</span>
+              <span class="pma-files-label">File Outbox</span>
               <button class="pma-icon-btn-small hidden pma-clear-btn" id="pma-outbox-clear" title="Clear outbox">🗑</button>
               <div class="pma-file-list filebox-list" id="pma-outbox-files"></div>
               <button class="pma-icon-btn-small" id="pma-outbox-refresh" title="Refresh files">↻</button>
@@ -1068,7 +1069,7 @@
     <div aria-describedby="notification-modal-body" aria-labelledby="notification-modal-title" aria-modal="true"
       class="modal-dialog notification-dialog" role="dialog" tabindex="-1">
       <div class="modal-header notification-modal-header">
-        <span class="label" id="notification-modal-title">Dispatches</span>
+        <span class="label" id="notification-modal-title">Run Dispatches</span>
         <div class="notification-modal-actions">
           <button class="ghost sm" id="notification-refresh">Refresh</button>
           <button class="ghost sm icon-btn" id="notification-close" title="Close">✕</button>

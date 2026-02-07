@@ -1939,6 +1939,8 @@ def create_hub_app(
                         continue
                     messages.append(
                         {
+                            "item_type": "run_dispatch",
+                            "next_action": "reply_and_resume",
                             "repo_id": snap.id,
                             "repo_display_name": snap.display_name,
                             "repo_path": str(snap.path),

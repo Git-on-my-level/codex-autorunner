@@ -44,6 +44,7 @@ function renderList(items) {
         const repoLabel = item.repo_display_name || item.repo_id;
         const href = item.open_url || `/repos/${item.repo_id}/?tab=inbox&run_id=${item.run_id}`;
         const seq = item.seq ? `#${item.seq}` : "";
+        const nextAction = item.next_action === "reply_and_resume" ? "Next: Reply + resume run" : "";
         return `
         <div class="notification-item">
           <div class="notification-item-header">
@@ -52,6 +53,7 @@ function renderList(items) {
           </div>
           <div class="notification-title">${escapeHtml(title)}</div>
           <div class="notification-excerpt">${escapeHtml(excerpt)}</div>
+          ${nextAction ? `<div class="notification-next muted small">${escapeHtml(nextAction)}</div>` : ""}
           <div class="notification-actions">
             <a class="notification-action" href="${escapeHtml(resolvePath(href))}">Open run</a>
             <button class="notification-action" data-action="copy-run-id" data-run-id="${escapeHtml(item.run_id)}">Copy ID</button>

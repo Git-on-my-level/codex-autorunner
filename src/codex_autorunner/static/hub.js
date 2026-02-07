@@ -951,6 +951,7 @@ async function loadHubInbox(ctx) {
                     const failureLine = `Failure: ${item.failure_summary}`;
                     excerpt = excerpt ? `${excerpt} · ${failureLine}` : failureLine;
                 }
+                const nextActionLabel = item.next_action === "reply_and_resume" ? "Next: Reply + resume run" : "";
                 const repoLabel = item.repo_display_name || item.repo_id;
                 const href = item.open_url || `/repos/${item.repo_id}/?tab=messages&run_id=${item.run_id}`;
                 return `
@@ -961,6 +962,7 @@ async function loadHubInbox(ctx) {
               </div>
               <div class="hub-inbox-title">${escapeHtml(title)}</div>
               <div class="hub-inbox-excerpt muted small">${escapeHtml(excerpt)}</div>
+              ${nextActionLabel ? `<div class="hub-inbox-next muted small">${escapeHtml(nextActionLabel)}</div>` : ""}
             </a>
           `;
             })

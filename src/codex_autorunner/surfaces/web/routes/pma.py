@@ -1564,6 +1564,8 @@ def build_pma_routes() -> APIRouter:
         filename = entry.get("name", "")
         download = f"{base}/hub/pma/files/{box}/{filename}"
         return {
+            "item_type": "pma_file",
+            "next_action": "process_uploaded_file",
             "name": filename,
             "box": box,
             "size": entry.get("size"),

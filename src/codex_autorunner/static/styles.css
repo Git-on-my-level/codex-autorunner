@@ -10133,6 +10133,11 @@ button.loading::after {
   font-size: 13px;
 }
 
+.hub-inbox-next {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
 /* Inbox / Messages panel */
 #inbox.panel.active {
   display: flex;
@@ -10761,6 +10766,10 @@ button.loading::after {
   align-items: center;
   gap: 6px;
   min-height: 20px;
+}
+
+.pma-files-hint {
+  margin-left: 2px;
 }
 
 .chat-files-label,
@@ -13985,6 +13994,11 @@ button.filebox-delete:hover {
 
 .notification-excerpt {
   font-size: 12px;
+  color: var(--muted);
+}
+
+.notification-next {
+  font-size: 11px;
   color: var(--muted);
 }
 

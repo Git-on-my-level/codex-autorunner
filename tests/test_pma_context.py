@@ -263,7 +263,7 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
     assert "<hub_snapshot>" in result
-    assert "Inbox (paused runs needing attention):" in result
+    assert "Run Dispatches (paused runs needing attention):" in result
     assert "Ticket planning constraints (state machine):" in result
     assert "active_context.md" in result
     assert "decisions.md" in result
