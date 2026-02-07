@@ -114,9 +114,9 @@ def _ticket_suffix(path: Path) -> str:
     return match.group(2) or ""
 
 
-def _rename_ticket_order(order: list[Path]) -> None:
+def _planned_ticket_renames(order: list[Path]) -> list[tuple[Path, Path]]:
     if not order:
-        return
+        return []
     existing_width = max(
         3,
         max(
@@ -128,16 +128,79 @@ def _rename_ticket_order(order: list[Path]) -> None:
             default=3,
         ),
     )
-    staged: list[tuple[Path, Path]] = []
-    for path in order:
-        tmp = path.with_name(f".tmp-reorder-{uuid.uuid4().hex}-{path.name}")
-        path.rename(tmp)
-        staged.append((path, tmp))
-    for new_idx, (original_path, tmp_path) in enumerate(staged, start=1):
+    planned: list[tuple[Path, Path]] = []
+    for new_idx, original_path in enumerate(order, start=1):
         suffix = _ticket_suffix(original_path)
         target_name = f"TICKET-{new_idx:0{existing_width}d}{suffix}.md"
         target_path = original_path.with_name(target_name)
+        planned.append((original_path, target_path))
+    return planned
+
+
+def _rename_ticket_order(order: list[Path]) -> None:
+    planned = _planned_ticket_renames(order)
+    if not planned:
+        return
+    staged: list[tuple[Path, Path]] = []
+    for original_path, _target_path in planned:
+        tmp = original_path.with_name(
+            f".tmp-reorder-{uuid.uuid4().hex}-{original_path.name}"
+        )
+        original_path.rename(tmp)
+        staged.append((tmp, _target_path))
+    for tmp_path, target_path in staged:
         tmp_path.rename(target_path)
+
+
+def _sync_active_run_current_ticket_paths_after_reorder(
+    repo_root: Path, renamed_paths: list[tuple[Path, Path]]
+) -> None:
+    if not renamed_paths:
+        return
+    store = _require_flow_store(repo_root)
+    if store is None:
+        return
+    try:
+        records = store.list_flow_runs(flow_type="ticket_flow")
+        active = _active_or_paused_run(records)
+        if active is None or not isinstance(active.state, dict):
+            return
+        rel_map: dict[str, str] = {}
+        for old_path, new_path in renamed_paths:
+            rel_map[safe_relpath(old_path, repo_root)] = safe_relpath(
+                new_path, repo_root
+            )
+        next_state = dict(active.state)
+        changed = False
+
+        current_ticket = next_state.get("current_ticket")
+        if isinstance(current_ticket, str):
+            updated = rel_map.get(current_ticket)
+            if isinstance(updated, str) and updated != current_ticket:
+                next_state["current_ticket"] = updated
+                changed = True
+
+        ticket_engine = next_state.get("ticket_engine")
+        if isinstance(ticket_engine, dict):
+            next_ticket_engine = dict(ticket_engine)
+            current_ticket = next_ticket_engine.get("current_ticket")
+            if isinstance(current_ticket, str):
+                updated = rel_map.get(current_ticket)
+                if isinstance(updated, str) and updated != current_ticket:
+                    next_ticket_engine["current_ticket"] = updated
+                    next_state["ticket_engine"] = next_ticket_engine
+                    changed = True
+
+        if not changed:
+            return
+        store.update_flow_run_status(active.id, active.status, state=next_state)
+    except Exception as exc:
+        _logger.warning("Failed to sync current_ticket after reorder: %s", exc)
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
 
 
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
@@ -1090,8 +1153,12 @@ You are the first ticket in a new ticket_flow run.
                 + [source_path]
                 + remaining_paths[desired_pos:]
             )
+            renamed_paths = _planned_ticket_renames(reordered_paths)
             try:
                 _rename_ticket_order(reordered_paths)
+                _sync_active_run_current_ticket_paths_after_reorder(
+                    repo_root, renamed_paths
+                )
             except Exception as exc:
                 raise HTTPException(
                     status_code=400, detail=f"Failed to reorder ticket: {exc}"
