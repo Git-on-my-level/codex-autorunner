@@ -50,7 +50,7 @@ from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
 from .state import RunnerState, load_state, now_iso
 from .types import AppServerSupervisorFactory, BackendFactory
-from .utils import atomic_write
+from .utils import atomic_write, is_within
 
 logger = logging.getLogger("codex_autorunner.hub")
 
@@ -631,11 +631,17 @@ class HubSupervisor:
             raise ValueError(f"Base repo missing on disk: {base_repo_id}")
 
         self.hub_config.worktrees_root.mkdir(parents=True, exist_ok=True)
+        worktrees_root = self.hub_config.worktrees_root.resolve()
         safe_branch = re.sub(r"[^a-zA-Z0-9._/-]+", "-", branch).strip("-") or "work"
         repo_id = f"{base_repo_id}--{safe_branch.replace('/', '-')}"
         if manifest.get(repo_id) and not force:
             raise ValueError(f"Worktree repo already exists: {repo_id}")
-        worktree_path = (self.hub_config.worktrees_root / repo_id).resolve()
+        worktree_path = (worktrees_root / repo_id).resolve()
+        if not is_within(worktrees_root, worktree_path):
+            raise ValueError(
+                "Worktree path escapes worktrees_root: "
+                f"{worktree_path} (root={worktrees_root})"
+            )
         if worktree_path.exists() and not force:
             raise ValueError(f"Worktree path already exists: {worktree_path}")
 
