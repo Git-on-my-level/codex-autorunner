@@ -920,6 +920,8 @@ function els(): {
   dispatchPanel: HTMLElement | null;
   dispatchPanelToggle: HTMLButtonElement | null;
   dispatchMiniList: HTMLElement | null;
+  bulkSetAgentBtn: HTMLButtonElement | null;
+  bulkClearModelBtn: HTMLButtonElement | null;
   bootstrapBtn: HTMLButtonElement | null;
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
@@ -955,6 +957,8 @@ function els(): {
     dispatchPanel: document.getElementById("dispatch-panel"),
     dispatchPanelToggle: document.getElementById("dispatch-panel-toggle") as HTMLButtonElement | null,
     dispatchMiniList: document.getElementById("dispatch-mini-list"),
+    bulkSetAgentBtn: document.getElementById("ticket-bulk-set-agent") as HTMLButtonElement | null,
+    bulkClearModelBtn: document.getElementById("ticket-bulk-clear-model") as HTMLButtonElement | null,
     bootstrapBtn: document.getElementById("ticket-flow-bootstrap") as HTMLButtonElement | null,
     resumeBtn: document.getElementById("ticket-flow-resume") as HTMLButtonElement | null,
     refreshBtn: document.getElementById("ticket-flow-refresh") as HTMLButtonElement | null,
@@ -970,8 +974,30 @@ function els(): {
 }
 
 function setButtonsDisabled(disabled: boolean): void {
-  const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, reconnectBtn, recoverBtn } = els();
-  [bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, reconnectBtn, recoverBtn].forEach((btn) => {
+  const {
+    bootstrapBtn,
+    resumeBtn,
+    refreshBtn,
+    stopBtn,
+    restartBtn,
+    archiveBtn,
+    reconnectBtn,
+    recoverBtn,
+    bulkSetAgentBtn,
+    bulkClearModelBtn,
+  } = els();
+  [
+    bootstrapBtn,
+    resumeBtn,
+    refreshBtn,
+    stopBtn,
+    restartBtn,
+    archiveBtn,
+    reconnectBtn,
+    recoverBtn,
+    bulkSetAgentBtn,
+    bulkClearModelBtn,
+  ].forEach((btn) => {
     if (btn) btn.disabled = disabled;
   });
 }
@@ -1494,6 +1520,99 @@ async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
       renderTickets(null);
     }, { restoreOnNextFrame: true });
     flash((err as Error).message || "Failed to load tickets", "error");
+  }
+}
+
+type TicketBulkUpdateResponse = {
+  status?: string;
+  updated?: number;
+  skipped?: number;
+  errors?: string[];
+  lint_errors?: string[];
+};
+
+function summarizeBulkResult(action: string, payload: TicketBulkUpdateResponse): void {
+  const updated = payload.updated ?? 0;
+  const skipped = payload.skipped ?? 0;
+  const errors = payload.errors || [];
+  const lintErrors = payload.lint_errors || [];
+  if (!errors.length && !lintErrors.length) {
+    flash(`${action}: updated ${updated}, skipped ${skipped}.`, "success");
+    return;
+  }
+  const combined = [...errors, ...lintErrors];
+  const head = combined[0] ? ` ${combined[0]}` : "";
+  flash(`${action} completed with issues.${head}`, "error");
+  if (combined.length > 1) {
+    console.warn(`${action} issues:`, combined);
+  }
+}
+
+async function bulkSetAgent(): Promise<void> {
+  const { bulkSetAgentBtn } = els();
+  const agent = await inputModal("Set agent for tickets", {
+    placeholder: "codex",
+    confirmText: "Set agent",
+  });
+  if (!agent) return;
+  const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
+    placeholder: "1:20",
+    confirmText: "Apply",
+    allowEmpty: true,
+  });
+  if (range === null) return;
+  const rangeValue = range.trim() || undefined;
+
+  setButtonLoading(bulkSetAgentBtn, true);
+  try {
+    const payload = (await api("/api/flows/ticket_flow/tickets/bulk-set-agent", {
+      method: "POST",
+      body: {
+        agent,
+        range: rangeValue,
+      },
+    })) as TicketBulkUpdateResponse;
+    summarizeBulkResult("Bulk set agent", payload);
+    await loadTicketFiles({ reason: "manual" });
+  } catch (err) {
+    flash((err as Error).message || "Failed to bulk set agent", "error");
+  } finally {
+    setButtonLoading(bulkSetAgentBtn, false);
+  }
+}
+
+async function bulkClearModel(): Promise<void> {
+  const { bulkClearModelBtn } = els();
+  const range = await inputModal("Optional range (A:B). Leave blank for all tickets.", {
+    placeholder: "1:20",
+    confirmText: "Clear",
+    allowEmpty: true,
+  });
+  if (range === null) return;
+  const rangeValue = range.trim() || undefined;
+
+  const confirmed = await confirmModal(
+    rangeValue
+      ? `Clear model/reasoning overrides for tickets ${rangeValue}?`
+      : "Clear model/reasoning overrides for all tickets?",
+    { confirmText: "Clear", cancelText: "Cancel", danger: true }
+  );
+  if (!confirmed) return;
+
+  setButtonLoading(bulkClearModelBtn, true);
+  try {
+    const payload = (await api("/api/flows/ticket_flow/tickets/bulk-clear-model", {
+      method: "POST",
+      body: {
+        range: rangeValue,
+      },
+    })) as TicketBulkUpdateResponse;
+    summarizeBulkResult("Bulk clear model", payload);
+    await loadTicketFiles({ reason: "manual" });
+  } catch (err) {
+    flash((err as Error).message || "Failed to clear model overrides", "error");
+  } finally {
+    setButtonLoading(bulkClearModelBtn, false);
   }
 }
 
@@ -2153,7 +2272,19 @@ async function archiveTicketFlow(): Promise<void> {
 }
 
 export function initTicketFlow(): void {
-  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, reconnectBtn, recoverBtn } = els();
+  const {
+    card,
+    bootstrapBtn,
+    resumeBtn,
+    refreshBtn,
+    stopBtn,
+    restartBtn,
+    archiveBtn,
+    reconnectBtn,
+    recoverBtn,
+    bulkSetAgentBtn,
+    bulkClearModelBtn,
+  } = els();
   if (!card || card.dataset.ticketInitialized === "1") return;
   card.dataset.ticketInitialized = "1";
 
@@ -2164,6 +2295,8 @@ export function initTicketFlow(): void {
   if (archiveBtn) archiveBtn.addEventListener("click", archiveTicketFlow);
   if (reconnectBtn) reconnectBtn.addEventListener("click", reconnectTicketFlowStream);
   if (recoverBtn) recoverBtn.addEventListener("click", recoverTicketFlow);
+  if (bulkSetAgentBtn) bulkSetAgentBtn.addEventListener("click", () => void bulkSetAgent());
+  if (bulkClearModelBtn) bulkClearModelBtn.addEventListener("click", () => void bulkClearModel());
   if (refreshBtn) refreshBtn.addEventListener("click", () => {
     void loadTicketFlow({ reason: "manual" });
   });

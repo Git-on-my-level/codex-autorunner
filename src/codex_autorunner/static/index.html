@@ -698,8 +698,14 @@
           <div class="ticket-flow-grid">
             <div class="ticket-panel">
               <div class="ticket-panel-header">
-                <span class="muted">Tickets</span>
-                <span class="muted small" id="ticket-flow-dir">–</span>
+                <div class="ticket-panel-title">
+                  <span class="muted">Tickets</span>
+                  <span class="muted small" id="ticket-flow-dir">–</span>
+                </div>
+                <div class="ticket-panel-actions">
+                  <button class="ghost sm" id="ticket-bulk-set-agent" title="Bulk set agent">Set agent</button>
+                  <button class="ghost sm" id="ticket-bulk-clear-model" title="Clear model/reasoning overrides">Clear model</button>
+                </div>
               </div>
               <div class="ticket-progress-bar" id="ticket-progress-bar">
                 <div class="ticket-progress-fill" id="ticket-progress-fill"></div>

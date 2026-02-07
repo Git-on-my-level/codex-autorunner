@@ -98,6 +98,7 @@ from ...integrations.templates.scan_agent import (
 )
 from ...manifest import load_manifest
 from ...tickets import AgentPool
+from ...tickets.bulk import bulk_clear_model_pin, bulk_set_agent
 from ...tickets.files import (
     list_ticket_paths,
     read_ticket,
@@ -105,6 +106,11 @@ from ...tickets.files import (
     ticket_is_done,
 )
 from ...tickets.frontmatter import split_markdown_frontmatter
+from ...tickets.import_pack import (
+    TicketPackImportError,
+    import_ticket_pack,
+    load_template_frontmatter,
+)
 from ...tickets.lint import (
     lint_ticket_directory,
     parse_ticket_index,
@@ -123,6 +129,7 @@ telegram_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
 repos_app = typer.Typer(add_completion=False)
 worktree_app = typer.Typer(add_completion=False)
+hub_tickets_app = typer.Typer(add_completion=False)
 flow_app = typer.Typer(add_completion=False)
 ticket_flow_app = typer.Typer(add_completion=False)
 
@@ -316,6 +323,43 @@ def _resolve_hub_config_path_for_cli(
     return find_nearest_hub_config_path(repo_root)
 
 
+def _resolve_hub_repo_root(config: HubConfig, repo_id: str) -> Path:
+    manifest = load_manifest(config.manifest_path, config.root)
+    entry = manifest.get(repo_id)
+    if entry is None:
+        _raise_exit(f"Repo id not found in hub manifest: {repo_id}")
+    repo_root = (config.root / entry.path).resolve()
+    if not repo_root.exists():
+        _raise_exit(f"Repo path does not exist: {repo_root}")
+    return repo_root
+
+
+def _parse_renumber(value: Optional[str]) -> Optional[dict[str, int]]:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    parts = [part.strip() for part in cleaned.split(",") if part.strip()]
+    pairs: dict[str, int] = {}
+    for part in parts:
+        if "=" not in part:
+            _raise_exit("Renumber format must be start=<n>,step=<n>.")
+        key, raw = [segment.strip() for segment in part.split("=", 1)]
+        if key not in ("start", "step"):
+            _raise_exit("Renumber keys must be start and step.")
+        try:
+            value_int = int(raw)
+        except ValueError as exc:
+            _raise_exit(f"Renumber {key} must be an integer.", cause=exc)
+        pairs[key] = value_int
+    if "start" not in pairs or "step" not in pairs:
+        _raise_exit("Renumber requires both start=<n> and step=<n>.")
+    if pairs["start"] < 1 or pairs["step"] < 1:
+        _raise_exit("Renumber start/step must be >= 1.")
+    return pairs
+
+
 def _guard_unregistered_hub_repo(repo_root: Path, hub: Optional[Path]) -> None:
     hub_config_path = _resolve_hub_config_path_for_cli(repo_root, hub)
     if hub_config_path is None:
@@ -477,6 +521,7 @@ def _require_optional_feature(
 app.add_typer(hub_app, name="hub")
 hub_app.add_typer(dispatch_app, name="dispatch")
 hub_app.add_typer(worktree_app, name="worktree")
+hub_app.add_typer(hub_tickets_app, name="tickets")
 app.add_typer(telegram_app, name="telegram")
 app.add_typer(templates_app, name="templates")
 templates_app.add_typer(repos_app, name="repos")
@@ -571,7 +616,7 @@ def init(
 @app.command()
 def status(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", "--path", help="Hub root path"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
 ):
     """Show autorunner status."""
@@ -1732,6 +1777,223 @@ def hub_snapshot(
 
     indent = 2 if pretty else None
     typer.echo(json.dumps(snapshot, indent=indent))
+
+
+def _print_ticket_import_report(report) -> None:
+    typer.echo(f"Repo: {report.repo_id}")
+    typer.echo(f"Ticket dir: {report.ticket_dir}")
+    typer.echo(f"Zip: {report.zip_path}")
+    typer.echo(f"Dry run: {report.dry_run}")
+    if report.renumber:
+        typer.echo(
+            f"Renumber: start={report.renumber.get('start')}, step={report.renumber.get('step')}"
+        )
+    if report.assign_agent:
+        typer.echo(f"Assign agent: {report.assign_agent}")
+    if report.clear_model_pin:
+        typer.echo("Clear model pin: true")
+    if report.apply_template:
+        typer.echo(f"Template: {report.apply_template}")
+    if report.lint:
+        typer.echo("Lint: enabled")
+    if report.errors:
+        typer.echo("Errors:")
+        for err in report.errors:
+            typer.echo(f"- {err}")
+    if report.lint_errors:
+        typer.echo("Lint errors:")
+        for err in report.lint_errors:
+            typer.echo(f"- {err}")
+    typer.echo(f"Tickets ready: {report.created}")
+    for item in report.items:
+        status = item.status.upper()
+        target = item.target or "-"
+        typer.echo(f"- {status}: {item.source} -> {target}")
+        for err in item.errors:
+            typer.echo(f"    {err}")
+
+
+def _print_ticket_bulk_report(
+    *,
+    repo_id: str,
+    ticket_dir: Path,
+    action: str,
+    updated: int,
+    skipped: int,
+    errors: list[str],
+    lint_errors: list[str],
+) -> None:
+    typer.echo(f"Repo: {repo_id}")
+    typer.echo(f"Ticket dir: {ticket_dir}")
+    typer.echo(f"Action: {action}")
+    typer.echo(f"Updated: {updated}")
+    typer.echo(f"Skipped: {skipped}")
+    if errors:
+        typer.echo("Errors:")
+        for err in errors:
+            typer.echo(f"- {err}")
+    if lint_errors:
+        typer.echo("Lint errors:")
+        for err in lint_errors:
+            typer.echo(f"- {err}")
+
+
+@hub_tickets_app.command("import")
+def hub_tickets_import(
+    repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
+    zip_path: Path = typer.Option(..., "--zip", help="Path to ticket pack zip"),
+    renumber: Optional[str] = typer.Option(
+        None, "--renumber", help="Renumber tickets with start=<n>,step=<n>"
+    ),
+    assign_agent: Optional[str] = typer.Option(
+        None, "--assign-agent", help="Override ticket frontmatter agent"
+    ),
+    clear_model_pin: bool = typer.Option(
+        False, "--clear-model-pin", help="Clear model/reasoning overrides"
+    ),
+    apply_template: Optional[str] = typer.Option(
+        None, "--apply-template", help="Template ref REPO:PATH[@REF]"
+    ),
+    lint: bool = typer.Option(
+        True, "--lint/--no-lint", help="Lint destination tickets (default on)"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Import a zip ticket pack into the queue."""
+    config = _require_hub_config(hub)
+    repo_root = _resolve_hub_repo_root(config, repo_id)
+
+    if assign_agent:
+        if assign_agent != "user":
+            try:
+                validate_agent_id(assign_agent)
+            except ValueError as exc:
+                _raise_exit(str(exc), cause=exc)
+
+    renumber_parsed = _parse_renumber(renumber)
+
+    if not zip_path.exists():
+        _raise_exit(f"Zip path does not exist: {zip_path}")
+    if zip_path.is_dir():
+        _raise_exit("Zip path must be a file.")
+
+    template_frontmatter = None
+    if apply_template:
+        ctx = _require_repo_config(repo_root, config.root)
+        _require_templates_enabled(ctx.config)
+        fetched, _scan_record, _hub_root = _fetch_template_with_scan(
+            apply_template, ctx, config.root
+        )
+        try:
+            template_frontmatter = load_template_frontmatter(fetched.content)
+        except TicketPackImportError as exc:
+            _raise_exit(str(exc), cause=exc)
+
+    report = import_ticket_pack(
+        repo_id=repo_id,
+        repo_root=repo_root,
+        ticket_dir=repo_root / ".codex-autorunner" / "tickets",
+        zip_path=zip_path,
+        renumber=renumber_parsed,
+        assign_agent=assign_agent,
+        clear_model_pin=clear_model_pin,
+        template_ref=apply_template,
+        template_frontmatter=template_frontmatter,
+        lint=lint,
+        dry_run=dry_run,
+    )
+
+    if output_json:
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+    else:
+        _print_ticket_import_report(report)
+
+    if not report.ok():
+        _raise_exit("Ticket import failed.")
+
+
+@hub_tickets_app.command("bulk-set")
+def hub_tickets_bulk_set(
+    repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
+    agent: str = typer.Option(..., "--agent", help="Agent id to set on tickets"),
+    range_spec: Optional[str] = typer.Option(
+        None, "--range", help="Range of ticket indices in the form A:B"
+    ),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Bulk set agent for tickets in a repo queue."""
+    config = _require_hub_config(hub)
+    repo_root = _resolve_hub_repo_root(config, repo_id)
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+
+    if agent != "user":
+        try:
+            validate_agent_id(agent)
+        except ValueError as exc:
+            _raise_exit(str(exc), cause=exc)
+
+    try:
+        result = bulk_set_agent(
+            ticket_dir,
+            agent,
+            range_spec,
+            repo_root=repo_root,
+        )
+    except ValueError as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    lint_errors = _validate_tickets(ticket_dir)
+    _print_ticket_bulk_report(
+        repo_id=repo_id,
+        ticket_dir=ticket_dir,
+        action="bulk-set-agent",
+        updated=result.updated,
+        skipped=result.skipped,
+        errors=result.errors,
+        lint_errors=lint_errors,
+    )
+
+    if result.errors or lint_errors:
+        _raise_exit("Ticket bulk update failed.")
+
+
+@hub_tickets_app.command("bulk-clear-model")
+def hub_tickets_bulk_clear_model(
+    repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
+    range_spec: Optional[str] = typer.Option(
+        None, "--range", help="Range of ticket indices in the form A:B"
+    ),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Bulk clear model/reasoning overrides for tickets in a repo queue."""
+    config = _require_hub_config(hub)
+    repo_root = _resolve_hub_repo_root(config, repo_id)
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+
+    try:
+        result = bulk_clear_model_pin(
+            ticket_dir,
+            range_spec,
+            repo_root=repo_root,
+        )
+    except ValueError as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    lint_errors = _validate_tickets(ticket_dir)
+    _print_ticket_bulk_report(
+        repo_id=repo_id,
+        ticket_dir=ticket_dir,
+        action="bulk-clear-model",
+        updated=result.updated,
+        skipped=result.skipped,
+        errors=result.errors,
+        lint_errors=lint_errors,
+    )
+
+    if result.errors or lint_errors:
+        _raise_exit("Ticket bulk update failed.")
 
 
 @dispatch_app.command("reply")

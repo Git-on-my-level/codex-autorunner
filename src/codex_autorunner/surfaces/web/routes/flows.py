@@ -41,6 +41,7 @@ from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import AgentPool
+from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
 from ....tickets.files import (
     list_ticket_paths,
     parse_ticket_index,
@@ -51,6 +52,9 @@ from ....tickets.frontmatter import parse_markdown_frontmatter
 from ....tickets.lint import lint_ticket_directory, lint_ticket_frontmatter
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
+    TicketBulkClearModelRequest,
+    TicketBulkSetAgentRequest,
+    TicketBulkUpdateResponse,
     TicketCreateRequest,
     TicketDeleteResponse,
     TicketResponse,
@@ -246,6 +250,12 @@ def _validate_tickets(ticket_dir: Path) -> list[str]:
             errors.append(f"{path.relative_to(path.parent.parent)}: {err}")
 
     return errors
+
+
+def _lint_after_ticket_update(ticket_dir: Path) -> list[str]:
+    if not ticket_dir.exists():
+        return []
+    return _validate_tickets(ticket_dir)
 
 
 def _cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
@@ -992,6 +1002,59 @@ You are the first ticket in a new ticket_flow run.
             status="deleted",
             index=index,
             path=rel_path,
+        )
+
+    @router.post(
+        "/ticket_flow/tickets/bulk-set-agent", response_model=TicketBulkUpdateResponse
+    )
+    async def bulk_set_agent_route(request: TicketBulkSetAgentRequest):
+        """Bulk set agent for tickets, optionally limited by range."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        try:
+            result = bulk_set_agent(
+                ticket_dir,
+                request.agent,
+                request.range,
+                repo_root=repo_root,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        lint_errors = _lint_after_ticket_update(ticket_dir)
+        status = "ok" if not result.errors and not lint_errors else "error"
+        return TicketBulkUpdateResponse(
+            status=status,
+            updated=result.updated,
+            skipped=result.skipped,
+            errors=result.errors,
+            lint_errors=lint_errors,
+        )
+
+    @router.post(
+        "/ticket_flow/tickets/bulk-clear-model", response_model=TicketBulkUpdateResponse
+    )
+    async def bulk_clear_model_route(request: TicketBulkClearModelRequest):
+        """Bulk clear model/reasoning overrides for tickets, optionally limited by range."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        try:
+            result = bulk_clear_model_pin(
+                ticket_dir,
+                request.range,
+                repo_root=repo_root,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        lint_errors = _lint_after_ticket_update(ticket_dir)
+        status = "ok" if not result.errors and not lint_errors else "error"
+        return TicketBulkUpdateResponse(
+            status=status,
+            updated=result.updated,
+            skipped=result.skipped,
+            errors=result.errors,
+            lint_errors=lint_errors,
         )
 
     @router.post("/{run_id}/stop", response_model=FlowStatusResponse)

@@ -478,3 +478,20 @@ class TicketDeleteResponse(ResponseModel):
     status: str
     index: int
     path: str
+
+
+class TicketBulkSetAgentRequest(Payload):
+    agent: str
+    range: Optional[str] = None
+
+
+class TicketBulkClearModelRequest(Payload):
+    range: Optional[str] = None
+
+
+class TicketBulkUpdateResponse(ResponseModel):
+    status: str
+    updated: int
+    skipped: int
+    errors: list[str] = []
+    lint_errors: list[str] = []

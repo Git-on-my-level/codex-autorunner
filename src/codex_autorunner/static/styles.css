@@ -2539,6 +2539,25 @@ button.icon-btn {
   margin-bottom: 2px;
 }
 
+.ticket-card .ticket-panel-header .ticket-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ticket-card .ticket-panel-header .ticket-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ticket-card .ticket-panel-header .ticket-panel-actions button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 /* Ticket progress bar */
 .ticket-progress-bar {
   height: 3px;
