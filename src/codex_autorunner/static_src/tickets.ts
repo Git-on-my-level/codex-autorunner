@@ -1308,6 +1308,7 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint
     badges.appendChild(agent);
 
     // Cumulative diff stats (from FlowStore DIFF_UPDATED aggregation).
+    // Keep this immediately to the left of right-aligned badges (dispatch mirror).
     const diffStats = ticket.diff_stats || null;
     if (diffStats && (diffStats.insertions > 0 || diffStats.deletions > 0)) {
       const statsEl = document.createElement("span");
@@ -1316,7 +1317,7 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint
       const del = diffStats.deletions || 0;
       statsEl.innerHTML = `<span class="diff-add">+${formatNumber(ins)}</span><span class="diff-del">-${formatNumber(del)}</span>`;
       statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
-      badges.appendChild(statsEl);
+      head.appendChild(statsEl);
     }
 
     head.appendChild(badges);
