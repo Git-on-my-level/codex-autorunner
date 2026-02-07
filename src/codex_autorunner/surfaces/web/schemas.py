@@ -467,6 +467,18 @@ class TicketUpdateRequest(Payload):
     content: str  # Full markdown with frontmatter
 
 
+class TicketReorderRequest(Payload):
+    source_index: int = Field(
+        validation_alias=AliasChoices("source_index", "sourceIndex")
+    )
+    destination_index: int = Field(
+        validation_alias=AliasChoices("destination_index", "destinationIndex")
+    )
+    place_after: bool = Field(
+        default=False, validation_alias=AliasChoices("place_after", "placeAfter")
+    )
+
+
 class TicketResponse(ResponseModel):
     path: str
     index: int
@@ -478,6 +490,14 @@ class TicketDeleteResponse(ResponseModel):
     status: str
     index: int
     path: str
+
+
+class TicketReorderResponse(ResponseModel):
+    status: str
+    source_index: int
+    destination_index: int
+    place_after: bool = False
+    lint_errors: list[str] = []
 
 
 class TicketBulkSetAgentRequest(Payload):

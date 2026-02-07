@@ -177,15 +177,12 @@ function isFlowActiveStatus(status: string | null): boolean {
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 let dispatchPanelCollapsed = false;
-const TICKET_FLOW_SPLIT_WIDTH_KEY = "car-ticket-flow-split-width";
-const TICKET_FLOW_SPLIT_HEIGHT_KEY = "car-ticket-flow-split-height";
-const TICKET_FLOW_MIN_PANEL_WIDTH = 180;
-const TICKET_FLOW_MIN_DISPATCH_WIDTH = 260;
-const TICKET_FLOW_MIN_PANEL_HEIGHT = 140;
-const TICKET_FLOW_MIN_DISPATCH_HEIGHT = 170;
 const LAST_SEEN_SEQ_KEY_PREFIX = "car-ticket-flow-last-seq:";
 const EVENT_STREAM_RETRY_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
 const STALE_THRESHOLD_MS = 30000;
+let dragSourceIndex: number | null = null;
+let dragTargetIndex: number | null = null;
+let dragPlaceAfter = false;
 
 // Throttling state
 let liveOutputRenderPending = false;
@@ -300,149 +297,49 @@ function initDispatchPanelToggle(): void {
   });
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
+function clearTicketDragState(): void {
+  dragSourceIndex = null;
+  dragTargetIndex = null;
+  dragPlaceAfter = false;
+  const ticketList = document.getElementById("ticket-flow-tickets");
+  if (!ticketList) return;
+  ticketList
+    .querySelectorAll(".ticket-item.drag-source, .ticket-item.drop-before, .ticket-item.drop-after")
+    .forEach((el) => {
+      el.classList.remove("drag-source", "drop-before", "drop-after");
+    });
 }
 
-function initTicketFlowSplitter(): void {
-  const { ticketFlowGrid, ticketFlowSplitter, ticketsPanel } = els();
-  if (!ticketFlowGrid || !ticketFlowSplitter || !ticketsPanel) return;
+function getTicketMoveToPosition(
+  tickets: TicketFile[],
+  sourceIndex: number,
+  destinationIndex: number,
+  placeAfter: boolean
+): number | null {
+  const ordered = tickets
+    .map((ticket) => ticket.index)
+    .filter((index): index is number => typeof index === "number");
+  const sourcePos = ordered.indexOf(sourceIndex) + 1;
+  const destinationPos = ordered.indexOf(destinationIndex) + 1;
+  if (!sourcePos || !destinationPos) return null;
+  const desiredPos = destinationPos + (placeAfter ? 1 : 0);
+  const toPos = sourcePos < desiredPos ? desiredPos - 1 : desiredPos;
+  return Math.max(1, Math.min(toPos, ordered.length));
+}
 
-  const mobileQuery = window.matchMedia("(max-width: 639px)");
-  let activePointerId: number | null = null;
-  let dragStartCoord = 0;
-  let dragStartSize = 0;
-  let isMobileLayout = mobileQuery.matches;
-
-  const getSplitterSize = (): number => {
-    const raw = getComputedStyle(ticketFlowGrid).getPropertyValue("--ticket-flow-splitter-size");
-    const parsed = Number.parseFloat(raw);
-    return Number.isFinite(parsed) ? parsed : 14;
-  };
-
-  const getPanelBounds = (): { min: number; max: number } => {
-    const gridRect = ticketFlowGrid.getBoundingClientRect();
-    const splitterSize = getSplitterSize();
-    if (isMobileLayout) {
-      const min = TICKET_FLOW_MIN_PANEL_HEIGHT;
-      const max = Math.max(min, gridRect.height - splitterSize - TICKET_FLOW_MIN_DISPATCH_HEIGHT);
-      return { min, max };
-    }
-    const min = TICKET_FLOW_MIN_PANEL_WIDTH;
-    const max = Math.max(min, gridRect.width - splitterSize - TICKET_FLOW_MIN_DISPATCH_WIDTH);
-    return { min, max };
-  };
-
-  const updateA11y = (sizePx: number): void => {
-    const { min, max } = getPanelBounds();
-    ticketFlowSplitter.setAttribute("aria-orientation", isMobileLayout ? "horizontal" : "vertical");
-    ticketFlowSplitter.setAttribute("aria-valuemin", String(Math.round(min)));
-    ticketFlowSplitter.setAttribute("aria-valuemax", String(Math.round(max)));
-    ticketFlowSplitter.setAttribute("aria-valuenow", String(Math.round(clamp(sizePx, min, max))));
-  };
-
-  const applySize = (sizePx: number): number => {
-    const { min, max } = getPanelBounds();
-    const nextSize = clamp(sizePx, min, max);
-    if (isMobileLayout) {
-      ticketFlowGrid.style.setProperty("--ticket-flow-first-height", `${Math.round(nextSize)}px`);
-    } else {
-      ticketFlowGrid.style.setProperty("--ticket-flow-first-width", `${Math.round(nextSize)}px`);
-    }
-    updateA11y(nextSize);
-    return nextSize;
-  };
-
-  const getStoredSize = (): number | null => {
-    const key = isMobileLayout ? TICKET_FLOW_SPLIT_HEIGHT_KEY : TICKET_FLOW_SPLIT_WIDTH_KEY;
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = Number.parseFloat(raw);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
-
-  const applyStoredSize = (): void => {
-    const stored = getStoredSize();
-    if (stored != null) {
-      applySize(stored);
-      return;
-    }
-    const panelRect = ticketsPanel.getBoundingClientRect();
-    updateA11y(isMobileLayout ? panelRect.height : panelRect.width);
-  };
-
-  const persistSize = (sizePx: number): void => {
-    const key = isMobileLayout ? TICKET_FLOW_SPLIT_HEIGHT_KEY : TICKET_FLOW_SPLIT_WIDTH_KEY;
-    localStorage.setItem(key, String(Math.round(sizePx)));
-  };
-
-  const stopDrag = (): void => {
-    if (activePointerId == null) return;
-    if (ticketFlowSplitter.hasPointerCapture(activePointerId)) {
-      ticketFlowSplitter.releasePointerCapture(activePointerId);
-    }
-    activePointerId = null;
-    ticketFlowGrid.classList.remove("dragging");
-    const panelRect = ticketsPanel.getBoundingClientRect();
-    persistSize(isMobileLayout ? panelRect.height : panelRect.width);
-  };
-
-  ticketFlowSplitter.addEventListener("pointerdown", (event: PointerEvent) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    event.preventDefault();
-    isMobileLayout = mobileQuery.matches;
-    activePointerId = event.pointerId;
-    dragStartCoord = isMobileLayout ? event.clientY : event.clientX;
-    const panelRect = ticketsPanel.getBoundingClientRect();
-    dragStartSize = isMobileLayout ? panelRect.height : panelRect.width;
-    ticketFlowGrid.classList.add("dragging");
-    ticketFlowSplitter.setPointerCapture(event.pointerId);
-    updateA11y(dragStartSize);
+async function reorderTicket(
+  sourceIndex: number,
+  destinationIndex: number,
+  placeAfter: boolean
+): Promise<void> {
+  await api("/api/flows/ticket_flow/tickets/reorder", {
+    method: "POST",
+    body: {
+      source_index: sourceIndex,
+      destination_index: destinationIndex,
+      place_after: placeAfter,
+    },
   });
-
-  ticketFlowSplitter.addEventListener("pointermove", (event: PointerEvent) => {
-    if (event.pointerId !== activePointerId) return;
-    const currentCoord = isMobileLayout ? event.clientY : event.clientX;
-    const delta = currentCoord - dragStartCoord;
-    applySize(dragStartSize + delta);
-  });
-
-  ticketFlowSplitter.addEventListener("pointerup", (event: PointerEvent) => {
-    if (event.pointerId !== activePointerId) return;
-    stopDrag();
-  });
-  ticketFlowSplitter.addEventListener("pointercancel", stopDrag);
-  ticketFlowSplitter.addEventListener("lostpointercapture", stopDrag);
-  ticketFlowSplitter.addEventListener("keydown", (event: KeyboardEvent) => {
-    isMobileLayout = mobileQuery.matches;
-    const step = event.shiftKey ? 24 : 12;
-    let delta = 0;
-    if (!isMobileLayout && event.key === "ArrowLeft") delta = -step;
-    if (!isMobileLayout && event.key === "ArrowRight") delta = step;
-    if (isMobileLayout && event.key === "ArrowUp") delta = -step;
-    if (isMobileLayout && event.key === "ArrowDown") delta = step;
-    if (delta === 0) return;
-    event.preventDefault();
-    const panelRect = ticketsPanel.getBoundingClientRect();
-    const currentSize = isMobileLayout ? panelRect.height : panelRect.width;
-    const nextSize = applySize(currentSize + delta);
-    persistSize(nextSize);
-  });
-
-  mobileQuery.addEventListener("change", (event) => {
-    isMobileLayout = event.matches;
-    ticketFlowGrid.classList.remove("dragging");
-    activePointerId = null;
-    applyStoredSize();
-  });
-  window.addEventListener("resize", () => {
-    isMobileLayout = mobileQuery.matches;
-    const panelRect = ticketsPanel.getBoundingClientRect();
-    const currentSize = isMobileLayout ? panelRect.height : panelRect.width;
-    applySize(currentSize);
-  });
-
-  applyStoredSize();
 }
 
 /**
@@ -1049,9 +946,6 @@ function initReasonModal(): void {
 }
 
 function els(): {
-  ticketFlowGrid: HTMLElement | null;
-  ticketFlowSplitter: HTMLElement | null;
-  ticketsPanel: HTMLElement | null;
   card: HTMLElement | null;
   status: HTMLElement | null;
   run: HTMLElement | null;
@@ -1089,9 +983,6 @@ function els(): {
     overflowArchive: HTMLButtonElement | null;
   } {
   return {
-    ticketFlowGrid: document.getElementById("ticket-flow-grid"),
-    ticketFlowSplitter: document.getElementById("ticket-flow-splitter"),
-    ticketsPanel: document.getElementById("ticket-flow-tickets-panel"),
     card: document.getElementById("ticket-card"),
     status: document.getElementById("ticket-flow-status"),
     run: document.getElementById("ticket-flow-run"),
@@ -1211,6 +1102,7 @@ function truncate(text: string, max = 100): string {
 
 function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint_errors?: string[] } | null): void {
   ticketListCache = data;
+  clearTicketDragState();
   const { tickets, dir } = els();
   if (dir) dir.textContent = data?.ticket_dir || "–";
   if (!tickets) return;
@@ -1265,6 +1157,39 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint
     item.title = "Click to edit";
     item.setAttribute("data-ticket-path", ticket.path || "");
 
+    const ticketIndex = typeof ticket.index === "number" ? ticket.index : null;
+
+    // Left-edge drag handle for ticket reordering.
+    if (ticketIndex !== null) {
+      const dragHandle = document.createElement("button");
+      dragHandle.className = "ticket-reorder-handle";
+      dragHandle.type = "button";
+      dragHandle.title = "Drag to reorder ticket";
+      dragHandle.setAttribute("aria-label", "Drag to reorder ticket");
+      dragHandle.draggable = true;
+      for (let i = 0; i < 6; i++) {
+        dragHandle.appendChild(document.createElement("span"));
+      }
+      dragHandle.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      dragHandle.addEventListener("dragstart", (e: DragEvent) => {
+        dragSourceIndex = ticketIndex;
+        dragTargetIndex = null;
+        dragPlaceAfter = false;
+        item.classList.add("drag-source");
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", String(ticketIndex));
+        }
+      });
+      dragHandle.addEventListener("dragend", () => {
+        clearTicketDragState();
+      });
+      item.appendChild(dragHandle);
+    }
+
     // Make ticket item clickable to open editor
     item.addEventListener("click", async () => {
       updateSelectedTicket(ticket.path || null);
@@ -1277,6 +1202,44 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint
         openTicketEditor(data as TicketData);
       } catch (err) {
         flash(`Failed to load ticket: ${(err as Error).message}`, "error");
+      }
+    });
+    item.addEventListener("dragover", (e: DragEvent) => {
+      if (dragSourceIndex === null || ticketIndex === null || dragSourceIndex === ticketIndex) {
+        return;
+      }
+      e.preventDefault();
+      const rect = item.getBoundingClientRect();
+      dragPlaceAfter = e.clientY > rect.top + rect.height / 2;
+      dragTargetIndex = ticketIndex;
+      item.classList.toggle("drop-before", !dragPlaceAfter);
+      item.classList.toggle("drop-after", dragPlaceAfter);
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "move";
+      }
+    });
+    item.addEventListener("dragleave", () => {
+      item.classList.remove("drop-before", "drop-after");
+    });
+    item.addEventListener("drop", async (e: DragEvent) => {
+      if (dragSourceIndex === null || dragTargetIndex === null) return;
+      e.preventDefault();
+      const sourceIndex = dragSourceIndex;
+      const destinationIndex = dragTargetIndex;
+      const placeAfter = dragPlaceAfter;
+      clearTicketDragState();
+      const toPos = getTicketMoveToPosition(list, sourceIndex, destinationIndex, placeAfter);
+      if (toPos === null) return;
+      const ordered = list
+        .map((t) => t.index)
+        .filter((idx): idx is number => typeof idx === "number");
+      const fromPos = ordered.indexOf(sourceIndex) + 1;
+      if (!fromPos || toPos === fromPos) return;
+      try {
+        await reorderTicket(sourceIndex, destinationIndex, placeAfter);
+        await loadTicketFiles({ reason: "manual" });
+      } catch (err) {
+        flash((err as Error).message || "Failed to reorder ticket", "error");
       }
     });
 
@@ -2517,9 +2480,6 @@ export function initTicketFlow(): void {
 
   // Initialize dispatch panel toggle for medium screens
   initDispatchPanelToggle();
-  // Initialize compact draggable splitter between tickets and dispatch
-  initTicketFlowSplitter();
-
   // Set up scroll listeners for fade indicator
   const ticketList = document.getElementById("ticket-flow-tickets");
   const dispatchHistory = document.getElementById("ticket-dispatch-history");

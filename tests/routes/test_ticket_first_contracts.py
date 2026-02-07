@@ -248,3 +248,44 @@ def test_ticket_list_keeps_diff_stats_for_latest_completed_run(tmp_path, monkeyp
             "deletions": 3,
             "files_changed": 2,
         }
+
+
+def test_reorder_ticket_moves_source_before_destination(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-002.md").write_text(
+        "---\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-003.md").write_text(
+        "---\nagent: codex\ndone: false\ntitle: Three\n---\n\nBody 3\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/flows/ticket_flow/tickets/reorder",
+            json={
+                "source_index": 3,
+                "destination_index": 1,
+                "place_after": False,
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["status"] == "ok"
+
+        listed = client.get("/api/flows/ticket_flow/tickets")
+        assert listed.status_code == 200
+        names = [Path(ticket["path"]).name for ticket in listed.json()["tickets"]]
+        assert names == ["TICKET-001.md", "TICKET-002.md", "TICKET-003.md"]
+        first_ticket = (ticket_dir / "TICKET-001.md").read_text(encoding="utf-8")
+        assert "title: Three" in first_ticket

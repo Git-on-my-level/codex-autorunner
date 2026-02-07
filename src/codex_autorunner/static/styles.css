@@ -2487,76 +2487,11 @@ button.icon-btn {
 
 .ticket-card .ticket-flow-grid {
   display: grid;
-  gap: 0;
-  --ticket-flow-first-width: 360px;
-  --ticket-flow-first-height: 280px;
-  --ticket-flow-splitter-size: 14px;
-  grid-template-columns: minmax(220px, var(--ticket-flow-first-width)) var(--ticket-flow-splitter-size) minmax(260px, 1fr);
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   margin-top: 8px;
   flex: 1;
   min-height: 0;
-}
-
-.ticket-card .ticket-flow-splitter {
-  align-self: stretch;
-  justify-self: stretch;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: col-resize;
-  touch-action: none;
-  user-select: none;
-  position: relative;
-}
-
-.ticket-card .ticket-flow-splitter::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 24px;
-  transform: translateX(-50%);
-}
-
-.ticket-card .ticket-flow-splitter-dots {
-  width: 8px;
-  height: 22px;
-  border-radius: 6px;
-  border: 1px solid rgba(108, 245, 216, 0.24);
-  background: rgba(108, 245, 216, 0.08);
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 2px;
-  padding: 3px 2px;
-  pointer-events: none;
-  box-shadow: 0 0 0 1px rgba(8, 12, 20, 0.35) inset;
-}
-
-.ticket-card .ticket-flow-splitter-dots span {
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: rgba(108, 245, 216, 0.9);
-}
-
-.ticket-card .ticket-flow-splitter:hover .ticket-flow-splitter-dots,
-.ticket-card .ticket-flow-grid.dragging .ticket-flow-splitter-dots,
-.ticket-card .ticket-flow-splitter:focus-visible .ticket-flow-splitter-dots {
-  border-color: rgba(108, 245, 216, 0.6);
-  background: rgba(108, 245, 216, 0.16);
-}
-
-.ticket-card .ticket-flow-splitter:focus-visible {
-  outline: none;
-}
-
-.ticket-card .ticket-flow-grid.dragging {
-  cursor: col-resize;
-}
-
-.ticket-card .ticket-flow-grid.dragging .ticket-flow-splitter {
-  cursor: col-resize;
 }
 
 .ticket-card .ticket-panel {
@@ -3001,7 +2936,7 @@ button.icon-btn {
 .ticket-card .ticket-item {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 10px 10px;
+  padding: 8px 10px 10px 34px;
   background: rgba(255, 255, 255, 0.02);
   display: flex;
   flex-direction: column;
@@ -3010,6 +2945,83 @@ button.icon-btn {
   /* Consistent height for visual rhythm with body preview */
   transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
   overflow: hidden;
+  position: relative;
+}
+
+.ticket-card .ticket-reorder-handle {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(160, 168, 184, 0.9);
+  cursor: grab;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  align-items: center;
+  justify-items: center;
+  padding: 0;
+  z-index: 2;
+}
+
+.ticket-card .ticket-reorder-handle::before {
+  content: "";
+  position: absolute;
+  width: 22px;
+  height: 30px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.ticket-card .ticket-reorder-handle span {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ticket-card .ticket-reorder-handle:hover,
+.ticket-card .ticket-item.drag-source .ticket-reorder-handle,
+.ticket-card .ticket-reorder-handle:focus-visible {
+  color: rgba(108, 245, 216, 0.95);
+}
+
+.ticket-card .ticket-reorder-handle:active {
+  cursor: grabbing;
+}
+
+.ticket-card .ticket-reorder-handle:focus-visible {
+  outline: 1px solid rgba(108, 245, 216, 0.7);
+  outline-offset: 1px;
+}
+
+.ticket-card .ticket-item.drag-source {
+  opacity: 0.7;
+}
+
+.ticket-card .ticket-item.drop-before::before,
+.ticket-card .ticket-item.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(108, 245, 216, 0.9);
+}
+
+.ticket-card .ticket-item.drop-before::before {
+  top: 2px;
+}
+
+.ticket-card .ticket-item.drop-after::after {
+  bottom: 2px;
 }
 
 .ticket-card .ticket-item:hover {
@@ -3305,40 +3317,9 @@ button.icon-btn {
 /* ===== Mobile (<640px): Stacked layout with full ticket info ===== */
 @media (max-width: 639px) {
 
-  /* Stacked layout with vertical splitter for touch resize */
+  /* Force single column stacked layout on mobile */
   .ticket-card .ticket-flow-grid {
     grid-template-columns: 1fr !important;
-    grid-template-rows: minmax(140px, var(--ticket-flow-first-height)) var(--ticket-flow-splitter-size) minmax(170px, 1fr);
-    gap: 0;
-  }
-
-  .ticket-card .ticket-flow-splitter {
-    cursor: row-resize;
-    justify-content: flex-start;
-    align-items: center;
-    padding-left: 6px;
-  }
-
-  .ticket-card .ticket-flow-splitter::before {
-    top: 50%;
-    left: 0;
-    right: 0;
-    width: auto;
-    height: 24px;
-    transform: translateY(-50%);
-  }
-
-  .ticket-card .ticket-flow-splitter-dots {
-    width: 22px;
-    height: 8px;
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(2, 1fr);
-    padding: 2px 3px;
-  }
-
-  .ticket-card .ticket-flow-grid.dragging,
-  .ticket-card .ticket-flow-grid.dragging .ticket-flow-splitter {
-    cursor: row-resize;
   }
 
   /* Hide toggle button on mobile */
@@ -3348,7 +3329,7 @@ button.icon-btn {
 
   /* Compact ticket items for mobile - even vertical spacing */
   .ticket-card .ticket-item {
-    padding: 8px 10px 8px 10px !important;
+    padding: 8px 10px 8px 34px !important;
     gap: 0 !important;
     flex-direction: row !important;
     align-items: center !important;
@@ -3466,7 +3447,7 @@ button.icon-btn {
 
   /* Use slim tickets sidebar with compact pills */
   .ticket-card .ticket-flow-grid {
-    grid-template-columns: auto var(--ticket-flow-splitter-size) 1fr;
+    grid-template-columns: auto 1fr;
     align-items: start;
   }
 
@@ -3525,6 +3506,10 @@ button.icon-btn {
     justify-content: center !important;
   }
 
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-reorder-handle {
+    display: none;
+  }
+
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item:hover {
     background: rgba(255, 255, 255, 0.08);
   }
@@ -3580,7 +3565,7 @@ button.icon-btn {
 /* ===== Medium screens (900-1100px): Wider compact pills sidebar ===== */
 @media (min-width: 900px) and (max-width: 1100px) {
   .ticket-card .ticket-flow-grid {
-    grid-template-columns: auto var(--ticket-flow-splitter-size) 1fr;
+    grid-template-columns: auto 1fr;
     /* Tickets slim sidebar, dispatch fills rest */
     align-items: start;
     /* Prevent panels from stretching to match heights */
@@ -3631,6 +3616,10 @@ button.icon-btn {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
+  }
+
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-reorder-handle {
+    display: none;
   }
 
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item:hover {
