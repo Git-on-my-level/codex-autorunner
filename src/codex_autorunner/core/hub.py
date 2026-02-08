@@ -736,9 +736,6 @@ class HubSupervisor:
             raise ValueError(f"git worktree add failed: {_git_failure_detail(proc)}")
 
         seed_repo_files(worktree_path, force=force, git_required=False)
-        self._run_worktree_setup_commands(
-            worktree_path, base.worktree_setup_commands, base_repo_id=base_repo_id
-        )
         manifest.ensure_repo(
             self.hub_config.root,
             worktree_path,
@@ -748,6 +745,9 @@ class HubSupervisor:
             branch=branch,
         )
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self._run_worktree_setup_commands(
+            worktree_path, base.worktree_setup_commands, base_repo_id=base_repo_id
+        )
         return self._snapshot_for_repo(repo_id)
 
     def set_worktree_setup_commands(

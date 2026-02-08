@@ -579,12 +579,18 @@ def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
         supervisor.create_worktree(base_repo_id="base", branch="feature/setup-fail")
 
     worktree_path = hub_root / "worktrees" / "base--feature-setup-fail"
+    worktree_repo_id = "base--feature-setup-fail"
     assert worktree_path.exists()
     assert (worktree_path / "PRE_FAIL.txt").read_text(encoding="utf-8").strip() == "ok"
     log_text = (
         worktree_path / ".codex-autorunner" / "logs" / "worktree-setup.log"
     ).read_text(encoding="utf-8")
     assert "$ exit 17" in log_text
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    assert manifest.get(worktree_repo_id) is not None
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree_repo_id, archive=False)
+    assert not worktree_path.exists()
 
 
 def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
