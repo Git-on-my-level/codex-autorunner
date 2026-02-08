@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import threading
 import time
@@ -11,18 +10,10 @@ from ...core.app_server_ids import (
     extract_thread_id_for_turn,
     extract_turn_id,
 )
+from ...core.sse import format_sse
 
 TurnKey = tuple[str, str]
 LOGGER = logging.getLogger("codex_autorunner.app_server")
-
-
-def format_sse(event: str, data: object) -> str:
-    payload = data if isinstance(data, str) else json.dumps(data)
-    lines = payload.splitlines() or [""]
-    parts = [f"event: {event}"]
-    for line in lines:
-        parts.append(f"data: {line}")
-    return "\n".join(parts) + "\n\n"
 
 
 @dataclass

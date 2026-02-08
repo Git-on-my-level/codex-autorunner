@@ -1,0 +1,471 @@
+{
+  "agents": {
+    "codex": {
+      "binary": "codex"
+    },
+    "opencode": {
+      "binary": "opencode",
+      "subagent_models": {
+        "subagent": "zai-coding-plan/glm-4.7-flashx"
+      }
+    }
+  },
+  "app_server": {
+    "auto_restart": true,
+    "client": {
+      "max_message_bytes": 52428800,
+      "max_oversize_drain_bytes": 104857600,
+      "oversize_preview_bytes": 4096,
+      "restart_backoff_initial_seconds": 0.5,
+      "restart_backoff_jitter_ratio": 0.1,
+      "restart_backoff_max_seconds": 30.0
+    },
+    "command": [
+      "codex",
+      "app-server"
+    ],
+    "idle_ttl_seconds": 3600,
+    "max_handles": 20,
+    "output": {
+      "policy": "final_only"
+    },
+    "prompts": {
+      "autorunner": {
+        "max_chars": 16000,
+        "message_max_chars": 2000,
+        "prev_run_max_chars": 3000,
+        "todo_excerpt_max_chars": 4000
+      },
+      "doc_chat": {
+        "max_chars": 12000,
+        "message_max_chars": 2000,
+        "recent_summary_max_chars": 2000,
+        "target_excerpt_max_chars": 4000
+      },
+      "spec_ingest": {
+        "max_chars": 12000,
+        "message_max_chars": 2000,
+        "spec_excerpt_max_chars": 5000
+      }
+    },
+    "request_timeout": null,
+    "state_root": "~/.codex-autorunner/workspaces",
+    "turn_stall_poll_interval_seconds": 2,
+    "turn_stall_recovery_min_interval_seconds": 10,
+    "turn_stall_timeout_seconds": 60,
+    "turn_timeout_seconds": 28800
+  },
+  "housekeeping": {
+    "dry_run": false,
+    "enabled": true,
+    "interval_seconds": 3600,
+    "min_file_age_seconds": 600,
+    "rules": [
+      {
+        "glob": "run-*.log",
+        "kind": "directory",
+        "max_age_days": 30,
+        "max_files": 200,
+        "max_total_bytes": 500000000,
+        "name": "run_logs",
+        "path": ".codex-autorunner/runs",
+        "recursive": false
+      },
+      {
+        "glob": "*",
+        "kind": "directory",
+        "max_age_days": 14,
+        "max_files": 500,
+        "max_total_bytes": 200000000,
+        "name": "terminal_image_uploads",
+        "path": ".codex-autorunner/uploads/terminal-images",
+        "recursive": false
+      },
+      {
+        "glob": "*",
+        "kind": "directory",
+        "max_age_days": 14,
+        "max_files": 500,
+        "max_total_bytes": 200000000,
+        "name": "telegram_images",
+        "path": ".codex-autorunner/uploads/telegram-images",
+        "recursive": false
+      },
+      {
+        "glob": "*",
+        "kind": "directory",
+        "max_age_days": 14,
+        "max_files": 500,
+        "max_total_bytes": 500000000,
+        "name": "telegram_voice",
+        "path": ".codex-autorunner/uploads/telegram-voice",
+        "recursive": false
+      },
+      {
+        "glob": "*",
+        "kind": "directory",
+        "max_age_days": 14,
+        "max_files": 500,
+        "max_total_bytes": 500000000,
+        "name": "telegram_files",
+        "path": ".codex-autorunner/uploads/telegram-files",
+        "recursive": true
+      },
+      {
+        "glob": "*",
+        "kind": "directory",
+        "max_age_days": 30,
+        "max_files": 200,
+        "max_total_bytes": 100000000,
+        "name": "github_context",
+        "path": ".codex-autorunner/github_context",
+        "recursive": false
+      },
+      {
+        "glob": "*",
+        "kind": "directory",
+        "max_age_days": 30,
+        "max_files": 2000,
+        "max_total_bytes": 1000000000,
+        "name": "update_cache",
+        "path": "~/.codex-autorunner/update_cache",
+        "recursive": true
+      },
+      {
+        "kind": "file",
+        "max_bytes": 5000000,
+        "name": "update_log",
+        "path": "~/.codex-autorunner/update-standalone.log"
+      }
+    ]
+  },
+  "hub": {
+    "auto_init_missing": true,
+    "discover_depth": 1,
+    "include_root_repo": false,
+    "log": {
+      "backup_count": 3,
+      "max_bytes": 10000000,
+      "path": ".codex-autorunner/codex-autorunner-hub.log"
+    },
+    "manifest": ".codex-autorunner/manifest.yml",
+    "repo_server_inherit": true,
+    "repos_root": ".",
+    "update_repo_ref": "main",
+    "update_repo_url": "https://github.com/Git-on-my-level/codex-autorunner.git",
+    "worktrees_root": "worktrees"
+  },
+  "mode": "hub",
+  "opencode": {
+    "max_text_chars": 20000,
+    "session_stall_timeout_seconds": 60
+  },
+  "pma": {
+    "active_context_max_lines": 200,
+    "context_log_tail_lines": 120,
+    "default_agent": "codex",
+    "docs_max_chars": 12000,
+    "enabled": true,
+    "max_messages": 10,
+    "max_repos": 25,
+    "max_text_chars": 800,
+    "max_upload_bytes": 10000000,
+    "model": null,
+    "reactive_debounce_seconds": 300,
+    "reactive_enabled": true,
+    "reactive_event_types": [
+      "flow_paused",
+      "flow_failed",
+      "flow_completed",
+      "dispatch_created"
+    ],
+    "reactive_origin_blocklist": [
+      "pma"
+    ],
+    "reasoning": null
+  },
+  "repo_defaults": {
+    "autorunner": {
+      "reuse_session": false
+    },
+    "codex": {
+      "args": [
+        "--yolo",
+        "exec",
+        "--sandbox",
+        "danger-full-access"
+      ],
+      "binary": "codex",
+      "model": null,
+      "models": {
+        "large": null,
+        "small": "gpt-5.1-codex-mini"
+      },
+      "reasoning": null,
+      "terminal_args": [
+        "--yolo"
+      ]
+    },
+    "docs": {
+      "active_context": ".codex-autorunner/contextspace/active_context.md",
+      "decisions": ".codex-autorunner/contextspace/decisions.md",
+      "spec": ".codex-autorunner/contextspace/spec.md"
+    },
+    "git": {
+      "auto_commit": false,
+      "commit_message_template": "[codex] run #{run_id}"
+    },
+    "github": {
+      "enabled": true,
+      "pr_draft_default": true,
+      "sync_agent_timeout_seconds": 1800,
+      "sync_commit_mode": "auto"
+    },
+    "log": {
+      "backup_count": 3,
+      "max_bytes": 10000000,
+      "path": ".codex-autorunner/codex-autorunner.log"
+    },
+    "notifications": {
+      "discord": {
+        "webhook_url_env": "CAR_DISCORD_WEBHOOK_URL"
+      },
+      "enabled": "auto",
+      "events": [
+        "run_finished",
+        "run_error",
+        "tui_idle"
+      ],
+      "telegram": {
+        "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+        "chat_id_env": "CAR_TELEGRAM_CHAT_ID"
+      },
+      "timeout_seconds": 5.0,
+      "tui_idle_seconds": 60
+    },
+    "opencode": {
+      "max_text_chars": 20000,
+      "session_stall_timeout_seconds": 60
+    },
+    "prompt": {
+      "prev_run_max_chars": 6000,
+      "template": ".codex-autorunner/prompt.txt"
+    },
+    "review": {
+      "agent": "opencode",
+      "enabled": true,
+      "max_wallclock_seconds": null,
+      "model": "zai-coding-plan/glm-4.7",
+      "reasoning": null,
+      "subagent_agent": "subagent",
+      "subagent_model": "zai-coding-plan/glm-4.7-flashx"
+    },
+    "runner": {
+      "max_wallclock_seconds": null,
+      "no_progress_threshold": 3,
+      "review": {
+        "agent": null,
+        "artifacts": {
+          "attach_to_last_run_index": true,
+          "write_to_review_runs_dir": true
+        },
+        "context": {
+          "include_docs": [
+            "active_context"
+          ],
+          "include_last_run_artifacts": true,
+          "max_doc_chars": 20000,
+          "primary_docs": [
+            "spec",
+            "decisions"
+          ]
+        },
+        "enabled": false,
+        "max_wallclock_seconds": null,
+        "model": null,
+        "reasoning": null,
+        "trigger": {
+          "on_error_exit": false,
+          "on_max_runs_stop": true,
+          "on_no_progress_stop": true,
+          "on_stop_requested": false,
+          "on_todos_complete": true
+        }
+      },
+      "sleep_seconds": 5,
+      "stop_after_runs": null
+    },
+    "server_log": {
+      "backup_count": 3,
+      "max_bytes": 10000000,
+      "path": ".codex-autorunner/codex-server.log"
+    },
+    "ticket_flow": {
+      "approval_mode": "yolo",
+      "default_approval_decision": "accept",
+      "include_previous_ticket_context": false
+    },
+    "ui": {
+      "editor": "vi"
+    },
+    "update": {
+      "skip_checks": false
+    },
+    "usage": {
+      "cache_scope": "global",
+      "global_cache_root": null,
+      "repo_cache_path": ".codex-autorunner/usage/usage_series_cache.json"
+    },
+    "voice": {
+      "chunk_ms": 600,
+      "enabled": true,
+      "latency_mode": "balanced",
+      "provider": "openai_whisper",
+      "providers": {
+        "openai_whisper": {
+          "api_key_env": "OPENAI_API_KEY",
+          "base_url": null,
+          "language": null,
+          "model": "whisper-1",
+          "redact_request": true,
+          "temperature": 0
+        }
+      },
+      "push_to_talk": {
+        "max_ms": 15000,
+        "min_hold_ms": 150,
+        "silence_auto_stop_ms": 1200
+      },
+      "sample_rate": 16000,
+      "warn_on_remote_api": true
+    }
+  },
+  "server": {
+    "access_log": false,
+    "allowed_hosts": [],
+    "allowed_origins": [],
+    "auth_token_env": "",
+    "base_path": "",
+    "host": "127.0.0.1",
+    "port": 4173
+  },
+  "server_log": null,
+  "static_assets": {
+    "cache_root": ".codex-autorunner/static-cache",
+    "max_cache_age_days": 30,
+    "max_cache_entries": 5
+  },
+  "storage": {
+    "durable_writes": false
+  },
+  "telegram_bot": {
+    "allowed_chat_ids": [],
+    "allowed_user_ids": [],
+    "app_server": {
+      "idle_ttl_seconds": 3600,
+      "max_handles": 20,
+      "turn_timeout_seconds": 28800
+    },
+    "app_server_command": [
+      "codex",
+      "app-server"
+    ],
+    "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
+    "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+    "cache": {
+      "cleanup_interval_seconds": 300,
+      "coalesce_buffer_ttl_seconds": 60,
+      "media_batch_buffer_ttl_seconds": 60,
+      "model_pending_ttl_seconds": 1800,
+      "oversize_warning_ttl_seconds": 3600,
+      "pending_approval_ttl_seconds": 600,
+      "pending_question_ttl_seconds": 600,
+      "progress_stream_ttl_seconds": 900,
+      "reasoning_buffer_ttl_seconds": 900,
+      "selection_state_ttl_seconds": 1800,
+      "turn_preview_ttl_seconds": 900,
+      "update_id_persist_interval_seconds": 60
+    },
+    "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+    "command_registration": {
+      "enabled": true,
+      "scopes": [
+        {
+          "language_code": "",
+          "type": "default"
+        },
+        {
+          "language_code": "",
+          "type": "all_group_chats"
+        }
+      ]
+    },
+    "concurrency": {
+      "max_parallel_turns": 5,
+      "per_topic_queue": true
+    },
+    "debug": {
+      "prefix_context": false
+    },
+    "defaults": {
+      "approval_mode": "yolo",
+      "approval_policy": "on-request",
+      "sandbox_policy": "dangerFullAccess",
+      "yolo_approval_policy": "never",
+      "yolo_sandbox_policy": "dangerFullAccess"
+    },
+    "enabled": false,
+    "media": {
+      "enabled": true,
+      "files": true,
+      "image_prompt": "The user sent an image with no caption. Use it to continue the conversation; if no clear task, describe the image and ask what they want.",
+      "images": true,
+      "max_file_bytes": 100000000,
+      "max_image_bytes": 10000000,
+      "max_voice_bytes": 10000000,
+      "voice": true
+    },
+    "mode": "polling",
+    "opencode_command": null,
+    "parse_mode": "HTML",
+    "polling": {
+      "allowed_updates": [
+        "message",
+        "edited_message",
+        "callback_query"
+      ],
+      "timeout_seconds": 30
+    },
+    "require_topics": false,
+    "shell": {
+      "enabled": false,
+      "max_output_chars": 3800,
+      "timeout_ms": 120000
+    },
+    "state_file": ".codex-autorunner/telegram_state.sqlite3"
+  },
+  "templates": {
+    "enabled": true,
+    "repos": [
+      {
+        "default_ref": "main",
+        "id": "blessed",
+        "trusted": true,
+        "url": "https://github.com/Git-on-my-level/car-ticket-templates"
+      }
+    ]
+  },
+  "terminal": {
+    "idle_timeout_seconds": 43200
+  },
+  "update": {
+    "skip_checks": false
+  },
+  "usage": {
+    "cache_scope": "global",
+    "global_cache_root": null,
+    "repo_cache_path": ".codex-autorunner/usage/usage_series_cache.json"
+  },
+  "version": 2
+}
+

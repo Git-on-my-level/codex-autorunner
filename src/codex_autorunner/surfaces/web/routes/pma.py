@@ -39,7 +39,6 @@ from ....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
-from ....core.pma_delivery import deliver_pma_output_to_active_sink
 from ....core.pma_dispatches import (
     find_pma_dispatch_path,
     list_pma_dispatches,
@@ -55,6 +54,7 @@ from ....core.pma_state import PmaStateStore
 from ....core.pma_transcripts import PmaTranscriptStore
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
+from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
 from ....integrations.telegram.adapter import chunk_message
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
@@ -1311,7 +1311,7 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "message exceeds max_text_chars " f"({max_text_chars} characters)"
+                    f"message exceeds max_text_chars ({max_text_chars} characters)"
                 ),
             )
 
@@ -1841,8 +1841,7 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=413,
                 detail=(
-                    "Snapshot too large "
-                    f"(max {PMA_CONTEXT_SNAPSHOT_MAX_BYTES} bytes)"
+                    f"Snapshot too large (max {PMA_CONTEXT_SNAPSHOT_MAX_BYTES} bytes)"
                 ),
             )
 

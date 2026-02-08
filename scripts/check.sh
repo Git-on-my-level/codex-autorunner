@@ -62,8 +62,7 @@ echo "Validating hub interface contracts..."
 "$PYTHON_BIN" scripts/validate_interfaces.py
 
 echo "Checking core imports (no adapter implementations)..."
-# Temporarily disabled for merge: allowlisted violations not supported by check_core_imports.py
-# "$PYTHON_BIN" scripts/check_core_imports.py
+"$PYTHON_BIN" scripts/check_core_imports.py
 
 echo "Checking for legacy TODO/SUMMARY pipeline code..."
 "$PYTHON_BIN" scripts/check_legacy_pipeline.py

@@ -14,6 +14,12 @@ def extract_turn_id(payload: Any) -> Optional[str]:
             value = turn.get(key)
             if isinstance(value, str):
                 return value
+    item = payload.get("item")
+    if isinstance(item, dict):
+        for key in ("turnId", "turn_id", "id"):
+            value = item.get(key)
+            if isinstance(value, str):
+                return value
     return None
 
 

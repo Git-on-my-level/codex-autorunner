@@ -58,14 +58,12 @@ from ...core.usage import (
     get_hub_usage_summary_cached,
     parse_iso_datetime,
 )
-from ...core.utils import (
-    atomic_write,
-    build_opencode_supervisor,
-    reset_repo_root_context,
-    set_repo_root_context,
-)
+from ...core.utils import atomic_write, reset_repo_root_context, set_repo_root_context
 from ...housekeeping import run_housekeeping_once
 from ...integrations.agents import build_backend_orchestrator
+from ...integrations.agents.opencode_supervisor_factory import (
+    build_opencode_supervisor_from_repo_config,
+)
 from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -426,41 +424,6 @@ def _parse_command(raw: Optional[str]) -> list[str]:
         return []
 
 
-def _build_opencode_supervisor(
-    config: AppServerConfig,
-    *,
-    workspace_root: Path,
-    opencode_binary: Optional[str],
-    opencode_command: Optional[list[str]],
-    logger: logging.Logger,
-    env: Mapping[str, str],
-    subagent_models: Optional[Mapping[str, str]] = None,
-    session_stall_timeout_seconds: Optional[float] = None,
-    max_text_chars: Optional[int] = None,
-) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
-    supervisor = build_opencode_supervisor(
-        opencode_command=opencode_command,
-        opencode_binary=opencode_binary,
-        workspace_root=workspace_root,
-        logger=logger,
-        request_timeout=config.request_timeout,
-        max_handles=config.max_handles,
-        idle_ttl_seconds=config.idle_ttl_seconds,
-        session_stall_timeout_seconds=session_stall_timeout_seconds,
-        max_text_chars=max_text_chars,
-        base_env=env,
-        subagent_models=subagent_models,
-    )
-    if supervisor is None:
-        safe_log(
-            logger,
-            logging.INFO,
-            "OpenCode command unavailable; skipping opencode supervisor.",
-        )
-        return None, None
-    return supervisor, _app_server_prune_interval(config.idle_ttl_seconds)
-
-
 def _build_app_context(
     repo_root: Optional[Path],
     base_path: Optional[str],
@@ -596,24 +559,23 @@ def _build_app_context(
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
     )
-    opencode_command = config.agent_serve_command("opencode")
-    try:
-        opencode_binary = config.agent_binary("opencode")
-    except ConfigError:
-        opencode_binary = None
-    agent_config = config.agents.get("opencode")
-    subagent_models = agent_config.subagent_models if agent_config else None
-    opencode_supervisor, opencode_prune_interval = _build_opencode_supervisor(
-        config.app_server,
+    opencode_supervisor = build_opencode_supervisor_from_repo_config(
+        config,
         workspace_root=engine.repo_root,
-        opencode_binary=opencode_binary,
-        opencode_command=opencode_command,
         logger=logger,
-        env=env,
-        subagent_models=subagent_models,
-        session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
-        max_text_chars=config.opencode.max_text_chars,
+        base_env=env,
     )
+    if opencode_supervisor is None:
+        safe_log(
+            logger,
+            logging.INFO,
+            "OpenCode command unavailable; skipping opencode supervisor.",
+        )
+        opencode_prune_interval = None
+    else:
+        opencode_prune_interval = _app_server_prune_interval(
+            config.app_server.idle_ttl_seconds
+        )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
         voice_service = None
@@ -844,24 +806,23 @@ def _build_hub_context(
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(config.root)
     )
-    opencode_command = config.agent_serve_command("opencode")
-    try:
-        opencode_binary = config.agent_binary("opencode")
-    except ConfigError:
-        opencode_binary = None
-    agent_config = config.agents.get("opencode")
-    subagent_models = agent_config.subagent_models if agent_config else None
-    opencode_supervisor, opencode_prune_interval = _build_opencode_supervisor(
-        config.app_server,
+    opencode_supervisor = build_opencode_supervisor_from_repo_config(
+        config,
         workspace_root=config.root,
-        opencode_binary=opencode_binary,
-        opencode_command=opencode_command,
         logger=logger,
-        env=resolve_env_for_root(config.root),
-        subagent_models=subagent_models,
-        session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
-        max_text_chars=config.opencode.max_text_chars,
+        base_env=resolve_env_for_root(config.root),
     )
+    if opencode_supervisor is None:
+        safe_log(
+            logger,
+            logging.INFO,
+            "OpenCode command unavailable; skipping opencode supervisor.",
+        )
+        opencode_prune_interval = None
+    else:
+        opencode_prune_interval = _app_server_prune_interval(
+            config.app_server.idle_ttl_seconds
+        )
     static_dir, static_context = materialize_static_assets(
         config.static_assets.cache_root,
         max_cache_entries=config.static_assets.max_cache_entries,

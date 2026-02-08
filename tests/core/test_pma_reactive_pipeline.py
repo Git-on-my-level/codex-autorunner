@@ -12,11 +12,11 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.core.pma_delivery import deliver_pma_output_to_active_sink
 from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_sink import PmaActiveSinkStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.integrations.pma_delivery import deliver_pma_output_to_active_sink
 from codex_autorunner.integrations.telegram.state import TelegramStateStore
 from codex_autorunner.manifest import load_manifest, save_manifest
 
