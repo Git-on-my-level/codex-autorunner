@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator, Iterable, Optional
 import httpx
 
 from ...core.logging_utils import log_event
-from .events import SSEEvent, parse_sse_lines
+from ...core.sse import SSEEvent, parse_sse_lines
 
 _MAX_INVALID_JSON_PREVIEW_BYTES = 512
 

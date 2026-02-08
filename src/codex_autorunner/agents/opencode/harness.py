@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from ...integrations.app_server.event_buffer import format_sse
+from ...core.sse import format_sse
 from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
 from .constants import DEFAULT_TICKET_MODEL

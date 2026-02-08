@@ -8,6 +8,7 @@ from .lifecycle_events import (
     LifecycleEventStore,
     LifecycleEventType,
 )
+from .sse import SSEEvent, format_sse, parse_sse_lines
 
 __all__ = [
     "ArchiveResult",
@@ -18,4 +19,7 @@ __all__ = [
     "LifecycleEventEmitter",
     "LifecycleEventStore",
     "LifecycleEventType",
+    "SSEEvent",
+    "format_sse",
+    "parse_sse_lines",
 ]
