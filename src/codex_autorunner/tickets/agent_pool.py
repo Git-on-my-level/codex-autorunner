@@ -11,7 +11,9 @@ from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..core.app_server_ids import extract_turn_id
 from ..core.config import RepoConfig
 from ..core.flows.models import FlowEventType
-from ..core.utils import build_opencode_supervisor
+from ..integrations.agents.opencode_supervisor_factory import (
+    build_opencode_supervisor_from_repo_config,
+)
 from ..integrations.app_server.client import CodexAppServerClient
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
@@ -143,29 +145,11 @@ class AgentPool:
         if self._opencode_supervisor is not None:
             return self._opencode_supervisor
 
-        app_server_cfg = self._config.app_server
-        opencode_command = self._config.agent_serve_command("opencode")
-        opencode_binary = None
-        try:
-            opencode_binary = self._config.agent_binary("opencode")
-        except Exception:
-            opencode_binary = None
-
-        agent_cfg = self._config.agents.get("opencode")
-        subagent_models = agent_cfg.subagent_models if agent_cfg else None
-
-        supervisor = build_opencode_supervisor(
-            opencode_command=opencode_command,
-            opencode_binary=opencode_binary,
+        supervisor = build_opencode_supervisor_from_repo_config(
+            self._config,
             workspace_root=self._config.root,
             logger=logging.getLogger("codex_autorunner.opencode"),
-            request_timeout=app_server_cfg.request_timeout,
-            max_handles=app_server_cfg.max_handles,
-            idle_ttl_seconds=app_server_cfg.idle_ttl_seconds,
-            session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
-            max_text_chars=self._config.opencode.max_text_chars,
             base_env=None,
-            subagent_models=subagent_models,
         )
         if supervisor is None:
             raise RuntimeError(

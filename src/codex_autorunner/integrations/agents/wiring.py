@@ -9,12 +9,12 @@ from typing import Any, Awaitable, Callable, Optional
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
 from ...core.state import RunnerState
-from ...core.utils import build_opencode_supervisor
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.env import build_app_server_env
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from .codex_backend import CodexAppServerBackend
 from .opencode_backend import OpenCodeBackend
+from .opencode_supervisor_factory import build_opencode_supervisor_from_repo_config
 
 NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
 BackendFactory = Callable[
@@ -176,26 +176,11 @@ class AgentBackendFactory:
     def _ensure_opencode_supervisor(self) -> Optional[Any]:
         if self._opencode_supervisor is not None:
             return self._opencode_supervisor
-        opencode_command = self._config.agent_serve_command("opencode")
-        opencode_binary = None
-        try:
-            opencode_binary = self._config.agent_binary("opencode")
-        except Exception:
-            opencode_binary = None
-        agent_config = self._config.agents.get("opencode")
-        subagent_models = agent_config.subagent_models if agent_config else None
-        supervisor = build_opencode_supervisor(
-            opencode_command=opencode_command,
-            opencode_binary=opencode_binary,
+        supervisor = build_opencode_supervisor_from_repo_config(
+            self._config,
             workspace_root=self._repo_root,
             logger=self._logger,
-            request_timeout=self._config.app_server.request_timeout,
-            max_handles=self._config.app_server.max_handles,
-            idle_ttl_seconds=self._config.app_server.idle_ttl_seconds,
-            session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
-            max_text_chars=self._config.opencode.max_text_chars,
             base_env=None,
-            subagent_models=subagent_models,
         )
         self._opencode_supervisor = supervisor
         return supervisor
