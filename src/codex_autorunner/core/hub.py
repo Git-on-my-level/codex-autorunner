@@ -69,9 +69,7 @@ def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
     except GitError as exc:
         raise ValueError(f"git rev-parse failed for {ref}: {exc}") from exc
     if proc.returncode != 0:
-        raise ValueError(
-            f"Unable to resolve ref {ref}: {_git_failure_detail(proc)}"
-        )
+        raise ValueError(f"Unable to resolve ref {ref}: {_git_failure_detail(proc)}")
     sha = (proc.stdout or "").strip()
     if not sha:
         raise ValueError(f"Unable to resolve ref {ref}: empty output")
@@ -673,7 +671,9 @@ class HubSupervisor:
 
         # Create the worktree (branch may or may not exist locally).
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        start_ref = start_point.strip() if start_point and start_point.strip() else "HEAD"
+        start_ref = (
+            start_point.strip() if start_point and start_point.strip() else "HEAD"
+        )
         start_sha = _resolve_ref_sha(base_path, start_ref)
         try:
             exists = run_git(
