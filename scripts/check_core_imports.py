@@ -10,11 +10,11 @@ interfaces defined in integrations/agents/.
 import ast
 import sys
 from pathlib import Path
-from typing import Set, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 
 def is_inside_type_checking(
-    node: ast.AST, parent_map: dict[ast.AST, ast.AST | None]
+    node: ast.AST, parent_map: Dict[ast.AST, Optional[ast.AST]]
 ) -> bool:
     """
     Check if a node is inside a TYPE_CHECKING block.
@@ -33,11 +33,11 @@ def is_inside_type_checking(
     return False
 
 
-def build_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST | None]:
+def build_parent_map(tree: ast.AST) -> Dict[ast.AST, Optional[ast.AST]]:
     """Build a map from each AST node to its parent node."""
-    parent_map: dict[ast.AST, ast.AST | None] = {}
+    parent_map: Dict[ast.AST, Optional[ast.AST]] = {}
 
-    def build(n: ast.AST, parent: ast.AST | None = None):
+    def build(n: ast.AST, parent: Optional[ast.AST] = None):
         parent_map[n] = parent
         for child in ast.iter_child_nodes(n):
             build(child, n)
