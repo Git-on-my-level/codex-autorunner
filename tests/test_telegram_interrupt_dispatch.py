@@ -78,7 +78,9 @@ class _DispatchServiceStub:
         self.workspace_requests.append(workspace_path)
         return self._codex_client
 
-    async def _edit_message_text(self, chat_id: int, message_id: int, text: str) -> bool:
+    async def _edit_message_text(
+        self, chat_id: int, message_id: int, text: str
+    ) -> bool:
         self.edits.append((chat_id, message_id, text))
         return True
 
@@ -87,7 +89,9 @@ class _DispatchServiceStub:
 async def test_interrupt_uses_turn_context_topic_for_codex_workspace() -> None:
     codex_client = _CodexClientStub()
     records = {
-        "current": SimpleNamespace(agent="codex", workspace_path=None, active_thread_id=None),
+        "current": SimpleNamespace(
+            agent="codex", workspace_path=None, active_thread_id=None
+        ),
         "scoped": SimpleNamespace(
             agent="codex",
             workspace_path="/tmp/scoped-workspace",
@@ -126,7 +130,9 @@ async def test_interrupt_uses_turn_context_topic_for_opencode_session() -> None:
     opencode_client = _OpenCodeClientStub()
     opencode_supervisor = _OpenCodeSupervisorStub(opencode_client)
     records = {
-        "current": SimpleNamespace(agent="codex", workspace_path=None, active_thread_id=None),
+        "current": SimpleNamespace(
+            agent="codex", workspace_path=None, active_thread_id=None
+        ),
         "scoped": SimpleNamespace(
             agent="opencode",
             workspace_path="/tmp/opencode-workspace",
@@ -159,4 +165,3 @@ async def test_interrupt_uses_turn_context_topic_for_opencode_session() -> None:
     assert opencode_supervisor.roots == [Path("/tmp/opencode-workspace")]
     assert opencode_client.abort_calls == ["session-from-turn"]
     assert service.edits == []
-

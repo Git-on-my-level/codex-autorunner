@@ -1179,11 +1179,7 @@ class TelegramBotService(
         key = await self._resolve_topic_key(chat_id, thread_id)
         record = await self._router.get_topic(key)
         turn_ctx = self._resolve_turn_context(turn_id, thread_id=codex_thread_id)
-        if (
-            turn_ctx is not None
-            and turn_ctx.topic_key
-            and turn_ctx.topic_key != key
-        ):
+        if turn_ctx is not None and turn_ctx.topic_key and turn_ctx.topic_key != key:
             scoped_record = await self._router.get_topic(turn_ctx.topic_key)
             if scoped_record is not None:
                 key = turn_ctx.topic_key
