@@ -6,6 +6,10 @@
       "display_name": {"type": "string"},
       "enabled": {"type": "boolean"},
       "auto_run": {"type": "boolean"},
+      "worktree_setup_commands": {
+        "type": ["null", "array"],
+        "items": {"type": "string"}
+      },
       "kind": {"type": "string", "enum": ["base", "worktree"]},
       "worktree_of": {"type": ["null", "string"]},
       "branch": {"type": ["null", "string"]},
@@ -53,6 +57,7 @@
       "display_name",
       "enabled",
       "auto_run",
+      "worktree_setup_commands",
       "kind",
       "worktree_of",
       "branch",

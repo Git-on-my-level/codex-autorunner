@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -50,7 +51,7 @@ from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
 from .state import RunnerState, load_state, now_iso
 from .types import AppServerSupervisorFactory, BackendFactory
-from .utils import atomic_write, is_within
+from .utils import atomic_write, is_within, subprocess_env
 
 logger = logging.getLogger("codex_autorunner.hub")
 
@@ -100,6 +101,7 @@ class RepoSnapshot:
     display_name: str
     enabled: bool
     auto_run: bool
+    worktree_setup_commands: Optional[List[str]]
     kind: str  # base|worktree
     worktree_of: Optional[str]
     branch: Optional[str]
@@ -126,6 +128,7 @@ class RepoSnapshot:
             "display_name": self.display_name,
             "enabled": self.enabled,
             "auto_run": self.auto_run,
+            "worktree_setup_commands": self.worktree_setup_commands,
             "kind": self.kind,
             "worktree_of": self.worktree_of,
             "branch": self.branch,
@@ -189,6 +192,14 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 display_name=str(entry.get("display_name", "")),
                 enabled=bool(entry.get("enabled", True)),
                 auto_run=bool(entry.get("auto_run", False)),
+                worktree_setup_commands=(
+                    [
+                        str(cmd).strip()
+                        for cmd in (entry.get("worktree_setup_commands") or [])
+                        if isinstance(cmd, str) and str(cmd).strip()
+                    ]
+                    or None
+                ),
                 kind=str(entry.get("kind", "base")),
                 worktree_of=entry.get("worktree_of"),
                 branch=entry.get("branch"),
@@ -725,6 +736,9 @@ class HubSupervisor:
             raise ValueError(f"git worktree add failed: {_git_failure_detail(proc)}")
 
         seed_repo_files(worktree_path, force=force, git_required=False)
+        self._run_worktree_setup_commands(
+            worktree_path, base.worktree_setup_commands, base_repo_id=base_repo_id
+        )
         manifest.ensure_repo(
             self.hub_config.root,
             worktree_path,
@@ -733,6 +747,23 @@ class HubSupervisor:
             worktree_of=base_repo_id,
             branch=branch,
         )
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        return self._snapshot_for_repo(repo_id)
+
+    def set_worktree_setup_commands(
+        self, repo_id: str, commands: List[str]
+    ) -> RepoSnapshot:
+        self._invalidate_list_cache()
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(repo_id)
+        if not entry:
+            raise ValueError(f"Repo not found: {repo_id}")
+        if entry.kind != "base":
+            raise ValueError(
+                "Worktree setup commands can only be configured on base repos"
+            )
+        normalized = [str(cmd).strip() for cmd in commands if str(cmd).strip()]
+        entry.worktree_setup_commands = normalized or None
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_repo(repo_id)
 
@@ -1443,6 +1474,7 @@ class HubSupervisor:
             display_name=record.repo.display_name or repo_path.name or record.repo.id,
             enabled=record.repo.enabled,
             auto_run=record.repo.auto_run,
+            worktree_setup_commands=record.repo.worktree_setup_commands,
             kind=record.repo.kind,
             worktree_of=record.repo.worktree_of,
             branch=record.repo.branch,
@@ -1462,6 +1494,52 @@ class HubSupervisor:
             last_exit_code=runner_state.last_exit_code if runner_state else None,
             runner_pid=runner_state.runner_pid if runner_state else None,
         )
+
+    def _run_worktree_setup_commands(
+        self,
+        worktree_path: Path,
+        commands: Optional[List[str]],
+        *,
+        base_repo_id: str,
+    ) -> None:
+        normalized = [str(cmd).strip() for cmd in (commands or []) if str(cmd).strip()]
+        if not normalized:
+            return
+        log_path = worktree_path / ".codex-autorunner" / "logs" / "worktree-setup.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(
+                f"[{now_iso()}] base_repo={base_repo_id} commands={len(normalized)}\n"
+            )
+            for idx, command in enumerate(normalized, start=1):
+                log_file.write(f"$ {command}\n")
+                try:
+                    proc = subprocess.run(
+                        ["/bin/sh", "-lc", command],
+                        cwd=str(worktree_path),
+                        capture_output=True,
+                        text=True,
+                        timeout=600,
+                        env=subprocess_env(),
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise ValueError(
+                        "Worktree setup command %d/%d timed out after 600s: %r"
+                        % (idx, len(normalized), command)
+                    ) from exc
+                output = (proc.stdout or "") + (proc.stderr or "")
+                if output:
+                    log_file.write(output)
+                    if not output.endswith("\n"):
+                        log_file.write("\n")
+                if proc.returncode != 0:
+                    detail = output.strip() or f"exit {proc.returncode}"
+                    raise ValueError(
+                        "Worktree setup failed for command %d/%d (%r): %s"
+                        % (idx, len(normalized), command, detail)
+                    )
+            log_file.write("\n")
 
     def _derive_status(
         self,

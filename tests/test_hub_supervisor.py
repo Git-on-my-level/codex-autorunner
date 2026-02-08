@@ -27,7 +27,7 @@ from codex_autorunner.integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
-from codex_autorunner.manifest import sanitize_repo_id
+from codex_autorunner.manifest import load_manifest, sanitize_repo_id
 from codex_autorunner.server import create_hub_app
 
 
@@ -528,3 +528,89 @@ def test_create_worktree_fails_if_explicit_start_point_mismatches_existing_branc
             branch="feature/test",
             start_point="HEAD",
         )
+
+
+def test_create_worktree_runs_configured_setup_commands(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    supervisor.set_worktree_setup_commands(
+        "base", ["echo ready > SETUP_OK.txt", "echo done >> SETUP_OK.txt"]
+    )
+
+    worktree = supervisor.create_worktree(
+        base_repo_id="base", branch="feature/setup-ok"
+    )
+    setup_file = worktree.path / "SETUP_OK.txt"
+    assert setup_file.exists()
+    assert setup_file.read_text(encoding="utf-8") == "ready\ndone\n"
+    log_path = worktree.path / ".codex-autorunner" / "logs" / "worktree-setup.log"
+    assert log_path.exists()
+    assert "commands=2" in log_path.read_text(encoding="utf-8")
+
+
+def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    supervisor.set_worktree_setup_commands(
+        "base", ["echo ok > PRE_FAIL.txt", "exit 17"]
+    )
+
+    with pytest.raises(ValueError, match="Worktree setup failed for command 2/2"):
+        supervisor.create_worktree(base_repo_id="base", branch="feature/setup-fail")
+
+    worktree_path = hub_root / "worktrees" / "base--feature-setup-fail"
+    assert worktree_path.exists()
+    assert (worktree_path / "PRE_FAIL.txt").read_text(encoding="utf-8").strip() == "ok"
+    log_text = (
+        worktree_path / ".codex-autorunner" / "logs" / "worktree-setup.log"
+    ).read_text(encoding="utf-8")
+    assert "$ exit 17" in log_text
+
+
+def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/hub/repos/base/worktree-setup",
+        json={"commands": ["make setup", "pre-commit install"]},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["worktree_setup_commands"] == ["make setup", "pre-commit install"]
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.worktree_setup_commands == ["make setup", "pre-commit install"]

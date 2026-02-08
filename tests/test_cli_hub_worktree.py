@@ -28,6 +28,7 @@ def _snapshot(
         display_name=repo_id,
         enabled=True,
         auto_run=False,
+        worktree_setup_commands=None,
         kind=kind,
         worktree_of=worktree_of,
         branch=branch,

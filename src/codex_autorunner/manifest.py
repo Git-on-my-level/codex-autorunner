@@ -48,6 +48,7 @@ class ManifestRepo:
     worktree_of: Optional[str] = None
     branch: Optional[str] = None
     display_name: Optional[str] = None
+    worktree_setup_commands: Optional[List[str]] = None
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         rel = _relative_to_hub_root(hub_root, self.path)
@@ -64,6 +65,10 @@ class ManifestRepo:
             payload["worktree_of"] = str(self.worktree_of)
         if self.branch:
             payload["branch"] = str(self.branch)
+        if self.worktree_setup_commands:
+            payload["worktree_setup_commands"] = [
+                str(cmd) for cmd in self.worktree_setup_commands if str(cmd).strip()
+            ]
         return payload
 
 
@@ -95,6 +100,7 @@ class Manifest:
         kind: str = "base",
         worktree_of: Optional[str] = None,
         branch: Optional[str] = None,
+        worktree_setup_commands: Optional[List[str]] = None,
     ) -> ManifestRepo:
         base_name = display_name or repo_id or repo_path.name
         repo_id = sanitize_repo_id(repo_id or base_name)
@@ -115,6 +121,11 @@ class Manifest:
             worktree_of=str(worktree_of) if worktree_of else None,
             branch=str(branch) if branch else None,
             display_name=display_name or base_name,
+            worktree_setup_commands=(
+                [str(cmd) for cmd in worktree_setup_commands if str(cmd).strip()]
+                if worktree_setup_commands
+                else None
+            ),
         )
         self.repos.append(repo)
         return repo
@@ -182,6 +193,14 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
                     str(entry.get("display_name"))
                     if entry.get("display_name")
                     else None
+                ),
+                worktree_setup_commands=(
+                    [
+                        str(cmd).strip()
+                        for cmd in (entry.get("worktree_setup_commands") or [])
+                        if isinstance(cmd, str) and str(cmd).strip()
+                    ]
+                    or None
                 ),
             )
         )

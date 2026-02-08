@@ -28,6 +28,7 @@ interface HubRepo {
   display_name: string;
   enabled: boolean;
   auto_run: boolean;
+  worktree_setup_commands?: string[] | null;
   kind: "base" | "worktree";
   worktree_of: string | null;
   branch: string | null;
@@ -879,6 +880,12 @@ function buildActions(repo: HubRepo): RepoAction[] {
   }
   if (!missing && kind === "base") {
     actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
+    actions.push({
+      key: "worktree_setup",
+      label: "Setup",
+      kind: "ghost",
+      title: "Configure commands to run after creating a new worktree",
+    });
     const clean = repo.is_clean;
     const syncDisabled = clean !== true;
     const syncTitle = syncDisabled
@@ -904,6 +911,87 @@ function buildActions(repo: HubRepo): RepoAction[] {
     actions.push({ key: "remove_repo", label: "Remove", kind: "danger" });
   }
   return actions;
+}
+
+async function editWorktreeSetupCommands(repo: HubRepo): Promise<string[] | null> {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.hidden = true;
+
+  const dialog = document.createElement("div");
+  dialog.className = "modal-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+
+  const title = document.createElement("h3");
+  title.textContent = `Worktree setup for ${repo.display_name || repo.id}`;
+
+  const desc = document.createElement("p");
+  desc.className = "muted small";
+  desc.textContent =
+    "One command per line. Commands run with /bin/sh -lc in the new worktree. Leave blank to disable setup.";
+
+  const textarea = document.createElement("textarea");
+  textarea.rows = 8;
+  textarea.style.width = "100%";
+  textarea.style.resize = "vertical";
+  textarea.placeholder = "make setup\npnpm install";
+  textarea.value = (repo.worktree_setup_commands || []).join("\n");
+
+  const actions = document.createElement("div");
+  actions.className = "modal-actions";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "primary";
+  saveBtn.textContent = "Save";
+  actions.append(cancelBtn, saveBtn);
+
+  dialog.append(title, desc, textarea, actions);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  return new Promise((resolve) => {
+    let closeModal: (() => void) | null = null;
+    let settled = false;
+
+    const finalize = (value: string[] | null) => {
+      if (settled) return;
+      settled = true;
+      if (closeModal) {
+        const close = closeModal;
+        closeModal = null;
+        close();
+      }
+      overlay.remove();
+      resolve(value);
+    };
+
+    closeModal = openModal(overlay, {
+      initialFocus: textarea,
+      returnFocusTo: document.activeElement as HTMLElement | null,
+      onRequestClose: () => finalize(null),
+      onKeydown: (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          const commands = textarea.value
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+          finalize(commands);
+        }
+      },
+    });
+
+    cancelBtn.addEventListener("click", () => finalize(null));
+    saveBtn.addEventListener("click", () => {
+      const commands = textarea.value
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      finalize(commands);
+    });
+  });
 }
 
 function buildMountBadge(repo: HubRepo): string {
@@ -1036,6 +1124,11 @@ function renderRepos(repos: HubRepo[]): void {
     }
     if (lastActivity) {
       infoItems.push(lastActivity);
+    }
+    if ((repo.worktree_setup_commands || []).length > 0 && repo.kind === "base") {
+      infoItems.push(
+        `setup:${(repo.worktree_setup_commands || []).length} command(s)`
+      );
     }
     const infoLine =
       infoItems.length > 0
@@ -1363,6 +1456,27 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
       if (created?.mounted) {
         window.location.href = resolvePath(`/repos/${created.id}/`);
       }
+      return;
+    }
+    if (action === "worktree_setup") {
+      const repo = hubData.repos.find((item) => item.id === repoId);
+      if (!repo) {
+        flash(`Repo not found: ${repoId}`, "error");
+        return;
+      }
+      const commands = await editWorktreeSetupCommands(repo);
+      if (commands === null) return;
+      await api(`/hub/repos/${encodeURIComponent(repoId)}/worktree-setup`, {
+        method: "POST",
+        body: JSON.stringify({ commands }),
+      });
+      flash(
+        commands.length
+          ? `Saved ${commands.length} setup command(s) for ${repoId}`
+          : `Cleared setup commands for ${repoId}`,
+        "success"
+      );
+      await refreshHub();
       return;
     }
     if (action === "cleanup_worktree") {

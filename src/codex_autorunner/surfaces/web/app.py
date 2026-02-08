@@ -9,7 +9,7 @@ from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -1958,7 +1958,7 @@ def create_hub_app(
                             "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
                         }
                     )
-            messages.sort(key=lambda m: (m.get("run_created_at") or ""), reverse=True)
+            messages.sort(key=lambda m: m.get("run_created_at") or "", reverse=True)
             if limit and limit > 0:
                 return messages[: int(limit)]
             return messages
@@ -2138,6 +2138,28 @@ def create_hub_app(
             "hub.create_repo", _run_create_repo, request_id=get_request_id()
         )
         return job.to_dict()
+
+    @app.post("/hub/repos/{repo_id}/worktree-setup")
+    async def set_worktree_setup(repo_id: str, payload: Dict[str, Any]):
+        commands_raw = payload.get("commands") if isinstance(payload, dict) else []
+        if not isinstance(commands_raw, list):
+            raise HTTPException(status_code=400, detail="commands must be a list")
+        commands = [str(item) for item in commands_raw if str(item).strip()]
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub set worktree setup repo=%s commands=%d" % (repo_id, len(commands)),
+        )
+        try:
+            snapshot = await asyncio.to_thread(
+                context.supervisor.set_worktree_setup_commands,
+                repo_id,
+                commands,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _refresh_mounts([snapshot], full_refresh=False)
+        return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.get("/hub/repos/{repo_id}/remove-check")
     async def remove_repo_check(repo_id: str):
