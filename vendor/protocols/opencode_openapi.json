@@ -116,6 +116,9 @@
           },
           "topP": {
             "type": "number"
+          },
+          "variant": {
+            "type": "string"
           }
         },
         "required": [
@@ -130,9 +133,25 @@
         "additionalProperties": {},
         "properties": {
           "color": {
-            "description": "Hex color code for the agent (e.g., #FF5733)",
-            "pattern": "^#[0-9a-fA-F]{6}$",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "accent",
+                  "success",
+                  "warning",
+                  "error",
+                  "info"
+                ],
+                "type": "string"
+              }
+            ],
+            "description": "Hex color code (e.g., #FF5733) or theme color (e.g., primary)"
           },
           "description": {
             "description": "Description of when to use the agent",
@@ -196,6 +215,10 @@
           },
           "top_p": {
             "type": "number"
+          },
+          "variant": {
+            "description": "Default model variant for this agent (applies only when using the agent's configured model).",
+            "type": "string"
           }
         },
         "type": "object"
@@ -2377,7 +2400,10 @@
             "type": "object"
           },
           "type": {
-            "const": "text",
+            "enum": [
+              "text",
+              "binary"
+            ],
             "type": "string"
           }
         },
@@ -2402,6 +2428,14 @@
             "type": "number"
           },
           "file": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "added",
+              "deleted",
+              "modified"
+            ],
             "type": "string"
           }
         },
@@ -2632,6 +2666,11 @@
           "command_list": {
             "default": "ctrl+p",
             "description": "List available commands",
+            "type": "string"
+          },
+          "display_thinking": {
+            "default": "none",
+            "description": "Toggle thinking blocks visibility",
             "type": "string"
           },
           "editor_open": {
@@ -4818,6 +4857,10 @@
           "mdns": {
             "description": "Enable mDNS service discovery",
             "type": "boolean"
+          },
+          "mdnsDomain": {
+            "description": "Custom domain name for mDNS service (default: opencode.local)",
+            "type": "string"
           },
           "port": {
             "description": "Port to listen on",
