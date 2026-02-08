@@ -671,10 +671,14 @@ class HubSupervisor:
 
         # Create the worktree (branch may or may not exist locally).
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        start_ref = (
-            start_point.strip() if start_point and start_point.strip() else "HEAD"
+        explicit_start_ref = (
+            start_point.strip() if start_point and start_point.strip() else None
         )
-        start_sha = _resolve_ref_sha(base_path, start_ref)
+        start_sha = (
+            _resolve_ref_sha(base_path, explicit_start_ref)
+            if explicit_start_ref is not None
+            else None
+        )
         try:
             exists = run_git(
                 ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -685,13 +689,20 @@ class HubSupervisor:
             raise ValueError(f"git worktree add failed: {exc}") from exc
         try:
             if exists.returncode == 0:
-                branch_sha = _resolve_ref_sha(base_path, f"refs/heads/{branch}")
-                if branch_sha != start_sha:
-                    raise ValueError(
-                        "Branch %r already exists and points to %s, but %s resolves to %s. "
-                        "Use a different branch name or realign the existing branch first."
-                        % (branch, branch_sha[:12], start_ref, start_sha[:12])
-                    )
+                if explicit_start_ref is not None:
+                    branch_sha = _resolve_ref_sha(base_path, f"refs/heads/{branch}")
+                    assert start_sha is not None
+                    if branch_sha != start_sha:
+                        raise ValueError(
+                            "Branch %r already exists and points to %s, but %s resolves to %s. "
+                            "Use a different branch name or realign the existing branch first."
+                            % (
+                                branch,
+                                branch_sha[:12],
+                                explicit_start_ref,
+                                start_sha[:12],
+                            )
+                        )
                 proc = run_git(
                     ["worktree", "add", str(worktree_path), branch],
                     base_path,
@@ -699,7 +710,9 @@ class HubSupervisor:
                     timeout_seconds=120,
                 )
             else:
-                cmd = ["worktree", "add", "-b", branch, str(worktree_path), start_ref]
+                cmd = ["worktree", "add", "-b", branch, str(worktree_path)]
+                if explicit_start_ref is not None:
+                    cmd.append(explicit_start_ref)
                 proc = run_git(
                     cmd,
                     base_path,
