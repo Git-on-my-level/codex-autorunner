@@ -63,6 +63,19 @@ def _git_failure_detail(proc) -> str:
     return (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
 
 
+def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
+    try:
+        proc = run_git(["rev-parse", "--verify", ref], repo_root, check=False)
+    except GitError as exc:
+        raise ValueError(f"git rev-parse failed for {ref}: {exc}") from exc
+    if proc.returncode != 0:
+        raise ValueError(f"Unable to resolve ref {ref}: {_git_failure_detail(proc)}")
+    sha = (proc.stdout or "").strip()
+    if not sha:
+        raise ValueError(f"Unable to resolve ref {ref}: empty output")
+    return sha
+
+
 class RepoStatus(str, enum.Enum):
     UNINITIALIZED = "uninitialized"
     INITIALIZING = "initializing"
@@ -469,6 +482,17 @@ class HubSupervisor:
             raise ValueError(f"git pull failed: {exc}") from exc
         if proc.returncode != 0:
             raise ValueError(f"git pull failed: {_git_failure_detail(proc)}")
+        local_sha = git_head_sha(repo_root)
+        if not local_sha:
+            raise ValueError("Unable to resolve local HEAD after sync")
+        origin_ref = f"refs/remotes/origin/{default_branch}"
+        origin_sha = _resolve_ref_sha(repo_root, origin_ref)
+        if local_sha != origin_sha:
+            raise ValueError(
+                "Sync main did not land on origin/%s: local=%s origin=%s. "
+                "Local branch may contain extra commits; resolve divergence first."
+                % (default_branch, local_sha[:12], origin_sha[:12])
+            )
         return self._snapshot_for_repo(repo_id)
 
     def create_repo(
@@ -647,6 +671,14 @@ class HubSupervisor:
 
         # Create the worktree (branch may or may not exist locally).
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        explicit_start_ref = (
+            start_point.strip() if start_point and start_point.strip() else None
+        )
+        start_sha = (
+            _resolve_ref_sha(base_path, explicit_start_ref)
+            if explicit_start_ref is not None
+            else None
+        )
         try:
             exists = run_git(
                 ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -657,6 +689,20 @@ class HubSupervisor:
             raise ValueError(f"git worktree add failed: {exc}") from exc
         try:
             if exists.returncode == 0:
+                if explicit_start_ref is not None:
+                    branch_sha = _resolve_ref_sha(base_path, f"refs/heads/{branch}")
+                    assert start_sha is not None
+                    if branch_sha != start_sha:
+                        raise ValueError(
+                            "Branch %r already exists and points to %s, but %s resolves to %s. "
+                            "Use a different branch name or realign the existing branch first."
+                            % (
+                                branch,
+                                branch_sha[:12],
+                                explicit_start_ref,
+                                start_sha[:12],
+                            )
+                        )
                 proc = run_git(
                     ["worktree", "add", str(worktree_path), branch],
                     base_path,
@@ -665,8 +711,8 @@ class HubSupervisor:
                 )
             else:
                 cmd = ["worktree", "add", "-b", branch, str(worktree_path)]
-                if start_point:
-                    cmd.append(start_point)
+                if explicit_start_ref is not None:
+                    cmd.append(explicit_start_ref)
                 proc = run_git(
                     cmd,
                     base_path,

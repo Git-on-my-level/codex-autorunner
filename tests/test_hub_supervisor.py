@@ -56,6 +56,32 @@ def _init_git_repo(path: Path) -> None:
     )
 
 
+def _git_stdout(path: Path, *args: str) -> str:
+    proc = run_git(list(args), path, check=True)
+    return (proc.stdout or "").strip()
+
+
+def _commit_file(path: Path, rel: str, content: str, message: str) -> str:
+    file_path = path / rel
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(content, encoding="utf-8")
+    run_git(["add", rel], path, check=True)
+    run_git(
+        [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            message,
+        ],
+        path,
+        check=True,
+    )
+    return _git_stdout(path, "rev-parse", "HEAD")
+
+
 def _unwrap_fastapi_app(sub_app) -> Optional[FastAPI]:
     current = sub_app
     while not isinstance(current, FastAPI):
@@ -415,3 +441,90 @@ def test_hub_remove_repo_with_worktrees(tmp_path: Path):
     assert remove_resp.status_code == 200
     assert not base.path.exists()
     assert not worktree.path.exists()
+
+
+def test_sync_main_raises_when_local_default_diverges_from_origin(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    origin = tmp_path / "origin.git"
+    origin.mkdir(parents=True, exist_ok=True)
+    run_git(["init", "--bare"], origin, check=True)
+
+    seed = tmp_path / "seed"
+    seed.mkdir(parents=True, exist_ok=True)
+    run_git(["init"], seed, check=True)
+    run_git(["branch", "-M", "main"], seed, check=True)
+    _commit_file(seed, "README.md", "seed\n", "seed init")
+    run_git(["remote", "add", "origin", str(origin)], seed, check=True)
+    run_git(["push", "-u", "origin", "main"], seed, check=True)
+    run_git(["symbolic-ref", "HEAD", "refs/heads/main"], origin, check=True)
+
+    repo_dir = hub_root / "base"
+    run_git(["clone", str(origin), str(repo_dir)], hub_root, check=True)
+    local_sha = _commit_file(repo_dir, "LOCAL.txt", "local\n", "local only")
+    origin_sha = _git_stdout(origin, "rev-parse", "refs/heads/main")
+    assert local_sha != origin_sha
+
+    supervisor = HubSupervisor.from_path(hub_root)
+    supervisor.scan()
+
+    with pytest.raises(ValueError, match="did not land on origin/main"):
+        supervisor.sync_main("base")
+
+
+def test_create_worktree_allows_existing_branch_without_start_point(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    first_sha = _git_stdout(base.path, "rev-list", "--max-parents=0", "HEAD")
+    _commit_file(base.path, "SECOND.txt", "second\n", "second")
+    head_sha = _git_stdout(base.path, "rev-parse", "HEAD")
+    assert first_sha != head_sha
+    run_git(["branch", "feature/test", first_sha], base.path, check=True)
+
+    worktree = supervisor.create_worktree(base_repo_id="base", branch="feature/test")
+    assert worktree.branch == "feature/test"
+    assert worktree.path.exists()
+    assert _git_stdout(worktree.path, "rev-parse", "HEAD") == first_sha
+
+
+def test_create_worktree_fails_if_explicit_start_point_mismatches_existing_branch(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    first_sha = _git_stdout(base.path, "rev-list", "--max-parents=0", "HEAD")
+    _commit_file(base.path, "SECOND.txt", "second\n", "second")
+    head_sha = _git_stdout(base.path, "rev-parse", "HEAD")
+    assert first_sha != head_sha
+    run_git(["branch", "feature/test", first_sha], base.path, check=True)
+
+    with pytest.raises(ValueError, match="already exists and points to"):
+        supervisor.create_worktree(
+            base_repo_id="base",
+            branch="feature/test",
+            start_point="HEAD",
+        )
