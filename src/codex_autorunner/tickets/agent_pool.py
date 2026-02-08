@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional, cast
 from ..agents.opencode.constants import DEFAULT_TICKET_MODEL
 from ..agents.opencode.runtime import collect_opencode_output, split_model_id
 from ..agents.opencode.supervisor import OpenCodeSupervisor
+from ..core.app_server_ids import extract_turn_id
 from ..core.config import RepoConfig
 from ..core.flows.models import FlowEventType
 from ..core.utils import build_opencode_supervisor
@@ -59,32 +60,10 @@ class AgentPool:
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._active_emitters: dict[str, EmitEventFn] = {}
 
-    @staticmethod
-    def _extract_turn_id(params: Any) -> Optional[str]:
-        if not isinstance(params, dict):
-            return None
-        for key in ("turnId", "turn_id", "id"):
-            value = params.get(key)
-            if isinstance(value, str) and value:
-                return value
-        turn = params.get("turn")
-        if isinstance(turn, dict):
-            for key in ("turnId", "turn_id", "id"):
-                value = turn.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        item = params.get("item")
-        if isinstance(item, dict):
-            for key in ("turnId", "turn_id", "id"):
-                value = item.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        return None
-
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         method = message.get("method")
         params = message.get("params")
-        turn_id = self._extract_turn_id(params)
+        turn_id = extract_turn_id(params)
         if not turn_id:
             return
         emitter = self._active_emitters.get(turn_id)
