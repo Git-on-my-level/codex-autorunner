@@ -383,5 +383,78 @@ async def test_flow_hub_overview_allows_parse_mode_override(
 
     assert handler.sent
     assert "`r1`" in handler.sent[0][0]
+    assert "\n\n" not in handler.sent[0][0]
     assert "`/flow <repo-id> status`" in handler.sent[0][0]
     assert handler.sent[0][1] == "Markdown"
+
+
+@pytest.mark.anyio
+async def test_flow_hub_overview_marks_completed_idle_as_done(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _StubStore:
+        def initialize(self) -> None: ...
+
+        def list_flow_runs(self, *args, **kwargs):
+            return []
+
+        def close(self) -> None: ...
+
+    class _HubOverviewHandler(FlowCommands):
+        def __init__(self) -> None:
+            self._manifest_path = tmp_path / "manifest.yml"
+            self._hub_root = tmp_path
+            self._store = _TopicStoreStub(None)
+            self.sent: list[tuple[str, Optional[str]]] = []
+
+        async def _resolve_topic_key(
+            self, _chat_id: int, _thread_id: int | None
+        ) -> str:
+            return "topic"
+
+        def _resolve_workspace(self, _arg: str) -> tuple[str, Path] | None:
+            return None
+
+        async def _send_message(
+            self,
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: int | None = None,
+            reply_to: int | None = None,
+            reply_markup: dict[str, object] | None = None,
+            parse_mode: str | None = None,
+        ) -> None:
+            _ = (thread_id, reply_to, reply_markup, parse_mode)
+            self.sent.append((text, parse_mode))
+
+    monkeypatch.setattr(flows_module, "_load_flow_store", lambda _root: _StubStore())
+    monkeypatch.setattr(
+        flows_module,
+        "ticket_progress",
+        lambda _root: {"done": 3, "total": 3},
+    )
+    monkeypatch.setattr(
+        flows_module,
+        "load_manifest",
+        lambda _path, _root: SimpleNamespace(
+            repos=[SimpleNamespace(id="base--my-worktree", enabled=True, path=".")]
+        ),
+    )
+
+    handler = _HubOverviewHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._send_flow_hub_overview(message)
+
+    assert handler.sent
+    assert "🔵 `my-worktree`: Done 3/3" in handler.sent[0][0]

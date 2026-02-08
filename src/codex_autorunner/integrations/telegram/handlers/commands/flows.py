@@ -124,6 +124,13 @@ def _code(value: object) -> str:
     return f"`{value}`"
 
 
+def _worktree_suffix(repo_id: str) -> Optional[str]:
+    parts = [part for part in repo_id.split("--") if part]
+    if len(parts) <= 1:
+        return None
+    return parts[-1]
+
+
 def _discover_unregistered_worktrees(
     manifest, hub_root: Optional[Path]
 ) -> list[dict[str, object]]:
@@ -157,9 +164,9 @@ def _discover_unregistered_worktrees(
         repo_id = child.name
         label = repo_id
         indent = ""
-        if "--" in repo_id:
-            _, suffix = repo_id.split("--", 1)
-            label = suffix or repo_id
+        suffix = _worktree_suffix(repo_id)
+        if suffix:
+            label = suffix
             indent = "  - "
         label = f"{label} (unregistered)"
         if repo_id in known_ids:
@@ -973,7 +980,6 @@ class FlowCommands(SharedHelpers):
 
         def _format_status_line(
             label: str,
-            repo_id: str,
             *,
             status_icon: str,
             status_value: str,
@@ -982,9 +988,7 @@ class FlowCommands(SharedHelpers):
             indent: str = "",
         ) -> str:
             run_suffix = f" run {_code(run_id)}" if run_id else ""
-            repo_label = _code(repo_id)
-            if label != repo_id:
-                repo_label += f" ({label})"
+            repo_label = _code(label)
             return (
                 f"{indent}{status_icon} {repo_label}: {status_value} "
                 f"{progress_label}{run_suffix}"
@@ -1000,7 +1004,7 @@ class FlowCommands(SharedHelpers):
                 continue
             repo_root = (self._hub_root / repo.path).resolve()
             group, suffix = _group_key(repo.id)
-            label = suffix or repo.id
+            label = _worktree_suffix(repo.id) or suffix or repo.id
             indent = "  - " if suffix else ""
             entries.append(
                 {
@@ -1044,7 +1048,6 @@ class FlowCommands(SharedHelpers):
                     )
                     status_line = _format_status_line(
                         label,
-                        repo_id,
                         status_icon=status_icon,
                         status_value=active.status.value,
                         progress_label=progress_label,
@@ -1058,7 +1061,6 @@ class FlowCommands(SharedHelpers):
                     if paused:
                         status_line = _format_status_line(
                             label,
-                            repo_id,
                             status_icon="🔴",
                             status_value="PAUSED",
                             progress_label=progress_label,
@@ -1068,15 +1070,16 @@ class FlowCommands(SharedHelpers):
                     else:
                         status_line = _format_status_line(
                             label,
-                            repo_id,
-                            status_icon="⚪",
-                            status_value="Idle",
+                            status_icon="🔵" if total > 0 and done >= total else "⚪",
+                            status_value=(
+                                "Done" if total > 0 and done >= total else "Idle"
+                            ),
                             progress_label=progress_label,
                             run_id=None,
                             indent=indent,
                         )
             except Exception:
-                status_line = f"{indent}❓ {_code(repo_id)}: Error reading state"
+                status_line = f"{indent}❓ {_code(label)}: Error reading state"
             finally:
                 store.close()
 
@@ -1088,16 +1091,10 @@ class FlowCommands(SharedHelpers):
                 continue
             entries.sort(key=lambda pair: (0 if pair[0] == group else 1, pair[0]))
             lines.extend([line for _label, line in entries])
-            lines.append("")
-
-        if lines and lines[-1] == "":
-            lines.pop()
         if extras:
-            lines.append("")
             lines.append(
                 "Note: Unregistered worktrees detected. Run `car hub scan` to register them."
             )
-        lines.append("")
         lines.append("Tip: use `/flow <repo-id> status` for repo details.")
 
         await self._send_message(
