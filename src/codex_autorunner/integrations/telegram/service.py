@@ -1184,9 +1184,16 @@ class TelegramBotService(
             if scoped_record is not None:
                 key = turn_ctx.topic_key
                 record = scoped_record
+        workspace_path = record.workspace_path if record else None
+        if record and getattr(record, "pma_enabled", False):
+            # PMA topics are hub-scoped; their stored topic records may not carry a
+            # workspace path. Turn execution patches workspace_path to hub_root, but
+            # interrupt dispatch must do the same so /interrupt works in PMA mode.
+            hub_root = getattr(self, "_hub_root", None)
+            if hub_root is not None:
+                workspace_path = str(hub_root)
         if record and record.agent == "opencode":
             session_id = record.active_thread_id or codex_thread_id
-            workspace_path = record.workspace_path
             if (
                 not session_id
                 or self._opencode_supervisor is None
@@ -1236,9 +1243,7 @@ class TelegramBotService(
             runtime.interrupt_requested = False
             return
         try:
-            client = await self._client_for_workspace(
-                record.workspace_path if record else None
-            )
+            client = await self._client_for_workspace(workspace_path)
         except AppServerUnavailableError:
             runtime.interrupt_requested = False
             if runtime.interrupt_message_id is not None:
