@@ -147,7 +147,7 @@ def doctor(
         )
 
     # Check config file
-    config_path = repo_root / "codex-autorunner.yml"
+    config_path = repo_root / ".codex-autorunner" / "config.yml"
     if not config_path.exists():
         checks.append(
             DoctorCheck(
