@@ -51,6 +51,7 @@ class TicketImportReport:
     assign_agent: Optional[str]
     clear_model_pin: bool
     apply_template: Optional[str]
+    strip_depends_on: bool
     created: int
     skipped: int
     errors: list[str]
@@ -74,12 +75,27 @@ class TicketImportReport:
             "assign_agent": self.assign_agent,
             "clear_model_pin": self.clear_model_pin,
             "apply_template": self.apply_template,
+            "strip_depends_on": self.strip_depends_on,
             "created": self.created,
             "skipped": self.skipped,
             "errors": list(self.errors),
             "lint_errors": list(self.lint_errors),
             "items": [item.to_dict() for item in self.items],
         }
+
+
+def _depends_on_note(value: Any) -> Optional[str]:
+    """Render a stable, low-noise note for depends_on values from external ticket packs."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, list):
+        parts = [str(v).strip() for v in value if str(v).strip()]
+        if parts:
+            return ", ".join(parts)
+    rendered = str(value).strip()
+    return rendered or None
 
 
 def load_template_frontmatter(content: str) -> dict[str, Any]:
@@ -165,6 +181,7 @@ def import_ticket_pack(
     template_frontmatter: Optional[dict[str, Any]] = None,
     lint: bool = True,
     dry_run: bool = False,
+    strip_depends_on: bool = True,
 ) -> TicketImportReport:
     items: list[TicketImportItem] = []
     errors: list[str] = []
@@ -226,6 +243,19 @@ def import_ticket_pack(
             status="ready",
         )
         data, body = parse_markdown_frontmatter(raw)
+
+        depends_note = None
+        if strip_depends_on and isinstance(data, dict) and "depends_on" in data:
+            depends_note = _depends_on_note(data.get("depends_on"))
+            try:
+                data = dict(data)
+                data.pop("depends_on", None)
+            except Exception:
+                pass
+            item.warnings.append(
+                "Removed frontmatter.depends_on (CAR executes tickets in filename order)."
+            )
+
         _frontmatter, fm_errors = lint_ticket_frontmatter(data)
         if fm_errors:
             item.status = "error"
@@ -253,6 +283,14 @@ def import_ticket_pack(
             continue
 
         assert _frontmatter2 is not None
+        if depends_note:
+            # Keep the original intent without reintroducing unsupported frontmatter.
+            note = f"<!-- CAR ticket-pack note: depends_on={depends_note} -->\n"
+            if body.startswith("\n"):
+                # Insert after the first newline so the remaining body stays byte-for-byte.
+                body = f"{body[:1]}{note}{body[1:]}"
+            else:
+                body = f"\n\n{note}{body}"
         rendered = _render_ticket(merged, body)
         filename = f"TICKET-{target_index:0{width}d}.md"
         target_path = ticket_dir / filename
@@ -285,6 +323,7 @@ def import_ticket_pack(
         assign_agent=assign_agent,
         clear_model_pin=clear_model_pin,
         apply_template=template_ref,
+        strip_depends_on=strip_depends_on,
         created=created,
         skipped=0,
         errors=errors,

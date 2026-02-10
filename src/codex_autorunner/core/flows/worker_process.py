@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import IO, Literal, Optional, Tuple
 
 _WORKER_METADATA_FILENAME = "worker.json"
+_WORKER_EXIT_FILENAME = "worker.exit.json"
+_MAX_TAIL_BYTES = 32_768
 
 
 @dataclass
@@ -19,6 +21,8 @@ class FlowWorkerHealth:
     cmdline: list[str]
     artifact_path: Path
     message: Optional[str] = None
+    exit_code: Optional[int] = None
+    stderr_tail: Optional[str] = None
 
     @property
     def is_alive(self) -> bool:
@@ -45,6 +49,74 @@ def _worker_artifacts_dir(
 
 def _worker_metadata_path(artifacts_dir: Path) -> Path:
     return artifacts_dir / _WORKER_METADATA_FILENAME
+
+
+def _worker_exit_path(artifacts_dir: Path) -> Path:
+    return artifacts_dir / _WORKER_EXIT_FILENAME
+
+
+def _tail_file(
+    path: Path, *, max_lines: int = 5, max_chars: int = 320
+) -> Optional[str]:
+    try:
+        if not path.exists() or not path.is_file():
+            return None
+        size = path.stat().st_size
+        start = max(0, size - _MAX_TAIL_BYTES)
+        with path.open("rb") as fh:
+            if start:
+                fh.seek(start)
+            chunk = fh.read()
+        text = chunk.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    tail = "\n".join(lines[-max_lines:]).strip()
+    if not tail:
+        return None
+    if len(tail) <= max_chars:
+        return tail
+    return tail[-max_chars:].lstrip()
+
+
+def write_worker_exit_info(
+    repo_root: Path,
+    run_id: str,
+    *,
+    returncode: Optional[int],
+    artifacts_root: Optional[Path] = None,
+) -> None:
+    """Persist worker exit status + log tails for fast postmortem debugging."""
+    import time
+
+    normalized_run_id = _normalized_run_id(run_id)
+    artifacts_dir = _worker_artifacts_dir(repo_root, normalized_run_id, artifacts_root)
+    metadata = {}
+    try:
+        metadata = json.loads(
+            _worker_metadata_path(artifacts_dir).read_text(encoding="utf-8")
+        )
+    except Exception:
+        metadata = {}
+    data = {
+        "run_id": normalized_run_id,
+        "returncode": returncode,
+        "captured_at": time.time(),
+        # Guard against stale exit info: only trust it when it matches the current
+        # worker.json lifecycle metadata.
+        "pid": metadata.get("pid"),
+        "spawned_at": metadata.get("spawned_at"),
+        "stderr_tail": _tail_file(artifacts_dir / "worker.err.log"),
+        "stdout_tail": _tail_file(artifacts_dir / "worker.out.log"),
+    }
+    try:
+        _worker_exit_path(artifacts_dir).write_text(
+            json.dumps(data, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
 
 
 def _build_worker_cmd(entrypoint: str, run_id: str, repo_root: Path) -> list[str]:
@@ -147,6 +219,7 @@ def check_worker_health(
 ) -> FlowWorkerHealth:
     artifacts_dir = _worker_artifacts_dir(repo_root, run_id, artifacts_root)
     metadata_path = _worker_metadata_path(artifacts_dir)
+    exit_path = _worker_exit_path(artifacts_dir)
 
     if not metadata_path.exists():
         return FlowWorkerHealth(
@@ -160,6 +233,9 @@ def check_worker_health(
     try:
         data = json.loads(metadata_path.read_text(encoding="utf-8"))
         pid = int(data.get("pid")) if data.get("pid") is not None else None
+        spawned_at = data.get("spawned_at")
+        if not isinstance(spawned_at, (int, float)):
+            spawned_at = None
         raw_cmd = data.get("cmd") or []
         cmd = [str(part) for part in raw_cmd] if isinstance(raw_cmd, list) else []
     except Exception:
@@ -181,12 +257,36 @@ def check_worker_health(
         )
 
     if not _pid_is_running(pid):
+        exit_code = None
+        stderr_tail = None
+        if exit_path.exists():
+            try:
+                exit_data = json.loads(exit_path.read_text(encoding="utf-8"))
+                if isinstance(exit_data, dict):
+                    # Only trust the cached exit info when it matches the current
+                    # worker.json (avoids stale exit payloads for reused run_ids).
+                    if exit_data.get("pid") == pid and (
+                        spawned_at is None or exit_data.get("spawned_at") == spawned_at
+                    ):
+                        raw_code = exit_data.get("returncode")
+                        if isinstance(raw_code, int) and not isinstance(raw_code, bool):
+                            exit_code = raw_code
+                        raw_tail = exit_data.get("stderr_tail")
+                        if isinstance(raw_tail, str) and raw_tail.strip():
+                            stderr_tail = raw_tail.strip()
+            except Exception:
+                exit_code = None
+                stderr_tail = None
+        if stderr_tail is None:
+            stderr_tail = _tail_file(artifacts_dir / "worker.err.log")
         return FlowWorkerHealth(
             status="dead",
             pid=pid,
             cmdline=cmd,
             artifact_path=metadata_path,
             message="worker PID not running",
+            exit_code=exit_code,
+            stderr_tail=stderr_tail,
         )
 
     expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id, repo_root)
