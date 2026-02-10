@@ -34,7 +34,11 @@ from ....core.flows.ux_helpers import (
     seed_issue_from_github,
     seed_issue_from_text,
 )
-from ....core.flows.worker_process import FlowWorkerHealth, check_worker_health
+from ....core.flows.worker_process import (
+    FlowWorkerHealth,
+    check_worker_health,
+    write_worker_exit_info,
+)
 from ....core.runtime import RuntimeContext
 from ....core.safe_paths import SafePathError, validate_single_filename
 from ....core.utils import atomic_write, find_repo_root
@@ -366,6 +370,13 @@ def _cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
         return
 
     proc, stdout, stderr = handle
+    if proc and proc.poll() is not None:
+        try:
+            write_worker_exit_info(
+                find_repo_root(), run_id, returncode=getattr(proc, "returncode", None)
+            )
+        except Exception:
+            pass
     if proc and proc.poll() is None:
         try:
             proc.terminate()
@@ -415,6 +426,8 @@ class FlowWorkerHealthResponse(BaseModel):
     pid: Optional[int]
     is_alive: bool
     message: Optional[str] = None
+    exit_code: Optional[int] = None
+    stderr_tail: Optional[str] = None
 
     @classmethod
     def from_health(cls, health: FlowWorkerHealth) -> "FlowWorkerHealthResponse":
@@ -423,6 +436,8 @@ class FlowWorkerHealthResponse(BaseModel):
             pid=health.pid,
             is_alive=health.is_alive,
             message=health.message,
+            exit_code=getattr(health, "exit_code", None),
+            stderr_tail=getattr(health, "stderr_tail", None),
         )
 
 

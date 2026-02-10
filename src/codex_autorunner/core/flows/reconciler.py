@@ -93,6 +93,25 @@ def reconcile_flow_run(
                     note=decision.note,
                     failed_at=decision.finished_at,
                 )
+                failure = state.get("failure") if isinstance(state, dict) else None
+                if isinstance(failure, dict):
+                    patched = False
+                    updated_failure = dict(failure)
+                    exit_code = getattr(health, "exit_code", None)
+                    if exit_code is not None and updated_failure.get("exit_code") is None:
+                        updated_failure["exit_code"] = exit_code
+                        patched = True
+                    stderr_tail = getattr(health, "stderr_tail", None)
+                    if (
+                        isinstance(stderr_tail, str)
+                        and stderr_tail.strip()
+                        and not updated_failure.get("stderr_tail")
+                    ):
+                        updated_failure["stderr_tail"] = stderr_tail.strip()
+                        patched = True
+                    if patched:
+                        state = dict(state)
+                        state["failure"] = updated_failure
             updated = store.update_flow_run_status(
                 run_id=record.id,
                 status=decision.status,

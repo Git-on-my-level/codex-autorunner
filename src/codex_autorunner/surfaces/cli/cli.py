@@ -305,8 +305,12 @@ def _apply_agent_override(content: str, agent: str) -> str:
     return f"---\n{rendered}\n---{body}"
 
 
-def _build_server_url(config, path: str) -> str:
-    base_path = config.server_base_path or ""
+def _build_server_url(config, path: str, *, base_path_override: Optional[str] = None) -> str:
+    base_path = (
+        _normalize_base_path(base_path_override)
+        if base_path_override is not None
+        else (config.server_base_path or "")
+    )
     if base_path.endswith("/") and path.startswith("/"):
         base_path = base_path[:-1]
     return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
@@ -478,9 +482,27 @@ def _request_json(
     if token_env:
         token = _require_auth_token(token_env)
         headers = {"Authorization": f"Bearer {token}"}
-    response = httpx.request(method, url, json=payload, timeout=2.0, headers=headers)
+    response = httpx.request(
+        method,
+        url,
+        json=payload,
+        timeout=2.0,
+        headers=headers,
+        follow_redirects=True,
+    )
     response.raise_for_status()
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:
+        preview = ""
+        try:
+            preview = (response.text or "")[:200].strip()
+        except Exception:
+            preview = ""
+        hint = f" body_preview={preview!r}" if preview else ""
+        raise httpx.HTTPError(
+            f"Non-JSON response from {response.url!s} (status={response.status_code}).{hint}"
+        ) from exc
     return data if isinstance(data, dict) else {}
 
 
@@ -502,10 +524,27 @@ def _request_form_json(
         data = form or {}
         files = []
     response = httpx.request(
-        method, url, data=data, files=files, timeout=5.0, headers=headers
+        method,
+        url,
+        data=data,
+        files=files,
+        timeout=5.0,
+        headers=headers,
+        follow_redirects=True,
     )
     response.raise_for_status()
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:
+        preview = ""
+        try:
+            preview = (response.text or "")[:200].strip()
+        except Exception:
+            preview = ""
+        hint = f" body_preview={preview!r}" if preview else ""
+        raise httpx.HTTPError(
+            f"Non-JSON response from {response.url!s} (status={response.status_code}).{hint}"
+        ) from exc
     return data if isinstance(data, dict) else {}
 
 
@@ -1664,11 +1703,16 @@ def hub_snapshot(
         True, "--json/--no-json", help="Emit JSON output (default: true)"
     ),
     pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
+    base_path: Optional[str] = typer.Option(
+        None, "--base-path", help="Override hub server base path (e.g. /car)"
+    ),
 ):
     """Return a compact hub snapshot (repos + inbox items)."""
     config = _require_hub_config(path)
-    repos_url = _build_server_url(config, "/hub/repos")
-    messages_url = _build_server_url(config, "/hub/messages?limit=50")
+    repos_url = _build_server_url(config, "/hub/repos", base_path_override=base_path)
+    messages_url = _build_server_url(
+        config, "/hub/messages?limit=50", base_path_override=base_path
+    )
 
     try:
         repos_response = _request_json(
@@ -1685,7 +1729,10 @@ def hub_snapshot(
     ) as exc:
         logger.debug("Failed to fetch hub snapshot from server: %s", exc)
         _raise_exit(
-            "Failed to connect to hub server. Ensure 'car hub serve' is running.",
+            "Failed to connect to hub server. Ensure 'car hub serve' is running.\n"
+            f"Attempted:\n- {repos_url}\n- {messages_url}\n"
+            "If the hub UI is served under a base path (commonly /car), either set "
+            "`server.base_path` in the hub config or pass `--base-path /car`.",
             cause=exc,
         )
 
@@ -1796,6 +1843,8 @@ def _print_ticket_import_report(report) -> None:
         typer.echo("Clear model pin: true")
     if report.apply_template:
         typer.echo(f"Template: {report.apply_template}")
+    if getattr(report, "strip_depends_on", False):
+        typer.echo("Strip depends_on: true")
     if report.lint:
         typer.echo("Lint: enabled")
     if report.errors:
@@ -1813,6 +1862,8 @@ def _print_ticket_import_report(report) -> None:
         typer.echo(f"- {status}: {item.source} -> {target}")
         for err in item.errors:
             typer.echo(f"    {err}")
+        for warning in getattr(item, "warnings", []) or []:
+            typer.echo(f"    Warning: {warning}")
 
 
 def _print_ticket_bulk_report(
@@ -1855,6 +1906,11 @@ def hub_tickets_import(
     ),
     apply_template: Optional[str] = typer.Option(
         None, "--apply-template", help="Template ref REPO:PATH[@REF]"
+    ),
+    strip_depends_on: bool = typer.Option(
+        True,
+        "--strip-depends-on/--no-strip-depends-on",
+        help="Remove unsupported frontmatter.depends_on keys from imported tickets",
     ),
     lint: bool = typer.Option(
         True, "--lint/--no-lint", help="Lint destination tickets (default on)"
@@ -1905,6 +1961,7 @@ def hub_tickets_import(
         template_frontmatter=template_frontmatter,
         lint=lint,
         dry_run=dry_run,
+        strip_depends_on=strip_depends_on,
     )
 
     if output_json:
@@ -2013,6 +2070,9 @@ def hub_dispatch_reply(
         None, "--idempotency-key", help="Optional key to avoid duplicate replies"
     ),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    base_path: Optional[str] = typer.Option(
+        None, "--base-path", help="Override hub server base path (e.g. /car)"
+    ),
     output_json: bool = typer.Option(
         True, "--json/--no-json", help="Emit JSON output (default: true)"
     ),
@@ -2035,13 +2095,22 @@ def hub_dispatch_reply(
         _raise_exit("Reply message cannot be empty.")
 
     thread_url = _build_server_url(
-        config, f"/repos/{repo_id}/api/messages/threads/{run_id}"
+        config,
+        f"/repos/{repo_id}/api/messages/threads/{run_id}",
+        base_path_override=base_path,
     )
     reply_url = _build_server_url(
-        config, f"/repos/{repo_id}/api/messages/{run_id}/reply"
+        config,
+        f"/repos/{repo_id}/api/messages/{run_id}/reply",
+        base_path_override=base_path,
     )
     resume_url = _build_server_url(
-        config, f"/repos/{repo_id}/api/flows/{run_id}/resume"
+        config,
+        f"/repos/{repo_id}/api/flows/{run_id}/resume",
+        base_path_override=base_path,
+    )
+    inbox_url = _build_server_url(
+        config, "/hub/messages?limit=200", base_path_override=base_path
     )
 
     marker = None
@@ -2059,7 +2128,10 @@ def hub_dispatch_reply(
         OSError,
     ) as exc:
         _raise_exit(
-            "Failed to query run thread via hub server. Ensure 'car hub serve' is running.",
+            "Failed to query run thread via hub server. Ensure 'car hub serve' is running.\n"
+            f"Attempted: {thread_url}\n"
+            "If the hub UI is served under a base path (commonly /car), either set "
+            "`server.base_path` in the hub config or pass `--base-path /car`.",
             cause=exc,
         )
 
@@ -2067,9 +2139,31 @@ def hub_dispatch_reply(
         "status"
     )
     if run_status != "paused":
-        _raise_exit(
-            f"Run {run_id} is not paused-awaiting-input (status={run_status or 'unknown'})."
-        )
+        fallback_status = None
+        try:
+            inbox = _request_json("GET", inbox_url, token_env=config.server_auth_token_env)
+            items = inbox.get("items", []) if isinstance(inbox, dict) else []
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("repo_id") or "") != repo_id:
+                    continue
+                if str(item.get("run_id") or "") != run_id:
+                    continue
+                fallback_status = item.get("status")
+                break
+        except Exception:
+            fallback_status = None
+
+        if run_status is None and fallback_status == "paused":
+            run_status = "paused"
+        else:
+            hint = ""
+            if fallback_status is not None and fallback_status != run_status:
+                hint = f" (hub inbox sees status={fallback_status})"
+            _raise_exit(
+                f"Run {run_id} is not paused-awaiting-input (status={run_status or 'unknown'}).{hint}"
+            )
 
     duplicate = False
     reply_seq = None
@@ -2635,6 +2729,8 @@ def _ticket_flow_status_payload(
                 "status": health.status,
                 "pid": health.pid,
                 "message": health.message,
+                "exit_code": getattr(health, "exit_code", None),
+                "stderr_tail": getattr(health, "stderr_tail", None),
             }
             if health
             else None
@@ -2679,6 +2775,13 @@ def _print_ticket_flow_status(payload: dict) -> None:
             typer.echo(
                 f"Worker: {worker.get('status')} pid={worker.get('pid')} {worker.get('message') or ''}".rstrip()
             )
+        if status == "failed":
+            exit_code = worker.get("exit_code")
+            stderr_tail = worker.get("stderr_tail")
+            if exit_code is not None:
+                typer.echo(f"Worker exit code: {exit_code}")
+            if isinstance(stderr_tail, str) and stderr_tail.strip():
+                typer.echo(f"Worker stderr tail: {stderr_tail.strip()}")
 
 
 def _start_ticket_flow_worker(

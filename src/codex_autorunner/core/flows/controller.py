@@ -164,6 +164,8 @@ class FlowController:
                 engine.pop("reason_code", None)
                 state["ticket_engine"] = engine
             state.pop("reason_summary", None)
+            # Clear stale failure diagnostics when resuming a run.
+            state.pop("failure", None)
 
             updated = self.store.update_flow_run_status(
                 run_id=run_id,
