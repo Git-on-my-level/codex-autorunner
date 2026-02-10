@@ -165,3 +165,83 @@ async def test_interrupt_uses_turn_context_topic_for_opencode_session() -> None:
     assert opencode_supervisor.roots == [Path("/tmp/opencode-workspace")]
     assert opencode_client.abort_calls == ["session-from-turn"]
     assert service.edits == []
+
+
+@pytest.mark.anyio
+async def test_interrupt_uses_hub_root_for_pma_codex_topics() -> None:
+    codex_client = _CodexClientStub()
+    records = {
+        "pma": SimpleNamespace(
+            agent="codex",
+            workspace_path=None,
+            active_thread_id=None,
+            pma_enabled=True,
+        ),
+    }
+    service = _DispatchServiceStub(
+        records=records,
+        resolved_key="pma",
+        turn_ctx=SimpleNamespace(topic_key=None),
+        codex_client=codex_client,
+    )
+    service._hub_root = Path("/tmp/hub-root")
+    runtime = SimpleNamespace(
+        interrupt_requested=True,
+        interrupt_message_id=55,
+        interrupt_turn_id="turn-pma",
+    )
+
+    await TelegramBotService._dispatch_interrupt_request(
+        service,
+        turn_id="turn-pma",
+        codex_thread_id="thread-pma",
+        runtime=runtime,
+        chat_id=123,
+        thread_id=456,
+    )
+
+    assert service.workspace_requests == ["/tmp/hub-root"]
+    assert codex_client.calls == [("turn-pma", "thread-pma")]
+    assert service.edits == []
+
+
+@pytest.mark.anyio
+async def test_interrupt_uses_hub_root_for_pma_opencode_topics() -> None:
+    codex_client = _CodexClientStub()
+    opencode_client = _OpenCodeClientStub()
+    opencode_supervisor = _OpenCodeSupervisorStub(opencode_client)
+    records = {
+        "pma": SimpleNamespace(
+            agent="opencode",
+            workspace_path=None,
+            active_thread_id=None,
+            pma_enabled=True,
+        ),
+    }
+    service = _DispatchServiceStub(
+        records=records,
+        resolved_key="pma",
+        turn_ctx=SimpleNamespace(topic_key=None),
+        codex_client=codex_client,
+        opencode_supervisor=opencode_supervisor,
+    )
+    service._hub_root = Path("/tmp/hub-root")
+    runtime = SimpleNamespace(
+        interrupt_requested=True,
+        interrupt_message_id=56,
+        interrupt_turn_id="turn-pma-opencode",
+    )
+
+    await TelegramBotService._dispatch_interrupt_request(
+        service,
+        turn_id="turn-pma-opencode",
+        codex_thread_id="session-pma",
+        runtime=runtime,
+        chat_id=123,
+        thread_id=456,
+    )
+
+    assert service.workspace_requests == []
+    assert opencode_supervisor.roots == [Path("/tmp/hub-root")]
+    assert opencode_client.abort_calls == ["session-pma"]
+    assert service.edits == []
