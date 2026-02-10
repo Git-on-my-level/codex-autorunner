@@ -305,7 +305,9 @@ def _apply_agent_override(content: str, agent: str) -> str:
     return f"---\n{rendered}\n---{body}"
 
 
-def _build_server_url(config, path: str, *, base_path_override: Optional[str] = None) -> str:
+def _build_server_url(
+    config, path: str, *, base_path_override: Optional[str] = None
+) -> str:
     base_path = (
         _normalize_base_path(base_path_override)
         if base_path_override is not None
@@ -2141,7 +2143,9 @@ def hub_dispatch_reply(
     if run_status != "paused":
         fallback_status = None
         try:
-            inbox = _request_json("GET", inbox_url, token_env=config.server_auth_token_env)
+            inbox = _request_json(
+                "GET", inbox_url, token_env=config.server_auth_token_env
+            )
             items = inbox.get("items", []) if isinstance(inbox, dict) else []
             for item in items if isinstance(items, list) else []:
                 if not isinstance(item, dict):

@@ -25,4 +25,3 @@ def test_check_worker_health_dead_includes_stderr_tail(tmp_path: Path) -> None:
     assert health.status == "dead"
     assert health.stderr_tail is not None
     assert "line6" in health.stderr_tail
-

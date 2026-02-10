@@ -55,7 +55,9 @@ def _worker_exit_path(artifacts_dir: Path) -> Path:
     return artifacts_dir / _WORKER_EXIT_FILENAME
 
 
-def _tail_file(path: Path, *, max_lines: int = 5, max_chars: int = 320) -> Optional[str]:
+def _tail_file(
+    path: Path, *, max_lines: int = 5, max_chars: int = 320
+) -> Optional[str]:
     try:
         if not path.exists() or not path.is_file():
             return None
@@ -91,10 +93,21 @@ def write_worker_exit_info(
 
     normalized_run_id = _normalized_run_id(run_id)
     artifacts_dir = _worker_artifacts_dir(repo_root, normalized_run_id, artifacts_root)
+    metadata = {}
+    try:
+        metadata = json.loads(
+            _worker_metadata_path(artifacts_dir).read_text(encoding="utf-8")
+        )
+    except Exception:
+        metadata = {}
     data = {
         "run_id": normalized_run_id,
         "returncode": returncode,
         "captured_at": time.time(),
+        # Guard against stale exit info: only trust it when it matches the current
+        # worker.json lifecycle metadata.
+        "pid": metadata.get("pid"),
+        "spawned_at": metadata.get("spawned_at"),
         "stderr_tail": _tail_file(artifacts_dir / "worker.err.log"),
         "stdout_tail": _tail_file(artifacts_dir / "worker.out.log"),
     }
@@ -220,6 +233,9 @@ def check_worker_health(
     try:
         data = json.loads(metadata_path.read_text(encoding="utf-8"))
         pid = int(data.get("pid")) if data.get("pid") is not None else None
+        spawned_at = data.get("spawned_at")
+        if not isinstance(spawned_at, (int, float)):
+            spawned_at = None
         raw_cmd = data.get("cmd") or []
         cmd = [str(part) for part in raw_cmd] if isinstance(raw_cmd, list) else []
     except Exception:
@@ -247,12 +263,17 @@ def check_worker_health(
             try:
                 exit_data = json.loads(exit_path.read_text(encoding="utf-8"))
                 if isinstance(exit_data, dict):
-                    raw_code = exit_data.get("returncode")
-                    if isinstance(raw_code, int) and not isinstance(raw_code, bool):
-                        exit_code = raw_code
-                    raw_tail = exit_data.get("stderr_tail")
-                    if isinstance(raw_tail, str) and raw_tail.strip():
-                        stderr_tail = raw_tail.strip()
+                    # Only trust the cached exit info when it matches the current
+                    # worker.json (avoids stale exit payloads for reused run_ids).
+                    if exit_data.get("pid") == pid and (
+                        spawned_at is None or exit_data.get("spawned_at") == spawned_at
+                    ):
+                        raw_code = exit_data.get("returncode")
+                        if isinstance(raw_code, int) and not isinstance(raw_code, bool):
+                            exit_code = raw_code
+                        raw_tail = exit_data.get("stderr_tail")
+                        if isinstance(raw_tail, str) and raw_tail.strip():
+                            stderr_tail = raw_tail.strip()
             except Exception:
                 exit_code = None
                 stderr_tail = None

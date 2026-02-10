@@ -287,9 +287,10 @@ def import_ticket_pack(
             # Keep the original intent without reintroducing unsupported frontmatter.
             note = f"<!-- CAR ticket-pack note: depends_on={depends_note} -->\n"
             if body.startswith("\n"):
-                body = f"\n{note}{body.lstrip()}"
+                # Insert after the first newline so the remaining body stays byte-for-byte.
+                body = f"{body[:1]}{note}{body[1:]}"
             else:
-                body = f"\n\n{note}{body.lstrip()}"
+                body = f"\n\n{note}{body}"
         rendered = _render_ticket(merged, body)
         filename = f"TICKET-{target_index:0{width}d}.md"
         target_path = ticket_dir / filename

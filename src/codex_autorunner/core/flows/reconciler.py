@@ -98,7 +98,10 @@ def reconcile_flow_run(
                     patched = False
                     updated_failure = dict(failure)
                     exit_code = getattr(health, "exit_code", None)
-                    if exit_code is not None and updated_failure.get("exit_code") is None:
+                    if (
+                        exit_code is not None
+                        and updated_failure.get("exit_code") is None
+                    ):
                         updated_failure["exit_code"] = exit_code
                         patched = True
                     stderr_tail = getattr(health, "stderr_tail", None)

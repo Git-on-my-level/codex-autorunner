@@ -42,4 +42,3 @@ def test_import_ticket_pack_strips_depends_on(tmp_path: Path) -> None:
     raw = imported.read_text(encoding="utf-8")
     assert "depends_on" not in raw.split("---", 2)[1]
     assert "CAR ticket-pack note: depends_on=" in raw
-
