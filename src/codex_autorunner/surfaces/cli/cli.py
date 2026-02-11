@@ -1797,6 +1797,9 @@ def hub_snapshot(
             if isinstance(ticket_flow, dict)
             else None
         )
+        run_state = repo.get("run_state")
+        if not isinstance(run_state, dict):
+            run_state = {}
         return {
             "id": repo.get("id"),
             "display_name": repo.get("display_name"),
@@ -1810,6 +1813,13 @@ def hub_snapshot(
             "failure_summary": failure_summary,
             "pr_url": pr_url,
             "final_review_status": final_review_status,
+            "run_state": {
+                "state": run_state.get("state"),
+                "blocking_reason": run_state.get("blocking_reason"),
+                "current_ticket": run_state.get("current_ticket"),
+                "last_progress_at": run_state.get("last_progress_at"),
+                "recommended_action": run_state.get("recommended_action"),
+            },
         }
 
     def _summarize_message(msg: dict) -> dict:
@@ -1821,6 +1831,9 @@ def hub_snapshot(
         body = dispatch.get("body", "")
         title = dispatch.get("title", "")
         truncated_body = (body[:200] + "...") if len(body) > 200 else body
+        run_state = msg.get("run_state")
+        if not isinstance(run_state, dict):
+            run_state = {}
         return {
             "item_type": msg.get("item_type"),
             "next_action": msg.get("next_action"),
@@ -1839,6 +1852,14 @@ def hub_snapshot(
             "files_count": (
                 len(msg.get("files", [])) if isinstance(msg.get("files"), list) else 0
             ),
+            "reason": msg.get("reason"),
+            "run_state": {
+                "state": run_state.get("state"),
+                "blocking_reason": run_state.get("blocking_reason"),
+                "current_ticket": run_state.get("current_ticket"),
+                "last_progress_at": run_state.get("last_progress_at"),
+                "recommended_action": run_state.get("recommended_action"),
+            },
         }
 
     snapshot = {
@@ -1858,16 +1879,35 @@ def hub_snapshot(
         for repo in snapshot["repos"]:
             pr_url = repo.get("pr_url")
             final_review_status = repo.get("final_review_status")
+            run_state = (
+                repo.get("run_state") if isinstance(repo.get("run_state"), dict) else {}
+            )
             typer.echo(
                 f"- {repo.get('id')}: status={repo.get('status')}, "
                 f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}, "
-                f"final_review={final_review_status}, pr_url={pr_url}"
+                f"final_review={final_review_status}, pr_url={pr_url}, "
+                f"run_state={run_state.get('state')}"
             )
+            if run_state.get("blocking_reason"):
+                typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
+            if run_state.get("recommended_action"):
+                typer.echo(
+                    f"  recommended_action: {run_state.get('recommended_action')}"
+                )
         for msg in snapshot["inbox_items"]:
+            run_state = (
+                msg.get("run_state") if isinstance(msg.get("run_state"), dict) else {}
+            )
             typer.echo(
                 f"- Inbox: repo={msg.get('repo_id')}, run_id={msg.get('run_id')}, "
-                f"title={msg.get('dispatch', {}).get('title')}"
+                f"title={msg.get('dispatch', {}).get('title')}, state={run_state.get('state')}"
             )
+            if run_state.get("blocking_reason"):
+                typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
+            if run_state.get("recommended_action"):
+                typer.echo(
+                    f"  recommended_action: {run_state.get('recommended_action')}"
+                )
         return
 
     indent = 2 if pretty else None

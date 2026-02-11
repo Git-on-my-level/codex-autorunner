@@ -67,7 +67,14 @@ def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
-        assert res.json()["items"] == []
+        items = res.json()["items"]
+        assert len(items) == 1
+        assert items[0]["item_type"] == "run_state_attention"
+        assert items[0]["run_id"] == run_id
+        assert "already replied" in (items[0].get("reason") or "").lower()
+        run_state = items[0].get("run_state") or {}
+        assert run_state.get("state") == "blocked"
+        assert run_state.get("recommended_action")
 
 
 def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
@@ -84,6 +91,32 @@ def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
         assert len(items) == 1
         assert items[0]["run_id"] == run_id
         assert items[0]["seq"] == 2
+        assert items[0]["item_type"] == "run_dispatch"
+        run_state = items[0].get("run_state") or {}
+        assert run_state.get("state") == "paused"
+        assert run_state.get("recommended_action")
+
+
+def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> None:
+    run_id = "44444444-4444-4444-4444-444444444444"
+    _seed_paused_run(hub_env.repo_root, run_id)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["item_type"] == "run_state_attention"
+        assert item["run_id"] == run_id
+        assert (
+            "paused without an actionable dispatch"
+            in (item.get("reason") or "").lower()
+        )
+        run_state = item.get("run_state") or {}
+        assert run_state.get("state") == "blocked"
+        assert run_state.get("recommended_action")
 
 
 def test_hub_messages_dismiss_filters_and_persists(hub_env) -> None:

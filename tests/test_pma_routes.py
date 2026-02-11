@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 
@@ -566,6 +567,31 @@ def test_pma_docs_list(hub_env) -> None:
             assert "mtime" in doc
         if doc["name"] == "active_context.md":
             assert "line_count" in doc
+
+
+def test_pma_docs_list_includes_auto_prune_metadata(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    active_context = (
+        hub_env.hub_root / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    )
+    active_context.write_text(
+        "\n".join(f"line {idx}" for idx in range(220)), encoding="utf-8"
+    )
+    state = maybe_auto_prune_active_context(hub_env.hub_root, max_lines=50)
+    assert state is not None
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/docs")
+    assert resp.status_code == 200
+    payload = resp.json()
+    meta = payload.get("active_context_auto_prune")
+    assert isinstance(meta, dict)
+    assert meta.get("line_count_before") == 220
+    assert meta.get("line_budget") == 50
+    assert isinstance(meta.get("last_auto_pruned_at"), str)
 
 
 def test_pma_docs_get(hub_env) -> None:

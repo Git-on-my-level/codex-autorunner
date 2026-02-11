@@ -5,7 +5,11 @@ import yaml
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.core.pma_context import build_hub_snapshot, format_pma_prompt
+from codex_autorunner.core.pma_context import (
+    build_hub_snapshot,
+    format_pma_prompt,
+    get_active_context_auto_prune_meta,
+)
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
@@ -335,6 +339,53 @@ def test_active_context_line_count_reflected_in_metadata(tmp_path: Path) -> None
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
     assert "current_lines='3'" in result
+
+
+def test_format_pma_prompt_auto_prunes_active_context_when_over_budget(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    active_context_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    )
+    context_log_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+    )
+    long_content = "\n".join(f"line {idx}" for idx in range(260))
+    active_context_path.write_text(long_content, encoding="utf-8")
+
+    _write_hub_config(
+        tmp_path,
+        {
+            "mode": "hub",
+            "pma": {
+                "docs_max_chars": 12000,
+                "active_context_max_lines": 50,
+                "context_log_tail_lines": 120,
+            },
+        },
+    )
+
+    result = format_pma_prompt(
+        "Base prompt", {"test": "data"}, "hello", hub_root=tmp_path
+    )
+
+    pruned_active = active_context_path.read_text(encoding="utf-8")
+    assert "Auto-pruned on" in pruned_active
+    assert "line 259" not in pruned_active
+
+    log_content = context_log_path.read_text(encoding="utf-8")
+    assert "## Snapshot:" in log_content
+    assert "line 259" in log_content
+
+    meta = get_active_context_auto_prune_meta(tmp_path)
+    assert meta is not None
+    assert meta["line_count_before"] == 260
+    assert meta["line_budget"] == 50
+
+    assert "<ACTIVE_CONTEXT_AUTO_PRUNE" in result
+    assert "triggered_now='true'" in result
 
 
 def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:

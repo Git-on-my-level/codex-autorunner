@@ -48,6 +48,10 @@ from ...core.flows.store import FlowStore
 from ...core.hub import HubSupervisor
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
+from ...core.pma_context import (
+    build_ticket_flow_run_state,
+    get_latest_ticket_flow_run_state,
+)
 from ...core.request_context import get_request_id
 from ...core.runtime import LockError, RuntimeContext
 from ...core.state import load_state, persist_session_registry
@@ -1872,47 +1876,94 @@ def create_hub_app(
                 for record in paused:
                     record_input = dict(record.input_data or {})
                     latest = _latest_dispatch(repo_root, str(record.id), record_input)
-                    if not latest or not latest.get("dispatch"):
+                    seq = int(latest.get("seq") or 0) if isinstance(latest, dict) else 0
+                    latest_reply_seq = _latest_reply_history_seq(
+                        repo_root, str(record.id), record_input
+                    )
+                    has_pending_dispatch = bool(
+                        latest
+                        and latest.get("dispatch")
+                        and seq > 0
+                        and latest_reply_seq < seq
+                    )
+                    if (
+                        has_pending_dispatch
+                        and _dismissal_key(str(record.id), seq) in dismissals
+                    ):
                         continue
-                    seq = int(latest.get("seq") or 0)
-                    if seq <= 0:
-                        continue
-                    if _dismissal_key(str(record.id), seq) in dismissals:
-                        continue
+
+                    dispatch_state_reason = None
+                    if not has_pending_dispatch:
+                        if latest and latest.get("errors"):
+                            dispatch_state_reason = (
+                                "Paused run has unreadable dispatch metadata"
+                            )
+                        elif seq > 0 and latest_reply_seq >= seq:
+                            dispatch_state_reason = (
+                                "Latest dispatch already replied; run is still paused"
+                            )
+                        else:
+                            dispatch_state_reason = (
+                                "Run is paused without an actionable dispatch"
+                            )
+
+                    run_state = build_ticket_flow_run_state(
+                        repo_root=repo_root,
+                        repo_id=snap.id,
+                        record=record,
+                        store=store,
+                        has_pending_dispatch=has_pending_dispatch,
+                        dispatch_state_reason=dispatch_state_reason,
+                    )
+
                     failure_payload = get_failure_payload(record)
                     failure_summary = (
                         format_failure_summary(failure_payload)
                         if failure_payload
                         else None
                     )
-                    # Reconcile stale inbox items: if reply history already
-                    # reached this dispatch seq, treat it as resolved.
-                    if (
-                        _latest_reply_history_seq(
-                            repo_root, str(record.id), record_input
+                    base_item = {
+                        "repo_id": snap.id,
+                        "repo_display_name": snap.display_name,
+                        "repo_path": str(snap.path),
+                        "run_id": record.id,
+                        "run_created_at": record.created_at,
+                        "status": record.status.value,
+                        "failure": failure_payload,
+                        "failure_summary": failure_summary,
+                        "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
+                        "run_state": run_state,
+                    }
+                    if has_pending_dispatch:
+                        messages.append(
+                            {
+                                **base_item,
+                                "item_type": "run_dispatch",
+                                "next_action": "reply_and_resume",
+                                "seq": latest["seq"],
+                                "dispatch": latest["dispatch"],
+                                "message": latest["dispatch"],
+                                "files": latest.get("files") or [],
+                            }
                         )
-                        >= seq
-                    ):
-                        continue
-                    messages.append(
-                        {
-                            "item_type": "run_dispatch",
-                            "next_action": "reply_and_resume",
-                            "repo_id": snap.id,
-                            "repo_display_name": snap.display_name,
-                            "repo_path": str(snap.path),
-                            "run_id": record.id,
-                            "run_created_at": record.created_at,
-                            "status": record.status.value,
-                            "seq": latest["seq"],
-                            "dispatch": latest["dispatch"],
-                            "message": latest["dispatch"],
-                            "files": latest.get("files") or [],
-                            "failure": failure_payload,
-                            "failure_summary": failure_summary,
-                            "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
-                        }
-                    )
+                    else:
+                        fallback_dispatch = latest.get("dispatch") if latest else None
+                        messages.append(
+                            {
+                                **base_item,
+                                "item_type": "run_state_attention",
+                                "next_action": "inspect_and_resume",
+                                "seq": seq if seq > 0 else None,
+                                "dispatch": fallback_dispatch,
+                                "message": fallback_dispatch
+                                or {
+                                    "title": "Run requires attention",
+                                    "body": dispatch_state_reason or "",
+                                },
+                                "files": latest.get("files") if latest else [],
+                                "reason": dispatch_state_reason,
+                            }
+                        )
             messages.sort(key=lambda m: m.get("run_created_at") or "", reverse=True)
             if limit and limit > 0:
                 return messages[: int(limit)]
@@ -1977,8 +2028,12 @@ def create_hub_app(
             repo_dict = _add_mount_info(snap.to_dict(context.config.root))
             if snap.initialized and snap.exists_on_disk:
                 repo_dict["ticket_flow"] = _get_ticket_flow_summary(snap.path)
+                repo_dict["run_state"] = get_latest_ticket_flow_run_state(
+                    snap.path, snap.id
+                )
             else:
                 repo_dict["ticket_flow"] = None
+                repo_dict["run_state"] = None
             return repo_dict
 
         return {
@@ -2000,8 +2055,12 @@ def create_hub_app(
             repo_dict = _add_mount_info(snap.to_dict(context.config.root))
             if snap.initialized and snap.exists_on_disk:
                 repo_dict["ticket_flow"] = _get_ticket_flow_summary(snap.path)
+                repo_dict["run_state"] = get_latest_ticket_flow_run_state(
+                    snap.path, snap.id
+                )
             else:
                 repo_dict["ticket_flow"] = None
+                repo_dict["run_state"] = None
             return repo_dict
 
         return {
