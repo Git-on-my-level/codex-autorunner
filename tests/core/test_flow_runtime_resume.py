@@ -241,6 +241,46 @@ async def test_ticket_flow_resume_requires_signal_or_force(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_ticket_flow_resume_signal_uses_workspace_root(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    workspace = tmp_path / "nested-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    async def step(_record, _input):
+        return StepOutcome.complete()
+
+    controller = _make_controller(tmp_path, {"step": step}, flow_type="ticket_flow")
+    run_id = "run-nested"
+    record = await controller.start_flow(
+        input_data={"workspace_root": "nested-workspace"},
+        run_id=run_id,
+    )
+
+    fingerprint = controller._repo_fingerprint()
+    assert isinstance(fingerprint, str)
+    blocked_state = {
+        "ticket_engine": {
+            "status": "paused",
+            "reason_code": "loop_no_diff",
+            "pause_context": {
+                "paused_reply_seq": 0,
+                "repo_fingerprint": fingerprint,
+            },
+        }
+    }
+    controller.store.update_flow_run_status(
+        run_id=record.id, status=FlowRunStatus.PAUSED, state=blocked_state
+    )
+
+    reply_path = workspace / ".codex-autorunner" / "runs" / run_id / "USER_REPLY.md"
+    reply_path.parent.mkdir(parents=True, exist_ok=True)
+    reply_path.write_text("reply in workspace\n", encoding="utf-8")
+
+    resumed = await controller.resume_flow(record.id)
+    assert resumed.status == FlowRunStatus.RUNNING
+
+
+@pytest.mark.asyncio
 async def test_ticket_flow_force_resume_bypasses_signal_check(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
 

@@ -225,13 +225,25 @@ class FlowController:
         repo_root = self._repo_root()
         if repo_root is None:
             return False
+        raw_workspace = input_data.get("workspace_root")
+        if isinstance(raw_workspace, str) and raw_workspace.strip():
+            workspace_root = Path(raw_workspace)
+            if not workspace_root.is_absolute():
+                workspace_root = (repo_root / workspace_root).resolve()
+            else:
+                workspace_root = workspace_root.resolve()
+        else:
+            workspace_root = repo_root
         runs_dir_raw = input_data.get("runs_dir")
         runs_dir = (
             Path(runs_dir_raw)
             if isinstance(runs_dir_raw, str) and runs_dir_raw
             else Path(".codex-autorunner/runs")
         )
-        run_dir = repo_root / runs_dir / run_id
+        if not runs_dir.is_absolute():
+            run_dir = workspace_root / runs_dir / run_id
+        else:
+            run_dir = runs_dir / run_id
         return (run_dir / "USER_REPLY.md").exists()
 
     def _repo_changed_since_pause(self, engine: dict[str, Any]) -> bool:
