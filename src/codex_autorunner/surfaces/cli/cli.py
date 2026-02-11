@@ -71,6 +71,7 @@ from ...core.usage import (
 )
 from ...core.utils import (
     RepoNotFoundError,
+    atomic_write,
     default_editor,
     find_repo_root,
     is_within,
@@ -100,6 +101,7 @@ from ...integrations.templates.scan_agent import (
 from ...manifest import load_manifest
 from ...tickets import AgentPool
 from ...tickets.bulk import bulk_clear_model_pin, bulk_set_agent
+from ...tickets.doctor import format_or_doctor_tickets
 from ...tickets.files import (
     list_ticket_paths,
     read_ticket,
@@ -1789,6 +1791,12 @@ def hub_snapshot(
             if isinstance(ticket_flow, dict)
             else None
         )
+        pr_url = ticket_flow.get("pr_url") if isinstance(ticket_flow, dict) else None
+        final_review_status = (
+            ticket_flow.get("final_review_status")
+            if isinstance(ticket_flow, dict)
+            else None
+        )
         return {
             "id": repo.get("id"),
             "display_name": repo.get("display_name"),
@@ -1800,6 +1808,8 @@ def hub_snapshot(
             "last_run_finished_at": repo.get("last_run_finished_at"),
             "failure": failure,
             "failure_summary": failure_summary,
+            "pr_url": pr_url,
+            "final_review_status": final_review_status,
         }
 
     def _summarize_message(msg: dict) -> dict:
@@ -1846,9 +1856,12 @@ def hub_snapshot(
             f"Hub Snapshot (repos={len(snapshot['repos'])}, inbox={len(snapshot['inbox_items'])})"
         )
         for repo in snapshot["repos"]:
+            pr_url = repo.get("pr_url")
+            final_review_status = repo.get("final_review_status")
             typer.echo(
                 f"- {repo.get('id')}: status={repo.get('status')}, "
-                f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}"
+                f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}, "
+                f"final_review={final_review_status}, pr_url={pr_url}"
             )
         for msg in snapshot["inbox_items"]:
             typer.echo(
@@ -1878,6 +1891,18 @@ def _print_ticket_import_report(report) -> None:
         typer.echo(f"Template: {report.apply_template}")
     if getattr(report, "strip_depends_on", False):
         typer.echo("Strip depends_on: true")
+    depends_summary = getattr(report, "depends_on_summary", None)
+    if isinstance(depends_summary, dict) and depends_summary.get("has_depends_on"):
+        typer.echo(
+            f"Depends_on: mode={depends_summary.get('reconcile_mode')} "
+            f"tickets={depends_summary.get('tickets_with_depends_on')} "
+            f"edges={depends_summary.get('dependency_edges')} "
+            f"reconciled={bool(depends_summary.get('reconciled'))}"
+        )
+        for warning in depends_summary.get("ordering_conflicts", []) or []:
+            typer.echo(f"  Ordering impact: {warning}")
+        for warning in depends_summary.get("ambiguous_reasons", []) or []:
+            typer.echo(f"  Depends_on warning: {warning}")
     if report.lint:
         typer.echo("Lint: enabled")
     if report.errors:
@@ -1924,6 +1949,81 @@ def _print_ticket_bulk_report(
             typer.echo(f"- {err}")
 
 
+def _print_ticket_doctor_report(action: str, report, *, check_mode: bool) -> None:
+    typer.echo(f"Action: {action}")
+    typer.echo(f"Checked: {report.checked}")
+    typer.echo(f"Changed: {report.changed}")
+    if report.changed_files:
+        typer.echo("Changed files:")
+        for rel in report.changed_files:
+            typer.echo(f"- {rel}")
+    if report.warnings:
+        typer.echo("Warnings:")
+        for warning in report.warnings:
+            typer.echo(f"- {warning}")
+    if report.errors:
+        typer.echo("Errors:")
+        for err in report.errors:
+            typer.echo(f"- {err}")
+    if check_mode and report.changed:
+        typer.echo("Check mode detected formatting/doctor drift.")
+
+
+def _render_ticket_markdown(frontmatter: dict, body: str) -> str:
+    fm_yaml = yaml.safe_dump(frontmatter, sort_keys=False).rstrip()
+    return f"---\n{fm_yaml}\n---\n\n{body.rstrip()}\n"
+
+
+def _append_setup_pack_final_tickets(
+    *,
+    ticket_dir: Path,
+    review_agent: str,
+    pr_agent: str,
+) -> list[str]:
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    existing_indices = _collect_ticket_indices(ticket_dir)
+    next_index = (max(existing_indices) + 1) if existing_indices else 1
+    width = max(
+        3,
+        len(str(next_index)),
+        len(str(next_index + 1)),
+        *(len(str(i)) for i in existing_indices),
+    )
+
+    review_path = ticket_dir / f"TICKET-{next_index:0{width}d}-final-review.md"
+    review_frontmatter = {
+        "agent": review_agent,
+        "done": False,
+        "title": "Final review",
+        "goal": "Review the implementation for regressions, risks, and test coverage.",
+        "ticket_kind": "final_review",
+    }
+    review_body = (
+        "Run a focused review pass and summarize findings by severity.\n"
+        "If no findings exist, state that explicitly and note residual risks/testing gaps."
+    )
+    atomic_write(review_path, _render_ticket_markdown(review_frontmatter, review_body))
+
+    pr_path = ticket_dir / f"TICKET-{next_index + 1:0{width}d}-open-pr.md"
+    pr_frontmatter = {
+        "agent": pr_agent,
+        "done": False,
+        "title": "Open PR",
+        "goal": "Push the branch and open/update the PR with implementation notes.",
+        "ticket_kind": "open_pr",
+    }
+    pr_body = (
+        "Open or update the pull request.\n"
+        "Add `pr_url` to this ticket frontmatter after the PR exists so hub summaries can surface it."
+    )
+    atomic_write(pr_path, _render_ticket_markdown(pr_frontmatter, pr_body))
+
+    return [
+        str(review_path.relative_to(ticket_dir.parent)),
+        str(pr_path.relative_to(ticket_dir.parent)),
+    ]
+
+
 @hub_tickets_app.command("import")
 def hub_tickets_import(
     repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
@@ -1944,6 +2044,11 @@ def hub_tickets_import(
         True,
         "--strip-depends-on/--no-strip-depends-on",
         help="Remove unsupported frontmatter.depends_on keys from imported tickets",
+    ),
+    reconcile_depends_on: str = typer.Option(
+        "warn",
+        "--reconcile-depends-on",
+        help="depends_on reconciliation mode: off, warn, auto",
     ),
     lint: bool = typer.Option(
         True, "--lint/--no-lint", help="Lint destination tickets (default on)"
@@ -1995,6 +2100,7 @@ def hub_tickets_import(
         lint=lint,
         dry_run=dry_run,
         strip_depends_on=strip_depends_on,
+        reconcile_depends_on=reconcile_depends_on,
     )
 
     if output_json:
@@ -2086,6 +2192,232 @@ def hub_tickets_bulk_clear_model(
 
     if result.errors or lint_errors:
         _raise_exit("Ticket bulk update failed.")
+
+
+@hub_tickets_app.command("fmt")
+def hub_tickets_fmt(
+    repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
+    check: bool = typer.Option(
+        False, "--check", help="Check only (non-zero when files would change)"
+    ),
+    default_agent: str = typer.Option(
+        "codex", "--default-agent", help="Fallback agent for missing agent key"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Normalize ticket frontmatter formatting."""
+    config = _require_hub_config(hub)
+    repo_root = _resolve_hub_repo_root(config, repo_id)
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+
+    report = format_or_doctor_tickets(
+        ticket_dir,
+        write=not check,
+        fill_defaults=False,
+        default_agent=default_agent,
+    )
+
+    if output_json:
+        payload = report.to_dict()
+        payload["action"] = "fmt"
+        payload["check"] = check
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        _print_ticket_doctor_report("fmt", report, check_mode=check)
+
+    if report.errors or (check and report.changed):
+        _raise_exit("Ticket fmt failed.")
+
+
+@hub_tickets_app.command("doctor")
+def hub_tickets_doctor(
+    repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
+    fix: bool = typer.Option(
+        False, "--fix", help="Apply auto-fixes for common frontmatter issues"
+    ),
+    default_agent: str = typer.Option(
+        "codex", "--default-agent", help="Fallback agent for missing agent key"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Validate ticket frontmatter and optionally apply auto-fixes."""
+    config = _require_hub_config(hub)
+    repo_root = _resolve_hub_repo_root(config, repo_id)
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+
+    report = format_or_doctor_tickets(
+        ticket_dir,
+        write=fix,
+        fill_defaults=fix,
+        default_agent=default_agent,
+    )
+
+    if output_json:
+        payload = report.to_dict()
+        payload["action"] = "doctor"
+        payload["fix"] = fix
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        _print_ticket_doctor_report("doctor", report, check_mode=not fix)
+
+    if report.errors or (not fix and report.changed):
+        _raise_exit("Ticket doctor failed.")
+
+
+@hub_tickets_app.command("setup-pack")
+def hub_tickets_setup_pack(
+    base_repo_id: str = typer.Option(..., "--base-repo", help="Base repo id"),
+    branch: str = typer.Option(..., "--branch", help="Branch name for worktree"),
+    zip_path: Path = typer.Option(..., "--zip", help="Path to ticket pack zip"),
+    renumber: Optional[str] = typer.Option(
+        None, "--renumber", help="Renumber tickets with start=<n>,step=<n>"
+    ),
+    assign_agent: Optional[str] = typer.Option(
+        None, "--assign-agent", help="Override ticket frontmatter agent"
+    ),
+    clear_model_pin: bool = typer.Option(
+        False, "--clear-model-pin", help="Clear model/reasoning overrides"
+    ),
+    apply_template: Optional[str] = typer.Option(
+        None, "--apply-template", help="Template ref REPO:PATH[@REF]"
+    ),
+    reconcile_depends_on: str = typer.Option(
+        "auto",
+        "--reconcile-depends-on",
+        help="depends_on reconciliation mode: off, warn, auto",
+    ),
+    final_review_agent: str = typer.Option(
+        "codex", "--final-review-agent", help="Agent for final review ticket"
+    ),
+    pr_agent: str = typer.Option(
+        "codex", "--pr-agent", help="Agent for open PR ticket"
+    ),
+    start_point: Optional[str] = typer.Option(
+        None, "--start-point", help="Optional git ref for worktree branch"
+    ),
+    force: bool = typer.Option(False, "--force", help="Allow existing worktree path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """One-command setup for ticket packs (worktree + import + assign + finalize + preflight)."""
+    config = _require_hub_config(hub)
+    if not zip_path.exists():
+        _raise_exit(f"Zip path does not exist: {zip_path}")
+    if zip_path.is_dir():
+        _raise_exit("Zip path must be a file.")
+
+    if assign_agent and assign_agent != "user":
+        try:
+            validate_agent_id(assign_agent)
+        except ValueError as exc:
+            _raise_exit(str(exc), cause=exc)
+    if final_review_agent != "user":
+        try:
+            validate_agent_id(final_review_agent)
+        except ValueError as exc:
+            _raise_exit(str(exc), cause=exc)
+    if pr_agent != "user":
+        try:
+            validate_agent_id(pr_agent)
+        except ValueError as exc:
+            _raise_exit(str(exc), cause=exc)
+
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+        agent_id_validator=validate_agent_id,
+    )
+    try:
+        snapshot = supervisor.create_worktree(
+            base_repo_id=base_repo_id,
+            branch=branch,
+            force=force,
+            start_point=start_point,
+        )
+    except Exception as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    repo_id = snapshot.id
+    repo_root = snapshot.path
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    renumber_parsed = _parse_renumber(renumber)
+
+    template_frontmatter = None
+    if apply_template:
+        ctx = _require_repo_config(repo_root, config.root)
+        _require_templates_enabled(ctx.config)
+        fetched, _scan_record, _hub_root = _fetch_template_with_scan(
+            apply_template, ctx, config.root
+        )
+        try:
+            template_frontmatter = load_template_frontmatter(fetched.content)
+        except TicketPackImportError as exc:
+            _raise_exit(str(exc), cause=exc)
+
+    import_report = import_ticket_pack(
+        repo_id=repo_id,
+        repo_root=repo_root,
+        ticket_dir=ticket_dir,
+        zip_path=zip_path,
+        renumber=renumber_parsed,
+        assign_agent=assign_agent,
+        clear_model_pin=clear_model_pin,
+        template_ref=apply_template,
+        template_frontmatter=template_frontmatter,
+        lint=True,
+        dry_run=False,
+        strip_depends_on=True,
+        reconcile_depends_on=reconcile_depends_on,
+    )
+
+    final_tickets: list[str] = []
+    if import_report.ok():
+        final_tickets = _append_setup_pack_final_tickets(
+            ticket_dir=ticket_dir,
+            review_agent=final_review_agent,
+            pr_agent=pr_agent,
+        )
+
+    lint_errors = _validate_tickets(ticket_dir)
+    engine = _require_repo_config(repo_root, config.root)
+    preflight = _ticket_flow_preflight(engine, ticket_dir)
+
+    payload = {
+        "repo_id": repo_id,
+        "repo_root": str(repo_root),
+        "worktree_of": base_repo_id,
+        "branch": branch,
+        "zip_path": str(zip_path),
+        "import": import_report.to_dict(),
+        "final_tickets": final_tickets,
+        "lint_errors": lint_errors,
+        "preflight": preflight.to_dict(),
+    }
+
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(
+            f"Setup pack: repo={repo_id} branch={branch} base={base_repo_id} zip={zip_path}"
+        )
+        _print_ticket_import_report(import_report)
+        if final_tickets:
+            typer.echo("Final tickets:")
+            for rel in final_tickets:
+                typer.echo(f"- {rel}")
+        if lint_errors:
+            typer.echo("Lint errors:")
+            for err in lint_errors:
+                typer.echo(f"- {err}")
+        typer.echo("Preflight:")
+        _print_preflight_report(preflight)
+
+    if (not import_report.ok()) or lint_errors:
+        _raise_exit("Ticket setup-pack failed.")
 
 
 @dispatch_app.command("reply")

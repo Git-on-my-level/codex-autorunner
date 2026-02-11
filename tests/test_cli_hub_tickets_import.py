@@ -152,3 +152,52 @@ Body one
 
     tickets_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
     assert not any(p.name.startswith("TICKET-") for p in tickets_dir.iterdir())
+
+
+def test_hub_tickets_import_auto_reconciles_depends_on(hub_env, tmp_path: Path) -> None:
+    zip_path = tmp_path / "deps.zip"
+    _make_zip(
+        zip_path,
+        {
+            "TICKET-001.md": """---
+agent: codex
+done: false
+depends_on:
+  - TICKET-002
+---
+
+A body
+""",
+            "TICKET-002.md": """---
+agent: codex
+done: false
+---
+
+B body
+""",
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "tickets",
+            "import",
+            "--hub",
+            str(hub_env.hub_root),
+            "--repo",
+            hub_env.repo_id,
+            "--zip",
+            str(zip_path),
+            "--reconcile-depends-on",
+            "auto",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    tickets_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    first = (tickets_dir / "TICKET-001.md").read_text(encoding="utf-8")
+    second = (tickets_dir / "TICKET-002.md").read_text(encoding="utf-8")
+    assert "B body" in first
+    assert "A body" in second
