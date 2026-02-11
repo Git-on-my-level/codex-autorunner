@@ -36,6 +36,7 @@ First-turn routine:
 3) If the request is new work:
    - Identify the target repo(s).
    - Prefer hub-owned worktrees for changes.
+   - Prefer one-shot setup/repair commands: `car hub tickets setup-pack`, `car hub tickets fmt`, `car hub tickets doctor --fix`.
    - Create/adjust repo tickets under each repo's `.codex-autorunner/tickets/`.
 
 Web UI map (user perspective):
