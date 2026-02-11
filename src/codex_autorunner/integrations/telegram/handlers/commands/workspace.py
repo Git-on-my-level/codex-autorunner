@@ -2050,18 +2050,20 @@ class WorkspaceCommands(SharedHelpers):
         if record is not None and self._effective_agent(record) == "opencode":
             await self._resume_opencode_thread_by_id(key, thread_id, callback=callback)
             return
-        if record is None or not record.workspace_path:
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
                 _with_conversation_id(
-                    "Topic not bound; use /bind before resuming.",
+                    error or "Topic not bound; use /bind before resuming.",
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),
             )
             return
+        record = self._record_with_workspace_path(record, workspace_path)
         try:
             client = await self._client_for_workspace(record.workspace_path)
         except AppServerUnavailableError as exc:
@@ -2247,18 +2249,20 @@ class WorkspaceCommands(SharedHelpers):
         chat_id, thread_id_val = _split_topic_key(key)
         self._resume_options.pop(key, None)
         record = await self._router.get_topic(key)
-        if record is None or not record.workspace_path:
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
                 _with_conversation_id(
-                    "Topic not bound; use /bind before resuming.",
+                    error or "Topic not bound; use /bind before resuming.",
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),
             )
             return
+        record = self._record_with_workspace_path(record, workspace_path)
         supervisor = getattr(self, "_opencode_supervisor", None)
         if supervisor is None:
             await self._answer_callback(callback, "Resume aborted")
