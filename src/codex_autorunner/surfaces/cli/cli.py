@@ -1,4 +1,5 @@
 import asyncio
+import importlib.metadata
 import ipaddress
 import json
 import logging
@@ -132,6 +133,36 @@ worktree_app = typer.Typer(add_completion=False)
 hub_tickets_app = typer.Typer(add_completion=False)
 flow_app = typer.Typer(add_completion=False)
 ticket_flow_app = typer.Typer(add_completion=False)
+
+
+def _car_version() -> str:
+    try:
+        return importlib.metadata.version("codex-autorunner")
+    except Exception:
+        return "unknown"
+
+
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    typer.echo(f"codex-autorunner {_car_version()}")
+    raise typer.Exit(code=0)
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the version and exit.",
+    ),
+) -> None:
+    # Intentionally empty; subcommands implement behavior.
+    #
+    # `--version` is handled eagerly via `_version_callback`.
+    return
 
 
 def main() -> None:
