@@ -33,6 +33,7 @@ from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
 from codex_autorunner.integrations.telegram.handlers.messages import (
     handle_media_message,
 )
+from codex_autorunner.integrations.telegram.handlers.selections import SelectionState
 from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
 
 
@@ -699,3 +700,88 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
 
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
     assert handler._sent and "PMA session reset" in handler._sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_resume_uses_hub_root(tmp_path: Path) -> None:
+    """Test that /resume works for PMA topics by using hub root."""
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    record = TelegramTopicRecord(pma_enabled=True, workspace_path=None, agent="codex")
+
+    class _ResumeClientStub:
+        async def thread_list(self, cursor: Optional[str] = None, limit: int = 100):
+            return {
+                "entries": [
+                    {
+                        "id": "thread-1",
+                        "workspace_path": str(hub_root),
+                        "rollout_path": None,
+                        "preview": {"user": "Test", "assistant": "Response"},
+                    }
+                ],
+                "cursor": None,
+            }
+
+    class _ResumeRouterStub:
+        def __init__(self, record: TelegramTopicRecord) -> None:
+            self._record = record
+
+        async def get_topic(self, _key: str) -> TelegramTopicRecord:
+            return self._record
+
+    class _ResumeHandler(WorkspaceCommands):
+        def __init__(self, record: TelegramTopicRecord, hub_root: Path) -> None:
+            self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace()
+            self._router = _ResumeRouterStub(record)
+            self._hub_root = hub_root
+            self._resume_options: dict[str, SelectionState] = {}
+            self._sent: list[str] = []
+
+            async def _store_load():
+                return SimpleNamespace(topics={})
+
+            async def _store_update_topic(k, f):
+                return None
+
+            self._store = SimpleNamespace(
+                load=_store_load,
+                update_topic=_store_update_topic,
+            )
+
+        async def _resolve_topic_key(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> str:
+            return f"{chat_id}:{thread_id}"
+
+        async def _send_message(
+            self,
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int],
+            reply_to: Optional[int],
+            reply_markup: Optional[object] = None,
+        ) -> None:
+            self._sent.append(text)
+
+        async def _client_for_workspace(self, workspace_path: str):
+            return _ResumeClientStub()
+
+    handler = _ResumeHandler(record, hub_root)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=-2002,
+        thread_id=333,
+        from_user_id=99,
+        text="/resume",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_resume(message, "")
+
+    # Should not send "Topic not bound" error - PMA should use hub root
+    assert not any("Topic not bound" in msg for msg in handler._sent)
