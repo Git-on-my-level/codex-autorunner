@@ -43,6 +43,18 @@ def _seed_doc(path: Path, force: bool, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def pma_dir(hub_root: Path) -> Path:
+    return hub_root / ".codex-autorunner" / "pma"
+
+
+def pma_docs_dir(hub_root: Path) -> Path:
+    return pma_dir(hub_root) / "docs"
+
+
+def pma_doc_path(hub_root: Path, name: str) -> Path:
+    return pma_docs_dir(hub_root) / name
+
+
 def write_hub_config(hub_root: Path, force: bool = False) -> Path:
     config_path = hub_root / CONFIG_FILENAME
     if config_path.exists() and not force:
@@ -186,10 +198,9 @@ def seed_repo_files(
 
 
 def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
-    ca_dir = hub_root / ".codex-autorunner"
-    pma_dir = ca_dir / "pma"
-    pma_dir.mkdir(parents=True, exist_ok=True)
-    docs_dir = pma_dir / "docs"
+    base_dir = pma_dir(hub_root)
+    base_dir.mkdir(parents=True, exist_ok=True)
+    docs_dir = pma_docs_dir(hub_root)
     docs_dir.mkdir(parents=True, exist_ok=True)
     seeds = (
         ("prompt.md", pma_prompt_content),
@@ -199,8 +210,34 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
         ("context_log.md", pma_context_log_content),
     )
     for filename, content_fn in seeds:
-        _seed_doc(pma_dir / filename, force, content_fn())
-        _seed_doc(docs_dir / filename, force, content_fn())
+        canonical_path = docs_dir / filename
+        legacy_path = base_dir / filename
+        canonical_existed = canonical_path.exists()
+
+        _seed_doc(canonical_path, force, content_fn())
+
+        # One-time migration from legacy PMA docs into canonical docs/.
+        if legacy_path.exists():
+            should_copy = force
+            if not force:
+                if not canonical_existed:
+                    should_copy = True
+                else:
+                    try:
+                        should_copy = (
+                            legacy_path.stat().st_mtime > canonical_path.stat().st_mtime
+                        )
+                    except OSError:
+                        should_copy = False
+            if should_copy:
+                try:
+                    atomic_write(canonical_path, legacy_path.read_text(encoding="utf-8"))
+                except OSError:
+                    pass
+            try:
+                legacy_path.unlink()
+            except OSError:
+                pass
 
 
 def seed_hub_files(hub_root: Path, force: bool = False) -> None:
@@ -244,7 +281,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Use CAR-native artifacts (tickets, ticket_flow, dispatch, PMA inbox/outbox).
 - Ask questions when requirements are ambiguous; keep updates concise.
 - Treat this prompt as code: keep it short and stable.
-- See `.codex-autorunner/pma/ABOUT_CAR.md` for operational how-to.
+- See `.codex-autorunner/pma/docs/ABOUT_CAR.md` for operational how-to.
 
 ## Ticket planning constraints
 
@@ -270,9 +307,9 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 
 ## PMA durable workspace
 
-Prefer writing durable guidance and recurring best-practices to `.codex-autorunner/pma/AGENTS.md`.
-Keep short-lived working context in `.codex-autorunner/pma/active_context.md` and prune it when it grows.
-When pruning, append the prior context to `.codex-autorunner/pma/context_log.md` with a timestamp.
+Prefer writing durable guidance and recurring best-practices to `.codex-autorunner/pma/docs/AGENTS.md`.
+Keep short-lived working context in `.codex-autorunner/pma/docs/active_context.md` and prune it when it grows.
+When pruning, append the prior context to `.codex-autorunner/pma/docs/context_log.md` with a timestamp.
 """
 
 

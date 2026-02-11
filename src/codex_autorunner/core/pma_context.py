@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from ..bootstrap import ensure_pma_docs
+from ..bootstrap import ensure_pma_docs, pma_doc_path
 from ..tickets.files import safe_relpath
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from .config import load_hub_config, load_repo_config
@@ -99,10 +99,9 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
     except Exception:
         pass
 
-    pma_dir = hub_root / ".codex-autorunner" / "pma"
-    agents_path = pma_dir / "AGENTS.md"
-    active_context_path = pma_dir / "active_context.md"
-    context_log_path = pma_dir / "context_log.md"
+    agents_path = pma_doc_path(hub_root, "AGENTS.md")
+    active_context_path = pma_doc_path(hub_root, "active_context.md")
+    context_log_path = pma_doc_path(hub_root, "context_log.md")
 
     def _read(path: Path) -> str:
         try:
@@ -218,7 +217,7 @@ def _build_templates_snapshot(
 
 
 def load_pma_prompt(hub_root: Path) -> str:
-    path = hub_root / ".codex-autorunner" / "pma" / "prompt.md"
+    path = pma_doc_path(hub_root, "prompt.md")
     try:
         ensure_pma_docs(hub_root)
     except Exception:
@@ -419,10 +418,10 @@ def format_pma_prompt(
 
     prompt = f"{base_prompt}\n\n"
     prompt += (
-        "Ops guide: `.codex-autorunner/pma/ABOUT_CAR.md`.\n"
-        "Durable guidance: `.codex-autorunner/pma/AGENTS.md`.\n"
-        "Working context: `.codex-autorunner/pma/active_context.md`.\n"
-        "History: `.codex-autorunner/pma/context_log.md`.\n"
+        "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`.\n"
+        "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
+        "Working context: `.codex-autorunner/pma/docs/active_context.md`.\n"
+        "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
         "To send a file to the user, write it to `.codex-autorunner/pma/outbox/`.\n"
         "User uploaded files are in `.codex-autorunner/pma/inbox/`.\n\n"
     )

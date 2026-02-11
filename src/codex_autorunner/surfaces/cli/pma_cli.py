@@ -9,7 +9,7 @@ from typing import Any, Optional
 import httpx
 import typer
 
-from ...bootstrap import ensure_pma_docs
+from ...bootstrap import ensure_pma_docs, pma_doc_path
 from ...core.config import load_hub_config
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,10 @@ docs_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="docs")
 context_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="context")
 pma_app.add_typer(docs_app)
 pma_app.add_typer(context_app)
+
+
+def _pma_docs_path(hub_root: Path, doc_name: str) -> Path:
+    return pma_doc_path(hub_root, doc_name)
 
 
 def _build_pma_url(config, path: str) -> str:
@@ -655,14 +659,12 @@ def pma_docs_show(
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    pma_dir = hub_root / ".codex-autorunner" / "pma"
-
     if doc_type == "agents":
-        doc_path = pma_dir / "AGENTS.md"
+        doc_path = _pma_docs_path(hub_root, "AGENTS.md")
     elif doc_type == "active":
-        doc_path = pma_dir / "active_context.md"
+        doc_path = _pma_docs_path(hub_root, "active_context.md")
     elif doc_type == "log":
-        doc_path = pma_dir / "context_log.md"
+        doc_path = _pma_docs_path(hub_root, "context_log.md")
     else:
         typer.echo("Invalid doc_type. Must be one of: agents, active, log", err=True)
         raise typer.Exit(code=1) from None
@@ -687,8 +689,7 @@ def pma_context_reset(
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    pma_dir = hub_root / ".codex-autorunner" / "pma"
-    active_context_path = pma_dir / "active_context.md"
+    active_context_path = _pma_docs_path(hub_root, "active_context.md")
 
     minimal_content = """# PMA active context (short-lived)
 
@@ -720,9 +721,8 @@ def pma_context_snapshot(
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    pma_dir = hub_root / ".codex-autorunner" / "pma"
-    active_context_path = pma_dir / "active_context.md"
-    context_log_path = pma_dir / "context_log.md"
+    active_context_path = _pma_docs_path(hub_root, "active_context.md")
+    context_log_path = _pma_docs_path(hub_root, "context_log.md")
 
     try:
         active_content = active_context_path.read_text(encoding="utf-8")
@@ -765,8 +765,7 @@ def pma_context_prune(
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    pma_dir = hub_root / ".codex-autorunner" / "pma"
-    active_context_path = pma_dir / "active_context.md"
+    active_context_path = _pma_docs_path(hub_root, "active_context.md")
 
     try:
         active_content = active_context_path.read_text(encoding="utf-8")
@@ -789,7 +788,7 @@ def pma_context_prune(
     snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
     snapshot_content = snapshot_header + active_content
 
-    context_log_path = pma_dir / "context_log.md"
+    context_log_path = _pma_docs_path(hub_root, "context_log.md")
     try:
         with context_log_path.open("a", encoding="utf-8") as f:
             f.write(snapshot_content)

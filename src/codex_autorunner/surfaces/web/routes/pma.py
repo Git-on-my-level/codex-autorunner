@@ -27,6 +27,8 @@ from ....bootstrap import (
     pma_active_context_content,
     pma_agents_content,
     pma_context_log_content,
+    pma_doc_path,
+    pma_docs_dir,
     pma_prompt_content,
 )
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
@@ -1817,13 +1819,12 @@ def build_pma_routes() -> APIRouter:
 
         docs_dir = _pma_docs_dir(hub_root)
         docs_dir.mkdir(parents=True, exist_ok=True)
-        active_context_path = _resolve_pma_doc_path(hub_root, "active_context.md")
-        if active_context_path is None:
-            raise HTTPException(status_code=404, detail="Doc not found: active_context.md")
-        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        active_context_path = docs_dir / "active_context.md"
+        if not active_context_path.exists():
+            raise HTTPException(
+                status_code=404, detail="Doc not found: active_context.md"
+            )
         context_log_path = docs_dir / "context_log.md"
-        legacy_active_context_path = pma_dir / "active_context.md"
-        legacy_context_log_path = pma_dir / "context_log.md"
 
         try:
             active_content = active_context_path.read_text(encoding="utf-8")
@@ -1847,9 +1848,6 @@ def build_pma_routes() -> APIRouter:
         try:
             with context_log_path.open("a", encoding="utf-8") as f:
                 f.write(snapshot_content)
-            if legacy_context_log_path.exists():
-                with legacy_context_log_path.open("a", encoding="utf-8") as f:
-                    f.write(snapshot_content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to append context_log.md: {exc}"
@@ -1858,10 +1856,6 @@ def build_pma_routes() -> APIRouter:
         if reset:
             try:
                 atomic_write(active_context_path, pma_active_context_content())
-                if legacy_active_context_path.exists():
-                    atomic_write(
-                        legacy_active_context_path, pma_active_context_content()
-                    )
             except Exception as exc:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to reset active_context.md: {exc}"
@@ -1904,28 +1898,7 @@ def build_pma_routes() -> APIRouter:
     }
 
     def _pma_docs_dir(hub_root: Path) -> Path:
-        return hub_root / ".codex-autorunner" / "pma" / "docs"
-
-    def _pma_legacy_doc_path(hub_root: Path, name: str) -> Path:
-        return hub_root / ".codex-autorunner" / "pma" / name
-
-    def _resolve_pma_doc_path(hub_root: Path, name: str) -> Optional[Path]:
-        docs_path = _pma_docs_dir(hub_root) / name
-        legacy_path = _pma_legacy_doc_path(hub_root, name)
-        docs_exists = docs_path.exists()
-        legacy_exists = legacy_path.exists()
-        if docs_exists and legacy_exists:
-            try:
-                docs_mtime = docs_path.stat().st_mtime
-                legacy_mtime = legacy_path.stat().st_mtime
-                return legacy_path if legacy_mtime > docs_mtime else docs_path
-            except OSError:
-                return docs_path
-        if docs_exists:
-            return docs_path
-        if legacy_exists:
-            return legacy_path
-        return None
+        return pma_docs_dir(hub_root)
 
     def _normalize_doc_name(name: str) -> str:
         try:
@@ -1997,9 +1970,9 @@ def build_pma_routes() -> APIRouter:
         docs_dir = _pma_docs_dir(hub_root)
         result: list[dict[str, Any]] = []
         for doc_name in _sorted_doc_names(docs_dir):
-            doc_path = _resolve_pma_doc_path(hub_root, doc_name)
+            doc_path = docs_dir / doc_name
             entry: dict[str, Any] = {"name": doc_name}
-            if doc_path is not None and doc_path.exists():
+            if doc_path.exists():
                 entry["exists"] = True
                 stat = doc_path.stat()
                 entry["size"] = stat.st_size
@@ -2030,8 +2003,8 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="PMA is disabled")
         name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
-        doc_path = _resolve_pma_doc_path(hub_root, name)
-        if doc_path is None:
+        doc_path = pma_doc_path(hub_root, name)
+        if not doc_path.exists():
             raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
         try:
             content = doc_path.read_text(encoding="utf-8")
@@ -2050,13 +2023,8 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="PMA is disabled")
         name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
-        pma_dir = hub_root / ".codex-autorunner" / "pma"
         docs_dir = _pma_docs_dir(hub_root)
-        if (
-            name not in PMA_DOC_SET
-            and not (docs_dir / name).exists()
-            and not (pma_dir / name).exists()
-        ):
+        if name not in PMA_DOC_SET and not (docs_dir / name).exists():
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         content = body.get("content", "")
         if not isinstance(content, str):
@@ -2066,7 +2034,6 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=413, detail=f"Content too large (max {MAX_DOC_SIZE} bytes)"
             )
-        pma_dir.mkdir(parents=True, exist_ok=True)
         docs_dir.mkdir(parents=True, exist_ok=True)
         doc_path = docs_dir / name
         try:
@@ -2075,11 +2042,6 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
-        try:
-            if name in PMA_DOC_SET or (pma_dir / name).exists():
-                atomic_write(pma_dir / name, content)
-        except Exception:
-            logger.exception("Failed to update legacy PMA doc %s", name)
         _write_doc_history(hub_root, name, content)
         details = {
             "name": name,

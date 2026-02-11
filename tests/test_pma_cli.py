@@ -203,7 +203,7 @@ def test_pma_context_reset(tmp_path: Path):
     """Verify PMA context reset command works and is idempotent."""
     seed_hub_files(tmp_path, force=True)
 
-    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "active_context.md"
+    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
 
     runner = CliRunner()
 
@@ -224,8 +224,8 @@ def test_pma_context_snapshot(tmp_path: Path):
     """Verify PMA context snapshot appends with timestamp."""
     seed_hub_files(tmp_path, force=True)
 
-    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "active_context.md"
-    context_log_path = tmp_path / ".codex-autorunner" / "pma" / "context_log.md"
+    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    context_log_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
 
     custom_content = "# Custom active context\n\n- Item 1\n- Item 2\n"
     active_context_path.write_text(custom_content, encoding="utf-8")
@@ -248,7 +248,7 @@ def test_pma_context_prune_under_budget(tmp_path: Path):
     """Verify PMA context prune does nothing when under budget."""
     seed_hub_files(tmp_path, force=True)
 
-    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "active_context.md"
+    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
 
     custom_content = "# Short content\n\n- Item 1\n- Item 2\n"
     active_context_path.write_text(custom_content, encoding="utf-8")
@@ -268,8 +268,8 @@ def test_pma_context_prune_over_budget(tmp_path: Path):
 
     seed_hub_files(tmp_path, force=True)
 
-    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "active_context.md"
-    context_log_path = tmp_path / ".codex-autorunner" / "pma" / "context_log.md"
+    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    context_log_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
 
     long_content = "\n".join([f"Line {i}" for i in range(250)])
     active_context_path.write_text(long_content, encoding="utf-8")

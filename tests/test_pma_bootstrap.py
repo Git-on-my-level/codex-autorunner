@@ -8,10 +8,12 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
 
     pma_dir = tmp_path / ".codex-autorunner" / "pma"
+    docs_dir = pma_dir / "docs"
     assert pma_dir.exists()
     assert pma_dir.is_dir()
+    assert docs_dir.exists()
 
-    prompt_path = pma_dir / "prompt.md"
+    prompt_path = docs_dir / "prompt.md"
     assert prompt_path.exists()
     prompt_content = prompt_path.read_text(encoding="utf-8")
     assert "Project Management Agent" in prompt_content
@@ -22,7 +24,7 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "decisions.md" in prompt_content
     assert "spec.md" in prompt_content
 
-    about_path = pma_dir / "ABOUT_CAR.md"
+    about_path = docs_dir / "ABOUT_CAR.md"
     assert about_path.exists()
     about_content = about_path.read_text(encoding="utf-8")
     assert "PMA Operations Guide" in about_content
@@ -50,9 +52,9 @@ def test_pma_config_defaults(tmp_path: Path) -> None:
 def test_pma_files_not_overridden_without_force(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
 
-    pma_dir = tmp_path / ".codex-autorunner" / "pma"
-    prompt_path = pma_dir / "prompt.md"
-    about_path = pma_dir / "ABOUT_CAR.md"
+    docs_dir = tmp_path / ".codex-autorunner" / "pma" / "docs"
+    prompt_path = docs_dir / "prompt.md"
+    about_path = docs_dir / "ABOUT_CAR.md"
 
     prompt_path.write_text("custom prompt", encoding="utf-8")
     about_path.write_text("custom about", encoding="utf-8")
@@ -61,3 +63,17 @@ def test_pma_files_not_overridden_without_force(tmp_path: Path) -> None:
 
     assert prompt_path.read_text(encoding="utf-8") == "custom prompt"
     assert about_path.read_text(encoding="utf-8") == "custom about"
+
+
+def test_pma_legacy_docs_migrated_to_docs_dir(tmp_path: Path) -> None:
+    pma_dir = tmp_path / ".codex-autorunner" / "pma"
+    pma_dir.mkdir(parents=True, exist_ok=True)
+    legacy_agents = pma_dir / "AGENTS.md"
+    legacy_agents.write_text("legacy agents", encoding="utf-8")
+
+    seed_hub_files(tmp_path, force=False)
+
+    docs_agents = pma_dir / "docs" / "AGENTS.md"
+    assert docs_agents.exists()
+    assert docs_agents.read_text(encoding="utf-8") == "legacy agents"
+    assert not legacy_agents.exists()
