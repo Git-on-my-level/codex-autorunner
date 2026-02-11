@@ -12,14 +12,21 @@ const STORAGE_CONFIG: ChatStorageConfig = {
   version: 1,
 };
 
-export function saveTicketChatHistory(ticketIndex: number, messages: ChatMessage[]): void {
-  saveChatHistory(STORAGE_CONFIG, String(ticketIndex), messages);
+function normalizeTicketHistoryKey(ticketRef: number | string): string {
+  return String(ticketRef);
 }
 
-export function loadTicketChatHistory(ticketIndex: number): ChatMessage[] {
-  return loadChatHistory(STORAGE_CONFIG, String(ticketIndex));
+export function saveTicketChatHistory(
+  ticketRef: number | string,
+  messages: ChatMessage[]
+): void {
+  saveChatHistory(STORAGE_CONFIG, normalizeTicketHistoryKey(ticketRef), messages);
 }
 
-export function clearTicketChatHistory(ticketIndex: number): void {
-  clearChatHistory(STORAGE_CONFIG, String(ticketIndex));
+export function loadTicketChatHistory(ticketRef: number | string): ChatMessage[] {
+  return loadChatHistory(STORAGE_CONFIG, normalizeTicketHistoryKey(ticketRef));
+}
+
+export function clearTicketChatHistory(ticketRef: number | string): void {
+  clearChatHistory(STORAGE_CONFIG, normalizeTicketHistoryKey(ticketRef));
 }

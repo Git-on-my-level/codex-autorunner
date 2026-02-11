@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ....core.config import load_repo_config
+from ....core.file_chat_keys import ticket_chat_scope
 from ....core.flows import (
     FlowController,
     FlowDefinition,
@@ -967,6 +968,7 @@ You are the first ticket in a new ticket_flow run.
                 {
                     "path": rel_path,
                     "index": idx,
+                    "chat_key": ticket_chat_scope(idx, path) if idx else None,
                     "frontmatter": asdict(doc.frontmatter) if doc else None,
                     "body": doc.body if doc else parsed_body,
                     "errors": errors,
@@ -993,6 +995,7 @@ You are the first ticket in a new ticket_flow run.
             return TicketResponse(
                 path=safe_relpath(ticket_path, repo_root),
                 index=doc.index,
+                chat_key=ticket_chat_scope(doc.index, ticket_path),
                 frontmatter=asdict(doc.frontmatter),
                 body=doc.body,
             )
@@ -1007,6 +1010,7 @@ You are the first ticket in a new ticket_flow run.
         return TicketResponse(
             path=safe_relpath(ticket_path, repo_root),
             index=parse_ticket_index(ticket_path.name),
+            chat_key=ticket_chat_scope(index, ticket_path),
             frontmatter=parsed_frontmatter or {},
             body=parsed_body,
         )
@@ -1062,6 +1066,7 @@ You are the first ticket in a new ticket_flow run.
         return TicketResponse(
             path=safe_relpath(ticket_path, repo_root),
             index=doc.index,
+            chat_key=ticket_chat_scope(doc.index, ticket_path),
             frontmatter=asdict(doc.frontmatter),
             body=doc.body,
         )
@@ -1097,6 +1102,7 @@ You are the first ticket in a new ticket_flow run.
         return TicketResponse(
             path=safe_relpath(ticket_path, repo_root),
             index=doc.index,
+            chat_key=ticket_chat_scope(doc.index, ticket_path),
             frontmatter=asdict(doc.frontmatter),
             body=doc.body,
         )

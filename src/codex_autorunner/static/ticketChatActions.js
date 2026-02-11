@@ -15,7 +15,14 @@ import { resumeFileChatTurn } from "./turnEvents.js";
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;
-const pendingKeyForTicket = (index) => index != null ? `car.ticketChat.pending.${index}` : "car.ticketChat.pending";
+const pendingKeyForTicket = (index, ticketChatKey) => {
+    if (ticketChatKey)
+        return `car.ticketChat.pending.${ticketChatKey}`;
+    if (index != null)
+        return `car.ticketChat.pending.${index}`;
+    return "car.ticketChat.pending";
+};
+const chatTargetForTicket = (index, ticketChatKey) => ticketChatKey || (index != null ? `ticket:${index}` : null);
 export const ticketChat = createDocChat({
     idPrefix: "ticket-chat",
     storage: { keyPrefix: "car-ticket-chat-", maxMessages: 50, version: 1 },
@@ -42,6 +49,7 @@ export const ticketChat = createDocChat({
 // Extend state with ticket-specific fields
 export const ticketChatState = Object.assign(ticketChat.state, {
     ticketIndex: null,
+    ticketChatKey: null,
     draft: null,
     contextUsagePercent: null,
 });
@@ -92,14 +100,15 @@ export async function startNewTicketChatThread() {
     if (!confirmed)
         return;
     try {
-        const key = `ticket_chat.${ticketChatState.ticketIndex}`;
-        await api(`/api/app-server/threads/reset`, {
+        await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/new-thread`, {
             method: "POST",
-            body: { key },
         });
         // Clear local message history
+        const localHistoryKey = chatTargetForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
         ticketChatState.messages = [];
-        saveTicketChatHistory(ticketChatState.ticketIndex, []);
+        if (localHistoryKey) {
+            saveTicketChatHistory(localHistoryKey, []);
+        }
         clearTicketEvents();
         flash("New thread started");
     }
@@ -222,15 +231,19 @@ export function addUserMessage(content) {
 export function addAssistantMessage(content, isFinal = true) {
     ticketChat.addAssistantMessage(content, isFinal);
 }
-export function setTicketIndex(index) {
-    const changed = ticketChatState.ticketIndex !== index;
+export function setTicketIndex(index, ticketChatKey = null) {
+    const nextTarget = chatTargetForTicket(index, ticketChatKey);
+    const changed = ticketChatState.ticketIndex !== index ||
+        chatTargetForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey) !==
+            nextTarget;
     ticketChatState.ticketIndex = index;
+    ticketChatState.ticketChatKey = ticketChatKey;
     ticketChatState.draft = null;
     resetTicketChatState();
     clearTurnEventsStream();
     // Clear chat history when switching tickets
     if (changed) {
-        ticketChat.setTarget(index != null ? String(index) : null);
+        ticketChat.setTarget(nextTarget);
     }
 }
 export function renderTicketChat() {
@@ -284,7 +297,7 @@ export async function sendTicketChat() {
     ticketChatState.statusText = "queued";
     clearTurnEventsStream();
     ticketChatState.controller = new AbortController();
-    const pendingKey = pendingKeyForTicket(ticketChatState.ticketIndex);
+    const pendingKey = pendingKeyForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey);
     const clientTurnId = newClientTurnId("ticket");
     savePendingTurn(pendingKey, {
         clientTurnId,
@@ -355,13 +368,13 @@ export async function cancelTicketChat() {
     ticketChatState.controller = null;
     renderTicketChat();
     if (ticketChatState.ticketIndex != null) {
-        clearPendingTurnState(pendingKeyForTicket(ticketChatState.ticketIndex));
+        clearPendingTurnState(pendingKeyForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey));
     }
 }
-export async function resumeTicketPendingTurn(index) {
+export async function resumeTicketPendingTurn(index, ticketChatKey = null) {
     if (index == null)
         return;
-    const pendingKey = pendingKeyForTicket(index);
+    const pendingKey = pendingKeyForTicket(index, ticketChatKey);
     const pending = loadPendingTurn(pendingKey);
     if (!pending || pending.target !== `ticket:${index}`)
         return;
@@ -396,7 +409,7 @@ export async function resumeTicketPendingTurn(index) {
             return;
         }
         if (!outcome.controller) {
-            window.setTimeout(() => void resumeTicketPendingTurn(index), 1000);
+            window.setTimeout(() => void resumeTicketPendingTurn(index, ticketChatKey), 1000);
         }
     }
     catch (err) {

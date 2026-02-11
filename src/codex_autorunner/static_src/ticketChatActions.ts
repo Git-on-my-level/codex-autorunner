@@ -24,6 +24,7 @@ export interface TicketDraft {
 
 export interface TicketChatState extends ChatState {
   ticketIndex: number | null;
+  ticketChatKey: string | null;
   draft: TicketDraft | null;
   contextUsagePercent: number | null;
 }
@@ -31,8 +32,14 @@ export interface TicketChatState extends ChatState {
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;
-const pendingKeyForTicket = (index: number | null) =>
-  index != null ? `car.ticketChat.pending.${index}` : "car.ticketChat.pending";
+const pendingKeyForTicket = (index: number | null, ticketChatKey: string | null) => {
+  if (ticketChatKey) return `car.ticketChat.pending.${ticketChatKey}`;
+  if (index != null) return `car.ticketChat.pending.${index}`;
+  return "car.ticketChat.pending";
+};
+
+const chatTargetForTicket = (index: number | null, ticketChatKey: string | null) =>
+  ticketChatKey || (index != null ? `ticket:${index}` : null);
 
 export const ticketChat = createDocChat({
   idPrefix: "ticket-chat",
@@ -61,6 +68,7 @@ export const ticketChat = createDocChat({
 // Extend state with ticket-specific fields
 export const ticketChatState: TicketChatState = Object.assign(ticketChat.state, {
   ticketIndex: null,
+  ticketChatKey: null,
   draft: null,
   contextUsagePercent: null,
 });
@@ -114,15 +122,19 @@ export async function startNewTicketChatThread(): Promise<void> {
   if (!confirmed) return;
 
   try {
-    const key = `ticket_chat.${ticketChatState.ticketIndex}`;
-    await api(`/api/app-server/threads/reset`, {
+    await api(`/api/tickets/${ticketChatState.ticketIndex}/chat/new-thread`, {
       method: "POST",
-      body: { key },
     });
 
     // Clear local message history
+    const localHistoryKey = chatTargetForTicket(
+      ticketChatState.ticketIndex,
+      ticketChatState.ticketChatKey
+    );
     ticketChatState.messages = [];
-    saveTicketChatHistory(ticketChatState.ticketIndex, []);
+    if (localHistoryKey) {
+      saveTicketChatHistory(localHistoryKey, []);
+    }
     clearTicketEvents();
     
     flash("New thread started");
@@ -263,15 +275,20 @@ export function addAssistantMessage(content: string, isFinal = true): void {
   ticketChat.addAssistantMessage(content, isFinal);
 }
 
-export function setTicketIndex(index: number | null): void {
-  const changed = ticketChatState.ticketIndex !== index;
+export function setTicketIndex(index: number | null, ticketChatKey: string | null = null): void {
+  const nextTarget = chatTargetForTicket(index, ticketChatKey);
+  const changed =
+    ticketChatState.ticketIndex !== index ||
+    chatTargetForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey) !==
+      nextTarget;
   ticketChatState.ticketIndex = index;
+  ticketChatState.ticketChatKey = ticketChatKey;
   ticketChatState.draft = null;
   resetTicketChatState();
   clearTurnEventsStream();
   // Clear chat history when switching tickets
   if (changed) {
-    ticketChat.setTarget(index != null ? String(index) : null);
+    ticketChat.setTarget(nextTarget);
   }
 }
 
@@ -335,7 +352,10 @@ export async function sendTicketChat(): Promise<void> {
   ticketChatState.statusText = "queued";
   clearTurnEventsStream();
   ticketChatState.controller = new AbortController();
-  const pendingKey = pendingKeyForTicket(ticketChatState.ticketIndex);
+  const pendingKey = pendingKeyForTicket(
+    ticketChatState.ticketIndex,
+    ticketChatState.ticketChatKey
+  );
   const clientTurnId = newClientTurnId("ticket");
   savePendingTurn(pendingKey, {
     clientTurnId,
@@ -415,13 +435,18 @@ export async function cancelTicketChat(): Promise<void> {
   ticketChatState.controller = null;
   renderTicketChat();
   if (ticketChatState.ticketIndex != null) {
-    clearPendingTurnState(pendingKeyForTicket(ticketChatState.ticketIndex));
+    clearPendingTurnState(
+      pendingKeyForTicket(ticketChatState.ticketIndex, ticketChatState.ticketChatKey)
+    );
   }
 }
 
-export async function resumeTicketPendingTurn(index: number | null): Promise<void> {
+export async function resumeTicketPendingTurn(
+  index: number | null,
+  ticketChatKey: string | null = null
+): Promise<void> {
   if (index == null) return;
-  const pendingKey = pendingKeyForTicket(index);
+  const pendingKey = pendingKeyForTicket(index, ticketChatKey);
   const pending = loadPendingTurn(pendingKey);
   if (!pending || pending.target !== `ticket:${index}`) return;
   const chatState = ticketChatState as ChatState;
@@ -456,7 +481,10 @@ export async function resumeTicketPendingTurn(index: number | null): Promise<voi
       return;
     }
     if (!outcome.controller) {
-      window.setTimeout(() => void resumeTicketPendingTurn(index), 1000);
+      window.setTimeout(
+        () => void resumeTicketPendingTurn(index, ticketChatKey),
+        1000
+      );
     }
   } catch (err) {
     const msg = (err as Error).message || "Failed to resume turn";

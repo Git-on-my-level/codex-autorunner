@@ -27,6 +27,7 @@ from ....contextspace.paths import (
 )
 from ....core import drafts as draft_utils
 from ....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
+from ....core.file_chat_keys import ticket_chat_scope, ticket_state_key
 from ....core.state import now_iso
 from ....core.utils import atomic_write, find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
@@ -46,6 +47,7 @@ class _Target:
     target: str
     kind: str  # "ticket" | "contextspace"
     id: str  # "001" | "spec"
+    chat_scope: str
     path: Path
     rel_path: str
     state_key: str
@@ -125,9 +127,10 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             target=f"ticket:{idx}",
             kind="ticket",
             id=f"{idx:03d}",
+            chat_scope=ticket_chat_scope(idx, path),
             path=path,
             rel_path=rel,
-            state_key=f"ticket_{idx:03d}",
+            state_key=ticket_state_key(idx, path),
         )
 
     if target.lower().startswith("contextspace:"):
@@ -156,6 +159,7 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             target=f"contextspace:{rel_suffix}",
             kind="contextspace",
             id=rel_suffix,
+            chat_scope=f"contextspace:{rel_suffix}",
             path=path,
             rel_path=rel,
             state_key=f"contextspace_{rel_suffix.replace('/', '_')}",
@@ -1143,5 +1147,30 @@ def build_file_chat_routes() -> APIRouter:
                 return {"status": "ok", "detail": "No active chat to interrupt"}
             ev.set()
             return {"status": "interrupted", "detail": "Ticket chat interrupted"}
+
+    @router.post("/tickets/{index}/chat/new-thread")
+    async def reset_ticket_chat_thread(index: int, request: Request):
+        repo_root = _resolve_repo_root(request)
+        target = _parse_target(repo_root, f"ticket:{int(index)}")
+        thread_key = f"file_chat.{target.state_key}"
+        registry = getattr(request.app.state, "app_server_threads", None)
+        cleared = False
+        if registry is not None:
+            try:
+                cleared = bool(registry.reset_thread(thread_key))
+            except Exception:
+                logger.debug(
+                    "ticket chat thread reset failed for key=%s",
+                    thread_key,
+                    exc_info=True,
+                )
+        return {
+            "status": "ok",
+            "index": int(index),
+            "target": target.target,
+            "chat_scope": target.chat_scope,
+            "key": thread_key,
+            "cleared": cleared,
+        }
 
     return router
