@@ -120,6 +120,48 @@ def test_get_ticket_by_index(tmp_path, monkeypatch):
         assert payload["index"] == 2
         assert payload["frontmatter"]["agent"] == "codex"
         assert "Body here" in payload["body"]
+        assert isinstance(payload.get("chat_key"), str)
+        assert payload["chat_key"]
+
+
+def test_create_ticket_sets_ticket_id_and_stable_chat_key(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/flows/ticket_flow/tickets",
+            json={"agent": "codex", "title": "Demo", "body": "Body"},
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        fm = payload["frontmatter"] or {}
+        extra = fm.get("extra") if isinstance(fm.get("extra"), dict) else {}
+        ticket_id = fm.get("ticket_id") or extra.get("ticket_id")
+        assert isinstance(ticket_id, str) and ticket_id.startswith("tkt_")
+        first_chat_key = payload.get("chat_key")
+        assert isinstance(first_chat_key, str) and ticket_id in first_chat_key
+
+        update_content = f"""---
+agent: "codex"
+done: true
+ticket_id: "{ticket_id}"
+title: "Demo"
+---
+
+Body updated
+"""
+        updated = client.put(
+            f"/api/flows/ticket_flow/tickets/{payload['index']}",
+            json={"content": update_content},
+        )
+        assert updated.status_code == 200
+        updated_payload = updated.json()
+        assert updated_payload.get("chat_key") == first_chat_key
 
 
 def test_get_ticket_by_index_returns_body_on_invalid_frontmatter(tmp_path, monkeypatch):

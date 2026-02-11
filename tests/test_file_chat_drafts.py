@@ -119,3 +119,28 @@ def test_workspace_write_invalidates_draft(client: TestClient, hub_env, repo: Pa
     # State file should no longer have the draft
     state = draft_utils.load_state(repo_root)
     assert not state.get("drafts", {})
+
+
+def test_ticket_new_thread_resets_instance_scoped_registry_key(
+    client: TestClient, hub_env, repo: Path
+):
+    repo_root = repo
+    ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+    _write_file(ticket_path, "---\nagent: codex\ndone: false\n---\n\nbody\n")
+
+    target = file_chat_routes._parse_target(repo_root, "ticket:1")
+    thread_key = f"file_chat.{target.state_key}"
+    threads_file = repo_root / ".codex-autorunner" / "app_server_threads.json"
+    threads_file.parent.mkdir(parents=True, exist_ok=True)
+    threads_file.write_text(
+        f'{{"version": 1, "threads": {{"{thread_key}": "thr_test_1"}}}}\n',
+        encoding="utf-8",
+    )
+
+    res = client.post(f"/repos/{hub_env.repo_id}/api/tickets/1/chat/new-thread")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "ok"
+    assert payload["key"] == thread_key
+    assert payload["cleared"] is True
+    assert thread_key not in threads_file.read_text(encoding="utf-8")

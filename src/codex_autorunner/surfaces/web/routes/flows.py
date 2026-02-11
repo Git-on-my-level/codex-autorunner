@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ....core.config import load_repo_config
+from ....core.file_chat_keys import ticket_chat_scope
 from ....core.flows import (
     FlowController,
     FlowDefinition,
@@ -873,9 +874,11 @@ def build_flow_routes() -> APIRouter:
 
         seeded = False
         if not tickets_exist and not ticket_path.exists():
-            template = """---
+            bootstrap_ticket_id = f"tkt_{uuid.uuid4().hex}"
+            template = f"""---
 agent: codex
 done: false
+ticket_id: "{bootstrap_ticket_id}"
 title: Bootstrap ticket plan
 goal: Capture scope and seed follow-up tickets
 ---
@@ -967,6 +970,7 @@ You are the first ticket in a new ticket_flow run.
                 {
                     "path": rel_path,
                     "index": idx,
+                    "chat_key": ticket_chat_scope(idx, path) if idx else None,
                     "frontmatter": asdict(doc.frontmatter) if doc else None,
                     "body": doc.body if doc else parsed_body,
                     "errors": errors,
@@ -993,6 +997,7 @@ You are the first ticket in a new ticket_flow run.
             return TicketResponse(
                 path=safe_relpath(ticket_path, repo_root),
                 index=doc.index,
+                chat_key=ticket_chat_scope(doc.index, ticket_path),
                 frontmatter=asdict(doc.frontmatter),
                 body=doc.body,
             )
@@ -1007,6 +1012,7 @@ You are the first ticket in a new ticket_flow run.
         return TicketResponse(
             path=safe_relpath(ticket_path, repo_root),
             index=parse_ticket_index(ticket_path.name),
+            chat_key=ticket_chat_scope(index, ticket_path),
             frontmatter=parsed_frontmatter or {},
             body=parsed_body,
         )
@@ -1038,11 +1044,14 @@ You are the first ticket in a new ticket_flow run.
 
         title_line = f"title: {_quote(request.title)}\n" if request.title else ""
         goal_line = f"goal: {_quote(request.goal)}\n" if request.goal else ""
+        ticket_id = f"tkt_{uuid.uuid4().hex}"
+        ticket_id_line = f"ticket_id: {_quote(ticket_id)}\n"
 
         content = (
             "---\n"
             f"agent: {_quote(request.agent)}\n"
             "done: false\n"
+            f"{ticket_id_line}"
             f"{title_line}"
             f"{goal_line}"
             "---\n\n"
@@ -1062,6 +1071,7 @@ You are the first ticket in a new ticket_flow run.
         return TicketResponse(
             path=safe_relpath(ticket_path, repo_root),
             index=doc.index,
+            chat_key=ticket_chat_scope(doc.index, ticket_path),
             frontmatter=asdict(doc.frontmatter),
             body=doc.body,
         )
@@ -1097,6 +1107,7 @@ You are the first ticket in a new ticket_flow run.
         return TicketResponse(
             path=safe_relpath(ticket_path, repo_root),
             index=doc.index,
+            chat_key=ticket_chat_scope(doc.index, ticket_path),
             frontmatter=asdict(doc.frontmatter),
             body=doc.body,
         )

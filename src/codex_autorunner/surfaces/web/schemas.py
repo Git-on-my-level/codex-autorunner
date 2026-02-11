@@ -482,6 +482,7 @@ class TicketReorderRequest(Payload):
 class TicketResponse(ResponseModel):
     path: str
     index: int
+    chat_key: Optional[str] = None
     frontmatter: Dict[str, Any]
     body: str
 

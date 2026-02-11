@@ -5,12 +5,15 @@ const STORAGE_CONFIG = {
     maxMessages: 50,
     version: 1,
 };
-export function saveTicketChatHistory(ticketIndex, messages) {
-    saveChatHistory(STORAGE_CONFIG, String(ticketIndex), messages);
+function normalizeTicketHistoryKey(ticketRef) {
+    return String(ticketRef);
 }
-export function loadTicketChatHistory(ticketIndex) {
-    return loadChatHistory(STORAGE_CONFIG, String(ticketIndex));
+export function saveTicketChatHistory(ticketRef, messages) {
+    saveChatHistory(STORAGE_CONFIG, normalizeTicketHistoryKey(ticketRef), messages);
 }
-export function clearTicketChatHistory(ticketIndex) {
-    clearChatHistory(STORAGE_CONFIG, String(ticketIndex));
+export function loadTicketChatHistory(ticketRef) {
+    return loadChatHistory(STORAGE_CONFIG, normalizeTicketHistoryKey(ticketRef));
+}
+export function clearTicketChatHistory(ticketRef) {
+    clearChatHistory(STORAGE_CONFIG, normalizeTicketHistoryKey(ticketRef));
 }

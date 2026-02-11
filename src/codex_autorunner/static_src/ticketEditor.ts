@@ -26,6 +26,7 @@ import { initTicketTemplates } from "./ticketTemplates.js";
 type TicketData = {
   path?: string;
   index?: number | null;
+  chat_key?: string | null;
   frontmatter?: Record<string, unknown> | null;
   body?: string | null;
   errors?: string[];
@@ -34,6 +35,7 @@ type TicketData = {
 type FrontmatterState = {
   agent: string;
   done: boolean;
+  ticketId: string;
   title: string;
   model: string;
   reasoning: string;
@@ -43,6 +45,7 @@ type EditorState = {
   isOpen: boolean;
   mode: "create" | "edit";
   ticketIndex: number | null;
+  ticketChatKey: string | null;
   originalBody: string;
   originalFrontmatter: FrontmatterState;
   // Undo support
@@ -54,6 +57,7 @@ type EditorState = {
 const DEFAULT_FRONTMATTER: FrontmatterState = {
   agent: "codex",
   done: false,
+  ticketId: "",
   title: "",
   model: "",
   reasoning: "",
@@ -63,6 +67,7 @@ const state: EditorState = {
   isOpen: false,
   mode: "create",
   ticketIndex: null,
+  ticketChatKey: null,
   originalBody: "",
   originalFrontmatter: { ...DEFAULT_FRONTMATTER },
   undoStack: [],
@@ -299,6 +304,7 @@ function pushUndoState(): void {
   if (last && last.body === body && 
       last.frontmatter.agent === fm.agent &&
       last.frontmatter.done === fm.done &&
+      last.frontmatter.ticketId === fm.ticketId &&
       last.frontmatter.title === fm.title &&
       last.frontmatter.model === fm.model &&
       last.frontmatter.reasoning === fm.reasoning) {
@@ -359,6 +365,10 @@ function getFrontmatterFromForm(): FrontmatterState {
   return {
     agent: fmAgent?.value || "codex",
     done: fmDone?.checked || false,
+    ticketId:
+      state.lastSavedFrontmatter.ticketId ||
+      state.originalFrontmatter.ticketId ||
+      "",
     title: fmTitle?.value || "",
     model: fmModel?.value || "",
     reasoning: fmReasoning?.value || "",
@@ -382,9 +392,14 @@ function setFrontmatterForm(fm: FrontmatterState): void {
  */
 function extractFrontmatter(ticket: TicketData): FrontmatterState {
   const fm = ticket.frontmatter || {};
+  const extra =
+    typeof fm.extra === "object" && fm.extra ? (fm.extra as Record<string, unknown>) : {};
+  const ticketId =
+    (fm.ticket_id as string) || (extra.ticket_id as string) || "";
   return {
     agent: (fm.agent as string) || "codex",
     done: Boolean(fm.done),
+    ticketId,
     title: (fm.title as string) || "",
     model: (fm.model as string) || "",
     reasoning: (fm.reasoning as string) || "",
@@ -409,6 +424,7 @@ function buildTicketContent(): string {
 
   lines.push(`agent: ${yamlQuote(fm.agent)}`);
   lines.push(`done: ${fm.done}`);
+  if (fm.ticketId) lines.push(`ticket_id: ${yamlQuote(fm.ticketId)}`);
   if (fm.title) lines.push(`title: ${yamlQuote(fm.title)}`);
   if (fm.model) lines.push(`model: ${yamlQuote(fm.model)}`);
   if (fm.reasoning) lines.push(`reasoning: ${yamlQuote(fm.reasoning)}`);
@@ -524,6 +540,7 @@ function hasUnsavedChanges(): boolean {
     currentBody !== state.lastSavedBody ||
     currentFm.agent !== state.lastSavedFrontmatter.agent ||
     currentFm.done !== state.lastSavedFrontmatter.done ||
+    currentFm.ticketId !== state.lastSavedFrontmatter.ticketId ||
     currentFm.title !== state.lastSavedFrontmatter.title ||
     currentFm.model !== state.lastSavedFrontmatter.model ||
     currentFm.reasoning !== state.lastSavedFrontmatter.reasoning
@@ -566,12 +583,27 @@ async function performAutosave(): Promise<void> {
           title: fm.title || undefined,
           body: content.value,
         },
-      }) as { index?: number };
+      }) as TicketData;
 
       if (createRes?.index != null) {
         // Switch to edit mode now that ticket exists
         state.mode = "edit";
         state.ticketIndex = createRes.index;
+        state.ticketChatKey = createRes.chat_key || null;
+        const createdFm = (createRes.frontmatter || {}) as Record<string, unknown>;
+        const createdExtra =
+          typeof createdFm.extra === "object" && createdFm.extra
+            ? (createdFm.extra as Record<string, unknown>)
+            : {};
+        const createdTicketId =
+          typeof createdFm.ticket_id === "string"
+            ? createdFm.ticket_id
+            : typeof createdExtra.ticket_id === "string"
+              ? createdExtra.ticket_id
+              : "";
+        if (createdTicketId) {
+          fm.ticketId = createdTicketId;
+        }
         
         // If done is true, update to set done flag
         if (fm.done) {
@@ -582,7 +614,7 @@ async function performAutosave(): Promise<void> {
         }
         
         // Set up chat for this ticket
-        setTicketIndex(createRes.index);
+        setTicketIndex(createRes.index, state.ticketChatKey);
       }
     } else {
       // Update existing
@@ -639,6 +671,7 @@ export function openTicketEditor(ticket?: TicketData): void {
     // Edit mode
     state.mode = "edit";
     state.ticketIndex = ticket.index;
+    state.ticketChatKey = ticket.chat_key || null;
     
     // Extract and set frontmatter
     const fm = extractFrontmatter(ticket);
@@ -680,13 +713,14 @@ export function openTicketEditor(ticket?: TicketData): void {
     if (deleteBtn) deleteBtn.classList.remove("hidden");
     
     // Set up chat for this ticket
-    setTicketIndex(ticket.index);
+    setTicketIndex(ticket.index, state.ticketChatKey);
     // Load any pending draft
     void loadTicketPending(ticket.index, true);
   } else {
     // Create mode
     state.mode = "create";
     state.ticketIndex = null;
+    state.ticketChatKey = null;
     
     // Reset frontmatter to defaults
     state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
@@ -704,7 +738,7 @@ export function openTicketEditor(ticket?: TicketData): void {
     if (deleteBtn) deleteBtn.classList.add("hidden");
     
     // Clear chat state for new ticket
-    setTicketIndex(null);
+    setTicketIndex(null, null);
   }
 
   // Initialize undo stack with current state
@@ -730,7 +764,7 @@ export function openTicketEditor(ticket?: TicketData): void {
   renderTicketChat();
   renderTicketEvents();
   renderTicketMessages();
-  void resumeTicketPendingTurn(ticket?.index ?? null);
+  void resumeTicketPendingTurn(ticket?.index ?? null, ticket?.chat_key || null);
 
   state.isOpen = true;
   modal.classList.remove("hidden");
@@ -773,6 +807,7 @@ export function closeTicketEditor(): void {
 
   state.isOpen = false;
   state.ticketIndex = null;
+  state.ticketChatKey = null;
   state.originalBody = "";
   state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
   state.lastSavedBody = "";
@@ -790,7 +825,7 @@ export function closeTicketEditor(): void {
   
   // Reset chat state
   resetTicketChatState();
-  setTicketIndex(null);
+  setTicketIndex(null, null);
   
   // Notify that editor was closed (for selection state cleanup)
   publish("ticket-editor:closed", {});
@@ -825,7 +860,7 @@ export async function deleteTicket(): Promise<void> {
       method: "DELETE",
     });
 
-    clearTicketChatHistory(state.ticketIndex);
+    clearTicketChatHistory(state.ticketChatKey || state.ticketIndex);
 
     flash("Ticket deleted");
 

@@ -15,6 +15,7 @@ import { initTicketTemplates } from "./ticketTemplates.js";
 const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
+    ticketId: "",
     title: "",
     model: "",
     reasoning: "",
@@ -23,6 +24,7 @@ const state = {
     isOpen: false,
     mode: "create",
     ticketIndex: null,
+    ticketChatKey: null,
     originalBody: "",
     originalFrontmatter: { ...DEFAULT_FRONTMATTER },
     undoStack: [],
@@ -216,6 +218,7 @@ function pushUndoState() {
     if (last && last.body === body &&
         last.frontmatter.agent === fm.agent &&
         last.frontmatter.done === fm.done &&
+        last.frontmatter.ticketId === fm.ticketId &&
         last.frontmatter.title === fm.title &&
         last.frontmatter.model === fm.model &&
         last.frontmatter.reasoning === fm.reasoning) {
@@ -269,6 +272,9 @@ function getFrontmatterFromForm() {
     return {
         agent: fmAgent?.value || "codex",
         done: fmDone?.checked || false,
+        ticketId: state.lastSavedFrontmatter.ticketId ||
+            state.originalFrontmatter.ticketId ||
+            "",
         title: fmTitle?.value || "",
         model: fmModel?.value || "",
         reasoning: fmReasoning?.value || "",
@@ -295,9 +301,12 @@ function setFrontmatterForm(fm) {
  */
 function extractFrontmatter(ticket) {
     const fm = ticket.frontmatter || {};
+    const extra = typeof fm.extra === "object" && fm.extra ? fm.extra : {};
+    const ticketId = fm.ticket_id || extra.ticket_id || "";
     return {
         agent: fm.agent || "codex",
         done: Boolean(fm.done),
+        ticketId,
         title: fm.title || "",
         model: fm.model || "",
         reasoning: fm.reasoning || "",
@@ -318,6 +327,8 @@ function buildTicketContent() {
     const lines = ["---"];
     lines.push(`agent: ${yamlQuote(fm.agent)}`);
     lines.push(`done: ${fm.done}`);
+    if (fm.ticketId)
+        lines.push(`ticket_id: ${yamlQuote(fm.ticketId)}`);
     if (fm.title)
         lines.push(`title: ${yamlQuote(fm.title)}`);
     if (fm.model)
@@ -421,6 +432,7 @@ function hasUnsavedChanges() {
     return (currentBody !== state.lastSavedBody ||
         currentFm.agent !== state.lastSavedFrontmatter.agent ||
         currentFm.done !== state.lastSavedFrontmatter.done ||
+        currentFm.ticketId !== state.lastSavedFrontmatter.ticketId ||
         currentFm.title !== state.lastSavedFrontmatter.title ||
         currentFm.model !== state.lastSavedFrontmatter.model ||
         currentFm.reasoning !== state.lastSavedFrontmatter.reasoning);
@@ -463,6 +475,19 @@ async function performAutosave() {
                 // Switch to edit mode now that ticket exists
                 state.mode = "edit";
                 state.ticketIndex = createRes.index;
+                state.ticketChatKey = createRes.chat_key || null;
+                const createdFm = (createRes.frontmatter || {});
+                const createdExtra = typeof createdFm.extra === "object" && createdFm.extra
+                    ? createdFm.extra
+                    : {};
+                const createdTicketId = typeof createdFm.ticket_id === "string"
+                    ? createdFm.ticket_id
+                    : typeof createdExtra.ticket_id === "string"
+                        ? createdExtra.ticket_id
+                        : "";
+                if (createdTicketId) {
+                    fm.ticketId = createdTicketId;
+                }
                 // If done is true, update to set done flag
                 if (fm.done) {
                     await api(`/api/flows/ticket_flow/tickets/${createRes.index}`, {
@@ -471,7 +496,7 @@ async function performAutosave() {
                     });
                 }
                 // Set up chat for this ticket
-                setTicketIndex(createRes.index);
+                setTicketIndex(createRes.index, state.ticketChatKey);
             }
         }
         else {
@@ -523,6 +548,7 @@ export function openTicketEditor(ticket) {
         // Edit mode
         state.mode = "edit";
         state.ticketIndex = ticket.index;
+        state.ticketChatKey = ticket.chat_key || null;
         // Extract and set frontmatter
         const fm = extractFrontmatter(ticket);
         state.originalFrontmatter = { ...fm };
@@ -561,7 +587,7 @@ export function openTicketEditor(ticket) {
         if (deleteBtn)
             deleteBtn.classList.remove("hidden");
         // Set up chat for this ticket
-        setTicketIndex(ticket.index);
+        setTicketIndex(ticket.index, state.ticketChatKey);
         // Load any pending draft
         void loadTicketPending(ticket.index, true);
     }
@@ -569,6 +595,7 @@ export function openTicketEditor(ticket) {
         // Create mode
         state.mode = "create";
         state.ticketIndex = null;
+        state.ticketChatKey = null;
         // Reset frontmatter to defaults
         state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
         state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
@@ -582,7 +609,7 @@ export function openTicketEditor(ticket) {
         if (deleteBtn)
             deleteBtn.classList.add("hidden");
         // Clear chat state for new ticket
-        setTicketIndex(null);
+        setTicketIndex(null, null);
     }
     // Initialize undo stack with current state
     state.undoStack = [{ body: content.value, frontmatter: getFrontmatterFromForm() }];
@@ -606,7 +633,7 @@ export function openTicketEditor(ticket) {
     renderTicketChat();
     renderTicketEvents();
     renderTicketMessages();
-    void resumeTicketPendingTurn(ticket?.index ?? null);
+    void resumeTicketPendingTurn(ticket?.index ?? null, ticket?.chat_key || null);
     state.isOpen = true;
     modal.classList.remove("hidden");
     // Update URL with ticket index
@@ -641,6 +668,7 @@ export function closeTicketEditor() {
     }
     state.isOpen = false;
     state.ticketIndex = null;
+    state.ticketChatKey = null;
     state.originalBody = "";
     state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
     state.lastSavedBody = "";
@@ -655,7 +683,7 @@ export function closeTicketEditor() {
     void updateTicketNavButtons();
     // Reset chat state
     resetTicketChatState();
-    setTicketIndex(null);
+    setTicketIndex(null, null);
     // Notify that editor was closed (for selection state cleanup)
     publish("ticket-editor:closed", {});
 }
@@ -682,7 +710,7 @@ export async function deleteTicket() {
         await api(`/api/flows/ticket_flow/tickets/${state.ticketIndex}`, {
             method: "DELETE",
         });
-        clearTicketChatHistory(state.ticketIndex);
+        clearTicketChatHistory(state.ticketChatKey || state.ticketIndex);
         flash("Ticket deleted");
         // Close modal
         state.isOpen = false;
