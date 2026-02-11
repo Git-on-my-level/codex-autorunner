@@ -4,7 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..locks import FileLockBusy, file_lock
 from .failure_diagnostics import ensure_failure_payload
@@ -47,6 +47,37 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
             clear_worker_metadata(health.artifact_path.parent)
         except Exception:
             _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
+
+
+def _latest_app_server_event_details(
+    store: FlowStore, run_id: str
+) -> tuple[Optional[str], Optional[str]]:
+    try:
+        event = store.get_last_event_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
+    except Exception:
+        return None, None
+    if event is None:
+        return None, None
+    data: dict[str, Any] = event.data if isinstance(event.data, dict) else {}
+    message_raw = data.get("message")
+    message: dict[str, Any] = message_raw if isinstance(message_raw, dict) else {}
+    method_raw = message.get("method")
+    method = (
+        method_raw.strip()
+        if isinstance(method_raw, str) and method_raw.strip()
+        else None
+    )
+    turn_raw = data.get("turn_id")
+    turn_id = (
+        turn_raw.strip() if isinstance(turn_raw, str) and turn_raw.strip() else None
+    )
+    if turn_id is None:
+        params_raw = message.get("params")
+        params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+        candidate = params.get("turn_id") or params.get("turnId")
+        if isinstance(candidate, str) and candidate.strip():
+            turn_id = candidate.strip()
+    return method, turn_id
 
 
 def reconcile_flow_run(
@@ -124,15 +155,23 @@ def reconcile_flow_run(
             )
 
             if decision.status == FlowRunStatus.FAILED and decision.error_message:
+                last_method, last_turn_id = _latest_app_server_event_details(
+                    store, record.id
+                )
+                event_data = {
+                    "error": decision.error_message,
+                    "reason": decision.note or "reconcile",
+                }
+                if last_method:
+                    event_data["last_app_event_method"] = last_method
+                if last_turn_id:
+                    event_data["last_turn_id"] = last_turn_id
                 try:
                     store.create_event(
                         event_id=str(uuid.uuid4()),
                         run_id=record.id,
                         event_type=FlowEventType.FLOW_FAILED,
-                        data={
-                            "error": decision.error_message,
-                            "reason": decision.note or "reconcile",
-                        },
+                        data=event_data,
                     )
                 except Exception as exc:
                     (logger or _logger).warning(

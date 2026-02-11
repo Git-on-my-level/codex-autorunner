@@ -36,7 +36,9 @@ def _health(alive: bool) -> SimpleNamespace:
     "status, inner_status, alive, expected",
     [
         (FlowRunStatus.RUNNING, "paused", True, FlowRunStatus.PAUSED),
+        (FlowRunStatus.RUNNING, "paused", False, FlowRunStatus.FAILED),
         (FlowRunStatus.RUNNING, "completed", True, FlowRunStatus.COMPLETED),
+        (FlowRunStatus.RUNNING, "completed", False, FlowRunStatus.COMPLETED),
         (FlowRunStatus.RUNNING, None, False, FlowRunStatus.FAILED),
         (FlowRunStatus.STOPPING, None, False, FlowRunStatus.STOPPED),
         (FlowRunStatus.PAUSED, "completed", True, FlowRunStatus.COMPLETED),

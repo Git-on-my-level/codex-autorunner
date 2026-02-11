@@ -50,15 +50,6 @@ def resolve_flow_transition(
 
     # 1) Inner engine completion takes priority over worker liveness for active flows.
     if record.status == FlowRunStatus.RUNNING:
-        if inner_status == "paused":
-            state = ensure_reason_summary(state, status=FlowRunStatus.PAUSED)
-            return TransitionDecision(
-                status=FlowRunStatus.PAUSED,
-                finished_at=None,
-                state=state,
-                note="engine-paused",
-            )
-
         if inner_status == "completed":
             return TransitionDecision(
                 status=FlowRunStatus.COMPLETED,
@@ -67,7 +58,8 @@ def resolve_flow_transition(
                 note="engine-completed",
             )
 
-        # 2) Worker liveness overrides for active flows (only if engine not completed).
+        # A dead worker for a RUNNING flow is always abnormal, even if stale
+        # ticket_engine state still says "paused" from a prior cycle.
         if not health.is_alive:
             new_status = FlowRunStatus.FAILED
             state = ensure_reason_summary(
@@ -78,6 +70,9 @@ def resolve_flow_transition(
                 error_msg += f", pid={health.pid}"
             if health.message:
                 error_msg += f", reason: {health.message}"
+            exit_code = getattr(health, "exit_code", None)
+            if isinstance(exit_code, int):
+                error_msg += f", exit_code={exit_code}"
             error_msg += ")"
             return TransitionDecision(
                 status=new_status,
@@ -85,6 +80,15 @@ def resolve_flow_transition(
                 state=state,
                 note="worker-dead",
                 error_message=error_msg,
+            )
+
+        if inner_status == "paused":
+            state = ensure_reason_summary(state, status=FlowRunStatus.PAUSED)
+            return TransitionDecision(
+                status=FlowRunStatus.PAUSED,
+                finished_at=None,
+                state=state,
+                note="engine-paused",
             )
 
         return TransitionDecision(
