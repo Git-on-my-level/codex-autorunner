@@ -1,8 +1,10 @@
+import asyncio
 import types
 
 import httpx
 import pytest
 
+from codex_autorunner.core.exceptions import CircuitOpenError
 from codex_autorunner.integrations.telegram.adapter import (
     TELEGRAM_MAX_MESSAGE_LENGTH,
     ApprovalCallback,
@@ -19,6 +21,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     ResumeCallback,
     ReviewCommitCallback,
     TelegramAllowlist,
+    TelegramAPIError,
     TelegramBotClient,
     TelegramCommand,
     TelegramMessage,
@@ -553,6 +556,65 @@ async def test_request_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) ->
     assert response.get("message_id") == 123
     assert calls["count"] == 2
     assert sleeps and sleeps[0] >= 0.9
+
+
+@pytest.mark.anyio
+async def test_rate_limit_scope_does_not_block_other_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json={"ok": True, "result": {}})
+    )
+    http_client = httpx.AsyncClient(transport=transport)
+    bot = TelegramBotClient("test-token", client=http_client)
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.adapter.asyncio.sleep",
+        fake_sleep,
+    )
+    try:
+        loop = asyncio.get_running_loop()
+        bot._rate_limit_until["editMessageText"] = loop.time() + 60.0
+        await bot._wait_for_rate_limit("getUpdates")
+    finally:
+        await bot.close()
+
+    assert sleeps == []
+
+
+@pytest.mark.anyio
+async def test_circuit_breaker_scope_isolated_per_method() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", 1)[-1]
+        if method == "editMessageText":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: message is not modified",
+                },
+            )
+        if method == "sendMessage":
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 123}})
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(transport=transport)
+    bot = TelegramBotClient("test-token", client=http_client)
+    try:
+        for _ in range(6):
+            with pytest.raises((TelegramAPIError, CircuitOpenError)):
+                await bot.edit_message_text(123, 1, "noop")
+        response = await bot.send_message(123, "hello")
+    finally:
+        await bot.close()
+
+    assert response.get("message_id") == 123
 
 
 @pytest.mark.anyio

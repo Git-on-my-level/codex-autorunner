@@ -3,8 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Optional,
+    Sequence,
+    Union,
+)
 
 import httpx
 
@@ -1183,10 +1193,10 @@ class TelegramBotClient:
         else:
             self._client = client
             self._owns_client = False
-        self._rate_limit_until: Optional[float] = None
+        self._rate_limit_until: dict[str, float] = {}
         self._rate_limit_lock: Optional[asyncio.Lock] = None
         self._rate_limit_lock_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._circuit_breaker = CircuitBreaker("Telegram", logger=self._logger)
+        self._circuit_breakers: dict[str, CircuitBreaker] = {}
 
     async def close(self) -> None:
         if self._owns_client:
@@ -1593,7 +1603,7 @@ class TelegramBotClient:
     async def _request_with_retry(
         self, method: str, send: Callable[[], Awaitable[httpx.Response]]
     ) -> Any:
-        async with self._circuit_breaker.call():
+        async with self._resilience_guard(method):
             await self._wait_for_rate_limit(method)
             try:
                 response = await send()
@@ -1722,32 +1732,61 @@ class TelegramBotClient:
             lock = asyncio.Lock()
             self._rate_limit_lock = lock
             self._rate_limit_lock_loop = loop
-            self._rate_limit_until = None
+            self._rate_limit_until = {}
         return lock
+
+    def _resilience_scope(self, method: str) -> str:
+        return method
+
+    def _circuit_breaker_scope(self, method: str) -> Optional[str]:
+        # Keep polling independent from delivery/edit resilience paths.
+        if method == "getUpdates":
+            return None
+        return self._resilience_scope(method)
+
+    @asynccontextmanager
+    async def _resilience_guard(self, method: str) -> AsyncIterator[None]:
+        circuit_scope = self._circuit_breaker_scope(method)
+        if not circuit_scope:
+            yield
+            return
+        breaker = self._circuit_breakers.get(circuit_scope)
+        if breaker is None:
+            breaker = CircuitBreaker(
+                f"Telegram:{circuit_scope}",
+                logger=self._logger,
+            )
+            self._circuit_breakers[circuit_scope] = breaker
+        async with breaker.call():
+            yield
 
     async def _apply_rate_limit(self, method: str, retry_after: int) -> None:
         delay = float(retry_after)
         loop = asyncio.get_running_loop()
         until = loop.time() + delay + _RATE_LIMIT_BUFFER_SECONDS
+        scope = self._resilience_scope(method)
         lock = self._ensure_rate_limit_lock()
         async with lock:
-            if self._rate_limit_until is None or until > self._rate_limit_until:
-                self._rate_limit_until = until
+            existing = self._rate_limit_until.get(scope)
+            if existing is None or until > existing:
+                self._rate_limit_until[scope] = until
         log_event(
             self._logger,
             logging.INFO,
             "telegram.rate_limit.hit",
             method=method,
             retry_after=retry_after,
+            scope=scope,
         )
         await self._wait_for_rate_limit(method, min_delay=delay)
 
     async def _wait_for_rate_limit(
         self, method: str, min_delay: Optional[float] = None
     ) -> None:
+        scope = self._resilience_scope(method)
         lock = self._ensure_rate_limit_lock()
         async with lock:
-            until = self._rate_limit_until
+            until = self._rate_limit_until.get(scope)
         if until is None:
             return
         loop = asyncio.get_running_loop()
@@ -1756,8 +1795,8 @@ class TelegramBotClient:
             delay = min_delay
         if delay <= 0:
             async with lock:
-                if self._rate_limit_until == until:
-                    self._rate_limit_until = None
+                if self._rate_limit_until.get(scope) == until:
+                    self._rate_limit_until.pop(scope, None)
             return
         log_event(
             self._logger,
@@ -1765,11 +1804,12 @@ class TelegramBotClient:
             "telegram.rate_limit.wait",
             method=method,
             delay_seconds=delay,
+            scope=scope,
         )
         await asyncio.sleep(delay)
         async with lock:
-            if self._rate_limit_until == until:
-                self._rate_limit_until = None
+            if self._rate_limit_until.get(scope) == until:
+                self._rate_limit_until.pop(scope, None)
 
 
 class TelegramUpdatePoller:
