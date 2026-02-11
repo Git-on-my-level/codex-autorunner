@@ -1780,6 +1780,7 @@ def create_hub_app(
                     return None
 
                 seq_dirs = sorted(seq_dirs, key=lambda p: p.name, reverse=True)
+                latest_seq = int(seq_dirs[0].name) if seq_dirs else None
                 handoff_candidate: Optional[dict] = None
                 non_summary_candidate: Optional[dict] = None
                 turn_summary_candidate: Optional[dict] = None
@@ -1790,6 +1791,16 @@ def create_hub_app(
                     dispatch_path = seq_dir / "DISPATCH.md"
                     dispatch, errors = parse_dispatch(dispatch_path)
                     if errors or dispatch is None:
+                        # Fail closed: when newest dispatch is unreadable, surface it
+                        # instead of falling back to older dispatch entries.
+                        if latest_seq is not None and seq == latest_seq:
+                            return {
+                                "seq": seq,
+                                "dir": safe_relpath(seq_dir, repo_root),
+                                "dispatch": None,
+                                "errors": errors,
+                                "files": [],
+                            }
                         if error_candidate is None:
                             error_candidate = {
                                 "seq": seq,

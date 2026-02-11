@@ -4,6 +4,8 @@ from pathlib import Path
 import yaml
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.pma_context import (
     build_hub_snapshot,
@@ -17,6 +19,42 @@ def _write_hub_config(hub_root: Path, data: dict) -> None:
     config_path = hub_root / ".codex-autorunner" / "config.yml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def _seed_paused_run(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+
+
+def _write_dispatch_history(
+    repo_root: Path, run_id: str, seq: int, *, mode: str = "pause"
+) -> None:
+    entry_dir = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / run_id
+        / "dispatch_history"
+        / f"{seq:04d}"
+    )
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    (entry_dir / "DISPATCH.md").write_text(
+        f"---\nmode: {mode}\ntitle: dispatch-{seq}\n---\n\nPlease review.\n",
+        encoding="utf-8",
+    )
 
 
 def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
@@ -433,3 +471,31 @@ def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
     assert repos[1]["trusted"] is False
     assert repos[1]["default_ref"] == "stable"
     assert "url" not in repos[0]
+
+
+def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None:
+    run_id = "66666666-6666-6666-6666-666666666666"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+    _write_dispatch_history(
+        hub_env.repo_root, run_id, seq=2, mode="invalid_mode"
+    )  # parseable frontmatter, invalid dispatch mode
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    inbox = snapshot.get("inbox") or []
+    assert len(inbox) == 1
+    item = inbox[0]
+    assert item["run_id"] == run_id
+    assert item["item_type"] == "run_state_attention"
+    assert item["seq"] == 2
+    assert item.get("dispatch") is None
+    assert "unreadable dispatch metadata" in (item.get("reason") or "").lower()
+    run_state = item.get("run_state") or {}
+    assert run_state.get("state") == "blocked"

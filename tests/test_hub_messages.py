@@ -44,6 +44,21 @@ def _write_dispatch_history(repo_root: Path, run_id: str, seq: int) -> None:
     )
 
 
+def _write_dispatch_history_raw(
+    repo_root: Path, run_id: str, seq: int, content: str
+) -> None:
+    entry_dir = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / run_id
+        / "dispatch_history"
+        / f"{seq:04d}"
+    )
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    (entry_dir / "DISPATCH.md").write_text(content, encoding="utf-8")
+
+
 def _write_reply_history(repo_root: Path, run_id: str, seq: int) -> None:
     entry_dir = (
         repo_root
@@ -117,6 +132,33 @@ def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> N
         run_state = item.get("run_state") or {}
         assert run_state.get("state") == "blocked"
         assert run_state.get("recommended_action")
+
+
+def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env) -> None:
+    run_id = "55555555-5555-5555-5555-555555555555"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+    _write_dispatch_history_raw(
+        hub_env.repo_root,
+        run_id,
+        seq=2,
+        content="---\nmode: invalid_mode\ntitle: Corrupt latest\n---\n\nbad dispatch\n",
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["item_type"] == "run_state_attention"
+        assert item["run_id"] == run_id
+        assert item["seq"] == 2
+        assert "unreadable dispatch metadata" in (item.get("reason") or "").lower()
+        assert item.get("dispatch") is None
+        run_state = item.get("run_state") or {}
+        assert run_state.get("state") == "blocked"
 
 
 def test_hub_messages_dismiss_filters_and_persists(hub_env) -> None:

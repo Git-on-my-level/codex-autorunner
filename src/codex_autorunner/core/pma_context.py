@@ -703,6 +703,7 @@ def _latest_dispatch(
             return files
 
         seq_dirs = sorted(seq_dirs, key=lambda p: p.name, reverse=True)
+        latest_seq = int(seq_dirs[0].name) if seq_dirs else None
         handoff_candidate: Optional[dict[str, Any]] = None
         non_summary_candidate: Optional[dict[str, Any]] = None
         turn_summary_candidate: Optional[dict[str, Any]] = None
@@ -713,6 +714,16 @@ def _latest_dispatch(
             dispatch_path = seq_dir / "DISPATCH.md"
             dispatch, errors = parse_dispatch(dispatch_path)
             if errors or dispatch is None:
+                # Fail closed: if the newest dispatch is unreadable, surface that
+                # corruption instead of silently falling back to older prompts.
+                if latest_seq is not None and seq == latest_seq:
+                    return {
+                        "seq": seq,
+                        "dir": safe_relpath(seq_dir, repo_root),
+                        "dispatch": None,
+                        "errors": errors,
+                        "files": [],
+                    }
                 if error_candidate is None:
                     error_candidate = {"seq": seq, "dir": seq_dir, "errors": errors}
                 continue
