@@ -53,3 +53,61 @@ def test_build_ticket_flow_summary_includes_pr_and_final_review(tmp_path: Path) 
     assert summary["final_review_status"] == "done"
     assert summary["done_count"] == 1
     assert summary["total_count"] == 2
+
+
+def test_build_ticket_flow_summary_uses_latest_final_review_ticket(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001-final-review.md").write_text(
+        "---\nagent: codex\ndone: true\ntitle: Final review\n---\n\nold\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-002-final-review.md").write_text(
+        "---\nagent: codex\ndone: false\ntitle: Final review\n---\n\nnew\n",
+        encoding="utf-8",
+    )
+
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        store.create_flow_run("run-1", "ticket_flow", input_data={}, state={})
+
+    summary = build_ticket_flow_summary(repo_root, include_failure=False)
+    assert summary is not None
+    assert summary["final_review_status"] == "pending"
+
+
+def test_build_ticket_flow_summary_pr_url_only_from_open_pr_ticket(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001-impl.md").write_text(
+        "---\nagent: codex\ndone: true\ntitle: Implement\n---\n\n"
+        "Related: https://github.com/example/repo/pull/999\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-002-final-review.md").write_text(
+        "---\nagent: codex\ndone: true\ntitle: Final review\n---\n\nok\n",
+        encoding="utf-8",
+    )
+
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        store.create_flow_run("run-1", "ticket_flow", input_data={}, state={})
+
+    summary = build_ticket_flow_summary(repo_root, include_failure=False)
+    assert summary is not None
+    assert summary["pr_url"] is None
+    assert summary["pr_opened"] is False

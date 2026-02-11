@@ -55,7 +55,7 @@ def build_ticket_flow_summary(
 
     total_count = len(ticket_paths)
     done_count = 0
-    pr_url: Optional[str] = None
+    open_pr_ticket_url: Optional[str] = None
     final_review_status: Optional[str] = None
     for path in ticket_paths:
         idx = parse_ticket_index(path.name)
@@ -75,17 +75,17 @@ def build_ticket_flow_summary(
 
         title = str(data.get("title") or "").strip().lower()
         ticket_kind = str(data.get("ticket_kind") or "").strip().lower()
-        if final_review_status is None and (
-            ticket_kind == "final_review" or "final review" in title
-        ):
+        is_final_review = ticket_kind == "final_review" or "final review" in title
+        if is_final_review:
             final_review_status = "done" if done_flag else "pending"
 
-        if pr_url is None and (
+        is_open_pr = (
             ticket_kind == "open_pr" or "open pr" in title or "pull request" in title
-        ):
-            pr_url = _extract_pr_url_from_ticket(path)
-        if pr_url is None:
-            pr_url = _extract_pr_url_from_ticket(path)
+        )
+        if is_open_pr:
+            open_pr_ticket_url = _extract_pr_url_from_ticket(path)
+
+    pr_url = open_pr_ticket_url
 
     state = latest.state if isinstance(latest.state, dict) else {}
     engine = state.get("ticket_engine") if isinstance(state, dict) else {}
