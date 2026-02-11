@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from ...core.flows.definition import EmitEventFn, FlowDefinition, StepOutcome
 from ...core.flows.models import FlowEventType, FlowRunRecord
-from ...core.utils import find_repo_root
+from ...core.utils import RepoNotFoundError, find_repo_root
 from ...manifest import ManifestError, load_manifest
 from ...tickets import (
     DEFAULT_MAX_TOTAL_TURNS,
@@ -35,13 +35,23 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         )
         engine_state = dict(engine_state) if isinstance(engine_state, dict) else {}
 
-        repo_root = find_repo_root()
-        raw_workspace = input_data.get("workspace_root") or repo_root
-        workspace_root = Path(raw_workspace)
-        if not workspace_root.is_absolute():
-            workspace_root = (Path(repo_root) / workspace_root).resolve()
+        raw_workspace = input_data.get("workspace_root")
+        if raw_workspace:
+            workspace_root = Path(raw_workspace)
+            if not workspace_root.is_absolute():
+                try:
+                    repo_root = find_repo_root()
+                    workspace_root = (repo_root / workspace_root).resolve()
+                except RepoNotFoundError as err:
+                    raise ValueError(
+                        "workspace_root is relative but no repo root found"
+                    ) from err
+            else:
+                workspace_root = workspace_root.resolve()
+            repo_root = find_repo_root(start=workspace_root)
         else:
-            workspace_root = workspace_root.resolve()
+            repo_root = find_repo_root()
+            workspace_root = repo_root
 
         ticket_dir = Path(input_data.get("ticket_dir") or ".codex-autorunner/tickets")
         if not ticket_dir.is_absolute():
