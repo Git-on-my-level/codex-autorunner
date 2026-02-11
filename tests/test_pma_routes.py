@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -602,6 +604,30 @@ def test_pma_docs_get_nonexistent(hub_env) -> None:
     assert "not found" in resp.json()["detail"].lower()
 
 
+def test_pma_docs_get_prefers_newer_legacy_doc(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
+    docs_path = pma_dir / "docs" / "active_context.md"
+    legacy_path = pma_dir / "active_context.md"
+
+    docs_path.write_text("# Docs copy\n\n- stale\n", encoding="utf-8")
+    legacy_content = "# Legacy copy\n\n- current\n- item\n"
+    legacy_path.write_text(legacy_content, encoding="utf-8")
+
+    stale = time.time() - 120
+    fresh = time.time()
+    os.utime(docs_path, (stale, stale))
+    os.utime(legacy_path, (fresh, fresh))
+
+    resp = client.get("/hub/pma/docs/active_context.md")
+    assert resp.status_code == 200
+    assert resp.json()["content"] == legacy_content
+
+
 def test_pma_docs_put(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
@@ -684,6 +710,37 @@ def test_pma_context_snapshot(hub_env) -> None:
     assert "## Snapshot:" in log_content
     assert active_content in log_content
     assert active_path.read_text(encoding="utf-8") == pma_active_context_content()
+
+
+def test_pma_context_snapshot_prefers_newer_legacy_active_context(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
+    docs_dir = pma_dir / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    docs_active_path = docs_dir / "active_context.md"
+    legacy_active_path = pma_dir / "active_context.md"
+    docs_active_path.write_text("# Docs copy\n\n- stale\n", encoding="utf-8")
+    legacy_content = "# Legacy copy\n\n- alpha\n- beta\n- gamma\n"
+    legacy_active_path.write_text(legacy_content, encoding="utf-8")
+
+    stale = time.time() - 120
+    fresh = time.time()
+    os.utime(docs_active_path, (stale, stale))
+    os.utime(legacy_active_path, (fresh, fresh))
+
+    resp = client.post("/hub/pma/context/snapshot", json={"reset": False})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["active_context_line_count"] == len(legacy_content.splitlines())
+
+    log_content = (docs_dir / "context_log.md").read_text(encoding="utf-8")
+    assert legacy_content in log_content
 
 
 def test_pma_docs_disabled(hub_env) -> None:

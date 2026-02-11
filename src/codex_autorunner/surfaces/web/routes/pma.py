@@ -1815,19 +1815,18 @@ def build_pma_routes() -> APIRouter:
         if isinstance(body, dict):
             reset = bool(body.get("reset", False))
 
-        pma_dir = hub_root / ".codex-autorunner" / "pma"
         docs_dir = _pma_docs_dir(hub_root)
         docs_dir.mkdir(parents=True, exist_ok=True)
-        active_context_path = docs_dir / "active_context.md"
+        active_context_path = _resolve_pma_doc_path(hub_root, "active_context.md")
+        if active_context_path is None:
+            raise HTTPException(status_code=404, detail="Doc not found: active_context.md")
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
         context_log_path = docs_dir / "context_log.md"
         legacy_active_context_path = pma_dir / "active_context.md"
         legacy_context_log_path = pma_dir / "context_log.md"
 
         try:
-            if active_context_path.exists():
-                active_content = active_context_path.read_text(encoding="utf-8")
-            else:
-                active_content = legacy_active_context_path.read_text(encoding="utf-8")
+            active_content = active_context_path.read_text(encoding="utf-8")
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to read active_context.md: {exc}"
@@ -1910,6 +1909,24 @@ def build_pma_routes() -> APIRouter:
     def _pma_legacy_doc_path(hub_root: Path, name: str) -> Path:
         return hub_root / ".codex-autorunner" / "pma" / name
 
+    def _resolve_pma_doc_path(hub_root: Path, name: str) -> Optional[Path]:
+        docs_path = _pma_docs_dir(hub_root) / name
+        legacy_path = _pma_legacy_doc_path(hub_root, name)
+        docs_exists = docs_path.exists()
+        legacy_exists = legacy_path.exists()
+        if docs_exists and legacy_exists:
+            try:
+                docs_mtime = docs_path.stat().st_mtime
+                legacy_mtime = legacy_path.stat().st_mtime
+                return legacy_path if legacy_mtime > docs_mtime else docs_path
+            except OSError:
+                return docs_path
+        if docs_exists:
+            return docs_path
+        if legacy_exists:
+            return legacy_path
+        return None
+
     def _normalize_doc_name(name: str) -> str:
         try:
             return sanitize_filename(name)
@@ -1980,9 +1997,9 @@ def build_pma_routes() -> APIRouter:
         docs_dir = _pma_docs_dir(hub_root)
         result: list[dict[str, Any]] = []
         for doc_name in _sorted_doc_names(docs_dir):
-            doc_path = docs_dir / doc_name
+            doc_path = _resolve_pma_doc_path(hub_root, doc_name)
             entry: dict[str, Any] = {"name": doc_name}
-            if doc_path.exists():
+            if doc_path is not None and doc_path.exists():
                 entry["exists"] = True
                 stat = doc_path.stat()
                 entry["size"] = stat.st_size
@@ -2013,14 +2030,9 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="PMA is disabled")
         name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
-        docs_dir = _pma_docs_dir(hub_root)
-        doc_path = docs_dir / name
-        if not doc_path.exists():
-            legacy_path = _pma_legacy_doc_path(hub_root, name)
-            if legacy_path.exists():
-                doc_path = legacy_path
-            else:
-                raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
+        doc_path = _resolve_pma_doc_path(hub_root, name)
+        if doc_path is None:
+            raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
         try:
             content = doc_path.read_text(encoding="utf-8")
         except Exception as exc:
