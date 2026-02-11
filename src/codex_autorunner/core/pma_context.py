@@ -6,13 +6,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..bootstrap import ensure_pma_docs
-from ..tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
+from ..tickets.files import safe_relpath
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from .config import load_hub_config, load_repo_config
 from .flows.models import FlowRunStatus
 from .flows.store import FlowStore
 from .hub import HubSupervisor
 from .state_roots import resolve_hub_templates_root
+from .ticket_flow_summary import build_ticket_flow_summary
 
 PMA_MAX_REPOS = 25
 PMA_MAX_MESSAGES = 10
@@ -35,6 +36,7 @@ First-turn routine:
 3) If the request is new work:
    - Identify the target repo(s).
    - Prefer hub-owned worktrees for changes.
+   - Prefer one-shot setup/repair commands: `car hub tickets setup-pack`, `car hub tickets fmt`, `car hub tickets doctor --fix`.
    - Create/adjust repo tickets under each repo's `.codex-autorunner/tickets/`.
 
 Web UI map (user perspective):
@@ -234,6 +236,8 @@ def _render_ticket_flow_summary(summary: Optional[dict[str, Any]]) -> str:
     done_count = summary.get("done_count")
     total_count = summary.get("total_count")
     current_step = summary.get("current_step")
+    pr_url = summary.get("pr_url")
+    final_review_status = summary.get("final_review_status")
     parts: list[str] = []
     if status is not None:
         parts.append(f"status={status}")
@@ -241,6 +245,10 @@ def _render_ticket_flow_summary(summary: Optional[dict[str, Any]]) -> str:
         parts.append(f"done={done_count}/{total_count}")
     if current_step is not None:
         parts.append(f"step={current_step}")
+    if pr_url:
+        parts.append("pr=opened")
+    if final_review_status:
+        parts.append(f"final_review={final_review_status}")
     if not parts:
         return "null"
     return " ".join(parts)
@@ -450,44 +458,7 @@ def format_pma_prompt(
 
 
 def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict[str, Any]]:
-    db_path = repo_path / ".codex-autorunner" / "flows.db"
-    if not db_path.exists():
-        return None
-    try:
-        config = load_repo_config(repo_path)
-        with FlowStore(db_path, durable=config.durable_writes) as store:
-            runs = store.list_flow_runs(flow_type="ticket_flow")
-            if not runs:
-                return None
-            latest = runs[0]
-
-            ticket_dir = repo_path / ".codex-autorunner" / "tickets"
-            total = 0
-            done = 0
-            for path in list_ticket_paths(ticket_dir):
-                total += 1
-                try:
-                    if ticket_is_done(path):
-                        done += 1
-                except Exception:
-                    continue
-
-            if total == 0:
-                return None
-
-            state = latest.state if isinstance(latest.state, dict) else {}
-            engine = state.get("ticket_engine") if isinstance(state, dict) else {}
-            engine = engine if isinstance(engine, dict) else {}
-            current_step = engine.get("total_turns")
-
-            return {
-                "status": latest.status.value,
-                "done_count": done,
-                "total_count": total,
-                "current_step": current_step,
-            }
-    except Exception:
-        return None
+    return build_ticket_flow_summary(repo_path, include_failure=False)
 
 
 def _latest_dispatch(
