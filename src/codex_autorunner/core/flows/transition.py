@@ -50,6 +50,30 @@ def resolve_flow_transition(
 
     # 1) Inner engine completion takes priority over worker liveness for active flows.
     if record.status == FlowRunStatus.RUNNING:
+        # A dead worker for a RUNNING flow is always abnormal, even if stale
+        # ticket_engine state still says "paused" from a prior cycle.
+        if not health.is_alive:
+            new_status = FlowRunStatus.FAILED
+            state = ensure_reason_summary(
+                state, status=new_status, default="Worker died"
+            )
+            error_msg = f"Worker died (status={health.status}"
+            if health.pid:
+                error_msg += f", pid={health.pid}"
+            if health.message:
+                error_msg += f", reason: {health.message}"
+            exit_code = getattr(health, "exit_code", None)
+            if isinstance(exit_code, int):
+                error_msg += f", exit_code={exit_code}"
+            error_msg += ")"
+            return TransitionDecision(
+                status=new_status,
+                finished_at=now,
+                state=state,
+                note="worker-dead",
+                error_message=error_msg,
+            )
+
         if inner_status == "paused":
             state = ensure_reason_summary(state, status=FlowRunStatus.PAUSED)
             return TransitionDecision(
@@ -65,26 +89,6 @@ def resolve_flow_transition(
                 finished_at=now,
                 state=state,
                 note="engine-completed",
-            )
-
-        # 2) Worker liveness overrides for active flows (only if engine not completed).
-        if not health.is_alive:
-            new_status = FlowRunStatus.FAILED
-            state = ensure_reason_summary(
-                state, status=new_status, default="Worker died"
-            )
-            error_msg = f"Worker died (status={health.status}"
-            if health.pid:
-                error_msg += f", pid={health.pid}"
-            if health.message:
-                error_msg += f", reason: {health.message}"
-            error_msg += ")"
-            return TransitionDecision(
-                status=new_status,
-                finished_at=now,
-                state=state,
-                note="worker-dead",
-                error_message=error_msg,
             )
 
         return TransitionDecision(

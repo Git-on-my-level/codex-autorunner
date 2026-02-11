@@ -94,6 +94,65 @@ def test_dead_worker_while_running_populates_error_message(
     assert events[-1].data.get("error") == recovered.error_message
 
 
+def test_dead_worker_flow_failed_event_includes_last_app_event(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    record = store.create_flow_run(
+        run_id="run-2b",
+        flow_type="ticket_flow",
+        input_data={},
+        state={"ticket_engine": {"status": "paused"}},
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state={"ticket_engine": {"status": "paused"}},
+    )
+    store.create_event(
+        event_id="app-last",
+        run_id=record.id,
+        event_type=FlowEventType.APP_SERVER_EVENT,
+        data={
+            "message": {
+                "method": "outputDelta",
+                "params": {"turn_id": "turn-123"},
+            }
+        },
+    )
+
+    def fake_health_dead(repo_root, run_id):
+        return SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=54321,
+            message="worker PID not running",
+            artifact_path=tmp_path,
+            exit_code=137,
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health", fake_health_dead
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.FAILED
+    assert updated is True
+    assert locked is False
+    assert recovered.error_message is not None
+    assert "exit_code=137" in recovered.error_message
+
+    events = store.get_events_by_type(record.id, FlowEventType.FLOW_FAILED)
+    assert len(events) > 0
+    assert events[-1].data.get("last_app_event_method") == "outputDelta"
+    assert events[-1].data.get("last_turn_id") == "turn-123"
+
+
 def test_dead_worker_metadata_preserves_repo_root(monkeypatch, tmp_path: Path) -> None:
     from codex_autorunner.core.flows import worker_process
 
