@@ -2024,7 +2024,7 @@ def build_pma_routes() -> APIRouter:
         name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
         docs_dir = _pma_docs_dir(hub_root)
-        if name not in PMA_DOC_SET and not (docs_dir / name).exists():
+        if name not in PMA_DOC_SET:
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         content = body.get("content", "")
         if not isinstance(content, str):

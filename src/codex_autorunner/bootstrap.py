@@ -231,7 +231,9 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
                         should_copy = False
             if should_copy:
                 try:
-                    atomic_write(canonical_path, legacy_path.read_text(encoding="utf-8"))
+                    atomic_write(
+                        canonical_path, legacy_path.read_text(encoding="utf-8")
+                    )
                 except OSError:
                     pass
             try:

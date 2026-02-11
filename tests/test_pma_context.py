@@ -136,7 +136,9 @@ def test_truncation_applied_to_long_active_context(tmp_path: Path) -> None:
     """Test that long active_context.md content is truncated."""
     seed_hub_files(tmp_path, force=True)
 
-    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    active_context_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    )
     long_content = "y" * 2000
     active_context_path.write_text(long_content, encoding="utf-8")
 
@@ -166,7 +168,9 @@ def test_context_log_tail_lines(tmp_path: Path) -> None:
     """Test that only the last N lines of context_log.md are injected."""
     seed_hub_files(tmp_path, force=True)
 
-    context_log_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+    context_log_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+    )
     log_lines = ["line 1", "line 2", "line 3", "line 4", "line 5"]
     context_log_path.write_text("\n".join(log_lines), encoding="utf-8")
 
@@ -214,7 +218,9 @@ def test_context_log_tail_lines_one(tmp_path: Path) -> None:
     # Seed files with force=False to not overwrite config
     seed_hub_files(tmp_path, force=False)
 
-    context_log_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+    context_log_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+    )
     log_lines = ["line 1", "line 2", "line 3"]
     context_log_path.write_text("\n".join(log_lines), encoding="utf-8")
 
@@ -304,7 +310,9 @@ def test_active_context_line_count_reflected_in_metadata(tmp_path: Path) -> None
     """Test that the line count is correctly reflected in the budget metadata."""
     seed_hub_files(tmp_path, force=True)
 
-    active_context_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    active_context_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    )
     custom_content = "line 1\nline 2\nline 3"
     active_context_path.write_text(custom_content, encoding="utf-8")
 
