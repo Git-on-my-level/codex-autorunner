@@ -1278,6 +1278,14 @@ interface HubInboxItem {
   status?: string;
   item_type?: string;
   next_action?: string;
+  reason?: string;
+  run_state?: {
+    state?: string | null;
+    blocking_reason?: string | null;
+    current_ticket?: string | null;
+    last_progress_at?: string | null;
+    recommended_action?: string | null;
+  };
   dispatch?: {
     mode?: string;
     title?: string | null;
@@ -1305,21 +1313,30 @@ async function loadHubInbox(ctx?: RefreshContext): Promise<void> {
       : items
         .map((item) => {
           const dispatch = item.dispatch || item.message || {};
-          const title = dispatch.title || dispatch.mode || "Message";
+          const title = dispatch.title || dispatch.mode || item.reason || "Run requires attention";
           let excerpt = dispatch.body ? dispatch.body.slice(0, 160) : "";
+          if (!excerpt && item.run_state?.blocking_reason) {
+            excerpt = item.run_state.blocking_reason;
+          }
           if (item.failure_summary) {
             const failureLine = `Failure: ${item.failure_summary}`;
             excerpt = excerpt ? `${excerpt} · ${failureLine}` : failureLine;
           }
-          const nextActionLabel =
-            item.next_action === "reply_and_resume" ? "Next: Reply + resume run" : "";
+          const recommendedAction = item.run_state?.recommended_action || "";
+          const nextActionLabel = recommendedAction
+            ? `Next: ${recommendedAction}`
+            : item.next_action === "reply_and_resume"
+              ? "Next: Reply + resume run"
+              : "";
+          const stateLabel = item.run_state?.state || item.status || "attention";
+          const stateClass = stateLabel === "paused" ? "pill-warn" : "pill-caution";
           const repoLabel = item.repo_display_name || item.repo_id;
           const href = item.open_url || `/repos/${item.repo_id}/?tab=messages&run_id=${item.run_id}`;
           return `
             <a class="hub-inbox-item" href="${escapeHtml(resolvePath(href))}">
               <div class="hub-inbox-item-header">
                 <span class="hub-inbox-repo">${escapeHtml(repoLabel)}</span>
-                <span class="pill pill-small pill-warn">paused</span>
+                <span class="pill pill-small ${stateClass}">${escapeHtml(stateLabel)}</span>
               </div>
               <div class="hub-inbox-title">${escapeHtml(title)}</div>
               <div class="hub-inbox-excerpt muted small">${escapeHtml(excerpt)}</div>

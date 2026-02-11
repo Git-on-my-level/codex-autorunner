@@ -23,11 +23,11 @@ function setBadges(count) {
 }
 function itemTitle(item) {
     const payload = item.dispatch || item.message || {};
-    return payload.title || payload.mode || "Message";
+    return payload.title || payload.mode || item.reason || "Run requires attention";
 }
 function itemBody(item) {
     const payload = item.dispatch || item.message || {};
-    return payload.body || "";
+    return payload.body || item.run_state?.blocking_reason || "";
 }
 function renderList(items) {
     const listEl = document.getElementById("notification-list");
@@ -44,12 +44,18 @@ function renderList(items) {
         const repoLabel = item.repo_display_name || item.repo_id;
         const href = item.open_url || `/repos/${item.repo_id}/?tab=inbox&run_id=${item.run_id}`;
         const seq = item.seq ? `#${item.seq}` : "";
-        const nextAction = item.next_action === "reply_and_resume" ? "Next: Reply + resume run" : "";
+        const nextAction = item.run_state?.recommended_action
+            ? `Next: ${item.run_state.recommended_action}`
+            : item.next_action === "reply_and_resume"
+                ? "Next: Reply + resume run"
+                : "";
+        const stateLabel = item.run_state?.state || item.status || "attention";
+        const stateClass = stateLabel === "paused" ? "pill-warn" : "pill-caution";
         return `
         <div class="notification-item">
           <div class="notification-item-header">
             <span class="notification-repo">${escapeHtml(repoLabel)} <span class="muted">(${item.run_id.slice(0, 8)}${seq})</span></span>
-            <span class="pill pill-small pill-warn">paused</span>
+            <span class="pill pill-small ${stateClass}">${escapeHtml(stateLabel)}</span>
           </div>
           <div class="notification-title">${escapeHtml(title)}</div>
           <div class="notification-excerpt">${escapeHtml(excerpt)}</div>

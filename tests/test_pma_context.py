@@ -4,8 +4,14 @@ from pathlib import Path
 import yaml
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.core.pma_context import build_hub_snapshot, format_pma_prompt
+from codex_autorunner.core.pma_context import (
+    build_hub_snapshot,
+    format_pma_prompt,
+    get_active_context_auto_prune_meta,
+)
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
@@ -13,6 +19,42 @@ def _write_hub_config(hub_root: Path, data: dict) -> None:
     config_path = hub_root / ".codex-autorunner" / "config.yml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def _seed_paused_run(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+
+
+def _write_dispatch_history(
+    repo_root: Path, run_id: str, seq: int, *, mode: str = "pause"
+) -> None:
+    entry_dir = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / run_id
+        / "dispatch_history"
+        / f"{seq:04d}"
+    )
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    (entry_dir / "DISPATCH.md").write_text(
+        f"---\nmode: {mode}\ntitle: dispatch-{seq}\n---\n\nPlease review.\n",
+        encoding="utf-8",
+    )
 
 
 def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
@@ -337,6 +379,53 @@ def test_active_context_line_count_reflected_in_metadata(tmp_path: Path) -> None
     assert "current_lines='3'" in result
 
 
+def test_format_pma_prompt_auto_prunes_active_context_when_over_budget(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    active_context_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    )
+    context_log_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+    )
+    long_content = "\n".join(f"line {idx}" for idx in range(260))
+    active_context_path.write_text(long_content, encoding="utf-8")
+
+    _write_hub_config(
+        tmp_path,
+        {
+            "mode": "hub",
+            "pma": {
+                "docs_max_chars": 12000,
+                "active_context_max_lines": 50,
+                "context_log_tail_lines": 120,
+            },
+        },
+    )
+
+    result = format_pma_prompt(
+        "Base prompt", {"test": "data"}, "hello", hub_root=tmp_path
+    )
+
+    pruned_active = active_context_path.read_text(encoding="utf-8")
+    assert "Auto-pruned on" in pruned_active
+    assert "line 259" not in pruned_active
+
+    log_content = context_log_path.read_text(encoding="utf-8")
+    assert "## Snapshot:" in log_content
+    assert "line 259" in log_content
+
+    meta = get_active_context_auto_prune_meta(tmp_path)
+    assert meta is not None
+    assert meta["line_count_before"] == 260
+    assert meta["line_budget"] == 50
+
+    assert "<ACTIVE_CONTEXT_AUTO_PRUNE" in result
+    assert "triggered_now='true'" in result
+
+
 def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
     """Verify templates metadata is included in hub snapshots."""
     seed_hub_files(tmp_path, force=True)
@@ -382,3 +471,31 @@ def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
     assert repos[1]["trusted"] is False
     assert repos[1]["default_ref"] == "stable"
     assert "url" not in repos[0]
+
+
+def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None:
+    run_id = "66666666-6666-6666-6666-666666666666"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+    _write_dispatch_history(
+        hub_env.repo_root, run_id, seq=2, mode="invalid_mode"
+    )  # parseable frontmatter, invalid dispatch mode
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    inbox = snapshot.get("inbox") or []
+    assert len(inbox) == 1
+    item = inbox[0]
+    assert item["run_id"] == run_id
+    assert item["item_type"] == "run_state_attention"
+    assert item["seq"] == 2
+    assert item.get("dispatch") is None
+    assert "unreadable dispatch metadata" in (item.get("reason") or "").lower()
+    run_state = item.get("run_state") or {}
+    assert run_state.get("state") == "blocked"

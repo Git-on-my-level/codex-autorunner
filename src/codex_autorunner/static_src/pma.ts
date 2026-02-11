@@ -1,7 +1,7 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, resolvePath, getAuthToken, flash } from "./utils.js";
+import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js";
 import {
   createDocChat,
   type ChatConfig,
@@ -50,6 +50,11 @@ type PMADocInfo = {
 type PMADocsResponse = {
   docs: PMADocInfo[];
   active_context_max_lines?: number;
+  active_context_auto_prune?: {
+    last_auto_pruned_at?: string;
+    line_count_before?: number;
+    line_budget?: number;
+  } | null;
 };
 
 type PMADocContent = {
@@ -91,6 +96,7 @@ let pendingUploadNames: string[] = [];
 let currentDocName: string | null = null;
 const docsInfo: Map<string, PMADocInfo> = new Map();
 let isSavingDoc = false;
+let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
 type PMAView = "chat" | "memory";
 
 type PendingTurn = {
@@ -233,6 +239,7 @@ async function loadPMADocs(): Promise<void> {
       typeof payload?.active_context_max_lines === "number"
         ? payload.active_context_max_lines
         : 200;
+    activeContextAutoPrune = payload?.active_context_auto_prune || null;
     renderPMADocsMeta();
   } catch (err) {
     flash("Failed to load PMA docs", "error");
@@ -318,11 +325,29 @@ function renderPMADocsMeta(): void {
   const maxLines = activeContextMaxLines || 200;
   const percent = Math.min(100, Math.round((lineCount / maxLines) * 100));
   const statusClass = percent >= 90 ? "pill-warn" : percent >= 70 ? "pill-caution" : "pill-idle";
+  let autoPruneHtml = "";
+  const autoPrunedAt = activeContextAutoPrune?.last_auto_pruned_at;
+  if (typeof autoPrunedAt === "string" && autoPrunedAt) {
+    const before = typeof activeContextAutoPrune?.line_count_before === "number"
+      ? String(activeContextAutoPrune.line_count_before)
+      : "?";
+    const budget = typeof activeContextAutoPrune?.line_budget === "number"
+      ? String(activeContextAutoPrune.line_budget)
+      : String(maxLines);
+    autoPruneHtml = `
+      <div class="pma-docs-meta-item">
+        <span class="muted">Last auto-prune:</span>
+        <span class="pill pill-small pill-caution">${escapeHtml(autoPrunedAt)}</span>
+        <span class="muted small">(${escapeHtml(before)} -> ${escapeHtml(budget)} lines)</span>
+      </div>
+    `;
+  }
   metaEl.innerHTML = `
     <div class="pma-docs-meta-item">
       <span class="muted">Active context:</span>
       <span class="pill pill-small ${statusClass}">${lineCount} / ${maxLines} lines</span>
     </div>
+    ${autoPruneHtml}
   `;
 }
 

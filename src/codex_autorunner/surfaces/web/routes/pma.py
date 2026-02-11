@@ -39,6 +39,7 @@ from ....core.pma_context import (
     PMA_MAX_TEXT,
     build_hub_snapshot,
     format_pma_prompt,
+    get_active_context_auto_prune_meta,
     load_pma_prompt,
 )
 from ....core.pma_dispatches import (
@@ -1994,6 +1995,7 @@ def build_pma_routes() -> APIRouter:
             "active_context_max_lines": int(
                 pma_config.get("active_context_max_lines", 200)
             ),
+            "active_context_auto_prune": get_active_context_auto_prune_meta(hub_root),
         }
 
     @router.get("/docs/{name}")
