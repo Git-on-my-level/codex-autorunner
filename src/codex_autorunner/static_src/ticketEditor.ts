@@ -35,6 +35,7 @@ type TicketData = {
 type FrontmatterState = {
   agent: string;
   done: boolean;
+  ticketId: string;
   title: string;
   model: string;
   reasoning: string;
@@ -56,6 +57,7 @@ type EditorState = {
 const DEFAULT_FRONTMATTER: FrontmatterState = {
   agent: "codex",
   done: false,
+  ticketId: "",
   title: "",
   model: "",
   reasoning: "",
@@ -302,6 +304,7 @@ function pushUndoState(): void {
   if (last && last.body === body && 
       last.frontmatter.agent === fm.agent &&
       last.frontmatter.done === fm.done &&
+      last.frontmatter.ticketId === fm.ticketId &&
       last.frontmatter.title === fm.title &&
       last.frontmatter.model === fm.model &&
       last.frontmatter.reasoning === fm.reasoning) {
@@ -362,6 +365,10 @@ function getFrontmatterFromForm(): FrontmatterState {
   return {
     agent: fmAgent?.value || "codex",
     done: fmDone?.checked || false,
+    ticketId:
+      state.lastSavedFrontmatter.ticketId ||
+      state.originalFrontmatter.ticketId ||
+      "",
     title: fmTitle?.value || "",
     model: fmModel?.value || "",
     reasoning: fmReasoning?.value || "",
@@ -385,9 +392,14 @@ function setFrontmatterForm(fm: FrontmatterState): void {
  */
 function extractFrontmatter(ticket: TicketData): FrontmatterState {
   const fm = ticket.frontmatter || {};
+  const extra =
+    typeof fm.extra === "object" && fm.extra ? (fm.extra as Record<string, unknown>) : {};
+  const ticketId =
+    (fm.ticket_id as string) || (extra.ticket_id as string) || "";
   return {
     agent: (fm.agent as string) || "codex",
     done: Boolean(fm.done),
+    ticketId,
     title: (fm.title as string) || "",
     model: (fm.model as string) || "",
     reasoning: (fm.reasoning as string) || "",
@@ -412,6 +424,7 @@ function buildTicketContent(): string {
 
   lines.push(`agent: ${yamlQuote(fm.agent)}`);
   lines.push(`done: ${fm.done}`);
+  if (fm.ticketId) lines.push(`ticket_id: ${yamlQuote(fm.ticketId)}`);
   if (fm.title) lines.push(`title: ${yamlQuote(fm.title)}`);
   if (fm.model) lines.push(`model: ${yamlQuote(fm.model)}`);
   if (fm.reasoning) lines.push(`reasoning: ${yamlQuote(fm.reasoning)}`);
@@ -527,6 +540,7 @@ function hasUnsavedChanges(): boolean {
     currentBody !== state.lastSavedBody ||
     currentFm.agent !== state.lastSavedFrontmatter.agent ||
     currentFm.done !== state.lastSavedFrontmatter.done ||
+    currentFm.ticketId !== state.lastSavedFrontmatter.ticketId ||
     currentFm.title !== state.lastSavedFrontmatter.title ||
     currentFm.model !== state.lastSavedFrontmatter.model ||
     currentFm.reasoning !== state.lastSavedFrontmatter.reasoning
@@ -569,12 +583,27 @@ async function performAutosave(): Promise<void> {
           title: fm.title || undefined,
           body: content.value,
         },
-      }) as { index?: number };
+      }) as TicketData;
 
       if (createRes?.index != null) {
         // Switch to edit mode now that ticket exists
         state.mode = "edit";
         state.ticketIndex = createRes.index;
+        state.ticketChatKey = createRes.chat_key || null;
+        const createdFm = (createRes.frontmatter || {}) as Record<string, unknown>;
+        const createdExtra =
+          typeof createdFm.extra === "object" && createdFm.extra
+            ? (createdFm.extra as Record<string, unknown>)
+            : {};
+        const createdTicketId =
+          typeof createdFm.ticket_id === "string"
+            ? createdFm.ticket_id
+            : typeof createdExtra.ticket_id === "string"
+              ? createdExtra.ticket_id
+              : "";
+        if (createdTicketId) {
+          fm.ticketId = createdTicketId;
+        }
         
         // If done is true, update to set done flag
         if (fm.done) {
@@ -585,7 +614,7 @@ async function performAutosave(): Promise<void> {
         }
         
         // Set up chat for this ticket
-        setTicketIndex(createRes.index);
+        setTicketIndex(createRes.index, state.ticketChatKey);
       }
     } else {
       // Update existing

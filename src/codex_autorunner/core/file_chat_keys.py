@@ -1,44 +1,42 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+from ..tickets.frontmatter import parse_markdown_frontmatter
 
-def _birthtime_ns_from_stat(stat_obj: object) -> int:
-    birth_ns = getattr(stat_obj, "st_birthtime_ns", None)
-    if isinstance(birth_ns, int) and birth_ns > 0:
-        return birth_ns
-    birth = getattr(stat_obj, "st_birthtime", None)
-    if isinstance(birth, (int, float)) and birth > 0:
-        return int(birth * 1_000_000_000)
-    return 0
+_TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
+
+
+def _sanitize_ticket_id(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    if not _TICKET_ID_RE.match(value):
+        return None
+    return value
 
 
 def ticket_instance_token(path: Path) -> str:
-    """Return a stable token for one ticket file instance.
+    """Return a stable ticket identity token.
 
-    The token is stable for in-place edits, but changes when the file is deleted
-    and recreated at the same path, preventing chat/thread state reuse.
+    Uses explicit frontmatter `ticket_id` so normal saves (which use atomic_write)
+    do not churn identity.
     """
     if not path.exists():
-        return "missing"
+        return "missing-ticket"
     try:
-        stat_obj = path.stat()
+        content = path.read_text(encoding="utf-8")
     except OSError:
-        return "missing"
-
-    inode = int(getattr(stat_obj, "st_ino", 0) or 0)
-    birth_ns = _birthtime_ns_from_stat(stat_obj)
-    if inode > 0 and birth_ns > 0:
-        return f"ino{inode:x}_birth{birth_ns:x}"
-    if inode > 0:
-        return f"ino{inode:x}"
-    if birth_ns > 0:
-        return f"birth{birth_ns:x}"
-
-    # Last-resort fallback for filesystems without inode/birthtime support.
-    mtime_ns = int(getattr(stat_obj, "st_mtime_ns", 0) or 0)
-    size = int(getattr(stat_obj, "st_size", 0) or 0)
-    return f"mtime{mtime_ns:x}_size{size:x}"
+        return "missing-ticket"
+    data, _ = parse_markdown_frontmatter(content)
+    ticket_id = _sanitize_ticket_id(data.get("ticket_id"))
+    if ticket_id:
+        return ticket_id
+    # Legacy fallback for older tickets that do not yet have ticket_id.
+    return f"legacy-{path.name.lower()}"
 
 
 def ticket_chat_scope(index: int, path: Path) -> str:
