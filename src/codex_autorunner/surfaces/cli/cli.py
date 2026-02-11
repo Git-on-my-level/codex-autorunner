@@ -3530,6 +3530,11 @@ def ticket_flow_resume(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force resume even when blocked without new reply/repo changes.",
+    ),
 ):
     """Resume a paused ticket_flow run."""
     engine = _require_repo_config(repo, hub)
@@ -3560,7 +3565,9 @@ def ticket_flow_resume(
     controller, agent_pool = _ticket_flow_controller(engine)
     try:
         try:
-            updated = asyncio.run(controller.resume_flow(normalized_run_id))
+            updated = asyncio.run(
+                controller.resume_flow(normalized_run_id, force=force)
+            )
         except ValueError as exc:
             _raise_exit(str(exc), cause=exc)
         _start_ticket_flow_worker(engine.repo_root, normalized_run_id)

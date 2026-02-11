@@ -1260,7 +1260,9 @@ You are the first ticket in a new ticket_flow run.
                 store.close()
 
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
-    async def resume_flow(http_request: Request, run_id: uuid.UUID):
+    async def resume_flow(
+        http_request: Request, run_id: uuid.UUID, force: bool = False
+    ):
         state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
@@ -1280,7 +1282,10 @@ You are the first ticket in a new ticket_flow run.
                     },
                 )
 
-        updated = await controller.resume_flow(run_id)
+        try:
+            updated = await controller.resume_flow(run_id, force=force)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _reap_dead_worker(run_id, state)
         _start_flow_worker(repo_root, run_id, state)
 

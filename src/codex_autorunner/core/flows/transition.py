@@ -125,6 +125,7 @@ def resolve_flow_transition(
             engine.pop("reason", None)
             engine.pop("reason_details", None)
             engine.pop("reason_code", None)
+            engine.pop("pause_context", None)
             state.pop("reason_summary", None)
             engine["status"] = "running"
             state["ticket_engine"] = engine

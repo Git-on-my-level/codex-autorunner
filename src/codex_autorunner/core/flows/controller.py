@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
 from ...manifest import ManifestError, load_manifest
+from ..git_utils import run_git
 from ..lifecycle_events import LifecycleEventEmitter
 from ..utils import find_repo_root
 from .definition import FlowDefinition
@@ -31,6 +32,7 @@ def _find_hub_root(repo_root: Optional[Path] = None) -> Optional[Path]:
 
 
 _logger = logging.getLogger(__name__)
+_RESUME_SIGNAL_REQUIRED_REASON_CODES = {"needs_user_fix", "infra_error", "loop_no_diff"}
 
 
 class FlowController:
@@ -138,7 +140,7 @@ class FlowController:
             raise RuntimeError(f"Failed to get record for run {run_id}")
         return updated
 
-    async def resume_flow(self, run_id: str) -> FlowRunRecord:
+    async def resume_flow(self, run_id: str, *, force: bool = False) -> FlowRunRecord:
         async with self._lock:
             record = self.store.get_flow_run(run_id)
             if not record:
@@ -154,6 +156,22 @@ class FlowController:
                 return cleared
             state = dict(record.state or {})
             engine = state.get("ticket_engine")
+            if (
+                record.flow_type == "ticket_flow"
+                and not force
+                and isinstance(engine, dict)
+                and str(engine.get("reason_code") or "")
+                in _RESUME_SIGNAL_REQUIRED_REASON_CODES
+            ):
+                has_new_reply = self._has_new_user_reply_signal(
+                    run_id=run_id, input_data=record.input_data
+                )
+                has_repo_change = self._repo_changed_since_pause(engine)
+                if not has_new_reply and not has_repo_change:
+                    raise ValueError(
+                        "Run is paused on a blocking condition. Provide a new /flow reply, "
+                        "change repository state, or resume with force."
+                    )
             if isinstance(engine, dict):
                 engine = dict(engine)
                 if engine.get("reason_code") == "max_turns":
@@ -162,6 +180,7 @@ class FlowController:
                 engine.pop("reason", None)
                 engine.pop("reason_details", None)
                 engine.pop("reason_code", None)
+                engine.pop("pause_context", None)
                 state["ticket_engine"] = engine
             state.pop("reason_summary", None)
             # Clear stale failure diagnostics when resuming a run.
@@ -179,6 +198,53 @@ class FlowController:
             if not updated:
                 raise RuntimeError(f"Failed to get record for run {run_id}")
             return updated
+
+    def _repo_root(self) -> Optional[Path]:
+        if not self.db_path:
+            return None
+        return self.db_path.parent.parent
+
+    def _repo_fingerprint(self) -> Optional[str]:
+        repo_root = self._repo_root()
+        if repo_root is None:
+            return None
+        try:
+            head_proc = run_git(["rev-parse", "HEAD"], cwd=repo_root, check=True)
+            status_proc = run_git(["status", "--porcelain"], cwd=repo_root, check=True)
+            head = (head_proc.stdout or "").strip()
+            status = (status_proc.stdout or "").strip()
+            if not head:
+                return None
+            return f"{head}\n{status}"
+        except Exception:
+            return None
+
+    def _has_new_user_reply_signal(
+        self, *, run_id: str, input_data: dict[str, Any]
+    ) -> bool:
+        repo_root = self._repo_root()
+        if repo_root is None:
+            return False
+        runs_dir_raw = input_data.get("runs_dir")
+        runs_dir = (
+            Path(runs_dir_raw)
+            if isinstance(runs_dir_raw, str) and runs_dir_raw
+            else Path(".codex-autorunner/runs")
+        )
+        run_dir = repo_root / runs_dir / run_id
+        return (run_dir / "USER_REPLY.md").exists()
+
+    def _repo_changed_since_pause(self, engine: dict[str, Any]) -> bool:
+        pause_context = engine.get("pause_context")
+        if not isinstance(pause_context, dict):
+            return False
+        paused_fingerprint = pause_context.get("repo_fingerprint")
+        if not isinstance(paused_fingerprint, str) or not paused_fingerprint:
+            return False
+        current_fingerprint = self._repo_fingerprint()
+        if not isinstance(current_fingerprint, str):
+            return False
+        return paused_fingerprint != current_fingerprint
 
     def get_status(self, run_id: str) -> Optional[FlowRunRecord]:
         return self.store.get_flow_run(run_id)

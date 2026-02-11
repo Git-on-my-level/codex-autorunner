@@ -539,9 +539,13 @@ class FlowCommands(SharedHelpers):
                 store.close()
             if error is None:
                 controller = _get_ticket_controller(repo_root)
-                updated = await controller.resume_flow(record.id)
-                _spawn_flow_worker(repo_root, updated.id)
-                notice = "Resumed."
+                try:
+                    updated = await controller.resume_flow(record.id)
+                except ValueError as exc:
+                    error = str(exc)
+                else:
+                    _spawn_flow_worker(repo_root, updated.id)
+                    notice = "Resumed."
         elif action == "stop":
             store = _load_flow_store(repo_root)
             try:
@@ -1478,8 +1482,18 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
 
+        force = self._has_flag(argv, "--force")
         controller = _get_ticket_controller(repo_root)
-        updated = await controller.resume_flow(record.id)
+        try:
+            updated = await controller.resume_flow(record.id, force=force)
+        except ValueError as exc:
+            await self._send_message(
+                message.chat_id,
+                str(exc),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         _spawn_flow_worker(repo_root, updated.id)
         await self._send_message(
             message.chat_id,

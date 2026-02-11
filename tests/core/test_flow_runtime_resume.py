@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any, List
 
@@ -11,20 +12,47 @@ from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 
 
 def _make_controller(
-    tmp_path: Path, steps: dict[str, Any], initial_step: str | None = None
+    tmp_path: Path,
+    steps: dict[str, Any],
+    initial_step: str | None = None,
+    *,
+    flow_type: str = "test-flow",
 ) -> FlowController:
     definition = FlowDefinition(
-        flow_type="test-flow",
+        flow_type=flow_type,
         initial_step=initial_step or list(steps.keys())[0],
         steps=steps,
     )
     controller = FlowController(
         definition=definition,
-        db_path=tmp_path / "flows.db",
-        artifacts_root=tmp_path / "artifacts",
+        db_path=tmp_path / ".codex-autorunner" / "flows.db",
+        artifacts_root=tmp_path / ".codex-autorunner" / "flows",
     )
     controller.initialize()
     return controller
+
+
+def _init_git_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+    (path / "README.md").write_text("seed\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"], cwd=path, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True
+    )
 
 
 @pytest.mark.asyncio
@@ -172,6 +200,74 @@ async def test_resume_flow_rejects_active_run(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         await controller.resume_flow(record.id)
+
+
+@pytest.mark.asyncio
+async def test_ticket_flow_resume_requires_signal_or_force(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+
+    async def step(_record, _input):
+        return StepOutcome.complete()
+
+    controller = _make_controller(tmp_path, {"step": step}, flow_type="ticket_flow")
+    run_id = "run-blocked"
+    record = await controller.start_flow(input_data={}, run_id=run_id)
+
+    fingerprint = controller._repo_fingerprint()
+    assert isinstance(fingerprint, str)
+    blocked_state = {
+        "ticket_engine": {
+            "status": "paused",
+            "reason_code": "loop_no_diff",
+            "pause_context": {
+                "paused_reply_seq": 0,
+                "repo_fingerprint": fingerprint,
+            },
+        }
+    }
+    controller.store.update_flow_run_status(
+        run_id=record.id, status=FlowRunStatus.PAUSED, state=blocked_state
+    )
+
+    with pytest.raises(ValueError):
+        await controller.resume_flow(record.id)
+
+    reply_path = tmp_path / ".codex-autorunner" / "runs" / run_id / "USER_REPLY.md"
+    reply_path.parent.mkdir(parents=True, exist_ok=True)
+    reply_path.write_text("unblock\n", encoding="utf-8")
+
+    resumed = await controller.resume_flow(record.id)
+    assert resumed.status == FlowRunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_ticket_flow_force_resume_bypasses_signal_check(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+
+    async def step(_record, _input):
+        return StepOutcome.complete()
+
+    controller = _make_controller(tmp_path, {"step": step}, flow_type="ticket_flow")
+    run_id = "run-force"
+    record = await controller.start_flow(input_data={}, run_id=run_id)
+    fingerprint = controller._repo_fingerprint()
+    assert isinstance(fingerprint, str)
+    blocked_state = {
+        "ticket_engine": {
+            "status": "paused",
+            "reason_code": "infra_error",
+            "pause_context": {
+                "paused_reply_seq": 0,
+                "repo_fingerprint": fingerprint,
+            },
+        }
+    }
+    controller.store.update_flow_run_status(
+        run_id=record.id, status=FlowRunStatus.PAUSED, state=blocked_state
+    )
+
+    resumed = await controller.resume_flow(record.id, force=True)
+    assert resumed.status == FlowRunStatus.RUNNING
 
 
 @pytest.mark.asyncio

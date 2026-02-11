@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +44,29 @@ def _corrupt_ticket_frontmatter(path: Path) -> None:
     # Make 'done' invalid.
     raw = raw.replace("done: false", "done: notabool")
     path.write_text(raw, encoding="utf-8")
+
+
+def _init_git_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+    (path / "README.md").write_text("seed\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"], cwd=path, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True
+    )
 
 
 def test_ticket_run_config_default_max_turns() -> None:
@@ -705,3 +729,43 @@ async def test_ticket_runner_archives_user_reply_before_turn(tmp_path: Path) -> 
 
     archived_reply = run_dir / "reply_history" / "0001" / "USER_REPLY.md"
     assert archived_reply.exists()
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_pauses_after_two_no_diff_turns(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    _init_git_repo(workspace_root)
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        # Intentionally no file changes.
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv1",
+            turn_id="t1",
+            text="still blocked",
+        )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=FakeAgentPool(handler),
+    )
+
+    first = await runner.step({})
+    assert first.status == "continue"
+    assert first.state.get("loop_guard", {}).get("no_change_count") == 1
+
+    second = await runner.step(first.state)
+    assert second.status == "paused"
+    assert second.state.get("reason_code") == "loop_no_diff"
+    assert second.dispatch is not None
+    assert second.dispatch.dispatch.mode == "pause"

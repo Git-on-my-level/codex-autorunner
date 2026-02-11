@@ -37,7 +37,7 @@ class _ControllerStub:
         self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
 
-    async def resume_flow(self, run_id: str) -> SimpleNamespace:
+    async def resume_flow(self, run_id: str, *, force: bool = False) -> SimpleNamespace:
         self.resume_calls.append(run_id)
         return SimpleNamespace(id=run_id)
 

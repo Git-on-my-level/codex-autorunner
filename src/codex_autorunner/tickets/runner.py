@@ -30,6 +30,7 @@ _logger = logging.getLogger(__name__)
 
 WORKSPACE_DOC_MAX_CHARS = 4000
 TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
+LOOP_NO_CHANGE_THRESHOLD = 2
 
 
 def _truncate_text_by_bytes(text: str, max_bytes: int) -> str:
@@ -328,6 +329,7 @@ class TicketRunner:
             state["ticket_turns"] = 0
             state.pop("last_agent_output", None)
             state.pop("lint", None)
+            state.pop("loop_guard", None)
         state.pop("commit", None)
 
         # Determine lint-retry mode early. When lint state is present, we allow the
@@ -339,6 +341,7 @@ class TicketRunner:
             state.pop("reason", None)
             state.pop("reason_details", None)
             state.pop("reason_code", None)
+            state.pop("pause_context", None)
 
         _lint_raw = state.get("lint")
         lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
@@ -477,6 +480,9 @@ class TicketRunner:
             lint_errors=lint_errors if lint_errors else None,
             reply_context=reply_context,
             previous_ticket_content=previous_ticket_content,
+            prior_no_change_turns=self._prior_no_change_turns(
+                state, safe_relpath(current_path, self._workspace_root)
+            ),
         )
 
         # Execute turn.
@@ -500,6 +506,7 @@ class TicketRunner:
         state["total_turns"] = total_turns
         state["ticket_turns"] = ticket_turns
 
+        repo_fingerprint_before_turn = self._repo_fingerprint()
         head_before_turn: Optional[str] = None
         try:
             head_proc = run_git(
@@ -557,6 +564,7 @@ class TicketRunner:
         state["last_agent_id"] = result.agent_id
         state["last_agent_conversation_id"] = result.conversation_id
         state["last_agent_turn_id"] = result.turn_id
+        repo_fingerprint_after_turn = self._repo_fingerprint()
 
         # Best-effort: check whether the agent created a commit and whether the
         # working tree is clean, before any runner-driven checkpoint commit.
@@ -662,6 +670,80 @@ class TicketRunner:
                 except Exception:
                     # Best-effort; do not block ticket execution on event emission.
                     pass
+
+        # Loop guard: if the same ticket runs with no repository state change for
+        # LOOP_NO_CHANGE_THRESHOLD consecutive successful turns, pause and ask for
+        # user intervention instead of spinning.
+        loop_guard_raw = state.get("loop_guard")
+        loop_guard_state: dict[str, Any] = (
+            dict(loop_guard_raw) if isinstance(loop_guard_raw, dict) else {}
+        )
+        current_ticket_id = safe_relpath(current_path, self._workspace_root)
+        no_repo_change_this_turn = (
+            isinstance(repo_fingerprint_before_turn, str)
+            and isinstance(repo_fingerprint_after_turn, str)
+            and repo_fingerprint_before_turn == repo_fingerprint_after_turn
+        )
+        lint_retry_mode = bool(lint_errors)
+        if lint_retry_mode:
+            state.pop("loop_guard", None)
+        else:
+            prev_ticket = loop_guard_state.get("ticket")
+            prev_count = int(loop_guard_state.get("no_change_count") or 0)
+            if (
+                no_repo_change_this_turn
+                and isinstance(prev_ticket, str)
+                and prev_ticket == current_ticket_id
+            ):
+                no_change_count = prev_count + 1
+            elif no_repo_change_this_turn:
+                no_change_count = 1
+            else:
+                no_change_count = 0
+            state["loop_guard"] = {
+                "ticket": current_ticket_id,
+                "no_change_count": no_change_count,
+            }
+
+            if no_change_count >= LOOP_NO_CHANGE_THRESHOLD:
+                reason = "Ticket appears stuck: same ticket ran twice with no repository diff changes."
+                details = (
+                    "Runner paused to avoid repeated no-op work.\n\n"
+                    f"Ticket: {current_ticket_id}\n"
+                    f"Consecutive no-change turns: {no_change_count}\n\n"
+                    "Please provide unblock guidance via reply, or change repository state, then resume. "
+                    "Use force resume only if you intentionally want to retry unchanged."
+                )
+                dispatch_record = self._create_runner_pause_dispatch(
+                    outbox_paths=outbox_paths,
+                    state=state,
+                    title="Ticket loop detected (no repo diff change)",
+                    body=details,
+                    ticket_id=current_ticket_id,
+                )
+                pause_context: dict[str, Any] = {
+                    "paused_reply_seq": int(state.get("reply_seq") or 0),
+                }
+                fingerprint = self._repo_fingerprint()
+                if isinstance(fingerprint, str):
+                    pause_context["repo_fingerprint"] = fingerprint
+                state["pause_context"] = pause_context
+                state["status"] = "paused"
+                state["reason"] = reason
+                state["reason_code"] = "loop_no_diff"
+                state["reason_details"] = details
+                return TicketResult(
+                    status="paused",
+                    state=state,
+                    reason=reason,
+                    reason_details=details,
+                    dispatch=dispatch_record,
+                    current_ticket=current_ticket_id,
+                    agent_output=result.text,
+                    agent_id=result.agent_id,
+                    agent_conversation_id=result.conversation_id,
+                    agent_turn_id=result.turn_id,
+                )
 
         # Post-turn: ticket frontmatter must remain valid.
         updated_fm, fm_errors = self._recheck_ticket_frontmatter(current_path)
@@ -869,6 +951,13 @@ class TicketRunner:
         state["status"] = "paused"
         state["reason"] = reason
         state["reason_code"] = reason_code
+        pause_context: dict[str, Any] = {
+            "paused_reply_seq": int(state.get("reply_seq") or 0),
+        }
+        fingerprint = self._repo_fingerprint()
+        if isinstance(fingerprint, str):
+            pause_context["repo_fingerprint"] = fingerprint
+        state["pause_context"] = pause_context
         if reason_details:
             state["reason_details"] = reason_details
         else:
@@ -885,6 +974,55 @@ class TicketRunner:
                 else None
             ),
         )
+
+    def _repo_fingerprint(self) -> Optional[str]:
+        """Return a stable snapshot of HEAD + porcelain status."""
+        try:
+            head_proc = run_git(
+                ["rev-parse", "HEAD"], cwd=self._workspace_root, check=True
+            )
+            status_proc = run_git(
+                ["status", "--porcelain"], cwd=self._workspace_root, check=True
+            )
+            head = (head_proc.stdout or "").strip()
+            status = (status_proc.stdout or "").strip()
+            if not head:
+                return None
+            return f"{head}\n{status}"
+        except Exception:
+            return None
+
+    def _create_runner_pause_dispatch(
+        self,
+        *,
+        outbox_paths,
+        state: dict[str, Any],
+        title: str,
+        body: str,
+        ticket_id: str,
+    ):
+        """Create and archive a runner-generated pause dispatch."""
+        try:
+            outbox_paths.dispatch_path.write_text(
+                f"---\nmode: pause\ntitle: {title}\n---\n\n{body}\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            return None
+        next_seq = int(state.get("dispatch_seq") or 0) + 1
+        dispatch_record, dispatch_errors = archive_dispatch(
+            outbox_paths,
+            next_seq=next_seq,
+            ticket_id=ticket_id,
+            repo_id=self._repo_id,
+            run_id=self._run_id,
+            origin="runner",
+        )
+        if dispatch_errors:
+            return None
+        if dispatch_record is not None:
+            state["dispatch_seq"] = dispatch_record.seq
+        return dispatch_record
 
     def _build_reply_context(self, *, reply_paths, last_seq: int) -> tuple[str, int]:
         """Render new human replies (reply_history) into a prompt block.
@@ -978,6 +1116,7 @@ class TicketRunner:
         lint_errors: Optional[list[str]],
         reply_context: Optional[str] = None,
         previous_ticket_content: Optional[str] = None,
+        prior_no_change_turns: int = 0,
     ) -> str:
         rel_ticket = safe_relpath(ticket_path, self._workspace_root)
         rel_dispatch_dir = safe_relpath(outbox_paths.dispatch_dir, self._workspace_root)
@@ -1016,6 +1155,16 @@ class TicketRunner:
             )
         else:
             lint_block = ""
+
+        loop_guard_block = ""
+        if prior_no_change_turns > 0:
+            loop_guard_block = (
+                "<CAR_LOOP_GUARD>\n"
+                "Previous turn(s) on this ticket produced no repository diff change.\n"
+                f"Consecutive no-change turns so far: {prior_no_change_turns}\n"
+                "If you are still blocked, write DISPATCH.md with mode: pause instead of retrying unchanged steps.\n"
+                "</CAR_LOOP_GUARD>"
+            )
 
         reply_block = ""
         if reply_context:
@@ -1132,6 +1281,7 @@ class TicketRunner:
                 f"{checkpoint_block}\n\n"
                 f"{commit_block}\n\n"
                 f"{lint_block}\n\n"
+                f"{loop_guard_block}\n\n"
                 "<CAR_WORKSPACE_DOCS>\n"
                 f"{sections['workspace_block']}\n"
                 "</CAR_WORKSPACE_DOCS>\n\n"
@@ -1161,3 +1311,12 @@ class TicketRunner:
             ],
         )
         return prompt
+
+    def _prior_no_change_turns(self, state: dict[str, Any], ticket_id: str) -> int:
+        loop_guard_raw = state.get("loop_guard")
+        loop_guard_state = (
+            dict(loop_guard_raw) if isinstance(loop_guard_raw, dict) else {}
+        )
+        if loop_guard_state.get("ticket") != ticket_id:
+            return 0
+        return int(loop_guard_state.get("no_change_count") or 0)
