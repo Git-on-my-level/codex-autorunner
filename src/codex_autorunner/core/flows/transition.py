@@ -50,6 +50,14 @@ def resolve_flow_transition(
 
     # 1) Inner engine completion takes priority over worker liveness for active flows.
     if record.status == FlowRunStatus.RUNNING:
+        if inner_status == "completed":
+            return TransitionDecision(
+                status=FlowRunStatus.COMPLETED,
+                finished_at=now,
+                state=state,
+                note="engine-completed",
+            )
+
         # A dead worker for a RUNNING flow is always abnormal, even if stale
         # ticket_engine state still says "paused" from a prior cycle.
         if not health.is_alive:
@@ -81,14 +89,6 @@ def resolve_flow_transition(
                 finished_at=None,
                 state=state,
                 note="engine-paused",
-            )
-
-        if inner_status == "completed":
-            return TransitionDecision(
-                status=FlowRunStatus.COMPLETED,
-                finished_at=now,
-                state=state,
-                note="engine-completed",
             )
 
         return TransitionDecision(
