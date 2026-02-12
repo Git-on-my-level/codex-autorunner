@@ -5,7 +5,7 @@ CAR provides a set of low-opinion agent coordination tools for you to run long c
 
 What this looks like in practice:
 - You write a plan, or generate a plan by chatting with your favorite AI
-- You convert the plan (or ask an AI to convert it for you) into CAR compatible tickets (markdown with some frontmatter)
+- You convert the plan (or ask an AI to convert it for you) into CAR compatible tickets (markdown with some frontmatter). Use the [CAR Ticket Skill](docs/car-ticket-skill.md) with ChatGPT, Claude, Codex, or your preferred assistant.
 - Go off and do something else, no need to babysit the agents, they will notify you if they need your input
 
 ![CAR Web Hub Screenshot](docs/screenshots/hub.png)
