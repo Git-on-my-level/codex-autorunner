@@ -31,8 +31,10 @@ done: false
 
 Required (linted):
 
-- `agent`: non-empty string
+- `agent`: registered CAR agent id for this repo (for example `codex`, `opencode`) or the special value `user`
 - `done`: boolean
+
+Do not use assistant product names as `agent` values (for example `chatgpt` or `claude`) unless those exact ids are configured in CAR for this repo.
 
 Common optional fields:
 
