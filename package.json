@@ -26,6 +26,6 @@
     "html-validate": "^10.7.0",
     "jsdom": "^28.0.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0"
+    "typescript-eslint": "^8.55.0"
   }
 }
