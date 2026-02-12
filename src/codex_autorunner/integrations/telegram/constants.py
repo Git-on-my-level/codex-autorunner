@@ -121,7 +121,7 @@ VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 VALID_AGENT_VALUES = {"codex", "opencode"}
 DEFAULT_AGENT_MODELS = {
     "codex": "gpt-5.3-codex",
-    "opencode": "zai-coding-plan/glm-4.7",
+    "opencode": "zai-coding-plan/glm-5",
 }
 LEGACY_DEFAULT_AGENT_MODELS = DEFAULT_AGENT_MODELS
 CONTEXT_BASELINE_TOKENS = 12000

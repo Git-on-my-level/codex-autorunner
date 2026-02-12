@@ -393,7 +393,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "review": {
         "enabled": True,
         "agent": "opencode",
-        "model": "zai-coding-plan/glm-4.7",
+        "model": "zai-coding-plan/glm-5",
         "subagent_agent": "subagent",
         "subagent_model": "zai-coding-plan/glm-4.7-flashx",
         "reasoning": None,
