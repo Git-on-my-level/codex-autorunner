@@ -145,7 +145,7 @@ repo_defaults:
     enabled: true
     agent: opencode
     # Model for parent coordinator agent
-    model: zai-coding-plan/glm-4.7
+    model: zai-coding-plan/glm-5
     # Agent ID to use for subtasks (bucket reviews, pruning agents)
     subagent_agent: subagent
     # Model to use for subagents (default to model if not specified)

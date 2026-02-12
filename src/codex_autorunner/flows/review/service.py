@@ -664,7 +664,7 @@ class ReviewService:
             ) from exc
 
         state["model"] = (
-            payload.get("model") or review_cfg.get("model") or "zai-coding-plan/glm-4.7"
+            payload.get("model") or review_cfg.get("model") or "zai-coding-plan/glm-5"
         )
         state["reasoning"] = payload.get("reasoning") or review_cfg.get("reasoning")
         state["max_wallclock_seconds"] = payload.get(
