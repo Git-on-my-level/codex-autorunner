@@ -255,7 +255,7 @@
       "agent": "opencode",
       "enabled": true,
       "max_wallclock_seconds": null,
-      "model": "zai-coding-plan/glm-4.7",
+      "model": "zai-coding-plan/glm-5",
       "reasoning": null,
       "subagent_agent": "subagent",
       "subagent_model": "zai-coding-plan/glm-4.7-flashx"
