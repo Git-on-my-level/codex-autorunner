@@ -21,7 +21,7 @@ from .config import load_hub_config, load_repo_config
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
 from .flows.models import FlowRunRecord, FlowRunStatus
 from .flows.store import FlowStore
-from .flows.worker_process import check_worker_health
+from .flows.worker_process import check_worker_health, read_worker_crash_info
 from .hub import HubSupervisor
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_summary import build_ticket_flow_summary
@@ -60,7 +60,7 @@ Web UI map (user perspective):
 Ticket planning constraints (state machine):
 - Ticket flow processes `.codex-autorunner/tickets/TICKET-###*.md` in ascending numeric order.
 - On each turn it picks the first ticket where `done != true`; when that ticket is completed, it advances to the next.
-- `depends_on` frontmatter is not supported; filename order is the only execution contract.
+- `depends_on` frontmatter is ignored by runtime ordering; filename order remains the execution contract.
 - If prerequisites are discovered late, reorder/split tickets so prerequisite work appears earlier.
 
 What each ticket agent turn can already see:
@@ -823,6 +823,30 @@ def build_ticket_flow_run_state(
             health = None
             dead_worker = False
 
+    crash_info = None
+    crash_summary = None
+    if dead_worker:
+        try:
+            crash_info = read_worker_crash_info(repo_root, run_id)
+        except Exception:
+            crash_info = None
+        if isinstance(crash_info, dict):
+            parts: list[str] = []
+            exception = crash_info.get("exception")
+            if isinstance(exception, str) and exception.strip():
+                parts.append(exception.strip())
+            last_event = crash_info.get("last_event")
+            if isinstance(last_event, str) and last_event.strip():
+                parts.append(f"last_event={last_event.strip()}")
+            exit_code = crash_info.get("exit_code")
+            if isinstance(exit_code, int):
+                parts.append(f"exit_code={exit_code}")
+            signal = crash_info.get("signal")
+            if isinstance(signal, str) and signal.strip():
+                parts.append(f"signal={signal.strip()}")
+            if parts:
+                crash_summary = " | ".join(parts)
+
     state = "running"
     if record.status == FlowRunStatus.COMPLETED:
         state = "completed"
@@ -848,7 +872,7 @@ def build_ticket_flow_run_state(
 
     blocking_reason = None
     if state == "dead":
-        detail = health.message if health is not None else None
+        detail = crash_summary or (health.message if health is not None else None)
         blocking_reason = (
             f"Worker not running ({detail})"
             if isinstance(detail, str) and detail.strip()
@@ -889,6 +913,15 @@ def build_ticket_flow_run_state(
         "recommended_actions": recommended_actions,
         "attention_required": attention_required,
         "worker_status": worker_status,
+        "crash": (
+            {
+                "summary": crash_summary,
+                "open_url": f"/repos/{repo_id}/api/flows/{run_id}/artifact?kind=worker_crash",
+                "path": f".codex-autorunner/flows/{run_id}/crash.json",
+            }
+            if isinstance(crash_info, dict)
+            else None
+        ),
         "flow_status": record.status.value,
         "repo_id": repo_id,
         "run_id": run_id,

@@ -6,11 +6,13 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Literal, Optional, Tuple
+from typing import IO, Any, Literal, Optional, Tuple
 
 _WORKER_METADATA_FILENAME = "worker.json"
 _WORKER_EXIT_FILENAME = "worker.exit.json"
+_WORKER_CRASH_FILENAME = "crash.json"
 _MAX_TAIL_BYTES = 32_768
 
 
@@ -23,6 +25,8 @@ class FlowWorkerHealth:
     message: Optional[str] = None
     exit_code: Optional[int] = None
     stderr_tail: Optional[str] = None
+    crash_path: Optional[Path] = None
+    crash_info: Optional[dict[str, Any]] = None
 
     @property
     def is_alive(self) -> bool:
@@ -53,6 +57,22 @@ def _worker_metadata_path(artifacts_dir: Path) -> Path:
 
 def _worker_exit_path(artifacts_dir: Path) -> Path:
     return artifacts_dir / _WORKER_EXIT_FILENAME
+
+
+def _worker_crash_path(artifacts_dir: Path) -> Path:
+    return artifacts_dir / _WORKER_CRASH_FILENAME
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _signal_from_returncode(returncode: Optional[int]) -> Optional[str]:
+    if not isinstance(returncode, int):
+        return None
+    if returncode >= 0:
+        return None
+    return f"SIG{-returncode}"
 
 
 def _tail_file(
@@ -117,6 +137,66 @@ def write_worker_exit_info(
         )
     except Exception:
         pass
+
+
+def write_worker_crash_info(
+    repo_root: Path,
+    run_id: str,
+    *,
+    worker_pid: Optional[int] = None,
+    exit_code: Optional[int] = None,
+    signal: Optional[str] = None,
+    last_event: Optional[str] = None,
+    stderr_tail: Optional[str] = None,
+    exception: Optional[str] = None,
+    stack_trace: Optional[str] = None,
+    artifacts_root: Optional[Path] = None,
+) -> Optional[Path]:
+    try:
+        normalized_run_id = _normalized_run_id(run_id)
+        artifacts_dir = _worker_artifacts_dir(
+            repo_root, normalized_run_id, artifacts_root
+        )
+    except Exception:
+        return None
+    if stderr_tail is None:
+        stderr_tail = _tail_file(artifacts_dir / "worker.err.log")
+    payload: dict[str, Any] = {
+        "timestamp": _iso_now(),
+        "worker_pid": worker_pid,
+        "exit_code": exit_code,
+        "signal": signal or _signal_from_returncode(exit_code),
+        "last_event": last_event,
+        "stderr_tail": stderr_tail,
+        "exception": exception,
+        "stack_trace": stack_trace,
+    }
+    crash_path = _worker_crash_path(artifacts_dir)
+    try:
+        crash_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        return None
+    return crash_path
+
+
+def read_worker_crash_info(
+    repo_root: Path,
+    run_id: str,
+    *,
+    artifacts_root: Optional[Path] = None,
+) -> Optional[dict[str, Any]]:
+    try:
+        artifacts_dir = _worker_artifacts_dir(repo_root, run_id, artifacts_root)
+    except Exception:
+        return None
+    crash_path = _worker_crash_path(artifacts_dir)
+    if not crash_path.exists():
+        return None
+    try:
+        raw = json.loads(crash_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return raw if isinstance(raw, dict) else None
 
 
 def _build_worker_cmd(entrypoint: str, run_id: str, repo_root: Path) -> list[str]:
@@ -259,6 +339,8 @@ def check_worker_health(
     if not _pid_is_running(pid):
         exit_code = None
         stderr_tail = None
+        crash_info = None
+        crash_path = _worker_crash_path(artifacts_dir)
         if exit_path.exists():
             try:
                 exit_data = json.loads(exit_path.read_text(encoding="utf-8"))
@@ -277,6 +359,20 @@ def check_worker_health(
             except Exception:
                 exit_code = None
                 stderr_tail = None
+        crash_info = read_worker_crash_info(
+            repo_root, run_id, artifacts_root=artifacts_root
+        )
+        if isinstance(crash_info, dict):
+            crash_exit = crash_info.get("exit_code")
+            if exit_code is None and isinstance(crash_exit, int):
+                exit_code = crash_exit
+            crash_stderr = crash_info.get("stderr_tail")
+            if (
+                stderr_tail is None
+                and isinstance(crash_stderr, str)
+                and crash_stderr.strip()
+            ):
+                stderr_tail = crash_stderr.strip()
         if stderr_tail is None:
             stderr_tail = _tail_file(artifacts_dir / "worker.err.log")
         return FlowWorkerHealth(
@@ -287,6 +383,8 @@ def check_worker_health(
             message="worker PID not running",
             exit_code=exit_code,
             stderr_tail=stderr_tail,
+            crash_path=crash_path if crash_path.exists() else None,
+            crash_info=crash_info if isinstance(crash_info, dict) else None,
         )
 
     expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id, repo_root)
