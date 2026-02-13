@@ -975,9 +975,9 @@ class FilesCommands(SharedHelpers):
 
     def _image_storage_dir(self, workspace_path: str, *, pma_enabled: bool) -> Path:
         if pma_enabled:
-            pma_inbox = self._pma_inbox_dir()
-            if pma_inbox is not None:
-                return pma_inbox
+            pma_root = self._pma_root_dir()
+            if pma_root is not None:
+                return pma_root / "telegram-images"
         return (
             Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-images"
         )
