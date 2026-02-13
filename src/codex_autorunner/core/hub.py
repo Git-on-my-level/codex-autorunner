@@ -936,6 +936,10 @@ class HubSupervisor:
         if not worktree_path.exists():
             raise ValueError(f"Worktree path does not exist: {worktree_path}")
 
+        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
+        if runner:
+            runner.stop()
+
         if git_available(worktree_path) and not git_is_clean(worktree_path):
             raise ValueError(
                 f"Worktree has uncommitted changes; commit or stash before archiving"
