@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.cli import app
+from codex_autorunner.surfaces.cli.cli import PreflightCheck, PreflightReport
 from codex_autorunner.tickets.frontmatter import parse_markdown_frontmatter
 
 runner = CliRunner()
@@ -86,6 +87,18 @@ def test_hub_tickets_setup_pack_creates_final_tickets(
     monkeypatch.setattr(
         "codex_autorunner.surfaces.cli.cli.HubSupervisor.create_worktree",
         _fake_create_worktree,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.cli._ticket_flow_preflight",
+        lambda *_args, **_kwargs: PreflightReport(
+            checks=[
+                PreflightCheck(
+                    check_id="frontmatter",
+                    status="ok",
+                    message="ok",
+                )
+            ]
+        ),
     )
 
     result = runner.invoke(

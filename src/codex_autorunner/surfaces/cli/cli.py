@@ -3086,9 +3086,7 @@ def hub_tickets_setup_pack(
     - `car hub tickets setup-pack --base-repo ... --branch ... --zip ...`
     """
 
-    new_mode_requested = (
-        target_path is not None or from_zip is not None or bool(assign) or start
-    )
+    new_mode_requested = target_path is not None or from_zip is not None or bool(assign)
 
     if new_mode_requested:
         if target_path is None:

@@ -97,6 +97,8 @@ def _extract_ticket_pack(zip_path: Path, ticket_dir: Path) -> list[str]:
                     continue
                 if not base_name.lower().endswith(".md"):
                     continue
+                if parse_ticket_index(base_name) is None:
+                    continue
                 if base_name in seen:
                     raise TicketPackSetupError(
                         f"Duplicate file name in zip: {base_name}."
