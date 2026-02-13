@@ -513,7 +513,9 @@ async def test_flow_hub_overview_uses_latest_run_not_stale_active(
         flows_module,
         "load_manifest",
         lambda _path, _root: SimpleNamespace(
-            repos=[SimpleNamespace(id="base--extension-refactor", enabled=True, path=".")]
+            repos=[
+                SimpleNamespace(id="base--extension-refactor", enabled=True, path=".")
+            ]
         ),
     )
 

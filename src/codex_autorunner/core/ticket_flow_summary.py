@@ -9,8 +9,8 @@ from ..tickets.frontmatter import parse_markdown_frontmatter
 from ..tickets.lint import parse_ticket_index
 from .config import load_repo_config
 from .flows import FlowStore
-from .flows.models import FlowRunRecord
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
+from .flows.models import FlowRunRecord
 
 _PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.IGNORECASE)
 

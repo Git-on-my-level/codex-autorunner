@@ -12,6 +12,21 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
+# Ensure local clones/worktrees have git hooks wired so pre-commit checks run.
+# Skip this in CI where hooks are intentionally not configured.
+if [ -z "${CI:-}" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  HOOKS_PATH="$(git config --get core.hooksPath || true)"
+  case "$HOOKS_PATH" in
+    .githooks|*/.githooks)
+      ;;
+    *)
+      echo "Git hooks are not installed for this repo/worktree." >&2
+      echo "Run 'make hooks' (or 'make setup') to enable pre-commit checks." >&2
+      exit 1
+      ;;
+  esac
+fi
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1. Install dev deps via 'pip install -e .[dev]'." >&2
