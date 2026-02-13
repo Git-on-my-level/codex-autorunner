@@ -118,6 +118,58 @@ async def test_ticket_runner_pauses_when_no_tickets(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ticket_runner_recovers_when_current_ticket_path_is_stale(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+
+    renamed_ticket_path = ticket_dir / "TICKET-009-ALREADY-DONE.md"
+    _write_ticket(renamed_ticket_path, done=False)
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv",
+            turn_id="t1",
+            text="noop",
+        )
+    )
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    stale_state = {
+        "current_ticket": ".codex-autorunner/tickets/TICKET-009.md",
+        "ticket_turns": 3,
+        "last_agent_output": "stale output",
+        "lint": {"errors": ["old"], "retries": 1},
+        "commit": {"pending": True, "retries": 1},
+    }
+
+    result = await runner.step(stale_state)
+
+    assert result.status == "continue"
+    assert len(pool.requests) == 1
+    assert (
+        result.state.get("current_ticket")
+        == ".codex-autorunner/tickets/TICKET-009-ALREADY-DONE.md"
+    )
+    assert result.state.get("ticket_turns") == 1
+    assert result.state.get("last_agent_output") == "noop"
+    assert result.state.get("lint") is None
+    assert result.state.get("commit") is None
+
+
+@pytest.mark.asyncio
 async def test_ticket_runner_completes_when_all_tickets_done(tmp_path: Path) -> None:
     workspace_root = tmp_path
     ticket_dir = workspace_root / ".codex-autorunner" / "tickets"

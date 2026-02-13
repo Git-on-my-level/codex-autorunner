@@ -296,6 +296,21 @@ class TicketRunner:
             else None
         )
 
+        # The agent may rename/delete the current ticket file. If persisted state
+        # points at a path that no longer exists, clear stale per-ticket fields and
+        # reselect from current on-disk tickets.
+        if current_path is not None and not current_path.exists():
+            _logger.warning(
+                "Current ticket file no longer exists at %s; clearing stale current_ticket state.",
+                safe_relpath(current_path, self._workspace_root),
+            )
+            current_path = None
+            state.pop("current_ticket", None)
+            state.pop("ticket_turns", None)
+            state.pop("last_agent_output", None)
+            state.pop("lint", None)
+            state.pop("commit", None)
+
         # If current ticket is done, clear it unless we're in the middle of a
         # bounded "commit required" follow-up loop.
         if current_path and ticket_is_done(current_path) and not commit_pending:
