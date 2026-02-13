@@ -685,11 +685,9 @@ class HubSupervisor:
         explicit_start_ref = (
             start_point.strip() if start_point and start_point.strip() else None
         )
-        effective_start_ref = explicit_start_ref or "origin/main"
-        needs_origin_refresh = (
-            explicit_start_ref is None or effective_start_ref.startswith("origin/")
-        )
-        if needs_origin_refresh:
+        effective_start_ref = explicit_start_ref
+
+        if explicit_start_ref is None or explicit_start_ref.startswith("origin/"):
             try:
                 fetch_proc = run_git(
                     ["fetch", "--prune", "origin"],
@@ -699,13 +697,21 @@ class HubSupervisor:
                 )
             except GitError as exc:
                 raise ValueError(
-                    f"Unable to refresh {effective_start_ref} before creating worktree: {exc}"
+                    "Unable to refresh origin before creating worktree: %s" % exc
                 ) from exc
             if fetch_proc.returncode != 0:
                 raise ValueError(
-                    "Unable to refresh %s before creating worktree: %s"
-                    % (effective_start_ref, _git_failure_detail(fetch_proc))
+                    "Unable to refresh origin before creating worktree: %s"
+                    % _git_failure_detail(fetch_proc)
                 )
+
+        if effective_start_ref is None:
+            default_branch = git_default_branch(base_path)
+            if not default_branch:
+                raise ValueError("Unable to resolve origin default branch")
+            effective_start_ref = f"origin/{default_branch}"
+
+        assert effective_start_ref is not None
         start_sha = _resolve_ref_sha(base_path, effective_start_ref)
         try:
             exists = run_git(

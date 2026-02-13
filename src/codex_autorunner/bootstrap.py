@@ -303,7 +303,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Prefer hub-owned worktrees:
   - Hub UI: “New Worktree”
   - CLI: `car hub worktree create <base_repo_id> <branch> [--start-point <ref>]`
-  - Default start point is `origin/main` unless `--start-point` is provided.
+  - Default start point is `origin/<default-branch>` unless `--start-point` is provided.
 - If a worktree was created manually (e.g. `git worktree add`), it MUST be registered:
   - `car hub scan --path <hub_root>`
 - Never copy `.codex-autorunner/` between worktrees. Each worktree has its own CAR state/docs.
@@ -356,7 +356,7 @@ Canonical worktree creation:
 - Hub UI: “New Worktree”
 - CLI (from hub root):
   `car hub worktree create <base_repo_id> <branch> [--start-point <ref>]`
-  (defaults to `origin/main` when `--start-point` is omitted)
+  (defaults to `origin/<default-branch>` when `--start-point` is omitted)
 
 Registering a manually-created worktree:
 - If you used `git worktree add`, run:

@@ -23,7 +23,7 @@ Examples:
 - `car hub worktree create myrepo feature/pma-worktree-ux --start-point origin/main`
 
 Notes:
-- If `--start-point` is omitted, CAR creates the worktree from `origin/main`.
+- If `--start-point` is omitted, CAR creates the worktree from `origin/<default-branch>`.
 - The worktree directory is created under: `<hub_root>/<hub.worktrees_root>/<worktree_repo_id>/`
 - Worktrees are treated as full repos and get their own `.codex-autorunner/` state/docs.
 

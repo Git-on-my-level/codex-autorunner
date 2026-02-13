@@ -478,7 +478,7 @@ def test_sync_main_raises_when_local_default_diverges_from_origin(tmp_path: Path
         supervisor.sync_main("base")
 
 
-def test_create_worktree_defaults_to_origin_main_without_start_point(
+def test_create_worktree_defaults_to_origin_default_branch_without_start_point(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
@@ -493,21 +493,22 @@ def test_create_worktree_defaults_to_origin_main_without_start_point(
     )
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)
-    run_git(["branch", "-M", "main"], base.path, check=True)
+    run_git(["branch", "-M", "master"], base.path, check=True)
     origin = tmp_path / "origin.git"
     origin.mkdir(parents=True, exist_ok=True)
     run_git(["init", "--bare"], origin, check=True)
     run_git(["remote", "add", "origin", str(origin)], base.path, check=True)
-    run_git(["push", "-u", "origin", "main"], base.path, check=True)
-    origin_main_sha = _git_stdout(base.path, "rev-parse", "origin/main")
+    run_git(["push", "-u", "origin", "master"], base.path, check=True)
+    run_git(["symbolic-ref", "HEAD", "refs/heads/master"], origin, check=True)
+    origin_default_sha = _git_stdout(base.path, "rev-parse", "origin/master")
 
     local_sha = _commit_file(base.path, "LOCAL.txt", "local\n", "local only")
-    assert local_sha != origin_main_sha
+    assert local_sha != origin_default_sha
 
     worktree = supervisor.create_worktree(base_repo_id="base", branch="feature/test")
     assert worktree.branch == "feature/test"
     assert worktree.path.exists()
-    assert _git_stdout(worktree.path, "rev-parse", "HEAD") == origin_main_sha
+    assert _git_stdout(worktree.path, "rev-parse", "HEAD") == origin_default_sha
 
 
 def test_create_worktree_fails_if_explicit_start_point_mismatches_existing_branch(
