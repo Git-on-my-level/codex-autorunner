@@ -953,7 +953,6 @@ class GitHubCommands(SharedHelpers):
                 subagent_labels: dict[str, str] = {}
                 opencode_context_window: Optional[int] = None
                 context_window_resolved = False
-                cumulative_usage: dict[str, int] = {}
 
                 async def _handle_opencode_part(
                     part_type: str,
@@ -962,7 +961,6 @@ class GitHubCommands(SharedHelpers):
                 ) -> None:
                     nonlocal opencode_context_window
                     nonlocal context_window_resolved
-                    nonlocal cumulative_usage
                     if turn_key is None:
                         return
                     tracker = self._turn_progress_trackers.get(turn_key)
@@ -1176,20 +1174,7 @@ class GitHubCommands(SharedHelpers):
                             if is_primary_session:
                                 last_usage = token_usage.get("last")
                                 if isinstance(last_usage, dict):
-                                    for key in (
-                                        "totalTokens",
-                                        "inputTokens",
-                                        "outputTokens",
-                                        "cachedInputTokens",
-                                        "reasoningTokens",
-                                    ):
-                                        val = last_usage.get(key)
-                                        if isinstance(val, int):
-                                            cumulative_usage[key] = (
-                                                cumulative_usage.get(key, 0) + val
-                                            )
-                                if cumulative_usage:
-                                    token_usage["total"] = dict(cumulative_usage)
+                                    token_usage["total"] = dict(last_usage)
                                 if (
                                     "modelContextWindow" not in token_usage
                                     and not context_window_resolved
