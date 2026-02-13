@@ -63,7 +63,10 @@ async def test_model_catalog_uses_codex_agent_filter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_catalog_falls_back_when_agent_filter_is_unsupported() -> None:
+@pytest.mark.parametrize("fail_code", [-32600, -32602])
+async def test_model_catalog_falls_back_when_agent_filter_is_unsupported(
+    fail_code: int,
+) -> None:
     client = _StubClient(
         response={
             "data": [
@@ -74,7 +77,7 @@ async def test_model_catalog_falls_back_when_agent_filter_is_unsupported() -> No
             ]
         },
         fail_agent_request=True,
-        fail_code=-32602,
+        fail_code=fail_code,
     )
     harness = CodexHarness(_StubSupervisor(client), events=object())  # type: ignore[arg-type]
 

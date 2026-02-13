@@ -23,6 +23,8 @@ from ..schemas import (
 )
 from .shared import SSE_HEADERS
 
+_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
+
 
 def build_app_server_routes() -> APIRouter:
     router = APIRouter()
@@ -56,7 +58,7 @@ def build_app_server_routes() -> APIRouter:
             try:
                 return await client.model_list(agent="codex")
             except CodexAppServerResponseError as exc:
-                if exc.code != -32602:
+                if exc.code not in _INVALID_PARAMS_ERROR_CODES:
                     raise
                 return await client.model_list()
         except CodexAppServerError as exc:

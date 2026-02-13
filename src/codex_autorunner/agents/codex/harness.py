@@ -10,6 +10,7 @@ from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
 
 _DEFAULT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
 
 
 def _coerce_entries(result: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -94,7 +95,7 @@ class CodexHarness(AgentHarness):
             return await client.model_list(agent="codex")
         except CodexAppServerResponseError as exc:
             # Older app-server versions may reject the `agent` filter.
-            if exc.code != -32602:
+            if exc.code not in _INVALID_PARAMS_ERROR_CODES:
                 raise
             return await client.model_list()
 
