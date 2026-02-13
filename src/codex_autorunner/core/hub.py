@@ -685,11 +685,28 @@ class HubSupervisor:
         explicit_start_ref = (
             start_point.strip() if start_point and start_point.strip() else None
         )
-        start_sha = (
-            _resolve_ref_sha(base_path, explicit_start_ref)
-            if explicit_start_ref is not None
-            else None
+        effective_start_ref = explicit_start_ref or "origin/main"
+        needs_origin_refresh = (
+            explicit_start_ref is None or effective_start_ref.startswith("origin/")
         )
+        if needs_origin_refresh:
+            try:
+                fetch_proc = run_git(
+                    ["fetch", "--prune", "origin"],
+                    base_path,
+                    check=False,
+                    timeout_seconds=120,
+                )
+            except GitError as exc:
+                raise ValueError(
+                    f"Unable to refresh {effective_start_ref} before creating worktree: {exc}"
+                ) from exc
+            if fetch_proc.returncode != 0:
+                raise ValueError(
+                    "Unable to refresh %s before creating worktree: %s"
+                    % (effective_start_ref, _git_failure_detail(fetch_proc))
+                )
+        start_sha = _resolve_ref_sha(base_path, effective_start_ref)
         try:
             exists = run_git(
                 ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -700,20 +717,18 @@ class HubSupervisor:
             raise ValueError(f"git worktree add failed: {exc}") from exc
         try:
             if exists.returncode == 0:
-                if explicit_start_ref is not None:
-                    branch_sha = _resolve_ref_sha(base_path, f"refs/heads/{branch}")
-                    assert start_sha is not None
-                    if branch_sha != start_sha:
-                        raise ValueError(
-                            "Branch %r already exists and points to %s, but %s resolves to %s. "
-                            "Use a different branch name or realign the existing branch first."
-                            % (
-                                branch,
-                                branch_sha[:12],
-                                explicit_start_ref,
-                                start_sha[:12],
-                            )
+                branch_sha = _resolve_ref_sha(base_path, f"refs/heads/{branch}")
+                if branch_sha != start_sha:
+                    raise ValueError(
+                        "Branch %r already exists and points to %s, but %s resolves to %s. "
+                        "Use a different branch name or realign the existing branch first."
+                        % (
+                            branch,
+                            branch_sha[:12],
+                            effective_start_ref,
+                            start_sha[:12],
                         )
+                    )
                 proc = run_git(
                     ["worktree", "add", str(worktree_path), branch],
                     base_path,
@@ -721,9 +736,14 @@ class HubSupervisor:
                     timeout_seconds=120,
                 )
             else:
-                cmd = ["worktree", "add", "-b", branch, str(worktree_path)]
-                if explicit_start_ref is not None:
-                    cmd.append(explicit_start_ref)
+                cmd = [
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch,
+                    str(worktree_path),
+                    effective_start_ref,
+                ]
                 proc = run_git(
                     cmd,
                     base_path,

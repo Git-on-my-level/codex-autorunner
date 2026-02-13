@@ -1856,7 +1856,9 @@ def hub_worktree_create(
     hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
     force: bool = typer.Option(False, "--force", help="Allow existing directory"),
     start_point: Optional[str] = typer.Option(
-        None, "--start-point", help="Optional git ref to branch from"
+        None,
+        "--start-point",
+        help="Optional git ref to branch from (default: origin/main)",
     ),
 ):
     """Create a new hub-managed worktree."""
@@ -3069,7 +3071,9 @@ def hub_tickets_setup_pack(
         "codex", "--pr-agent", help="Agent for open PR ticket (legacy)"
     ),
     start_point: Optional[str] = typer.Option(
-        None, "--start-point", help="Optional git ref for worktree branch (legacy)"
+        None,
+        "--start-point",
+        help="Optional git ref for worktree branch (legacy, default: origin/main)",
     ),
     force: bool = typer.Option(
         False, "--force", help="Allow existing worktree path (legacy)"
