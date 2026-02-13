@@ -128,6 +128,10 @@ Place files in outbox pending to send after this turn finishes.
 Check delivery with /files outbox.
 Max file size: {max_bytes} bytes."""
 
+_COMMAND_ALIASES = {
+    "models": "model",
+}
+
 
 @dataclass
 class _RuntimeStub:
@@ -389,13 +393,15 @@ class TelegramCommandHandlers(
     async def _handle_command(
         self, command: TelegramCommand, message: TelegramMessage, runtime: Any
     ) -> None:
-        name = command.name
+        original_name = command.name
+        name = _COMMAND_ALIASES.get(original_name, original_name)
         args = command.args
         log_event(
             self._logger,
             logging.INFO,
             "telegram.command",
             name=name,
+            original_name=original_name,
             args_len=len(args),
             chat_id=message.chat_id,
             thread_id=message.thread_id,

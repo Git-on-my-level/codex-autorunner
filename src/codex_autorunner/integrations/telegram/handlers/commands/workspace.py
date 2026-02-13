@@ -94,7 +94,9 @@ async def _model_list_with_agent_compat(
     *,
     params: dict[str, Any],
 ) -> Any:
-    request_params = dict(params)
+    # Avoid sending explicit nulls (for example cursor=None), which can trigger
+    # different pagination behavior on some app-server builds.
+    request_params = {key: value for key, value in params.items() if value is not None}
     requested_agent = request_params.get("agent")
     if not isinstance(requested_agent, str) or not requested_agent:
         requested_agent = None

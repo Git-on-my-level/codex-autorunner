@@ -42,7 +42,7 @@ async def test_model_list_with_agent_compat_uses_agent_filter() -> None:
     )
 
     assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
-    assert client.calls == [{"agent": "codex", "limit": 25, "cursor": None}]
+    assert client.calls == [{"agent": "codex", "limit": 25}]
 
 
 @pytest.mark.asyncio
@@ -63,8 +63,8 @@ async def test_model_list_with_agent_compat_falls_back_for_invalid_params(
 
     assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
     assert client.calls == [
-        {"agent": "codex", "limit": 25, "cursor": None},
-        {"limit": 25, "cursor": None},
+        {"agent": "codex", "limit": 25},
+        {"limit": 25},
     ]
 
 
@@ -82,7 +82,7 @@ async def test_model_list_with_agent_compat_raises_non_compat_errors() -> None:
             params={"agent": "codex", "limit": 25, "cursor": None},
         )
 
-    assert client.calls == [{"agent": "codex", "limit": 25, "cursor": None}]
+    assert client.calls == [{"agent": "codex", "limit": 25}]
 
 
 @pytest.mark.asyncio
@@ -96,3 +96,16 @@ async def test_model_list_with_agent_compat_without_agent_keeps_params() -> None
 
     assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
     assert client.calls == [{"limit": 10, "cursor": "next-cursor"}]
+
+
+@pytest.mark.asyncio
+async def test_model_list_with_agent_compat_drops_none_params() -> None:
+    client = _StubClient(response={"data": [{"id": "gpt-5.3-codex-spark"}]})
+
+    result = await _model_list_with_agent_compat(
+        client,
+        params={"agent": "codex", "limit": 25, "cursor": None, "foo": None},
+    )
+
+    assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
+    assert client.calls == [{"agent": "codex", "limit": 25}]
