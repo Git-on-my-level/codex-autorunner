@@ -2,9 +2,9 @@
   "findings": [
     "python:class:src/codex_autorunner/core/app_server_logging.py:72:AppServerEventFormatter",
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
-    "python:class:src/codex_autorunner/surfaces/web/schemas.py:192:GithubIssueRequest",
-    "python:class:src/codex_autorunner/surfaces/web/schemas.py:196:GithubContextRequest",
-    "python:class:src/codex_autorunner/surfaces/web/schemas.py:200:GithubPrSyncRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:212:GithubIssueRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:216:GithubContextRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:220:GithubPrSyncRequest",
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
     "python:function:src/codex_autorunner/core/git_utils.py:156:git_status_porcelain",
