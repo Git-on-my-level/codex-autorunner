@@ -36,10 +36,13 @@ class _StubClient:
 async def test_model_list_with_agent_compat_uses_agent_filter() -> None:
     client = _StubClient(response={"data": [{"id": "gpt-5.3-codex-spark"}]})
 
-    result = await _model_list_with_agent_compat(client, agent="codex")
+    result = await _model_list_with_agent_compat(
+        client,
+        params={"agent": "codex", "limit": 25, "cursor": None},
+    )
 
     assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
-    assert client.calls == [{"agent": "codex"}]
+    assert client.calls == [{"agent": "codex", "limit": 25, "cursor": None}]
 
 
 @pytest.mark.asyncio
@@ -53,10 +56,16 @@ async def test_model_list_with_agent_compat_falls_back_for_invalid_params(
         fail_code=fail_code,
     )
 
-    result = await _model_list_with_agent_compat(client, agent="codex")
+    result = await _model_list_with_agent_compat(
+        client,
+        params={"agent": "codex", "limit": 25, "cursor": None},
+    )
 
     assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
-    assert client.calls == [{"agent": "codex"}, {}]
+    assert client.calls == [
+        {"agent": "codex", "limit": 25, "cursor": None},
+        {"limit": 25, "cursor": None},
+    ]
 
 
 @pytest.mark.asyncio
@@ -68,6 +77,22 @@ async def test_model_list_with_agent_compat_raises_non_compat_errors() -> None:
     )
 
     with pytest.raises(CodexAppServerResponseError):
-        await _model_list_with_agent_compat(client, agent="codex")
+        await _model_list_with_agent_compat(
+            client,
+            params={"agent": "codex", "limit": 25, "cursor": None},
+        )
 
-    assert client.calls == [{"agent": "codex"}]
+    assert client.calls == [{"agent": "codex", "limit": 25, "cursor": None}]
+
+
+@pytest.mark.asyncio
+async def test_model_list_with_agent_compat_without_agent_keeps_params() -> None:
+    client = _StubClient(response={"data": [{"id": "gpt-5.3-codex-spark"}]})
+
+    result = await _model_list_with_agent_compat(
+        client,
+        params={"limit": 10, "cursor": "next-cursor"},
+    )
+
+    assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
+    assert client.calls == [{"limit": 10, "cursor": "next-cursor"}]

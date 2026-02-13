@@ -92,16 +92,21 @@ def _extract_opencode_session_path(payload: Any) -> Optional[str]:
 async def _model_list_with_agent_compat(
     client: CodexAppServerClient,
     *,
-    agent: Optional[str],
+    params: dict[str, Any],
 ) -> Any:
-    if not agent:
-        return await client.model_list()
+    request_params = dict(params)
+    requested_agent = request_params.get("agent")
+    if not isinstance(requested_agent, str) or not requested_agent:
+        requested_agent = None
+        request_params.pop("agent", None)
     try:
-        return await client.model_list(agent=agent)
+        return await client.model_list(**request_params)
     except CodexAppServerResponseError as exc:
-        if exc.code not in _INVALID_PARAMS_ERROR_CODES:
+        if requested_agent is None or exc.code not in _INVALID_PARAMS_ERROR_CODES:
             raise
-        return await client.model_list()
+        fallback_params = dict(request_params)
+        fallback_params.pop("agent", None)
+        return await client.model_list(**fallback_params)
 
 
 @dataclass
@@ -352,7 +357,9 @@ class WorkspaceCommands(SharedHelpers):
         requested_agent = list_params.get("agent")
         if not isinstance(requested_agent, str) or not requested_agent:
             requested_agent = agent
-        return await _model_list_with_agent_compat(client, agent=requested_agent)
+        request_params = dict(list_params)
+        request_params["agent"] = requested_agent
+        return await _model_list_with_agent_compat(client, params=request_params)
 
     async def _verify_active_thread(
         self, message: TelegramMessage, record: "TelegramTopicRecord"
