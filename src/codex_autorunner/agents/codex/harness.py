@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from ...integrations.app_server.client import CodexAppServerResponseError
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..base import AgentHarness
@@ -87,9 +88,19 @@ class CodexHarness(AgentHarness):
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
 
+    async def _model_list_with_agent_compat(self, client: Any) -> Any:
+        """Prefer codex-agent compatible models, but degrade for older servers."""
+        try:
+            return await client.model_list(agent="codex")
+        except CodexAppServerResponseError as exc:
+            # Older app-server versions may reject the `agent` filter.
+            if exc.code != -32602:
+                raise
+            return await client.model_list()
+
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         client = await self._supervisor.get_client(workspace_root)
-        result = await client.model_list()
+        result = await self._model_list_with_agent_compat(client)
         entries = _coerce_entries(result, ("data", "models", "items", "results"))
         models: list[ModelSpec] = []
         for entry in entries:
