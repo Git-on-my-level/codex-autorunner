@@ -659,6 +659,7 @@ def _find_hub_server_process(port: Optional[int]) -> Optional[dict[str, Any]]:
     if proc.returncode != 0:
         return None
     lines = (proc.stdout or "").splitlines()
+    candidates: list[dict[str, Any]] = []
     for raw in lines:
         line = raw.strip()
         if not line:
@@ -669,17 +670,38 @@ def _find_hub_server_process(port: Optional[int]) -> Optional[dict[str, Any]]:
         pid = int(parts[0])
         command = parts[1]
         command_lc = command.lower()
-        if "car hub serve" not in command_lc and "codex-autorunner" not in command_lc:
+
+        is_hub_serve = any(
+            marker in command_lc
+            for marker in (
+                "car hub serve",
+                "car serve",
+                "codex_autorunner.cli hub serve",
+                "codex_autorunner.cli serve",
+            )
+        )
+        if not is_hub_serve:
             continue
-        if "hub" not in command_lc or "serve" not in command_lc:
-            continue
+        candidates.append({"pid": pid, "command": command})
+
+    if not candidates:
+        return None
+    if port is None:
+        return candidates[0]
+
+    for candidate in candidates:
+        command = str(candidate.get("command") or "")
         if (
-            port is not None
-            and f"--port {port}" not in command
-            and f":{port}" not in command
+            f"--port {port}" in command
+            or f"--port={port}" in command
+            or f":{port}" in command
         ):
-            continue
-        return {"pid": pid, "command": command}
+            return candidate
+
+    # Some common startup paths rely on config defaults and do not pass --port
+    # explicitly. If there is a single serve process candidate, treat it as active.
+    if len(candidates) == 1:
+        return candidates[0]
     return None
 
 
@@ -2305,8 +2327,9 @@ def hub_inbox_clear(
         _raise_exit("Pass either --stale or both --repo-id and --run-id.")
 
     config = _require_hub_config(path)
+    message_limit = 0 if (repo_id and run_id) else 2000
     list_url = _build_server_url(
-        config, "/hub/messages?limit=2000", base_path_override=base_path
+        config, f"/hub/messages?limit={message_limit}", base_path_override=base_path
     )
     resolve_url = _build_server_url(
         config, "/hub/messages/resolve", base_path_override=base_path

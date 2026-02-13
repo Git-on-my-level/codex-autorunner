@@ -122,7 +122,7 @@ def test_hub_inbox_clear_targeted_apply(hub_root_only) -> None:
 
     def _mock_request(method: str, url: str, **kwargs):
         calls.append((method, url, kwargs.get("json")))
-        if method == "GET" and "/hub/messages?limit=2000" in url:
+        if method == "GET" and "/hub/messages?limit=0" in url:
             return _json_response(
                 method,
                 url,
