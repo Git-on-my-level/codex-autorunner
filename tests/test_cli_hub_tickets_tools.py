@@ -13,7 +13,7 @@ from codex_autorunner.tickets.frontmatter import parse_markdown_frontmatter
 runner = CliRunner()
 
 
-def test_hub_tickets_doctor_fix_removes_depends_on(hub_env) -> None:
+def test_hub_tickets_doctor_fix_preserves_depends_on(hub_env) -> None:
     ticket = hub_env.repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
     ticket.parent.mkdir(parents=True, exist_ok=True)
     ticket.write_text(
@@ -38,9 +38,9 @@ def test_hub_tickets_doctor_fix_removes_depends_on(hub_env) -> None:
 
     raw = ticket.read_text(encoding="utf-8")
     fm, _ = parse_markdown_frontmatter(raw)
-    assert "depends_on" not in fm
+    assert fm.get("depends_on") == ["TICKET-000"]
     assert fm.get("done") is False
-    assert "CAR ticket note: depends_on=" in raw
+    assert "CAR ticket note: depends_on=" not in raw
 
 
 def test_hub_tickets_fmt_check_fails_on_drift(hub_env) -> None:

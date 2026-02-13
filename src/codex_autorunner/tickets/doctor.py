@@ -24,20 +24,6 @@ def _coerce_done(value: Any) -> Any:
     return value
 
 
-def _depends_on_note(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        cleaned = value.strip()
-        return cleaned or None
-    if isinstance(value, list):
-        cleaned = [str(item).strip() for item in value if str(item).strip()]
-        if cleaned:
-            return ", ".join(cleaned)
-    rendered = str(value).strip()
-    return rendered or None
-
-
 def _split_with_recovery(raw: str) -> tuple[str | None, str]:
     fm_yaml, body = split_markdown_frontmatter(raw)
     if fm_yaml is not None:
@@ -127,20 +113,6 @@ def format_or_doctor_tickets(
 
         changed = False
         data = dict(loaded)
-
-        if "depends_on" in data:
-            depends_note = _depends_on_note(data.get("depends_on"))
-            data.pop("depends_on", None)
-            changed = True
-            report.warnings.append(
-                f"{rel}: removed unsupported frontmatter.depends_on."
-            )
-            if depends_note:
-                note = f"<!-- CAR ticket note: depends_on={depends_note} -->\n"
-                if body.startswith("\n"):
-                    body = f"{body[:1]}{note}{body[1:]}"
-                else:
-                    body = f"\n\n{note}{body}"
 
         if "agent" in data and isinstance(data["agent"], str):
             trimmed = data["agent"].strip()

@@ -90,6 +90,30 @@ def _write_reply_history(repo_root: Path, run_id: str, seq: int) -> None:
     (entry_dir / "USER_REPLY.md").write_text("Reply\n", encoding="utf-8")
 
 
+def _write_dead_worker_artifacts(repo_root: Path, run_id: str) -> None:
+    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    (artifacts_dir / "worker.json").write_text(
+        json.dumps({"pid": 999_999, "cmd": ["python"], "spawned_at": 1.0}),
+        encoding="utf-8",
+    )
+    (artifacts_dir / "crash.json").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-02-13T14:00:00Z",
+                "worker_pid": 999_999,
+                "exit_code": 137,
+                "signal": "SIGKILL",
+                "last_event": "item/reasoning/summaryTextDelta",
+                "stderr_tail": "",
+                "exception": "RepoNotFoundError: cwd mismatch",
+                "stack_trace": "Traceback ...",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
     run_id = "11111111-1111-1111-1111-111111111111"
     _seed_paused_run(hub_env.repo_root, run_id)
@@ -159,6 +183,27 @@ def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> N
         assert run_state.get("recommended_actions")
         assert isinstance(run_state.get("recommended_actions"), list)
         assert run_state.get("attention_required") is True
+
+
+def test_hub_messages_dead_worker_includes_crash_summary_and_open_url(hub_env) -> None:
+    run_id = "99999999-9999-9999-9999-999999999999"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dead_worker_artifacts(hub_env.repo_root, run_id)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        run_state = items[0].get("run_state") or {}
+        assert run_state.get("state") == "dead"
+        crash = run_state.get("crash") or {}
+        assert "RepoNotFoundError" in (crash.get("summary") or "")
+        assert crash.get("open_url") == (
+            f"/repos/{hub_env.repo_id}/api/flows/{run_id}/artifact?kind=worker_crash"
+        )
+        assert crash.get("path") == f".codex-autorunner/flows/{run_id}/crash.json"
 
 
 def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env) -> None:

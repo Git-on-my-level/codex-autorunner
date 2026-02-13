@@ -10,6 +10,7 @@ import shutil
 import site
 import subprocess
 import sys
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -36,12 +37,13 @@ from ...core.config import (
     load_repo_config,
 )
 from ...core.flows import FlowController, FlowStore
-from ...core.flows.models import FlowRunRecord, FlowRunStatus
+from ...core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ...core.flows.worker_process import (
     check_worker_health,
     clear_worker_metadata,
     register_worker_metadata,
+    write_worker_crash_info,
 )
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
@@ -124,6 +126,11 @@ from ...tickets.lint import (
     parse_ticket_index,
 )
 from ...tickets.outbox import resolve_outbox_paths
+from ...tickets.pack_import import (
+    TicketPackSetupError,
+    parse_assignment_specs,
+    setup_ticket_pack,
+)
 from ...voice import VoiceConfig
 from ..web.app import create_hub_app
 from .pma_cli import pma_app as pma_cli_app
@@ -2785,9 +2792,9 @@ def hub_tickets_import(
         None, "--apply-template", help="Template ref REPO:PATH[@REF]"
     ),
     strip_depends_on: bool = typer.Option(
-        True,
+        False,
         "--strip-depends-on/--no-strip-depends-on",
-        help="Remove unsupported frontmatter.depends_on keys from imported tickets",
+        help="Strip frontmatter.depends_on keys from imported tickets",
     ),
     reconcile_depends_on: str = typer.Option(
         "warn",
@@ -3012,40 +3019,163 @@ def hub_tickets_doctor(
 
 @hub_tickets_app.command("setup-pack")
 def hub_tickets_setup_pack(
-    base_repo_id: str = typer.Option(..., "--base-repo", help="Base repo id"),
-    branch: str = typer.Option(..., "--branch", help="Branch name for worktree"),
-    zip_path: Path = typer.Option(..., "--zip", help="Path to ticket pack zip"),
+    target_path: Optional[Path] = typer.Argument(
+        None,
+        help="Existing repo/worktree path (new mode).",
+    ),
+    from_zip: Optional[Path] = typer.Option(
+        None, "--from", help="Path to ticket pack zip (new mode)"
+    ),
+    assign: list[str] = typer.Option(
+        [],
+        "--assign",
+        help="Agent assignment spec '<agent>:<ticket_numbers>' (repeatable, new mode)",
+    ),
+    start: bool = typer.Option(
+        False,
+        "--start",
+        help="Start ticket_flow after setup succeeds (new mode and legacy mode)",
+    ),
+    base_repo_id: Optional[str] = typer.Option(
+        None, "--base-repo", help="Base repo id (legacy mode)"
+    ),
+    branch: Optional[str] = typer.Option(
+        None, "--branch", help="Branch name for worktree (legacy mode)"
+    ),
+    zip_path: Optional[Path] = typer.Option(
+        None, "--zip", help="Path to ticket pack zip (legacy mode)"
+    ),
     renumber: Optional[str] = typer.Option(
-        None, "--renumber", help="Renumber tickets with start=<n>,step=<n>"
+        None, "--renumber", help="Renumber tickets with start=<n>,step=<n> (legacy)"
     ),
     assign_agent: Optional[str] = typer.Option(
-        None, "--assign-agent", help="Override ticket frontmatter agent"
+        None, "--assign-agent", help="Override ticket frontmatter agent (legacy)"
     ),
     clear_model_pin: bool = typer.Option(
-        False, "--clear-model-pin", help="Clear model/reasoning overrides"
+        False, "--clear-model-pin", help="Clear model/reasoning overrides (legacy)"
     ),
     apply_template: Optional[str] = typer.Option(
-        None, "--apply-template", help="Template ref REPO:PATH[@REF]"
+        None, "--apply-template", help="Template ref REPO:PATH[@REF] (legacy)"
     ),
     reconcile_depends_on: str = typer.Option(
         "auto",
         "--reconcile-depends-on",
-        help="depends_on reconciliation mode: off, warn, auto",
+        help="depends_on reconciliation mode: off, warn, auto (legacy)",
     ),
     final_review_agent: str = typer.Option(
-        "codex", "--final-review-agent", help="Agent for final review ticket"
+        "codex", "--final-review-agent", help="Agent for final review ticket (legacy)"
     ),
     pr_agent: str = typer.Option(
-        "codex", "--pr-agent", help="Agent for open PR ticket"
+        "codex", "--pr-agent", help="Agent for open PR ticket (legacy)"
     ),
     start_point: Optional[str] = typer.Option(
-        None, "--start-point", help="Optional git ref for worktree branch"
+        None, "--start-point", help="Optional git ref for worktree branch (legacy)"
     ),
-    force: bool = typer.Option(False, "--force", help="Allow existing worktree path"),
+    force: bool = typer.Option(
+        False, "--force", help="Allow existing worktree path (legacy)"
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
-    """One-command setup for ticket packs (worktree + import + assign + finalize + preflight)."""
+    """One-command ticket pack setup.
+
+    New mode:
+    - `car hub tickets setup-pack <target_path> --from <zip> [--assign ...] [--start]`
+
+    Legacy mode:
+    - `car hub tickets setup-pack --base-repo ... --branch ... --zip ...`
+    """
+
+    new_mode_requested = (
+        target_path is not None or from_zip is not None or bool(assign) or start
+    )
+
+    if new_mode_requested:
+        if target_path is None:
+            _raise_exit(
+                "New setup-pack mode requires <target_path>. Example: "
+                "car hub tickets setup-pack worktrees/repo--branch --from pack.zip"
+            )
+        if from_zip is None:
+            _raise_exit("New setup-pack mode requires --from <zip_path>.")
+        if zip_path is not None:
+            _raise_exit("Do not pass --zip with new mode; use --from.")
+        if (
+            any(
+                value is not None
+                for value in (
+                    base_repo_id,
+                    branch,
+                    renumber,
+                    assign_agent,
+                    apply_template,
+                    start_point,
+                )
+            )
+            or clear_model_pin
+            or force
+        ):
+            _raise_exit(
+                "Cannot combine new mode flags (--from/--assign) with legacy setup-pack flags."
+            )
+        if reconcile_depends_on != "auto":
+            _raise_exit(
+                "Cannot use --reconcile-depends-on in new mode; depends_on is preserved."
+            )
+        if final_review_agent != "codex" or pr_agent != "codex":
+            _raise_exit("Cannot use --final-review-agent/--pr-agent in new mode.")
+
+        target_repo = target_path.resolve()
+        try:
+            parse_assignment_specs(assign)
+            report = setup_ticket_pack(
+                target_path=target_repo,
+                zip_path=from_zip,
+                assignment_specs=assign,
+            )
+        except TicketPackSetupError as exc:
+            _raise_exit(str(exc), cause=exc)
+
+        ticket_dir = target_repo / ".codex-autorunner" / "tickets"
+        lint_errors = _validate_tickets(ticket_dir)
+        engine = _require_repo_config(target_repo, hub)
+        preflight = _ticket_flow_preflight(engine, ticket_dir)
+
+        payload = {
+            "mode": "path",
+            "repo_root": str(target_repo),
+            "zip_path": str(from_zip),
+            "assign": list(assign),
+            "setup": report.to_dict(),
+            "lint_errors": lint_errors,
+            "preflight": preflight.to_dict(),
+            "started": False,
+        }
+
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            typer.echo(f"Setup pack: repo_root={target_repo} zip={from_zip}")
+            typer.echo(f"Extracted files: {len(report.extracted_files)}")
+            typer.echo(f"Assigned files: {len(report.assigned_files)}")
+            if lint_errors:
+                typer.echo("Lint errors:")
+                for err in lint_errors:
+                    typer.echo(f"- {err}")
+            typer.echo("Preflight:")
+            _print_preflight_report(preflight)
+
+        if lint_errors or preflight.has_errors():
+            _raise_exit("Ticket setup-pack failed preflight.")
+        if start:
+            ticket_flow_start(repo=target_repo, hub=hub, force_new=False)
+        return
+
+    if not base_repo_id or not branch or zip_path is None:
+        _raise_exit(
+            "Legacy setup-pack mode requires --base-repo, --branch, and --zip. "
+            "Or use new mode: setup-pack <target_path> --from <zip>."
+        )
     config = _require_hub_config(hub)
     if not zip_path.exists():
         _raise_exit(f"Zip path does not exist: {zip_path}")
@@ -3114,7 +3244,7 @@ def hub_tickets_setup_pack(
         template_frontmatter=template_frontmatter,
         lint=True,
         dry_run=False,
-        strip_depends_on=True,
+        strip_depends_on=False,
         reconcile_depends_on=reconcile_depends_on,
     )
 
@@ -3131,6 +3261,7 @@ def hub_tickets_setup_pack(
     preflight = _ticket_flow_preflight(engine, ticket_dir)
 
     payload = {
+        "mode": "legacy",
         "repo_id": repo_id,
         "repo_root": str(repo_root),
         "worktree_of": base_repo_id,
@@ -3140,6 +3271,7 @@ def hub_tickets_setup_pack(
         "final_tickets": final_tickets,
         "lint_errors": lint_errors,
         "preflight": preflight.to_dict(),
+        "started": False,
     }
 
     if output_json:
@@ -3160,8 +3292,10 @@ def hub_tickets_setup_pack(
         typer.echo("Preflight:")
         _print_preflight_report(preflight)
 
-    if (not import_report.ok()) or lint_errors:
+    if (not import_report.ok()) or lint_errors or preflight.has_errors():
         _raise_exit("Ticket setup-pack failed.")
+    if start:
+        ticket_flow_start(repo=repo_root, hub=config.root, force_new=False)
 
 
 @dispatch_app.command("reply")
@@ -4032,6 +4166,30 @@ def flow_worker(
             typer.echo(
                 f"Flow run {normalized_run_id} finished with status {final_record.status}"
             )
+        except Exception as exc:
+            last_event = None
+            try:
+                app_event = controller.store.get_last_event_by_type(
+                    normalized_run_id, FlowEventType.APP_SERVER_EVENT
+                )
+                if app_event and isinstance(app_event.data, dict):
+                    msg = app_event.data.get("message")
+                    if isinstance(msg, dict):
+                        method = msg.get("method")
+                        if isinstance(method, str) and method.strip():
+                            last_event = method.strip()
+            except Exception:
+                last_event = None
+            write_worker_crash_info(
+                engine.repo_root,
+                normalized_run_id,
+                worker_pid=os.getpid(),
+                last_event=last_event,
+                exception=f"{type(exc).__name__}: {exc}",
+                stack_trace=traceback.format_exc(),
+                artifacts_root=artifacts_root,
+            )
+            raise
         finally:
             if agent_pool is not None:
                 try:
