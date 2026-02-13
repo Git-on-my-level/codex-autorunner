@@ -103,9 +103,11 @@ class CodexHarness(AgentHarness):
         await self._supervisor.get_client(workspace_root)
 
     async def _model_list_with_agent_compat(self, client: Any) -> Any:
+        """Prefer codex-agent compatible models, but degrade for older servers."""
         try:
             return await client.model_list(agent="codex")
         except CodexAppServerResponseError as exc:
+            # Older app-server versions may reject the `agent` filter.
             if exc.code not in _INVALID_PARAMS_ERROR_CODES:
                 raise
             return await client.model_list()

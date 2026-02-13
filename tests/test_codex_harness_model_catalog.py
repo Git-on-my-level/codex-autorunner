@@ -64,6 +64,7 @@ async def test_model_catalog_uses_codex_agent_filter_and_normalizes_alias_name()
     catalog = await harness.model_catalog(Path("."))
 
     assert client.calls == [{"agent": "codex"}]
+    assert catalog.default_model == "gpt-5.3-codex-spark"
     assert [model.id for model in catalog.models] == [
         "gpt-5.3-codex-spark",
         "internal-preview-model",

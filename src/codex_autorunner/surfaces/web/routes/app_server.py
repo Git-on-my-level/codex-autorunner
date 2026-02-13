@@ -9,7 +9,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from ....core.app_server_threads import normalize_feature_key
 from ....core.utils import is_within
-from ....integrations.app_server.client import CodexAppServerError
+from ....integrations.app_server.client import (
+    CodexAppServerError,
+    CodexAppServerResponseError,
+)
 from ..schemas import (
     AppServerThreadArchiveRequest,
     AppServerThreadArchiveResponse,
@@ -19,6 +22,8 @@ from ..schemas import (
     AppServerThreadsResponse,
 )
 from .shared import SSE_HEADERS
+
+_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
 
 
 def build_app_server_routes() -> APIRouter:
@@ -50,7 +55,12 @@ def build_app_server_routes() -> APIRouter:
         supervisor = request.app.state.app_server_supervisor
         try:
             client = await supervisor.get_client(engine.repo_root)
-            return await client.model_list()
+            try:
+                return await client.model_list(agent="codex")
+            except CodexAppServerResponseError as exc:
+                if exc.code not in _INVALID_PARAMS_ERROR_CODES:
+                    raise
+                return await client.model_list()
         except CodexAppServerError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
