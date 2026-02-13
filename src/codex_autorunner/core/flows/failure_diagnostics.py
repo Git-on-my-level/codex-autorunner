@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .models import FlowEventType, FlowRunRecord
+from .models import FailureReasonCode, FlowEventType, FlowRunRecord
 from .store import FlowStore, now_iso
 
 _MAX_STDERR_LINES = 5
@@ -205,6 +205,99 @@ def _is_network_error(error_message: str) -> bool:
     )
 
 
+def _is_oom_error(error_message: str) -> bool:
+    if not error_message:
+        return False
+    error_lower = error_message.lower()
+    return any(
+        phrase in error_lower
+        for phrase in (
+            "oom",
+            "out of memory",
+            "memory allocation failed",
+            "cannot allocate memory",
+            "killed",
+            "signal 9",
+            "sigkill",
+        )
+    )
+
+
+def _is_preflight_error(error_message: str) -> bool:
+    if not error_message:
+        return False
+    error_lower = error_message.lower()
+    return any(
+        phrase in error_lower
+        for phrase in (
+            "preflight",
+            "bootstrap failed",
+            "initialization failed",
+            "setup failed",
+            "config error",
+            "invalid config",
+        )
+    )
+
+
+def _is_repo_not_found(error_message: str) -> bool:
+    if not error_message:
+        return False
+    error_lower = error_message.lower()
+    return any(
+        phrase in error_lower
+        for phrase in (
+            "repo not found",
+            "repository not found",
+            "no such repo",
+            "could not resolve",
+        )
+    )
+
+
+def _derive_failure_reason_code(
+    *,
+    state: Any,
+    error_message: Optional[str],
+    note: Optional[str],
+    exit_code: Optional[int] = None,
+) -> FailureReasonCode:
+    if isinstance(state, dict):
+        engine = state.get("ticket_engine")
+        if isinstance(engine, dict):
+            value = engine.get("reason_code")
+            if isinstance(value, str) and value.strip():
+                reason_lower = value.strip().lower()
+                if reason_lower == "user_stop":
+                    return FailureReasonCode.USER_STOP
+                if reason_lower == "timeout":
+                    return FailureReasonCode.TIMEOUT
+                if reason_lower == "network":
+                    return FailureReasonCode.NETWORK_ERROR
+    msg = (error_message or "").lower()
+    if _is_oom_error(msg) or (isinstance(exit_code, int) and exit_code in (137, 139)):
+        return FailureReasonCode.OOM_KILLED
+    if _is_preflight_error(msg):
+        return FailureReasonCode.PREFLIGHT_ERROR
+    if _is_repo_not_found(msg):
+        return FailureReasonCode.REPO_NOT_FOUND
+    if "timeout" in msg or "timed out" in msg:
+        return FailureReasonCode.TIMEOUT
+    if _is_network_error(msg):
+        return FailureReasonCode.NETWORK_ERROR
+    if "worker died" in msg or "crash" in msg:
+        return FailureReasonCode.AGENT_CRASH
+    if isinstance(note, str):
+        note_lower = note.strip().lower()
+        if "worker-dead" in note_lower or "worker_dead" in note_lower:
+            return FailureReasonCode.WORKER_DEAD
+        if "agent" in note_lower and "crash" in note_lower:
+            return FailureReasonCode.AGENT_CRASH
+    if msg:
+        return FailureReasonCode.UNCAUGHT_EXCEPTION
+    return FailureReasonCode.UNKNOWN
+
+
 def _derive_failure_class(
     *, state: Any, error_message: Optional[str], note: Optional[str]
 ) -> Optional[str]:
@@ -250,18 +343,35 @@ def build_failure_payload(
     failure_class = _derive_failure_class(
         state=state, error_message=err_text, note=note
     )
+    failure_reason_code = _derive_failure_reason_code(
+        state=state,
+        error_message=err_text,
+        note=note,
+        exit_code=exit_code,
+    )
     retryable = _is_network_error(err_text or "")
     if not retryable and isinstance(failure_class, str):
         retryable = failure_class in {"network", "timeout"}
+    last_event_seq = None
+    last_event_at = None
+    if store is not None:
+        try:
+            last_event_seq, last_event_at = store.get_last_event_meta(record.id)
+        except Exception:
+            pass
     payload = {
         "failed_at": failed_at or now_iso(),
         "ticket_id": ticket_id,
         "step": step,
+        "last_step": step,
         "last_command": last_command,
         "exit_code": exit_code,
         "stderr_tail": stderr_tail,
         "retryable": retryable,
         "failure_class": failure_class,
+        "failure_reason_code": failure_reason_code.value,
+        "last_event_seq": last_event_seq,
+        "last_event_at": last_event_at,
     }
     return payload
 

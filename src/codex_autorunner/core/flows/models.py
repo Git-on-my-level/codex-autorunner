@@ -7,6 +7,19 @@ from pydantic import BaseModel, Field
 _logger = logging.getLogger(__name__)
 
 
+class FailureReasonCode(str, Enum):
+    REPO_NOT_FOUND = "repo_not_found"
+    AGENT_CRASH = "agent_crash"
+    PREFLIGHT_ERROR = "preflight_error"
+    UNCAUGHT_EXCEPTION = "uncaught_exception"
+    OOM_KILLED = "oom_killed"
+    WORKER_DEAD = "worker_dead"
+    TIMEOUT = "timeout"
+    NETWORK_ERROR = "network_error"
+    USER_STOP = "user_stop"
+    UNKNOWN = "unknown"
+
+
 class FlowRunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"

@@ -778,6 +778,7 @@ def build_ticket_flow_run_state(
     status_cmd = f"car flow ticket_flow status --repo {quoted_repo} --run-id {run_id}"
     resume_cmd = f"car flow ticket_flow resume --repo {quoted_repo} --run-id {run_id}"
     start_cmd = f"car flow ticket_flow start --repo {quoted_repo}"
+    stop_cmd = f"car flow ticket_flow stop --repo {quoted_repo} --run-id {run_id}"
 
     failure_payload = get_failure_payload(record)
     failure_summary = (
@@ -832,6 +833,17 @@ def build_ticket_flow_run_state(
     elif record.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED):
         state = "blocked"
 
+    is_terminal = record.status.is_terminal()
+    attention_required = not is_terminal and (state in ("dead", "blocked") or record.status == FlowRunStatus.PAUSED)
+
+    worker_status = None
+    if is_terminal:
+        worker_status = "exited_expected"
+    elif dead_worker:
+        worker_status = "dead_unexpected"
+    elif health is not None and health.is_alive:
+        worker_status = "alive"
+
     blocking_reason = None
     if state == "dead":
         detail = health.message if health is not None else None
@@ -851,23 +863,30 @@ def build_ticket_flow_run_state(
     elif record.status == FlowRunStatus.PAUSED:
         blocking_reason = reason_summary or "Waiting for user input"
 
-    recommended_action = status_cmd
+    recommended_actions: list[str] = []
     if state == "completed":
-        recommended_action = start_cmd
+        recommended_actions = [start_cmd]
     elif state == "dead":
-        recommended_action = f"{resume_cmd} --force"
+        recommended_actions = [f"{resume_cmd} --force", status_cmd, stop_cmd]
     elif record.status == FlowRunStatus.PAUSED:
         if has_pending_dispatch:
-            recommended_action = resume_cmd
+            recommended_actions = [resume_cmd, status_cmd, stop_cmd]
         else:
-            recommended_action = f"{resume_cmd} --force"
+            recommended_actions = [f"{resume_cmd} --force", status_cmd, stop_cmd]
+    elif state == "blocked":
+        recommended_actions = [f"{resume_cmd} --force", status_cmd, stop_cmd]
+    else:
+        recommended_actions = [status_cmd]
 
     return {
         "state": state,
         "blocking_reason": blocking_reason,
         "current_ticket": current_ticket,
         "last_progress_at": last_progress_at,
-        "recommended_action": recommended_action,
+        "recommended_action": recommended_actions[0] if recommended_actions else None,
+        "recommended_actions": recommended_actions,
+        "attention_required": attention_required,
+        "worker_status": worker_status,
         "flow_status": record.status.value,
         "repo_id": repo_id,
         "run_id": run_id,
@@ -947,12 +966,16 @@ def _gather_inbox(
         try:
             config = load_repo_config(repo_root)
             with FlowStore(db_path, durable=config.durable_writes) as store:
-                paused = store.list_flow_runs(
-                    flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-                )
-                if not paused:
-                    continue
-                for record in paused:
+                active_statuses = [
+                    FlowRunStatus.PAUSED,
+                    FlowRunStatus.RUNNING,
+                    FlowRunStatus.FAILED,
+                    FlowRunStatus.STOPPED,
+                ]
+                all_runs = store.list_flow_runs(flow_type="ticket_flow")
+                for record in all_runs:
+                    if record.status not in active_statuses:
+                        continue
                     record_input = dict(record.input_data or {})
                     latest = _latest_dispatch(
                         repo_root,
@@ -971,7 +994,7 @@ def _gather_inbox(
                         and latest_reply_seq < seq
                     )
                     dispatch_state_reason = None
-                    if not has_dispatch:
+                    if record.status == FlowRunStatus.PAUSED and not has_dispatch:
                         if latest_payload.get("errors"):
                             dispatch_state_reason = (
                                 "Paused run has unreadable dispatch metadata"
@@ -984,6 +1007,12 @@ def _gather_inbox(
                             dispatch_state_reason = (
                                 "Run is paused without an actionable dispatch"
                             )
+                    elif record.status == FlowRunStatus.FAILED:
+                        dispatch_state_reason = (
+                            record.error_message or "Run failed"
+                        )
+                    elif record.status == FlowRunStatus.STOPPED:
+                        dispatch_state_reason = "Run was stopped"
                     run_state = build_ticket_flow_run_state(
                         repo_root=repo_root,
                         repo_id=snap.id,
@@ -992,7 +1021,11 @@ def _gather_inbox(
                         has_pending_dispatch=has_dispatch,
                         dispatch_state_reason=dispatch_state_reason,
                     )
-
+                    if not run_state.get("attention_required"):
+                        if has_dispatch:
+                            pass
+                        else:
+                            continue
                     base_item = {
                         "repo_id": snap.id,
                         "repo_display_name": snap.display_name,
@@ -1015,15 +1048,29 @@ def _gather_inbox(
                             }
                         )
                     else:
+                        item_type = "run_state_attention"
+                        next_action = "inspect_and_resume"
+                        if record.status == FlowRunStatus.RUNNING:
+                            health = check_worker_health(repo_root, str(record.id))
+                            if health.status in {"dead", "invalid", "mismatch"}:
+                                item_type = "worker_dead"
+                                next_action = "restart_worker"
+                        elif record.status == FlowRunStatus.FAILED:
+                            item_type = "run_failed"
+                            next_action = "diagnose_or_restart"
+                        elif record.status == FlowRunStatus.STOPPED:
+                            item_type = "run_stopped"
+                            next_action = "diagnose_or_restart"
                         messages.append(
                             {
                                 **base_item,
-                                "item_type": "run_state_attention",
-                                "next_action": "inspect_and_resume",
+                                "item_type": item_type,
+                                "next_action": next_action,
                                 "seq": seq if seq > 0 else None,
                                 "dispatch": latest_payload.get("dispatch"),
                                 "files": latest_payload.get("files") or [],
                                 "reason": dispatch_state_reason,
+                                "available_actions": run_state.get("recommended_actions", []),
                             }
                         )
         except Exception:

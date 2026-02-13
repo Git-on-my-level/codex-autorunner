@@ -90,6 +90,9 @@ def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
         run_state = items[0].get("run_state") or {}
         assert run_state.get("state") == "blocked"
         assert run_state.get("recommended_action")
+        assert run_state.get("recommended_actions")
+        assert isinstance(run_state.get("recommended_actions"), list)
+        assert run_state.get("attention_required") is True
 
 
 def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
@@ -110,6 +113,9 @@ def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
         run_state = items[0].get("run_state") or {}
         assert run_state.get("state") == "paused"
         assert run_state.get("recommended_action")
+        assert run_state.get("recommended_actions")
+        assert isinstance(run_state.get("recommended_actions"), list)
+        assert run_state.get("attention_required") is True
 
 
 def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> None:
@@ -132,6 +138,9 @@ def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> N
         run_state = item.get("run_state") or {}
         assert run_state.get("state") == "blocked"
         assert run_state.get("recommended_action")
+        assert run_state.get("recommended_actions")
+        assert isinstance(run_state.get("recommended_actions"), list)
+        assert run_state.get("attention_required") is True
 
 
 def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env) -> None:
