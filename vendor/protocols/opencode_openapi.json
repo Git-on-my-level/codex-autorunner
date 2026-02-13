@@ -355,6 +355,12 @@
                 "$ref": "#/components/schemas/MessageAbortedError"
               },
               {
+                "$ref": "#/components/schemas/StructuredOutputError"
+              },
+              {
+                "$ref": "#/components/schemas/ContextOverflowError"
+              },
+              {
                 "$ref": "#/components/schemas/APIError"
               }
             ]
@@ -399,6 +405,7 @@
           "sessionID": {
             "type": "string"
           },
+          "structured": {},
           "summary": {
             "type": "boolean"
           },
@@ -441,6 +448,9 @@
               },
               "reasoning": {
                 "type": "number"
+              },
+              "total": {
+                "type": "number"
               }
             },
             "required": [
@@ -450,6 +460,9 @@
               "cache"
             ],
             "type": "object"
+          },
+          "variant": {
+            "type": "string"
           }
         },
         "required": [
@@ -675,6 +688,12 @@
               "prune": {
                 "description": "Enable pruning of old tool outputs (default: true)",
                 "type": "boolean"
+              },
+              "reserved": {
+                "description": "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               }
             },
             "type": "object"
@@ -959,6 +978,13 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "urls": {
+                "description": "URLs to fetch skills from (e.g., https://example.com/.well-known/skills/)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               }
             },
             "type": "object"
@@ -1031,6 +1057,33 @@
             "type": "object"
           }
         },
+        "type": "object"
+      },
+      "ContextOverflowError": {
+        "properties": {
+          "data": {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "responseBody": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "const": "ContextOverflowError",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "data"
+        ],
         "type": "object"
       },
       "Event": {
@@ -1952,6 +2005,12 @@
                     "$ref": "#/components/schemas/MessageAbortedError"
                   },
                   {
+                    "$ref": "#/components/schemas/StructuredOutputError"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ContextOverflowError"
+                  },
+                  {
                     "$ref": "#/components/schemas/APIError"
                   }
                 ]
@@ -2637,6 +2696,13 @@
           "directory",
           "payload"
         ],
+        "type": "object"
+      },
+      "JSONSchema": {
+        "additionalProperties": {},
+        "propertyNames": {
+          "type": "string"
+        },
         "type": "object"
       },
       "KeybindsConfig": {
@@ -3766,6 +3832,50 @@
         ],
         "type": "object"
       },
+      "OutputFormat": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/OutputFormatText"
+          },
+          {
+            "$ref": "#/components/schemas/OutputFormatJsonSchema"
+          }
+        ]
+      },
+      "OutputFormatJsonSchema": {
+        "properties": {
+          "retryCount": {
+            "default": 2,
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/JSONSchema"
+          },
+          "type": {
+            "const": "json_schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "schema"
+        ],
+        "type": "object"
+      },
+      "OutputFormatText": {
+        "properties": {
+          "type": {
+            "const": "text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
       "Part": {
         "anyOf": [
           {
@@ -4438,13 +4548,13 @@
                 },
                 "provider": {
                   "properties": {
+                    "api": {
+                      "type": "string"
+                    },
                     "npm": {
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "npm"
-                  ],
                   "type": "object"
                 },
                 "reasoning": {
@@ -5113,6 +5223,9 @@
               },
               "reasoning": {
                 "type": "number"
+              },
+              "total": {
+                "type": "number"
               }
             },
             "required": [
@@ -5163,6 +5276,34 @@
           "sessionID",
           "messageID",
           "type"
+        ],
+        "type": "object"
+      },
+      "StructuredOutputError": {
+        "properties": {
+          "data": {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "retries": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "message",
+              "retries"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "const": "StructuredOutputError",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "data"
         ],
         "type": "object"
       },
@@ -5748,6 +5889,9 @@
         "properties": {
           "agent": {
             "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/OutputFormat"
           },
           "id": {
             "type": "string"
@@ -8034,13 +8178,13 @@
                                 },
                                 "provider": {
                                   "properties": {
+                                    "api": {
+                                      "type": "string"
+                                    },
                                     "npm": {
                                       "type": "string"
                                     }
                                   },
-                                  "required": [
-                                    "npm"
-                                  ],
                                   "type": "object"
                                 },
                                 "reasoning": {
@@ -9699,6 +9843,9 @@
                   "agent": {
                     "type": "string"
                   },
+                  "format": {
+                    "$ref": "#/components/schemas/OutputFormat"
+                  },
                   "messageID": {
                     "pattern": "^msg.*",
                     "type": "string"
@@ -10167,6 +10314,9 @@
                 "properties": {
                   "agent": {
                     "type": "string"
+                  },
+                  "format": {
+                    "$ref": "#/components/schemas/OutputFormat"
                   },
                   "messageID": {
                     "pattern": "^msg.*",
