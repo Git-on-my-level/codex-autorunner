@@ -4415,7 +4415,10 @@ def ticket_flow_start(
     controller, agent_pool = _ticket_flow_controller(engine)
     try:
         run_id = str(uuid.uuid4())
-        record = asyncio.run(controller.start_flow(input_data={}, run_id=run_id))
+        input_data = {"workspace_root": str(engine.repo_root)}
+        record = asyncio.run(
+            controller.start_flow(input_data=input_data, run_id=run_id)
+        )
         _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
     finally:
         controller.shutdown()
