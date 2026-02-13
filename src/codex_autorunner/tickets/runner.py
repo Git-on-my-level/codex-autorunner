@@ -310,6 +310,8 @@ class TicketRunner:
             state.pop("last_agent_output", None)
             state.pop("lint", None)
             state.pop("commit", None)
+            commit_pending = False
+            commit_retries = 0
 
         # If current ticket is done, clear it unless we're in the middle of a
         # bounded "commit required" follow-up loop.

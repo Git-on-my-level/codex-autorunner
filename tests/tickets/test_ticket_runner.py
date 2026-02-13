@@ -159,6 +159,7 @@ async def test_ticket_runner_recovers_when_current_ticket_path_is_stale(
 
     assert result.status == "continue"
     assert len(pool.requests) == 1
+    assert "<CAR_COMMIT_REQUIRED>" not in pool.requests[0].prompt
     assert (
         result.state.get("current_ticket")
         == ".codex-autorunner/tickets/TICKET-009-ALREADY-DONE.md"
