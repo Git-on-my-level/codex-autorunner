@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from codex_autorunner.core.flows.failure_diagnostics import (
-    build_failure_payload,
     _derive_failure_reason_code,
+    build_failure_payload,
 )
 from codex_autorunner.core.flows.models import FailureReasonCode, FlowEventType
 from codex_autorunner.core.flows.store import FlowStore
