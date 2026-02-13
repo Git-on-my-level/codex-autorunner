@@ -1,9 +1,10 @@
-from typing import Any
+from typing import Any, Dict, Optional
 
 import pytest
 
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
 from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
+    _model_list_all_with_agent_compat,
     _model_list_with_agent_compat,
 )
 
@@ -13,10 +14,12 @@ class _StubClient:
         self,
         *,
         response: Any,
+        responses_by_cursor: Optional[Dict[Optional[str], Any]] = None,
         fail_agent_request: bool = False,
         fail_code: int = -32602,
     ) -> None:
         self._response = response
+        self._responses_by_cursor = responses_by_cursor
         self._fail_agent_request = fail_agent_request
         self._fail_code = fail_code
         self.calls: list[dict[str, Any]] = []
@@ -29,6 +32,10 @@ class _StubClient:
                 code=self._fail_code,
                 message="invalid params",
             )
+        if self._responses_by_cursor is not None:
+            cursor = kwargs.get("cursor")
+            if cursor in self._responses_by_cursor:
+                return self._responses_by_cursor[cursor]
         return self._response
 
 
@@ -109,3 +116,76 @@ async def test_model_list_with_agent_compat_drops_none_params() -> None:
 
     assert result == {"data": [{"id": "gpt-5.3-codex-spark"}]}
     assert client.calls == [{"agent": "codex", "limit": 25}]
+
+
+@pytest.mark.asyncio
+async def test_model_list_all_with_agent_compat_follows_next_cursor() -> None:
+    client = _StubClient(
+        response={"data": []},
+        responses_by_cursor={
+            None: {
+                "data": [
+                    {"id": "gpt-5.3-codex"},
+                    {"id": "gpt-5.2-codex"},
+                ],
+                "nextCursor": "cursor-2",
+            },
+            "cursor-2": {
+                "data": [
+                    {"id": "gpt-5.3-codex-spark"},
+                    {"id": "gpt-5.1-codex-max"},
+                ],
+                "nextCursor": None,
+            },
+        },
+    )
+
+    result = await _model_list_all_with_agent_compat(
+        client,
+        params={"agent": "codex", "limit": 25, "cursor": None},
+    )
+
+    assert [entry["id"] for entry in result] == [
+        "gpt-5.3-codex",
+        "gpt-5.2-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.1-codex-max",
+    ]
+    assert client.calls == [
+        {"agent": "codex", "limit": 25},
+        {"agent": "codex", "limit": 25, "cursor": "cursor-2"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_list_all_with_agent_compat_deduplicates_models() -> None:
+    client = _StubClient(
+        response={"data": []},
+        responses_by_cursor={
+            None: {
+                "data": [
+                    {"id": "gpt-5.3-codex"},
+                    {"id": "gpt-5.3-codex-spark"},
+                ],
+                "nextCursor": "cursor-2",
+            },
+            "cursor-2": {
+                "data": [
+                    {"id": "gpt-5.3-codex-spark"},
+                    {"id": "gpt-5.2-codex"},
+                ],
+                "nextCursor": None,
+            },
+        },
+    )
+
+    result = await _model_list_all_with_agent_compat(
+        client,
+        params={"agent": "codex", "limit": 25},
+    )
+
+    assert [entry["id"] for entry in result] == [
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.2-codex",
+    ]

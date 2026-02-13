@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
 _INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
+_MODEL_LIST_MAX_PAGES = 10
 
 
 def _extract_opencode_session_path(payload: Any) -> Optional[str]:
@@ -109,6 +110,59 @@ async def _model_list_with_agent_compat(
         fallback_params = dict(request_params)
         fallback_params.pop("agent", None)
         return await client.model_list(**fallback_params)
+
+
+def _coerce_model_list_entries(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, dict)]
+    if isinstance(payload, dict):
+        for key in ("data", "models", "items", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [entry for entry in value if isinstance(entry, dict)]
+    return []
+
+
+def _extract_model_list_cursor(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("nextCursor", "next_cursor"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+async def _model_list_all_with_agent_compat(
+    client: CodexAppServerClient,
+    *,
+    params: dict[str, Any],
+    max_pages: int = _MODEL_LIST_MAX_PAGES,
+) -> list[dict[str, Any]]:
+    request_params = dict(params)
+    merged_entries: list[dict[str, Any]] = []
+    seen_model_ids: set[str] = set()
+    seen_cursors: set[str] = set()
+    pages = 0
+    while True:
+        pages += 1
+        payload = await _model_list_with_agent_compat(client, params=request_params)
+        for entry in _coerce_model_list_entries(payload):
+            model_id = entry.get("model") or entry.get("id")
+            if isinstance(model_id, str) and model_id:
+                if model_id in seen_model_ids:
+                    continue
+                seen_model_ids.add(model_id)
+            merged_entries.append(entry)
+        if pages >= max_pages:
+            break
+        next_cursor = _extract_model_list_cursor(payload)
+        if not next_cursor or next_cursor in seen_cursors:
+            break
+        seen_cursors.add(next_cursor)
+        request_params = dict(request_params)
+        request_params["cursor"] = next_cursor
+    return merged_entries
 
 
 @dataclass
@@ -361,7 +415,7 @@ class WorkspaceCommands(SharedHelpers):
             requested_agent = agent
         request_params = dict(list_params)
         request_params["agent"] = requested_agent
-        return await _model_list_with_agent_compat(client, params=request_params)
+        return await _model_list_all_with_agent_compat(client, params=request_params)
 
     async def _verify_active_thread(
         self, message: TelegramMessage, record: "TelegramTopicRecord"
