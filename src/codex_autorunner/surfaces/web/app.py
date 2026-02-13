@@ -97,6 +97,8 @@ from .routes.pma import build_pma_routes
 from .routes.system import build_system_routes
 from .runner_manager import RunnerManager
 from .schemas import (
+    HubArchiveWorktreeRequest,
+    HubArchiveWorktreeResponse,
     HubCleanupWorktreeRequest,
     HubCreateRepoRequest,
     HubCreateWorktreeRequest,
@@ -2544,6 +2546,25 @@ def create_hub_app(
             "hub.cleanup_worktree", _run_cleanup_worktree, request_id=get_request_id()
         )
         return job.to_dict()
+
+    @app.post("/hub/worktrees/archive", response_model=HubArchiveWorktreeResponse)
+    async def archive_worktree(payload: HubArchiveWorktreeRequest):
+        worktree_repo_id = payload.worktree_repo_id
+        archive_note = payload.archive_note
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub archive worktree id=%s" % (worktree_repo_id,),
+        )
+        try:
+            result = await asyncio.to_thread(
+                context.supervisor.archive_worktree,
+                worktree_repo_id=str(worktree_repo_id),
+                archive_note=archive_note,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return result
 
     @app.get("/hub/jobs/{job_id}", response_model=HubJobResponse)
     async def get_hub_job(job_id: str):

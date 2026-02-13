@@ -1990,6 +1990,35 @@ def hub_worktree_cleanup(
     typer.echo("ok")
 
 
+@worktree_app.command("archive")
+def hub_worktree_archive(
+    worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to archive"),
+    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    archive_note: Optional[str] = typer.Option(
+        None, "--archive-note", help="Optional archive note"
+    ),
+):
+    """Archive a hub-managed worktree snapshot without removing it."""
+    config = _require_hub_config(hub)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
+    )
+    try:
+        result = supervisor.archive_worktree(
+            worktree_repo_id=worktree_repo_id,
+            archive_note=archive_note,
+        )
+    except Exception as exc:
+        _raise_exit(str(exc), cause=exc)
+    typer.echo(f"Archived: {result['snapshot_id']}")
+    typer.echo(f"Path: {result['snapshot_path']}")
+    typer.echo(f"Status: {result['status']}")
+    typer.echo(f"Files: {result['file_count']}, Bytes: {result['total_bytes']}")
+
+
 @hub_app.command("serve")
 def hub_serve(
     path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),

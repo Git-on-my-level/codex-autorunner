@@ -170,6 +170,26 @@ class HubCleanupWorktreeRequest(Payload):
     )
 
 
+class HubArchiveWorktreeRequest(Payload):
+    worktree_repo_id: str = Field(
+        validation_alias=AliasChoices("worktree_repo_id", "worktreeRepoId")
+    )
+    archive_note: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    )
+
+
+class HubArchiveWorktreeResponse(ResponseModel):
+    snapshot_id: str
+    snapshot_path: str
+    meta_path: str
+    status: str
+    file_count: int
+    total_bytes: int
+    flow_run_count: int
+    latest_flow_run_id: Optional[str]
+
+
 class AppServerThreadResetRequest(Payload):
     key: str = Field(
         validation_alias=AliasChoices("key", "feature", "feature_key", "featureKey")

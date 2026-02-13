@@ -793,6 +793,74 @@ class HubSupervisor:
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_repo(repo_id)
 
+    def _archive_worktree_snapshot(
+        self,
+        *,
+        worktree_repo_id: str,
+        archive_note: Optional[str] = None,
+        force: bool = False,
+    ):
+        from .archive import ArchiveResult
+
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(worktree_repo_id)
+        if not entry or entry.kind != "worktree":
+            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
+        if not entry.worktree_of:
+            raise ValueError("Worktree repo is missing worktree_of metadata")
+        base = manifest.get(entry.worktree_of)
+        if not base or base.kind != "base":
+            raise ValueError(f"Base repo not found: {entry.worktree_of}")
+
+        base_path = (self.hub_config.root / base.path).resolve()
+        worktree_path = (self.hub_config.root / entry.path).resolve()
+
+        if not worktree_path.exists():
+            raise ValueError(f"Worktree path does not exist: {worktree_path}")
+
+        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
+        if runner:
+            runner.stop()
+
+        branch_name = entry.branch or git_branch(worktree_path) or "unknown"
+        head_sha = git_head_sha(worktree_path) or "unknown"
+        snapshot_id = build_snapshot_id(branch_name, head_sha)
+        logger.info(
+            "Hub archive worktree start id=%s snapshot_id=%s",
+            worktree_repo_id,
+            snapshot_id,
+        )
+        try:
+            result: ArchiveResult = archive_worktree_snapshot(
+                base_repo_root=base_path,
+                base_repo_id=base.id,
+                worktree_repo_root=worktree_path,
+                worktree_repo_id=worktree_repo_id,
+                branch=branch_name,
+                worktree_of=entry.worktree_of,
+                note=archive_note,
+                snapshot_id=snapshot_id,
+                head_sha=head_sha,
+                source_path=entry.path,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Hub archive worktree failed id=%s snapshot_id=%s",
+                worktree_repo_id,
+                snapshot_id,
+            )
+            if not force:
+                raise ValueError(f"Worktree archive failed: {exc}") from exc
+            return None
+        else:
+            logger.info(
+                "Hub archive worktree complete id=%s snapshot_id=%s status=%s",
+                worktree_repo_id,
+                result.snapshot_id,
+                result.status,
+            )
+            return result
+
     def cleanup_worktree(
         self,
         *,
@@ -817,48 +885,16 @@ class HubSupervisor:
         base_path = (self.hub_config.root / base.path).resolve()
         worktree_path = (self.hub_config.root / entry.path).resolve()
 
-        # Stop any runner first.
         runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
         if runner:
             runner.stop()
 
         if archive:
-            branch_name = entry.branch or git_branch(worktree_path) or "unknown"
-            head_sha = git_head_sha(worktree_path) or "unknown"
-            snapshot_id = build_snapshot_id(branch_name, head_sha)
-            logger.info(
-                "Hub archive worktree start id=%s snapshot_id=%s",
-                worktree_repo_id,
-                snapshot_id,
+            self._archive_worktree_snapshot(
+                worktree_repo_id=worktree_repo_id,
+                archive_note=archive_note,
+                force=force_archive,
             )
-            try:
-                result = archive_worktree_snapshot(
-                    base_repo_root=base_path,
-                    base_repo_id=base.id,
-                    worktree_repo_root=worktree_path,
-                    worktree_repo_id=worktree_repo_id,
-                    branch=branch_name,
-                    worktree_of=entry.worktree_of,
-                    note=archive_note,
-                    snapshot_id=snapshot_id,
-                    head_sha=head_sha,
-                    source_path=entry.path,
-                )
-            except Exception as exc:
-                logger.exception(
-                    "Hub archive worktree failed id=%s snapshot_id=%s",
-                    worktree_repo_id,
-                    snapshot_id,
-                )
-                if not force_archive:
-                    raise ValueError(f"Worktree archive failed: {exc}") from exc
-            else:
-                logger.info(
-                    "Hub archive worktree complete id=%s snapshot_id=%s status=%s",
-                    worktree_repo_id,
-                    result.snapshot_id,
-                    result.status,
-                )
 
         # Remove worktree from base repo.
         try:
@@ -911,6 +947,46 @@ class HubSupervisor:
 
         manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+
+    def archive_worktree(
+        self,
+        *,
+        worktree_repo_id: str,
+        archive_note: Optional[str] = None,
+    ) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(worktree_repo_id)
+        if not entry or entry.kind != "worktree":
+            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
+        if not entry.worktree_of:
+            raise ValueError("Worktree repo is missing worktree_of metadata")
+        worktree_path = (self.hub_config.root / entry.path).resolve()
+
+        if not worktree_path.exists():
+            raise ValueError(f"Worktree path does not exist: {worktree_path}")
+
+        if git_available(worktree_path) and not git_is_clean(worktree_path):
+            raise ValueError(
+                "Worktree has uncommitted changes; commit or stash before archiving"
+            )
+
+        result = self._archive_worktree_snapshot(
+            worktree_repo_id=worktree_repo_id,
+            archive_note=archive_note,
+            force=False,
+        )
+        if result is None:
+            raise ValueError("Archive failed unexpectedly")
+        return {
+            "snapshot_id": result.snapshot_id,
+            "snapshot_path": str(result.snapshot_path),
+            "meta_path": str(result.meta_path),
+            "status": result.status,
+            "file_count": result.file_count,
+            "total_bytes": result.total_bytes,
+            "flow_run_count": result.flow_run_count,
+            "latest_flow_run_id": result.latest_flow_run_id,
+        }
 
     def check_repo_removal(self, repo_id: str) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
