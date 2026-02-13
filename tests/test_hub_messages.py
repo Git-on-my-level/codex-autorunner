@@ -242,3 +242,55 @@ def test_hub_messages_failed_run_appears_in_inbox(hub_env) -> None:
         assert run_state.get("attention_required") is False
         assert run_state.get("worker_status") == "exited_expected"
         assert "available_actions" in item
+        assert item.get("resolution_state") == "terminal_attention"
+        assert "dismiss" in (item.get("resolvable_actions") or [])
+
+
+def test_hub_messages_dispatch_includes_lifecycle_metadata(hub_env) -> None:
+    run_id = "77777777-7777-7777-7777-777777777777"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["item_type"] == "run_dispatch"
+        assert item.get("resolution_state") == "pending_dispatch"
+        assert "reply_resume" in (item.get("resolvable_actions") or [])
+        assert "dismiss" in (item.get("resolvable_actions") or [])
+
+
+def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env) -> None:
+    run_id = "88888888-8888-8888-8888-888888888888"
+    _seed_failed_run(hub_env.repo_root, run_id)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        before = client.get("/hub/messages").json()["items"]
+        assert len(before) == 1
+        assert before[0]["item_type"] == "run_failed"
+
+        resolved = client.post(
+            "/hub/messages/resolve",
+            json={
+                "repo_id": hub_env.repo_id,
+                "run_id": run_id,
+                "item_type": "run_failed",
+                "action": "dismiss",
+                "reason": "cleanup",
+            },
+        )
+        assert resolved.status_code == 200
+        payload = resolved.json()
+        assert payload["status"] == "ok"
+        assert payload["resolved"]["run_id"] == run_id
+        assert payload["resolved"]["item_type"] == "run_failed"
+        assert payload["resolved"]["action"] == "dismiss"
+        assert payload["resolved"]["reason"] == "cleanup"
+
+        after = client.get("/hub/messages").json()["items"]
+        assert after == []

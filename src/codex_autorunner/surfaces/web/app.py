@@ -195,6 +195,81 @@ def _dismissal_key(run_id: str, seq: int) -> str:
     return f"{run_id}:{seq}"
 
 
+def _message_resolution_key(
+    run_id: str, *, item_type: str, seq: Optional[int] = None
+) -> str:
+    normalized = (item_type or "").strip() or "run_dispatch"
+    if normalized == "run_dispatch":
+        if isinstance(seq, int) and seq > 0:
+            return _dismissal_key(run_id, seq)
+        return f"{run_id}:run_dispatch"
+    if isinstance(seq, int) and seq > 0:
+        return f"{run_id}:{normalized}:{seq}"
+    return f"{run_id}:{normalized}"
+
+
+def _message_resolution_state(item_type: str) -> str:
+    if item_type == "run_dispatch":
+        return "pending_dispatch"
+    return "terminal_attention"
+
+
+def _message_resolvable_actions(item_type: str) -> list[str]:
+    if item_type == "run_dispatch":
+        return ["reply_resume", "dismiss"]
+    if item_type in {"run_failed", "run_stopped"}:
+        return ["dismiss", "archive_run", "restart"]
+    return ["dismiss", "reply_resume", "restart"]
+
+
+def _find_message_resolution(
+    dismissals: dict[str, dict[str, Any]],
+    *,
+    run_id: str,
+    item_type: str,
+    seq: Optional[int],
+) -> Optional[dict[str, Any]]:
+    keys = [_message_resolution_key(run_id, item_type=item_type, seq=seq)]
+    if item_type != "run_dispatch" and isinstance(seq, int) and seq > 0:
+        keys.append(_message_resolution_key(run_id, item_type=item_type))
+    for key in keys:
+        entry = dismissals.get(key)
+        if isinstance(entry, dict):
+            return entry
+    return None
+
+
+def _record_message_resolution(
+    *,
+    repo_root: Path,
+    repo_id: str,
+    run_id: str,
+    item_type: str,
+    seq: Optional[int],
+    action: str,
+    reason: Optional[str],
+    actor: Optional[str],
+) -> dict[str, Any]:
+    items = _load_hub_inbox_dismissals(repo_root)
+    resolved_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "repo_id": repo_id,
+        "run_id": run_id,
+        "item_type": item_type,
+        "seq": seq if isinstance(seq, int) and seq > 0 else None,
+        "action": action,
+        "reason": reason or None,
+        "resolved_at": resolved_at,
+        "resolution_state": "dismissed" if action == "dismiss" else "resolved",
+    }
+    if actor:
+        payload["resolved_by"] = actor
+    key = _message_resolution_key(run_id, item_type=item_type, seq=seq)
+    items[key] = payload
+    _save_hub_inbox_dismissals(repo_root, items)
+    return payload
+
+
 def _load_hub_inbox_dismissals(repo_root: Path) -> dict[str, dict[str, Any]]:
     path = _hub_inbox_dismissals_path(repo_root)
     if not path.exists():
@@ -1901,11 +1976,6 @@ def create_hub_app(
                         and seq > 0
                         and latest_reply_seq < seq
                     )
-                    if (
-                        has_pending_dispatch
-                        and _dismissal_key(str(record.id), seq) in dismissals
-                    ):
-                        continue
 
                     dispatch_state_reason = None
                     if (
@@ -1969,18 +2039,17 @@ def create_hub_app(
                         "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
                         "run_state": run_state,
                     }
+                    item_payload: dict[str, Any]
                     if has_pending_dispatch:
-                        messages.append(
-                            {
-                                **base_item,
-                                "item_type": "run_dispatch",
-                                "next_action": "reply_and_resume",
-                                "seq": latest["seq"],
-                                "dispatch": latest["dispatch"],
-                                "message": latest["dispatch"],
-                                "files": latest.get("files") or [],
-                            }
-                        )
+                        item_payload = {
+                            **base_item,
+                            "item_type": "run_dispatch",
+                            "next_action": "reply_and_resume",
+                            "seq": latest["seq"],
+                            "dispatch": latest["dispatch"],
+                            "message": latest["dispatch"],
+                            "files": latest.get("files") or [],
+                        }
                     else:
                         fallback_dispatch = latest.get("dispatch") if latest else None
                         item_type = "run_state_attention"
@@ -1991,25 +2060,51 @@ def create_hub_app(
                         elif record.status == FlowRunStatus.STOPPED:
                             item_type = "run_stopped"
                             next_action = "diagnose_or_restart"
-                        messages.append(
-                            {
-                                **base_item,
-                                "item_type": item_type,
-                                "next_action": next_action,
-                                "seq": seq if seq > 0 else None,
-                                "dispatch": fallback_dispatch,
-                                "message": fallback_dispatch
-                                or {
-                                    "title": "Run requires attention",
-                                    "body": dispatch_state_reason or "",
-                                },
-                                "files": latest.get("files") if latest else [],
-                                "reason": dispatch_state_reason,
-                                "available_actions": run_state.get(
-                                    "recommended_actions", []
-                                ),
-                            }
+                        item_payload = {
+                            **base_item,
+                            "item_type": item_type,
+                            "next_action": next_action,
+                            "seq": seq if seq > 0 else None,
+                            "dispatch": fallback_dispatch,
+                            "message": fallback_dispatch
+                            or {
+                                "title": "Run requires attention",
+                                "body": dispatch_state_reason or "",
+                            },
+                            "files": latest.get("files") if latest else [],
+                            "reason": dispatch_state_reason,
+                            "available_actions": run_state.get(
+                                "recommended_actions", []
+                            ),
+                        }
+
+                    item_type = str(item_payload.get("item_type") or "run_dispatch")
+                    item_seq_raw = item_payload.get("seq")
+                    item_seq = (
+                        int(item_seq_raw)
+                        if isinstance(item_seq_raw, int)
+                        or (
+                            isinstance(item_seq_raw, str)
+                            and item_seq_raw.isdigit()
+                            and int(item_seq_raw) > 0
                         )
+                        else None
+                    )
+                    if _find_message_resolution(
+                        dismissals,
+                        run_id=str(record.id),
+                        item_type=item_type,
+                        seq=item_seq,
+                    ):
+                        continue
+
+                    item_payload["resolution_state"] = _message_resolution_state(
+                        item_type
+                    )
+                    item_payload["resolvable_actions"] = _message_resolvable_actions(
+                        item_type
+                    )
+                    messages.append(item_payload)
             messages.sort(key=lambda m: m.get("run_created_at") or "", reverse=True)
             if limit and limit > 0:
                 return messages[: int(limit)]
@@ -2043,26 +2138,97 @@ def create_hub_app(
 
         repo_lock = await _repo_dismissal_lock(snapshot.path)
         async with repo_lock:
-            dismissed_at = datetime.now(timezone.utc).isoformat()
-            items = _load_hub_inbox_dismissals(snapshot.path)
-            items[_dismissal_key(run_id, seq)] = {
-                "repo_id": repo_id,
-                "run_id": run_id,
-                "seq": seq,
-                "reason": reason or None,
-                "dismissed_at": dismissed_at,
-            }
-            _save_hub_inbox_dismissals(snapshot.path, items)
+            dismissed = _record_message_resolution(
+                repo_root=snapshot.path,
+                repo_id=repo_id,
+                run_id=run_id,
+                item_type="run_dispatch",
+                seq=seq,
+                action="dismiss",
+                reason=reason or None,
+                actor="hub_messages_dismiss",
+            )
+            dismissed_at = str(dismissed.get("resolved_at") or "")
+            dismissed["dismissed_at"] = dismissed_at
         return {
             "status": "ok",
-            "dismissed": {
-                "repo_id": repo_id,
-                "run_id": run_id,
-                "seq": seq,
-                "reason": reason or None,
-                "dismissed_at": dismissed_at,
-            },
+            "dismissed": dismissed,
         }
+
+    @app.post("/hub/messages/resolve")
+    async def resolve_hub_message(payload: dict[str, Any]):
+        repo_id = str(payload.get("repo_id") or "").strip()
+        run_id = str(payload.get("run_id") or "").strip()
+        item_type = str(payload.get("item_type") or "").strip()
+        action = str(payload.get("action") or "dismiss").strip() or "dismiss"
+        reason_raw = payload.get("reason")
+        actor_raw = payload.get("actor")
+        reason = str(reason_raw).strip() if isinstance(reason_raw, str) else ""
+        actor = str(actor_raw).strip() if isinstance(actor_raw, str) else ""
+        seq_raw = payload.get("seq")
+        seq: Optional[int] = None
+        if seq_raw is not None and seq_raw != "":
+            try:
+                parsed = int(seq_raw)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid seq") from None
+            if parsed <= 0:
+                raise HTTPException(status_code=400, detail="Invalid seq")
+            seq = parsed
+
+        if not repo_id:
+            raise HTTPException(status_code=400, detail="Missing repo_id")
+        if not run_id:
+            raise HTTPException(status_code=400, detail="Missing run_id")
+        if action not in {"dismiss"}:
+            raise HTTPException(status_code=400, detail="Unsupported action")
+
+        snapshots = await asyncio.to_thread(context.supervisor.list_repos)
+        snapshot = next((s for s in snapshots if s.id == repo_id), None)
+        if snapshot is None or not snapshot.exists_on_disk:
+            raise HTTPException(status_code=404, detail="Repo not found")
+
+        if not item_type:
+            hub_payload = await hub_messages(limit=2000)
+            items_raw = (
+                hub_payload.get("items", []) if isinstance(hub_payload, dict) else []
+            )
+            matched = None
+            for item in items_raw if isinstance(items_raw, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("repo_id") or "") != repo_id:
+                    continue
+                if str(item.get("run_id") or "") != run_id:
+                    continue
+                candidate_seq = item.get("seq")
+                if seq is not None and candidate_seq != seq:
+                    continue
+                matched = item
+                break
+            if matched is None:
+                raise HTTPException(status_code=404, detail="Hub message not found")
+            item_type = str(matched.get("item_type") or "").strip() or "run_dispatch"
+            if seq is None:
+                matched_seq = matched.get("seq")
+                if isinstance(matched_seq, int) and matched_seq > 0:
+                    seq = matched_seq
+        elif item_type == "run_dispatch" and seq is None:
+            raise HTTPException(status_code=400, detail="Missing seq for run_dispatch")
+
+        repo_lock = await _repo_dismissal_lock(snapshot.path)
+        async with repo_lock:
+            resolved = _record_message_resolution(
+                repo_root=snapshot.path,
+                repo_id=repo_id,
+                run_id=run_id,
+                item_type=item_type,
+                seq=seq,
+                action=action,
+                reason=reason or None,
+                actor=actor or "hub_messages_resolve",
+            )
+        return {"status": "ok", "resolved": resolved}
 
     @app.get("/hub/repos")
     async def list_repos():

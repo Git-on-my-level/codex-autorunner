@@ -197,6 +197,7 @@ def test_pma_context_command_group_exists():
     assert "reset" in output, "PMA context should have 'reset' command"
     assert "snapshot" in output, "PMA context should have 'snapshot' command"
     assert "prune" in output, "PMA context should have 'prune' command"
+    assert "compact" in output, "PMA context should have 'compact' command"
 
 
 def test_pma_context_reset(tmp_path: Path):
@@ -308,3 +309,65 @@ def test_pma_context_prune_over_budget(tmp_path: Path):
         "This file was pruned" in active_content
     ), "Active context should have prune note"
     assert "Line 1" not in active_content, "Long content should be removed"
+
+
+def test_pma_context_compact_dry_run(tmp_path: Path):
+    """Verify context compact dry-run reports intent without modifying files."""
+    seed_hub_files(tmp_path, force=True)
+    active_context_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    )
+    before = active_context_path.read_text(encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["context", "compact", "--path", str(tmp_path), "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert "Dry run: compact active_context.md" in result.stdout
+    after = active_context_path.read_text(encoding="utf-8")
+    assert before == after
+
+
+def test_pma_context_compact_snapshots_and_rewrites_active_context(tmp_path: Path):
+    """Verify context compact snapshots old context and writes compact active context."""
+    seed_hub_files(tmp_path, force=True)
+
+    active_context_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+    )
+    context_log_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+    )
+
+    long_content = "\n".join([f"- Important line {i}" for i in range(1, 80)])
+    active_context_path.write_text(long_content, encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "context",
+            "compact",
+            "--path",
+            str(tmp_path),
+            "--max-lines",
+            "24",
+            "--summary-lines",
+            "4",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Compacted active_context.md" in result.stdout
+
+    log_content = context_log_path.read_text(encoding="utf-8")
+    assert "## Snapshot:" in log_content
+    assert "Important line 1" in log_content
+
+    compacted = active_context_path.read_text(encoding="utf-8")
+    assert "## Current priorities" in compacted
+    assert "## Next steps" in compacted
+    assert "## Open questions" in compacted
+    assert "## Archived context summary" in compacted
+    assert len(compacted.splitlines()) <= 24
