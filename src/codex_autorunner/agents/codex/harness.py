@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from ...integrations.app_server.client import CodexAppServerResponseError
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
 
 _DEFAULT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
 
 
 def _coerce_entries(result: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -72,6 +75,18 @@ def _coerce_reasoning_efforts(entry: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(efforts))
 
 
+def _normalize_model_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _select_display_name(model_id: str, display_name_raw: Any) -> str:
+    if not isinstance(display_name_raw, str) or not display_name_raw:
+        return model_id
+    if _normalize_model_name(display_name_raw) == _normalize_model_name(model_id):
+        return model_id
+    return display_name_raw
+
+
 class CodexHarness(AgentHarness):
     agent_id: AgentId = AgentId("codex")
     display_name = "Codex"
@@ -87,18 +102,26 @@ class CodexHarness(AgentHarness):
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
 
+    async def _model_list_with_agent_compat(self, client: Any) -> Any:
+        try:
+            return await client.model_list(agent="codex")
+        except CodexAppServerResponseError as exc:
+            if exc.code not in _INVALID_PARAMS_ERROR_CODES:
+                raise
+            return await client.model_list()
+
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         client = await self._supervisor.get_client(workspace_root)
-        result = await client.model_list()
+        result = await self._model_list_with_agent_compat(client)
         entries = _coerce_entries(result, ("data", "models", "items", "results"))
         models: list[ModelSpec] = []
         for entry in entries:
             model_id = entry.get("model") or entry.get("id")
             if not isinstance(model_id, str) or not model_id:
                 continue
-            display_name = entry.get("displayName") or entry.get("name") or model_id
-            if not isinstance(display_name, str) or not display_name:
-                display_name = model_id
+            display_name = _select_display_name(
+                model_id, entry.get("displayName") or entry.get("name")
+            )
             efforts = _coerce_reasoning_efforts(entry)
             models.append(
                 ModelSpec(

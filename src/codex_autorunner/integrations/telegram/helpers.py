@@ -703,6 +703,16 @@ def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _normalize_model_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _display_name_is_model_alias(model: str, display_name: Any) -> bool:
+    if not isinstance(display_name, str) or not display_name:
+        return False
+    return _normalize_model_name(display_name) == _normalize_model_name(model)
+
+
 def _coerce_model_options(
     result: Any, *, include_efforts: bool = True
 ) -> list[ModelOption]:
@@ -714,7 +724,11 @@ def _coerce_model_options(
             continue
         display_name = entry.get("displayName")
         label = model
-        if isinstance(display_name, str) and display_name and display_name != model:
+        if (
+            isinstance(display_name, str)
+            and display_name
+            and not _display_name_is_model_alias(model, display_name)
+        ):
             label = f"{model} ({display_name})"
         default_effort = None
         efforts: list[str] = []
@@ -764,7 +778,11 @@ def _format_model_list(
         model = entry.get("model") or entry.get("id") or "(unknown)"
         display_name = entry.get("displayName")
         label = str(model)
-        if isinstance(display_name, str) and display_name and display_name != model:
+        if (
+            isinstance(display_name, str)
+            and display_name
+            and not _display_name_is_model_alias(label, display_name)
+        ):
             label = f"{model} ({display_name})"
         if include_efforts:
             efforts = entry.get("supportedReasoningEfforts")
