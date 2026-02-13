@@ -10,7 +10,7 @@ def test_extract_context_usage_percent_prefers_total_usage_bucket() -> None:
         "total": {"totalTokens": 12000},
         "modelContextWindow": 20000,
     }
-    assert _extract_context_usage_percent(token_usage) == 60
+    assert _extract_context_usage_percent(token_usage) == 40
 
 
 def test_extract_context_usage_percent_uses_context_consumed_percent() -> None:
@@ -18,7 +18,7 @@ def test_extract_context_usage_percent_uses_context_consumed_percent() -> None:
         "last": {"totalTokens": 500},
         "modelContextWindow": 2000,
     }
-    assert _extract_context_usage_percent(token_usage) == 25
+    assert _extract_context_usage_percent(token_usage) == 75
 
 
 def test_format_tui_token_usage_uses_total_for_ctx_percent() -> None:
@@ -28,4 +28,4 @@ def test_format_tui_token_usage_uses_total_for_ctx_percent() -> None:
         "modelContextWindow": 2000,
     }
     line = _format_tui_token_usage(token_usage)
-    assert line == "Token usage: total 1500 input 1000 output 500 ctx 75%"
+    assert line == "Token usage: total 1500 input 1000 output 500 ctx 25%"
