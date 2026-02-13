@@ -4,12 +4,17 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shlex
+import shutil
+import site
 import subprocess
+import sys
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import NoReturn, Optional
+from typing import Any, NoReturn, Optional
 
 import httpx
 import typer
@@ -118,6 +123,7 @@ from ...tickets.lint import (
     lint_ticket_directory,
     parse_ticket_index,
 )
+from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig
 from ..web.app import create_hub_app
 from .pma_cli import pma_app as pma_cli_app
@@ -128,11 +134,14 @@ logger = logging.getLogger("codex_autorunner.cli")
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
 dispatch_app = typer.Typer(add_completion=False)
+inbox_app = typer.Typer(add_completion=False)
+hub_runs_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
 repos_app = typer.Typer(add_completion=False)
 worktree_app = typer.Typer(add_completion=False)
 hub_tickets_app = typer.Typer(add_completion=False)
+doctor_app = typer.Typer(add_completion=False, invoke_without_command=True)
 flow_app = typer.Typer(add_completion=False)
 ticket_flow_app = typer.Typer(add_completion=False)
 
@@ -594,15 +603,208 @@ def _require_optional_feature(
 
 app.add_typer(hub_app, name="hub")
 hub_app.add_typer(dispatch_app, name="dispatch")
+hub_app.add_typer(inbox_app, name="inbox")
+hub_app.add_typer(hub_runs_app, name="runs")
 hub_app.add_typer(worktree_app, name="worktree")
 hub_app.add_typer(hub_tickets_app, name="tickets")
 app.add_typer(telegram_app, name="telegram")
 app.add_typer(templates_app, name="templates")
 templates_app.add_typer(repos_app, name="repos")
+app.add_typer(doctor_app, name="doctor")
 app.add_typer(flow_app, name="flow")
 app.add_typer(ticket_flow_app, name="ticket-flow")
 flow_app.add_typer(ticket_flow_app, name="ticket_flow")
 app.add_typer(pma_cli_app, name="pma")
+
+_DURATION_PART_RE = re.compile(r"(\d+)([smhdw])")
+
+
+def _parse_bool_text(value: str, *, flag: str) -> bool:
+    normalized = (value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    _raise_exit(f"Invalid value for {flag}: {value!r} (expected true|false)")
+
+
+def _parse_duration(value: str) -> timedelta:
+    raw = (value or "").strip().lower()
+    if not raw:
+        _raise_exit("Duration must not be empty.")
+    matches = list(_DURATION_PART_RE.finditer(raw))
+    if not matches or "".join(m.group(0) for m in matches) != raw:
+        _raise_exit(
+            f"Invalid duration {value!r}. Use forms like 30m, 2h, 7d, or combined 1h30m."
+        )
+    total_seconds = 0
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    for match in matches:
+        total_seconds += int(match.group(1)) * multipliers[match.group(2)]
+    if total_seconds <= 0:
+        _raise_exit("Duration must be greater than zero.")
+    return timedelta(seconds=total_seconds)
+
+
+def _find_hub_server_process(port: Optional[int]) -> Optional[dict[str, Any]]:
+    try:
+        proc = subprocess.run(
+            ["ps", "-ax", "-o", "pid=", "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = (proc.stdout or "").splitlines()
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        command = parts[1]
+        command_lc = command.lower()
+        if "car hub serve" not in command_lc and "codex-autorunner" not in command_lc:
+            continue
+        if "hub" not in command_lc or "serve" not in command_lc:
+            continue
+        if (
+            port is not None
+            and f"--port {port}" not in command
+            and f":{port}" not in command
+        ):
+            continue
+        return {"pid": pid, "command": command}
+    return None
+
+
+def _repo_checkout_info(repo_root: Optional[Path]) -> Optional[dict[str, Any]]:
+    if repo_root is None:
+        return None
+    if not (repo_root / ".git").exists():
+        return None
+    try:
+        head = run_git(["rev-parse", "HEAD"], repo_root, check=False)
+        short_head = run_git(["rev-parse", "--short", "HEAD"], repo_root, check=False)
+        branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root, check=False)
+        describe = run_git(
+            ["describe", "--tags", "--always", "--dirty"],
+            repo_root,
+            check=False,
+        )
+        dirty = run_git(["status", "--porcelain"], repo_root, check=False)
+    except Exception:
+        return None
+    return {
+        "root": str(repo_root),
+        "branch": (branch.stdout or "").strip() or None,
+        "head": (head.stdout or "").strip() or None,
+        "short_head": (short_head.stdout or "").strip() or None,
+        "describe": (describe.stdout or "").strip() or None,
+        "dirty": bool((dirty.stdout or "").strip()),
+    }
+
+
+def _doctor_versions_payload(start_path: Path) -> dict[str, Any]:
+    start_path = start_path.resolve()
+    hub_config = None
+    hub_error = None
+    try:
+        hub_config = load_hub_config(start_path)
+    except ConfigError as exc:
+        hub_error = str(exc)
+
+    repo_root = None
+    try:
+        repo_root = find_repo_root(start_path)
+    except RepoNotFoundError:
+        repo_root = None
+
+    package_version = _car_version()
+    package_path = None
+    try:
+        import codex_autorunner  # noqa: PLC0415
+
+        package_path = str(Path(codex_autorunner.__file__).resolve())
+    except Exception:
+        package_path = None
+
+    site_packages: list[str] = []
+    try:
+        for item in site.getsitepackages():
+            if isinstance(item, str) and item not in site_packages:
+                site_packages.append(item)
+    except Exception:
+        pass
+    try:
+        user_site = site.getusersitepackages()
+        if isinstance(user_site, str) and user_site not in site_packages:
+            site_packages.append(user_site)
+    except Exception:
+        pass
+
+    hub_server = None
+    if hub_config is not None:
+        hub_server = _find_hub_server_process(hub_config.server_port)
+
+    checkout = _repo_checkout_info(repo_root)
+
+    source_matches_checkout = None
+    if package_path and repo_root:
+        try:
+            source_matches_checkout = is_within(Path(package_path), repo_root)
+        except Exception:
+            source_matches_checkout = None
+
+    mismatch_detected = None
+    if source_matches_checkout is not None:
+        mismatch_detected = not source_matches_checkout
+
+    return {
+        "cli": {
+            "version": package_version,
+            "argv0": sys.argv[0],
+            "resolved_argv0": (
+                str(Path(sys.argv[0]).resolve()) if Path(sys.argv[0]).exists() else None
+            ),
+            "car_executable": resolve_executable("car"),
+        },
+        "python": {
+            "executable": sys.executable,
+            "prefix": sys.prefix,
+            "base_prefix": getattr(sys, "base_prefix", None),
+            "site_packages": site_packages,
+        },
+        "package": {
+            "name": "codex-autorunner",
+            "version": package_version,
+            "path": package_path,
+        },
+        "hub": {
+            "root": str(hub_config.root) if hub_config else None,
+            "config_error": hub_error,
+            "server_host": getattr(hub_config, "server_host", None),
+            "server_port": getattr(hub_config, "server_port", None),
+            "server_base_path": getattr(hub_config, "server_base_path", None),
+            "server_process": {
+                "running": bool(hub_server),
+                "pid": hub_server.get("pid") if hub_server else None,
+                "startup_command": hub_server.get("command") if hub_server else None,
+                "version": package_version if hub_server else None,
+            },
+        },
+        "checkout": checkout,
+        "mismatch": {
+            "source_matches_checkout": source_matches_checkout,
+            "detected": mismatch_detected,
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _has_nested_git(path: Path) -> bool:
@@ -1386,12 +1588,15 @@ def edit(
     subprocess.run([*editor_parts, str(path)])
 
 
-@app.command("doctor")
+@doctor_app.callback(invoke_without_command=True)
 def doctor_cmd(
+    ctx: typer.Context,
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
     json_output: bool = typer.Option(False, "--json", help="Output JSON for scripting"),
 ):
     """Validate repo or hub setup."""
+    if ctx.invoked_subcommand:
+        return
     try:
         start_path = repo or Path.cwd()
         report = doctor(start_path)
@@ -1429,6 +1634,76 @@ def doctor_cmd(
     if report.has_errors():
         _raise_exit("Doctor check failed")
     typer.echo("Doctor check passed")
+
+
+@doctor_app.command("versions")
+def doctor_versions(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON"),
+):
+    """Show runtime/version introspection for CLI, Python, package, and hub server."""
+    payload = _doctor_versions_payload(repo or Path.cwd())
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    cli = payload.get("cli", {})
+    python_info = payload.get("python", {})
+    package = payload.get("package", {})
+    hub = payload.get("hub", {})
+    checkout = payload.get("checkout", {})
+    mismatch = payload.get("mismatch", {})
+    process = hub.get("server_process", {}) if isinstance(hub, dict) else {}
+
+    typer.echo("CLI")
+    typer.echo(f"- version: {cli.get('version')}")
+    typer.echo(f"- argv0: {cli.get('argv0')}")
+    typer.echo(f"- resolved argv0: {cli.get('resolved_argv0') or 'n/a'}")
+    typer.echo(f"- car executable: {cli.get('car_executable') or 'n/a'}")
+
+    typer.echo("Python")
+    typer.echo(f"- executable: {python_info.get('executable')}")
+    typer.echo(f"- prefix: {python_info.get('prefix')}")
+    typer.echo(f"- base_prefix: {python_info.get('base_prefix')}")
+    site_packages = python_info.get("site_packages")
+    if isinstance(site_packages, list) and site_packages:
+        typer.echo("- site-packages:")
+        for entry in site_packages:
+            typer.echo(f"  - {entry}")
+    else:
+        typer.echo("- site-packages: n/a")
+
+    typer.echo("Package")
+    typer.echo(f"- name: {package.get('name')}")
+    typer.echo(f"- version: {package.get('version')}")
+    typer.echo(f"- path: {package.get('path') or 'n/a'}")
+
+    typer.echo("Hub Server")
+    typer.echo(f"- hub root: {hub.get('root') or 'n/a'}")
+    typer.echo(f"- host: {hub.get('server_host') or 'n/a'}")
+    typer.echo(f"- port: {hub.get('server_port') or 'n/a'}")
+    typer.echo(f"- base path: {hub.get('server_base_path') or '/'}")
+    typer.echo(f"- running: {bool(process.get('running'))}")
+    if process.get("running"):
+        typer.echo(f"- pid: {process.get('pid')}")
+        typer.echo(f"- startup command: {process.get('startup_command')}")
+        typer.echo(f"- process version: {process.get('version')}")
+    elif hub.get("config_error"):
+        typer.echo(f"- config error: {hub.get('config_error')}")
+
+    typer.echo("Checkout")
+    if isinstance(checkout, dict) and checkout:
+        typer.echo(f"- root: {checkout.get('root')}")
+        typer.echo(f"- branch: {checkout.get('branch') or 'n/a'}")
+        typer.echo(f"- head: {checkout.get('head') or 'n/a'}")
+        typer.echo(f"- describe: {checkout.get('describe') or 'n/a'}")
+        typer.echo(f"- dirty: {bool(checkout.get('dirty'))}")
+    else:
+        typer.echo("- repo checkout: n/a")
+
+    typer.echo("Mismatch Detection")
+    typer.echo(f"- source matches checkout: {mismatch.get('source_matches_checkout')}")
+    typer.echo(f"- mismatch detected: {mismatch.get('detected')}")
 
 
 @app.command()
@@ -1912,6 +2187,412 @@ def hub_snapshot(
 
     indent = 2 if pretty else None
     typer.echo(json.dumps(snapshot, indent=indent))
+
+
+def _filter_inbox_items_for_clear(
+    items: list[dict[str, Any]],
+    *,
+    stale: bool,
+    repo_id: Optional[str],
+    run_id: Optional[str],
+    seq: Optional[int],
+) -> list[dict[str, Any]]:
+    stale_types = {"run_failed", "run_stopped", "run_state_attention"}
+    selected: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if repo_id and str(item.get("repo_id") or "") != repo_id:
+            continue
+        if run_id and str(item.get("run_id") or "") != run_id:
+            continue
+        item_seq = item.get("seq")
+        if seq is not None and item_seq != seq:
+            continue
+        if stale and str(item.get("item_type") or "") not in stale_types:
+            continue
+        selected.append(item)
+    return selected
+
+
+@inbox_app.command("resolve")
+def hub_inbox_resolve(
+    repo_id: str = typer.Option(..., "--repo-id", help="Hub repo id"),
+    run_id: str = typer.Option(..., "--run-id", help="Flow run id"),
+    seq: Optional[int] = typer.Option(None, "--seq", help="Dispatch sequence number"),
+    item_type: Optional[str] = typer.Option(
+        None, "--item-type", help="Inbox item type (auto-detected when omitted)"
+    ),
+    action: str = typer.Option("dismiss", "--action", help="Resolution action"),
+    reason: Optional[str] = typer.Option(None, "--reason", help="Resolution reason"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    base_path: Optional[str] = typer.Option(
+        None, "--base-path", help="Override hub server base path (e.g. /car)"
+    ),
+    output_json: bool = typer.Option(
+        True, "--json/--no-json", help="Emit JSON output (default: true)"
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
+):
+    """Resolve a hub inbox item without resuming the underlying run."""
+    config = _require_hub_config(path)
+    if action != "dismiss":
+        _raise_exit("Only --action dismiss is currently supported.")
+
+    payload: dict[str, Any] = {
+        "repo_id": repo_id,
+        "run_id": run_id,
+        "action": action,
+    }
+    if seq is not None:
+        payload["seq"] = seq
+    if item_type:
+        payload["item_type"] = item_type
+    if reason:
+        payload["reason"] = reason
+
+    resolve_url = _build_server_url(
+        config, "/hub/messages/resolve", base_path_override=base_path
+    )
+    try:
+        resolved = _request_json(
+            "POST",
+            resolve_url,
+            payload=payload,
+            token_env=config.server_auth_token_env,
+        )
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        _raise_exit("Failed to resolve hub inbox item.", cause=exc)
+
+    if output_json:
+        typer.echo(json.dumps(resolved, indent=2 if pretty else None))
+        return
+    resolved_payload = (
+        resolved.get("resolved", {}) if isinstance(resolved, dict) else {}
+    )
+    typer.echo(
+        "Resolved inbox item: "
+        f"repo={resolved_payload.get('repo_id')} run={resolved_payload.get('run_id')} "
+        f"type={resolved_payload.get('item_type')} seq={resolved_payload.get('seq')}"
+    )
+
+
+@inbox_app.command("clear")
+def hub_inbox_clear(
+    stale: bool = typer.Option(
+        False, "--stale", help="Clear stale non-dispatch attention items"
+    ),
+    repo_id: Optional[str] = typer.Option(None, "--repo-id", help="Hub repo id"),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run id"),
+    seq: Optional[int] = typer.Option(None, "--seq", help="Dispatch sequence number"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    base_path: Optional[str] = typer.Option(
+        None, "--base-path", help="Override hub server base path (e.g. /car)"
+    ),
+    output_json: bool = typer.Option(
+        True, "--json/--no-json", help="Emit JSON output (default: true)"
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
+):
+    """Clear stale or explicitly targeted hub inbox items."""
+    if not stale and not (repo_id and run_id):
+        _raise_exit("Pass either --stale or both --repo-id and --run-id.")
+
+    config = _require_hub_config(path)
+    list_url = _build_server_url(
+        config, "/hub/messages?limit=2000", base_path_override=base_path
+    )
+    resolve_url = _build_server_url(
+        config, "/hub/messages/resolve", base_path_override=base_path
+    )
+
+    try:
+        messages_payload = _request_json(
+            "GET", list_url, token_env=config.server_auth_token_env
+        )
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        _raise_exit("Failed to list hub inbox items.", cause=exc)
+
+    items = (
+        messages_payload.get("items", []) if isinstance(messages_payload, dict) else []
+    )
+    selected = _filter_inbox_items_for_clear(
+        items if isinstance(items, list) else [],
+        stale=stale,
+        repo_id=repo_id,
+        run_id=run_id,
+        seq=seq,
+    )
+
+    result_payload: dict[str, Any] = {
+        "dry_run": dry_run,
+        "requested": {
+            "stale": stale,
+            "repo_id": repo_id,
+            "run_id": run_id,
+            "seq": seq,
+        },
+        "selected_count": len(selected),
+        "selected": [
+            {
+                "repo_id": item.get("repo_id"),
+                "run_id": item.get("run_id"),
+                "item_type": item.get("item_type"),
+                "seq": item.get("seq"),
+            }
+            for item in selected
+        ],
+        "resolved": [],
+        "errors": [],
+    }
+
+    if not dry_run:
+        for item in selected:
+            payload = {
+                "repo_id": item.get("repo_id"),
+                "run_id": item.get("run_id"),
+                "item_type": item.get("item_type"),
+                "action": "dismiss",
+                "reason": "cleared via car hub inbox clear",
+                "actor": "cli:hub_inbox_clear",
+            }
+            if item.get("seq") is not None:
+                payload["seq"] = item.get("seq")
+            try:
+                resolved = _request_json(
+                    "POST",
+                    resolve_url,
+                    payload=payload,
+                    token_env=config.server_auth_token_env,
+                )
+                result_payload["resolved"].append(resolved.get("resolved"))
+            except Exception as exc:
+                result_payload["errors"].append(
+                    {
+                        "repo_id": item.get("repo_id"),
+                        "run_id": item.get("run_id"),
+                        "item_type": item.get("item_type"),
+                        "seq": item.get("seq"),
+                        "error": str(exc),
+                    }
+                )
+
+    if output_json:
+        typer.echo(json.dumps(result_payload, indent=2 if pretty else None))
+        if result_payload["errors"]:
+            raise typer.Exit(code=1)
+        return
+
+    typer.echo(
+        f"Inbox clear selected={result_payload['selected_count']} "
+        f"resolved={len(result_payload['resolved'])} "
+        f"errors={len(result_payload['errors'])} dry_run={dry_run}"
+    )
+    if result_payload["errors"]:
+        _raise_exit("hub inbox clear encountered errors.")
+
+
+def _flow_timestamp(record: FlowRunRecord) -> Optional[datetime]:
+    candidate = record.finished_at or record.started_at or record.created_at
+    if not isinstance(candidate, str) or not candidate.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _resolve_run_paths(record: FlowRunRecord, repo_root: Path):
+    workspace_root = Path(record.input_data.get("workspace_root") or repo_root)
+    runs_dir = Path(record.input_data.get("runs_dir") or ".codex-autorunner/runs")
+    return resolve_outbox_paths(
+        workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
+    )
+
+
+def _archive_flow_run_artifacts(
+    *,
+    repo_root: Path,
+    store: FlowStore,
+    record: FlowRunRecord,
+    force: bool,
+    delete_run: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    status = record.status
+    terminal = status.is_terminal()
+    if not terminal and not (
+        force and status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
+    ):
+        raise ValueError(
+            "Can only archive completed/stopped/failed runs (use --force for paused/stopping)."
+        )
+
+    artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    run_paths = _resolve_run_paths(record, repo_root)
+    run_dir = run_paths.run_dir
+    archive_root = artifacts_root / record.id
+    archived_runs_dir = archive_root / "archived_runs"
+    target_runs_dir = archived_runs_dir
+    if target_runs_dir.exists():
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        target_runs_dir = archive_root / f"archived_runs_{suffix}"
+
+    summary = {
+        "repo_root": str(repo_root),
+        "run_id": record.id,
+        "status": record.status.value,
+        "run_dir": str(run_dir),
+        "run_dir_exists": run_dir.exists() and run_dir.is_dir(),
+        "archive_dir": str(target_runs_dir),
+        "delete_run": delete_run,
+        "deleted_run": False,
+        "archived_runs": False,
+    }
+
+    if dry_run:
+        return summary
+
+    if run_dir.exists() and run_dir.is_dir():
+        target_runs_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(run_dir), str(target_runs_dir))
+        summary["archived_runs"] = True
+
+    if delete_run:
+        summary["deleted_run"] = bool(store.delete_flow_run(record.id))
+
+    return summary
+
+
+@hub_runs_app.command("cleanup")
+def hub_runs_cleanup(
+    stale: bool = typer.Option(False, "--stale", help="Cleanup stale terminal runs"),
+    older_than: Optional[str] = typer.Option(
+        None, "--older-than", help="Age threshold like 30m, 12h, 7d"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
+    delete_run: str = typer.Option(
+        "true", "--delete-run", help="Delete flow run record after archive (true|false)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Allow archiving paused/stopping runs"
+    ),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(
+        True, "--json/--no-json", help="Emit JSON output (default: true)"
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
+):
+    """Archive stale run artifacts across hub repos and optionally delete run records."""
+    if not stale:
+        _raise_exit("Pass --stale to confirm batch cleanup intent.")
+
+    config = _require_hub_config(path)
+    manifest = load_manifest(config.manifest_path, config.root)
+    cutoff = None
+    if older_than:
+        cutoff = datetime.now(timezone.utc) - _parse_duration(older_than)
+    parsed_delete_run = _parse_bool_text(delete_run, flag="--delete-run")
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    stale_statuses = {
+        FlowRunStatus.COMPLETED,
+        FlowRunStatus.FAILED,
+        FlowRunStatus.STOPPED,
+    }
+
+    for entry in manifest.repos:
+        repo_root = (config.root / entry.path).resolve()
+        db_path = repo_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            continue
+        try:
+            repo_config = load_repo_config(repo_root, hub_path=config.root)
+            store = FlowStore(db_path, durable=repo_config.durable_writes)
+            store.initialize()
+            records = store.list_flow_runs(flow_type="ticket_flow")
+        except Exception as exc:
+            errors.append(
+                {
+                    "repo_id": entry.id,
+                    "run_id": None,
+                    "error": f"store_open_failed: {exc}",
+                }
+            )
+            continue
+
+        try:
+            for record in records:
+                if record.status in {FlowRunStatus.RUNNING, FlowRunStatus.PENDING}:
+                    continue
+                if record.status not in stale_statuses and not (
+                    force
+                    and record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
+                ):
+                    continue
+                if cutoff is not None:
+                    ts = _flow_timestamp(record)
+                    if ts is None or ts > cutoff:
+                        continue
+                try:
+                    summary = _archive_flow_run_artifacts(
+                        repo_root=repo_root,
+                        store=store,
+                        record=record,
+                        force=force,
+                        delete_run=parsed_delete_run,
+                        dry_run=dry_run,
+                    )
+                    summary["repo_id"] = entry.id
+                    results.append(summary)
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "repo_id": entry.id,
+                            "run_id": record.id,
+                            "status": record.status.value,
+                            "error": str(exc),
+                        }
+                    )
+        finally:
+            store.close()
+
+    payload = {
+        "dry_run": dry_run,
+        "stale": stale,
+        "older_than": older_than,
+        "delete_run": parsed_delete_run,
+        "force": force,
+        "results": results,
+        "errors": errors,
+    }
+
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2 if pretty else None))
+        if errors:
+            raise typer.Exit(code=1)
+        return
+
+    typer.echo(
+        f"Hub runs cleanup candidates={len(results)} errors={len(errors)} dry_run={dry_run}"
+    )
+    if errors:
+        _raise_exit("hub runs cleanup encountered errors.")
 
 
 def _print_ticket_import_report(report) -> None:
@@ -3654,6 +4335,56 @@ def ticket_flow_stop(
         asyncio.run(agent_pool.close())
 
     typer.echo(f"Stop requested for run: {updated.id} (status={updated.status.value})")
+
+
+@ticket_flow_app.command("archive")
+def ticket_flow_archive(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
+    force: bool = typer.Option(
+        False, "--force", help="Allow archiving paused/stopping runs"
+    ),
+    delete_run: str = typer.Option(
+        "true", "--delete-run", help="Delete flow run record after archive (true|false)"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+):
+    """Archive run artifacts and optionally delete the flow run record."""
+    engine = _require_repo_config(repo, hub)
+    normalized_run_id = _normalize_flow_run_id(run_id)
+    if not normalized_run_id:
+        _raise_exit("--run-id is required")
+    parsed_delete_run = _parse_bool_text(delete_run, flag="--delete-run")
+
+    store = _open_flow_store(engine)
+    try:
+        record = store.get_flow_run(normalized_run_id)
+        if record is None:
+            _raise_exit(f"Flow run not found: {normalized_run_id}")
+        try:
+            summary = _archive_flow_run_artifacts(
+                repo_root=engine.repo_root,
+                store=store,
+                record=record,
+                force=force,
+                delete_run=parsed_delete_run,
+                dry_run=dry_run,
+            )
+        except ValueError as exc:
+            _raise_exit(str(exc), cause=exc)
+    finally:
+        store.close()
+
+    if output_json:
+        typer.echo(json.dumps(summary, indent=2))
+        return
+    typer.echo(
+        f"Archived run {summary.get('run_id')} status={summary.get('status')} "
+        f"archived_runs={summary.get('archived_runs')} "
+        f"deleted_run={summary.get('deleted_run')} dry_run={dry_run}"
+    )
 
 
 if __name__ == "__main__":
