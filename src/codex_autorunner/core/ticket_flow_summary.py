@@ -9,6 +9,7 @@ from ..tickets.frontmatter import parse_markdown_frontmatter
 from ..tickets.lint import parse_ticket_index
 from .config import load_repo_config
 from .flows import FlowStore
+from .flows.models import FlowRunRecord
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
 
 _PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.IGNORECASE)
@@ -30,6 +31,11 @@ def _extract_pr_url_from_ticket(path: Path) -> Optional[str]:
     return None
 
 
+def get_latest_ticket_flow_run(store: FlowStore) -> Optional[FlowRunRecord]:
+    runs = store.list_flow_runs(flow_type="ticket_flow")
+    return runs[0] if runs else None
+
+
 def build_ticket_flow_summary(
     repo_path: Path,
     *,
@@ -41,10 +47,9 @@ def build_ticket_flow_summary(
     try:
         config = load_repo_config(repo_path)
         with FlowStore(db_path, durable=config.durable_writes) as store:
-            runs = store.list_flow_runs(flow_type="ticket_flow")
-            if not runs:
+            latest = get_latest_ticket_flow_run(store)
+            if not latest:
                 return None
-            latest = runs[0]
     except Exception:
         return None
 

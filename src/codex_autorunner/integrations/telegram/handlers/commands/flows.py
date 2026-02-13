@@ -31,6 +31,7 @@ from .....core.flows.worker_process import (
 from .....core.logging_utils import log_event
 from .....core.runtime import RuntimeContext
 from .....core.state import now_iso
+from .....core.ticket_flow_summary import get_latest_ticket_flow_run
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....integrations.agents import build_backend_orchestrator
@@ -1045,43 +1046,42 @@ class FlowCommands(SharedHelpers):
                 done = progress.get("done", 0)
                 total = progress.get("total", 0)
                 progress_label = f"{done}/{total}"
-                active = _select_latest_run(store, lambda run: run.status.is_active())
-                if active:
-                    status_icon = (
-                        "🟢" if active.status == FlowRunStatus.RUNNING else "🟡"
-                    )
+                latest = get_latest_ticket_flow_run(store)
+                if latest:
+                    status_icon = "⚪"
+                    if latest.status == FlowRunStatus.RUNNING:
+                        status_icon = "🟢"
+                    elif latest.status in (
+                        FlowRunStatus.PENDING,
+                        FlowRunStatus.STOPPING,
+                    ):
+                        status_icon = "🟡"
+                    elif latest.status == FlowRunStatus.PAUSED:
+                        status_icon = "🔴"
+                    elif latest.status == FlowRunStatus.COMPLETED:
+                        status_icon = "🔵"
+                    elif latest.status in (
+                        FlowRunStatus.STOPPED,
+                        FlowRunStatus.FAILED,
+                    ):
+                        status_icon = "⚫"
                     status_line = _format_status_line(
                         label,
                         status_icon=status_icon,
-                        status_value=active.status.value,
+                        status_value=latest.status.value,
                         progress_label=progress_label,
-                        run_id=active.id,
+                        run_id=latest.id,
                         indent=indent,
                     )
                 else:
-                    paused = _select_latest_run(
-                        store, lambda run: run.status == FlowRunStatus.PAUSED
+                    status_line = _format_status_line(
+                        label,
+                        status_icon="🔵" if total > 0 and done >= total else "⚪",
+                        status_value="Done" if total > 0 and done >= total else "Idle",
+                        progress_label=progress_label,
+                        run_id=None,
+                        indent=indent,
                     )
-                    if paused:
-                        status_line = _format_status_line(
-                            label,
-                            status_icon="🔴",
-                            status_value="PAUSED",
-                            progress_label=progress_label,
-                            run_id=paused.id,
-                            indent=indent,
-                        )
-                    else:
-                        status_line = _format_status_line(
-                            label,
-                            status_icon="🔵" if total > 0 and done >= total else "⚪",
-                            status_value=(
-                                "Done" if total > 0 and done >= total else "Idle"
-                            ),
-                            progress_label=progress_label,
-                            run_id=None,
-                            indent=indent,
-                        )
             except Exception:
                 status_line = f"{indent}❓ {_code(label)}: Error reading state"
             finally:
