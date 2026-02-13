@@ -274,6 +274,12 @@ def _derive_failure_reason_code(
                     return FailureReasonCode.TIMEOUT
                 if reason_lower == "network":
                     return FailureReasonCode.NETWORK_ERROR
+    if isinstance(note, str):
+        note_lower = note.strip().lower()
+        if "worker-dead" in note_lower or "worker_dead" in note_lower:
+            return FailureReasonCode.WORKER_DEAD
+        if "agent" in note_lower and "crash" in note_lower:
+            return FailureReasonCode.AGENT_CRASH
     msg = (error_message or "").lower()
     if _is_oom_error(msg) or (isinstance(exit_code, int) and exit_code in (137, 139)):
         return FailureReasonCode.OOM_KILLED
@@ -287,12 +293,6 @@ def _derive_failure_reason_code(
         return FailureReasonCode.NETWORK_ERROR
     if "worker died" in msg or "crash" in msg:
         return FailureReasonCode.AGENT_CRASH
-    if isinstance(note, str):
-        note_lower = note.strip().lower()
-        if "worker-dead" in note_lower or "worker_dead" in note_lower:
-            return FailureReasonCode.WORKER_DEAD
-        if "agent" in note_lower and "crash" in note_lower:
-            return FailureReasonCode.AGENT_CRASH
     if msg:
         return FailureReasonCode.UNCAUGHT_EXCEPTION
     return FailureReasonCode.UNKNOWN

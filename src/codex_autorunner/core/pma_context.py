@@ -834,7 +834,9 @@ def build_ticket_flow_run_state(
         state = "blocked"
 
     is_terminal = record.status.is_terminal()
-    attention_required = not is_terminal and (state in ("dead", "blocked") or record.status == FlowRunStatus.PAUSED)
+    attention_required = not is_terminal and (
+        state in ("dead", "blocked") or record.status == FlowRunStatus.PAUSED
+    )
 
     worker_status = None
     if is_terminal:
@@ -1008,9 +1010,7 @@ def _gather_inbox(
                                 "Run is paused without an actionable dispatch"
                             )
                     elif record.status == FlowRunStatus.FAILED:
-                        dispatch_state_reason = (
-                            record.error_message or "Run failed"
-                        )
+                        dispatch_state_reason = record.error_message or "Run failed"
                     elif record.status == FlowRunStatus.STOPPED:
                         dispatch_state_reason = "Run was stopped"
                     run_state = build_ticket_flow_run_state(
@@ -1021,7 +1021,14 @@ def _gather_inbox(
                         has_pending_dispatch=has_dispatch,
                         dispatch_state_reason=dispatch_state_reason,
                     )
-                    if not run_state.get("attention_required"):
+                    is_terminal_failed = record.status in (
+                        FlowRunStatus.FAILED,
+                        FlowRunStatus.STOPPED,
+                    )
+                    if (
+                        not run_state.get("attention_required")
+                        and not is_terminal_failed
+                    ):
                         if has_dispatch:
                             pass
                         else:
@@ -1070,7 +1077,9 @@ def _gather_inbox(
                                 "dispatch": latest_payload.get("dispatch"),
                                 "files": latest_payload.get("files") or [],
                                 "reason": dispatch_state_reason,
-                                "available_actions": run_state.get("recommended_actions", []),
+                                "available_actions": run_state.get(
+                                    "recommended_actions", []
+                                ),
                             }
                         )
         except Exception:

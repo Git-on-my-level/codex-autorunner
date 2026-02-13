@@ -28,6 +28,24 @@ def _seed_paused_run(repo_root: Path, run_id: str) -> None:
         store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
 
 
+def _seed_failed_run(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.FAILED)
+
+
 def _write_dispatch_history(repo_root: Path, run_id: str, seq: int) -> None:
     entry_dir = (
         repo_root
@@ -203,3 +221,24 @@ def test_hub_messages_dismiss_filters_and_persists(hub_env) -> None:
     )
     data = json.loads(dismissals_path.read_text(encoding="utf-8"))
     assert data["items"][f"{run_id}:1"]["reason"] == "resolved elsewhere"
+
+
+def test_hub_messages_failed_run_appears_in_inbox(hub_env) -> None:
+    run_id = "66666666-6666-6666-6666-666666666666"
+    _seed_failed_run(hub_env.repo_root, run_id)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["run_id"] == run_id
+        assert item["item_type"] == "run_failed"
+        assert item["next_action"] == "diagnose_or_restart"
+        run_state = item.get("run_state") or {}
+        assert run_state.get("state") == "blocked"
+        assert run_state.get("attention_required") is False
+        assert run_state.get("worker_status") == "exited_expected"
+        assert "available_actions" in item

@@ -1877,14 +1877,18 @@ def create_hub_app(
                 try:
                     config = load_repo_config(repo_root)
                     with FlowStore(db_path, durable=config.durable_writes) as store:
-                        paused = store.list_flow_runs(
-                            flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-                        )
+                        active_statuses = [
+                            FlowRunStatus.PAUSED,
+                            FlowRunStatus.RUNNING,
+                            FlowRunStatus.FAILED,
+                            FlowRunStatus.STOPPED,
+                        ]
+                        all_runs = store.list_flow_runs(flow_type="ticket_flow")
                 except Exception:
                     continue
-                if not paused:
-                    continue
-                for record in paused:
+                for record in all_runs:
+                    if record.status not in active_statuses:
+                        continue
                     record_input = dict(record.input_data or {})
                     latest = _latest_dispatch(repo_root, str(record.id), record_input)
                     seq = int(latest.get("seq") or 0) if isinstance(latest, dict) else 0
@@ -1904,7 +1908,10 @@ def create_hub_app(
                         continue
 
                     dispatch_state_reason = None
-                    if not has_pending_dispatch:
+                    if (
+                        record.status == FlowRunStatus.PAUSED
+                        and not has_pending_dispatch
+                    ):
                         if latest and latest.get("errors"):
                             dispatch_state_reason = (
                                 "Paused run has unreadable dispatch metadata"
@@ -1917,6 +1924,10 @@ def create_hub_app(
                             dispatch_state_reason = (
                                 "Run is paused without an actionable dispatch"
                             )
+                    elif record.status == FlowRunStatus.FAILED:
+                        dispatch_state_reason = record.error_message or "Run failed"
+                    elif record.status == FlowRunStatus.STOPPED:
+                        dispatch_state_reason = "Run was stopped"
 
                     run_state = build_ticket_flow_run_state(
                         repo_root=repo_root,
@@ -1926,6 +1937,19 @@ def create_hub_app(
                         has_pending_dispatch=has_pending_dispatch,
                         dispatch_state_reason=dispatch_state_reason,
                     )
+
+                    is_terminal_failed = record.status in (
+                        FlowRunStatus.FAILED,
+                        FlowRunStatus.STOPPED,
+                    )
+                    if (
+                        not run_state.get("attention_required")
+                        and not is_terminal_failed
+                    ):
+                        if has_pending_dispatch:
+                            pass
+                        else:
+                            continue
 
                     failure_payload = get_failure_payload(record)
                     failure_summary = (
@@ -1959,11 +1983,19 @@ def create_hub_app(
                         )
                     else:
                         fallback_dispatch = latest.get("dispatch") if latest else None
+                        item_type = "run_state_attention"
+                        next_action = "inspect_and_resume"
+                        if record.status == FlowRunStatus.FAILED:
+                            item_type = "run_failed"
+                            next_action = "diagnose_or_restart"
+                        elif record.status == FlowRunStatus.STOPPED:
+                            item_type = "run_stopped"
+                            next_action = "diagnose_or_restart"
                         messages.append(
                             {
                                 **base_item,
-                                "item_type": "run_state_attention",
-                                "next_action": "inspect_and_resume",
+                                "item_type": item_type,
+                                "next_action": next_action,
                                 "seq": seq if seq > 0 else None,
                                 "dispatch": fallback_dispatch,
                                 "message": fallback_dispatch
@@ -1973,6 +2005,9 @@ def create_hub_app(
                                 },
                                 "files": latest.get("files") if latest else [],
                                 "reason": dispatch_state_reason,
+                                "available_actions": run_state.get(
+                                    "recommended_actions", []
+                                ),
                             }
                         )
             messages.sort(key=lambda m: m.get("run_created_at") or "", reverse=True)
