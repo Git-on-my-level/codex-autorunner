@@ -578,11 +578,7 @@ def _format_friendly_time(value: datetime) -> str:
 def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[str]:
     if not isinstance(token_usage, dict):
         return None
-    last = token_usage.get("last")
-    total = token_usage.get("total")
-    usage = (
-        last if isinstance(last, dict) else total if isinstance(total, dict) else None
-    )
+    usage = _select_context_usage_bucket(token_usage)
     if not isinstance(usage, dict):
         return None
     total_tokens = usage.get("totalTokens")
@@ -595,36 +591,43 @@ def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[s
         parts.append(f"input {input_tokens}")
     if isinstance(output_tokens, int):
         parts.append(f"output {output_tokens}")
-    context_window = token_usage.get("modelContextWindow")
-    if isinstance(context_window, int) and context_window > 0:
-        remaining = max(context_window - total_tokens, 0)
-        percent = round(remaining / context_window * 100)
+    percent = _extract_context_usage_percent(token_usage)
+    if percent is not None:
         parts.append(f"ctx {percent}%")
     return " ".join(parts)
+
+
+def _select_context_usage_bucket(
+    token_usage: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if not isinstance(token_usage, dict):
+        return None
+    # Prefer total cumulative usage when available; `last` is often per-call.
+    total = token_usage.get("total")
+    if isinstance(total, dict):
+        return total
+    last = token_usage.get("last")
+    if isinstance(last, dict):
+        return last
+    return None
 
 
 def _extract_context_usage_percent(
     token_usage: Optional[dict[str, Any]],
 ) -> Optional[int]:
-    if not isinstance(token_usage, dict):
-        return None
-    usage = None
-    last = token_usage.get("last")
-    total = token_usage.get("total")
-    if isinstance(last, dict):
-        usage = last
-    elif isinstance(total, dict):
-        usage = total
-    if usage is None:
+    usage = _select_context_usage_bucket(token_usage)
+    if not isinstance(usage, dict):
         return None
     total_tokens = usage.get("totalTokens")
+    if not isinstance(token_usage, dict):
+        return None
     context_window = token_usage.get("modelContextWindow")
     if not isinstance(total_tokens, int) or not isinstance(context_window, int):
         return None
     if context_window <= 0:
         return None
-    percent_remaining = round((context_window - total_tokens) / context_window * 100)
-    return min(max(percent_remaining, 0), 100)
+    percent_used = round(total_tokens / context_window * 100)
+    return min(max(percent_used, 0), 100)
 
 
 def _format_turn_metrics(
