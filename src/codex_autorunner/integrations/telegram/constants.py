@@ -31,6 +31,7 @@ CACHE_CLEANUP_INTERVAL_SECONDS = 300.0
 COALESCE_BUFFER_TTL_SECONDS = 60.0
 MEDIA_BATCH_BUFFER_TTL_SECONDS = 60.0
 MODEL_PENDING_TTL_SECONDS = 1800.0
+MODEL_CATALOG_TTL_SECONDS = 600.0
 PENDING_APPROVAL_TTL_SECONDS = 600.0
 PENDING_QUESTION_TTL_SECONDS = 600.0
 REASONING_BUFFER_TTL_SECONDS = 900.0
@@ -59,7 +60,7 @@ RESUME_PICKER_PROMPT = (
 )
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
 AGENT_PICKER_PROMPT = "Select an agent (buttons below)."
-MODEL_PICKER_PROMPT = "Select a model (buttons below)."
+MODEL_PICKER_PROMPT = "Select a model (buttons below). Use /model <search> to filter."
 EFFORT_PICKER_PROMPT = "Select a reasoning effort for {model}."
 UPDATE_PICKER_PROMPT = "Select update target (buttons below)."
 REVIEW_COMMIT_PICKER_PROMPT = (

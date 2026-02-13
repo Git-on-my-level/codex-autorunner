@@ -45,6 +45,7 @@ from ..constants import (
     DEFAULT_UPDATE_REPO_URL,
     INIT_PROMPT,
     MAX_MENTION_BYTES,
+    MODEL_CATALOG_TTL_SECONDS,
     MODEL_PICKER_PROMPT,
     SHELL_MESSAGE_BUFFER_CHARS,
     TELEGRAM_MAX_MESSAGE_LENGTH,
@@ -922,6 +923,148 @@ class TelegramCommandHandlers(
             )
             return
         argv = self._parse_command_args(args)
+        cache_key = f"{workspace_path}:{agent}"
+        if argv and argv[0].lower() in ("list", "ls"):
+            record_for_models = self._record_with_workspace_path(record, workspace_path)
+            cached_result = self._model_catalog_cache.get(cache_key)
+            if cached_result is not None:
+                result, cached_time = cached_result
+                if time.monotonic() - cached_time < MODEL_CATALOG_TTL_SECONDS:
+                    await self._send_message(
+                        message.chat_id,
+                        _format_model_list(
+                            result,
+                            include_efforts=supports_effort,
+                            set_hint=(
+                                "Use /model <provider/model> to set."
+                                if not supports_effort
+                                else None
+                            ),
+                        ),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+            try:
+                result = await self._fetch_model_list(
+                    record_for_models,
+                    agent=agent,
+                    client=client,
+                    list_params=list_params,
+                )
+                self._model_catalog_cache[cache_key] = (result, time.monotonic())
+            except OpenCodeSupervisorError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.model.list.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    agent=agent,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.model.list.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    agent=agent,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    _with_conversation_id(
+                        "Failed to list models; check logs for details.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                _format_model_list(
+                    result,
+                    include_efforts=supports_effort,
+                    set_hint=(
+                        "Use /model <provider/model> to set."
+                        if not supports_effort
+                        else None
+                    ),
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        search_query = argv[0].lower() if argv else None
+        cached_result = self._model_catalog_cache.get(cache_key)
+        if cached_result is not None:
+            result, cached_time = cached_result
+            if time.monotonic() - cached_time < MODEL_CATALOG_TTL_SECONDS:
+                options = _coerce_model_options(result, include_efforts=supports_effort)
+                if search_query:
+                    options = [
+                        opt
+                        for opt in options
+                        if search_query in opt.model_id.lower()
+                        or search_query in opt.label.lower()
+                    ]
+                if not options:
+                    await self._send_message(
+                        message.chat_id,
+                        f"No models found matching '{search_query}'.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                items = [(option.model_id, option.model_id) for option in options]
+                state = ModelPickerState(
+                    items=items, options={option.model_id: option for option in options}
+                )
+                self._model_options[key] = state
+                self._touch_cache_timestamp("model_options", key)
+                try:
+                    keyboard = self._build_model_keyboard(state)
+                except ValueError:
+                    self._model_options.pop(key, None)
+                    await self._send_message(
+                        message.chat_id,
+                        _format_model_list(
+                            result,
+                            include_efforts=supports_effort,
+                            set_hint=(
+                                "Use /model <provider/model> to set."
+                                if not supports_effort
+                                else None
+                            ),
+                        ),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                prompt_text = f"Models matching '{search_query}'"
+                if search_query:
+                    prompt_text = (
+                        f"Search: '{search_query}' (showing {len(options)} results)"
+                    )
+                await self._send_message(
+                    message.chat_id,
+                    prompt_text,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                    reply_markup=keyboard,
+                )
+                return
         if not argv:
             record_for_models = self._record_with_workspace_path(record, workspace_path)
             try:
@@ -931,6 +1074,7 @@ class TelegramCommandHandlers(
                     client=client,
                     list_params=list_params,
                 )
+                self._model_catalog_cache[cache_key] = (result, time.monotonic())
             except OpenCodeSupervisorError as exc:
                 log_event(
                     self._logger,
@@ -1009,68 +1153,6 @@ class TelegramCommandHandlers(
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 reply_markup=keyboard,
-            )
-            return
-        if argv[0].lower() in ("list", "ls"):
-            record_for_models = self._record_with_workspace_path(record, workspace_path)
-            try:
-                result = await self._fetch_model_list(
-                    record_for_models,
-                    agent=agent,
-                    client=client,
-                    list_params=list_params,
-                )
-            except OpenCodeSupervisorError as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.model.list.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    agent=agent,
-                    exc=exc,
-                )
-                await self._send_message(
-                    message.chat_id,
-                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.model.list.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    agent=agent,
-                    exc=exc,
-                )
-                await self._send_message(
-                    message.chat_id,
-                    _with_conversation_id(
-                        "Failed to list models; check logs for details.",
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                    ),
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            await self._send_message(
-                message.chat_id,
-                _format_model_list(
-                    result,
-                    include_efforts=supports_effort,
-                    set_hint=(
-                        "Use /model <provider/model> to set."
-                        if not supports_effort
-                        else None
-                    ),
-                ),
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
             )
             return
         if argv[0].lower() in ("clear", "reset"):

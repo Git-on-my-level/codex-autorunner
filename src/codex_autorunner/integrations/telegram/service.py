@@ -243,6 +243,7 @@ class TelegramBotService(
         )
         self._model_options: dict[str, ModelPickerState] = {}
         self._model_pending: dict[str, ModelOption] = {}
+        self._model_catalog_cache: dict[str, tuple[Any, float]] = {}
         self._agent_options: dict[str, SelectionState] = {}
         self._voice_config = voice_config
         self._voice_service = voice_service
