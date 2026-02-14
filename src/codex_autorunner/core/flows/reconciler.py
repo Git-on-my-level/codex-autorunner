@@ -162,6 +162,26 @@ def _ensure_worker_crash_artifact(
         pass
 
 
+def _is_stale_crash_info(crash_info: Optional[dict[str, Any]]) -> bool:
+    if not isinstance(crash_info, dict):
+        return True
+    useful_fields = (
+        "exit_code",
+        "signal",
+        "stderr_tail",
+        "exception",
+        "stack_trace",
+        "last_event",
+    )
+    has_useful_data = False
+    for field in useful_fields:
+        value = crash_info.get(field)
+        if value is not None and value != "":
+            has_useful_data = True
+            break
+    return not has_useful_data
+
+
 def _ensure_crash_payload(
     repo_root: Path,
     record: FlowRunRecord,
@@ -172,7 +192,10 @@ def _ensure_crash_payload(
     crash_info = dict(raw_crash_info) if isinstance(raw_crash_info, dict) else None
     if crash_info is None:
         crash_info = read_worker_crash_info(repo_root, record.id)
-    if crash_info is None and health.status == "dead":
+    should_write = crash_info is None or (
+        health.status == "dead" and _is_stale_crash_info(crash_info)
+    )
+    if should_write:
         last_method, _ = _latest_app_server_event_details(store, record.id)
         crash_path = write_worker_crash_info(
             repo_root,
