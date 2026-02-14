@@ -172,7 +172,6 @@ def _is_stale_crash_info(crash_info: Optional[dict[str, Any]]) -> bool:
         "exception",
         "stack_trace",
         "last_event",
-        "worker_pid",
     )
     has_useful_data = False
     for field in useful_fields:
