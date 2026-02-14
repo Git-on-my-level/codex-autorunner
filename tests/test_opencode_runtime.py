@@ -247,6 +247,145 @@ async def test_collect_output_emits_usage_from_properties_info_tokens() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_emits_usage_from_message_part_tokens() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"part":{"type":"step-finish",'
+                '"tokens":{"input":11,"output":4,"reasoning":1,'
+                '"cache":{"read":2}},"modelContextWindow":4096}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+    )
+    assert output.text == ""
+    assert len(seen) == 1
+    usage = seen[0]
+    assert usage["totalTokens"] == 18
+    assert usage["inputTokens"] == 11
+    assert usage["cachedInputTokens"] == 2
+    assert usage["outputTokens"] == 4
+    assert usage["reasoningTokens"] == 1
+    assert usage["modelContextWindow"] == 4096
+
+
+@pytest.mark.anyio
+async def test_collect_output_dedupes_usage_between_part_and_message_events() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"part":{"type":"step-finish",'
+                '"tokens":{"input":10,"output":5},"modelContextWindow":2000}}}'
+            ),
+        ),
+        SSEEvent(
+            event="message.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"info":{"tokens":'
+                '{"input":10,"output":5},"modelContextWindow":2000}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+    )
+    assert output.text == ""
+    assert len(seen) == 1
+
+
+@pytest.mark.anyio
+async def test_collect_output_emits_usage_when_detail_breakdown_changes() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"part":{"type":"step-finish",'
+                '"tokens":{"input":12,"output":3},"modelContextWindow":2000}}}'
+            ),
+        ),
+        SSEEvent(
+            event="message.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"info":{"tokens":'
+                '{"input":10,"output":3,"cache":{"read":2}},'
+                '"modelContextWindow":2000}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+    )
+    assert output.text == ""
+    assert len(seen) == 2
+    assert seen[0]["totalTokens"] == 15
+    assert "cachedInputTokens" not in seen[0]
+    assert seen[1]["totalTokens"] == 15
+    assert seen[1]["cachedInputTokens"] == 2
+
+
+@pytest.mark.anyio
+async def test_collect_output_prefers_aggregate_usage_over_part_tokens() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"info":{"tokens":'
+                '{"input":100,"output":50}},"part":{"type":"step-finish",'
+                '"tokens":{"input":1,"output":1}}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+    )
+    assert output.text == ""
+    assert len(seen) == 1
+    assert seen[0]["totalTokens"] == 150
+    assert seen[0]["inputTokens"] == 100
+    assert seen[0]["outputTokens"] == 50
+
+
+@pytest.mark.anyio
 async def test_collect_output_backfills_context_from_providers() -> None:
     seen: list[dict[str, int]] = []
 

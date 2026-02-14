@@ -1194,6 +1194,9 @@
             "$ref": "#/components/schemas/Event.message.part.updated"
           },
           {
+            "$ref": "#/components/schemas/Event.message.part.delta"
+          },
+          {
             "$ref": "#/components/schemas/Event.message.part.removed"
           },
           {
@@ -1481,6 +1484,46 @@
         ],
         "type": "object"
       },
+      "Event.message.part.delta": {
+        "properties": {
+          "properties": {
+            "properties": {
+              "delta": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              },
+              "messageID": {
+                "type": "string"
+              },
+              "partID": {
+                "type": "string"
+              },
+              "sessionID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sessionID",
+              "messageID",
+              "partID",
+              "field",
+              "delta"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "const": "message.part.delta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ],
+        "type": "object"
+      },
       "Event.message.part.removed": {
         "properties": {
           "properties": {
@@ -1517,9 +1560,6 @@
         "properties": {
           "properties": {
             "properties": {
-              "delta": {
-                "type": "string"
-              },
               "part": {
                 "$ref": "#/components/schemas/Part"
               }
@@ -5578,10 +5618,6 @@
             "description": "Brief description of the task",
             "type": "string"
           },
-          "id": {
-            "description": "Unique identifier for the todo item",
-            "type": "string"
-          },
           "priority": {
             "description": "Priority level of the task: high, medium, low",
             "type": "string"
@@ -5594,8 +5630,7 @@
         "required": [
           "content",
           "status",
-          "priority",
-          "id"
+          "priority"
         ],
         "type": "object"
       },

@@ -602,13 +602,13 @@ def _select_context_usage_bucket(
 ) -> Optional[dict[str, Any]]:
     if not isinstance(token_usage, dict):
         return None
-    # Prefer total cumulative usage when available; `last` is often per-call.
-    total = token_usage.get("total")
-    if isinstance(total, dict):
-        return total
+    # Prefer per-turn usage so progress tracks the active response context.
     last = token_usage.get("last")
     if isinstance(last, dict):
         return last
+    total = token_usage.get("total")
+    if isinstance(total, dict):
+        return total
     return None
 
 
