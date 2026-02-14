@@ -803,27 +803,6 @@ class FilesCommands(SharedHelpers):
                 candidate,
                 pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
             )
-            saved_image_paths.append(image_path)
-            image_inbox_path = self._save_inbox_file(
-                context.record.workspace_path,
-                context.topic_key,
-                data,
-                candidate=candidate,
-                file_path=file_path,
-                pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
-            )
-            original_name = (
-                candidate.file_name
-                or (Path(file_path).name if file_path else None)
-                or image_inbox_path.name
-            )
-            saved_image_inbox_info.append(
-                (
-                    original_name,
-                    str(image_inbox_path),
-                    file_size or len(data),
-                )
-            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -839,6 +818,41 @@ class FilesCommands(SharedHelpers):
             stats.image_save_failed += 1
             stats.failed_count += 1
             return True
+        saved_image_paths.append(image_path)
+        try:
+            image_inbox_path = self._save_inbox_file(
+                context.record.workspace_path,
+                context.topic_key,
+                data,
+                candidate=candidate,
+                file_path=file_path,
+                pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media_batch.image.inbox_save_failed",
+                chat_id=msg.chat_id,
+                thread_id=msg.thread_id,
+                message_id=msg.message_id,
+                exc=exc,
+            )
+        else:
+            original_name = (
+                candidate.file_name
+                or (Path(file_path).name if file_path else None)
+                or image_inbox_path.name
+            )
+            saved_image_inbox_info.append(
+                (
+                    original_name,
+                    str(image_inbox_path),
+                    file_size or len(data),
+                )
+            )
         return False
 
     async def _process_file_candidate(

@@ -316,11 +316,9 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
 
 
 def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-    if not records:
-        return None
-    latest = records[0]
-    if latest.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-        return latest
+    for record in records:
+        if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+            return record
     return None
 
 
