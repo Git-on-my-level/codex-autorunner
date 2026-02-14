@@ -276,6 +276,45 @@ class _PMAFlowStatusHandler(FlowCommands):
         self.sent.append(text)
 
 
+class _FlowWorktreeTargetHandler(FlowCommands):
+    def __init__(self, repo_root: Path) -> None:
+        self._store = _TopicStoreStub(None)
+        self._repo_root = repo_root.resolve()
+        self.status_calls: list[tuple[Path, list[str], str | None]] = []
+        self.sent: list[str] = []
+
+    async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
+        return "topic"
+
+    def _resolve_workspace(self, arg: str) -> tuple[str, str] | None:
+        if arg == "base--wt-1":
+            return str(self._repo_root), "base--wt-1"
+        return None
+
+    async def _handle_flow_status_action(
+        self,
+        _message: TelegramMessage,
+        repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: str | None = None,
+    ) -> None:
+        self.status_calls.append((repo_root, argv, repo_id))
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: int | None = None,
+        reply_to: int | None = None,
+        reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
+        self.sent.append(text)
+
+
 @pytest.mark.anyio
 async def test_flow_default_in_pma_topic_uses_hub_overview() -> None:
     record = SimpleNamespace(pma_enabled=True, workspace_path=None)
@@ -314,6 +353,26 @@ async def test_flow_default_unbound_topic_uses_hub_overview() -> None:
     await handler._handle_flow(message, "")
 
     assert handler.hub_calls == 1
+    assert not handler.sent
+
+
+@pytest.mark.anyio
+async def test_flow_repo_and_worktree_default_to_status(tmp_path: Path) -> None:
+    handler = _FlowWorktreeTargetHandler(tmp_path)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow base wt-1",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow(message, "base wt-1")
+
+    assert handler.status_calls == [(tmp_path.resolve(), [], "base--wt-1")]
     assert not handler.sent
 
 
@@ -384,7 +443,7 @@ async def test_flow_hub_overview_allows_parse_mode_override(
     assert handler.sent
     assert "`r1`" in handler.sent[0][0]
     assert "\n\n" not in handler.sent[0][0]
-    assert "`/flow <repo-id> status`" in handler.sent[0][0]
+    assert "`/flow <repo-id> <worktree-id>`" in handler.sent[0][0]
     assert handler.sent[0][1] == "Markdown"
 
 
