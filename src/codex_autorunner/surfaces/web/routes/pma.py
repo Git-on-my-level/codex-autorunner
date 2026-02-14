@@ -738,7 +738,13 @@ def build_pma_routes() -> APIRouter:
             client_turn_id, store=store, lane_id=getattr(item, "lane_id", None)
         )
         if not started:
-            logger.warning("PMA turn started while another was active")
+            detail = "Another PMA turn is already active; queue item was not started"
+            logger.warning("PMA queue item rejected: %s", detail)
+            return {
+                "status": "error",
+                "detail": detail,
+                "client_turn_id": client_turn_id or "",
+            }
 
         if not model and defaults.get("model"):
             model = defaults["model"]
@@ -785,10 +791,6 @@ def build_pma_routes() -> APIRouter:
                 )
             return result
 
-        meta_future: asyncio.Future[tuple[str, str]] = (
-            asyncio.get_running_loop().create_future()
-        )
-
         async def _meta(thread_id: str, turn_id: str) -> None:
             await _update_current(
                 store=store,
@@ -817,8 +819,6 @@ def build_pma_routes() -> APIRouter:
                 thread_id=thread_id,
                 turn_id=turn_id,
             )
-            if not meta_future.done():
-                meta_future.set_result((thread_id, turn_id))
 
         supervisor = getattr(request.app.state, "app_server_supervisor", None)
         events = getattr(request.app.state, "app_server_events", None)
@@ -905,15 +905,16 @@ def build_pma_routes() -> APIRouter:
 
         result = dict(result or {})
         result["client_turn_id"] = client_turn_id or ""
-        await _finalize_result(
-            result,
-            request=request,
-            store=store,
-            prompt_message=message,
-            lifecycle_event=lifecycle_event,
-            model=model,
-            reasoning=reasoning,
-        )
+        if started:
+            await _finalize_result(
+                result,
+                request=request,
+                store=store,
+                prompt_message=message,
+                lifecycle_event=lifecycle_event,
+                model=model,
+                reasoning=reasoning,
+            )
         return result
 
     @router.get("/active")

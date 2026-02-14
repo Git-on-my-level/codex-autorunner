@@ -14,6 +14,7 @@ from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
+from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 
@@ -298,6 +299,146 @@ async def test_pma_active_updates_during_running_turn(hub_env) -> None:
         resp = await chat_task
         assert resp.status_code == 200
         assert resp.json().get("status") == "ok"
+
+
+@pytest.mark.anyio
+async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blocker = asyncio.Event()
+    turn_start_calls = 0
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            await blocker.wait()
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["ok"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            nonlocal turn_start_calls
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            turn_start_calls += 1
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    queue = PmaQueue(hub_env.hub_root)
+    lane_id = "pma:test-concurrency"
+    start_lane_worker = app.state.pma_lane_worker_start
+    stop_lane_worker = app.state.pma_lane_worker_stop
+    assert callable(start_lane_worker)
+    assert callable(stop_lane_worker)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        chat_task = asyncio.create_task(
+            client.post(
+                "/hub/pma/chat",
+                json={"message": "first turn", "client_turn_id": "turn-1"},
+            )
+        )
+        try:
+            with anyio.fail_after(2):
+                while True:
+                    active_resp = await client.get("/hub/pma/active")
+                    assert active_resp.status_code == 200
+                    active_payload = active_resp.json()
+                    current = active_payload.get("current") or {}
+                    if (
+                        active_payload.get("active")
+                        and current.get("thread_id")
+                        and current.get("turn_id")
+                    ):
+                        break
+                    await anyio.sleep(0.05)
+
+            first_current = dict(active_payload["current"])
+            assert first_current.get("client_turn_id") == "turn-1"
+            assert turn_start_calls == 1
+
+            second_item, _ = await queue.enqueue(
+                lane_id,
+                "pma:test-concurrency:key-2",
+                {
+                    "message": "second turn",
+                    "agent": "codex",
+                    "client_turn_id": "turn-2",
+                },
+            )
+            await start_lane_worker(app, lane_id)
+
+            second_result = None
+            with anyio.fail_after(2):
+                while True:
+                    items = await queue.list_items(lane_id)
+                    match = next(
+                        (
+                            entry
+                            for entry in items
+                            if entry.item_id == second_item.item_id
+                        ),
+                        None,
+                    )
+                    assert match is not None
+                    if match.state in (
+                        QueueItemState.COMPLETED,
+                        QueueItemState.FAILED,
+                    ):
+                        second_result = dict(match.result or {})
+                        break
+                    await anyio.sleep(0.05)
+
+            assert second_result is not None
+            assert second_result.get("status") == "error"
+            assert "already active" in (second_result.get("detail") or "").lower()
+            assert turn_start_calls == 1
+
+            still_active = (await client.get("/hub/pma/active")).json()
+            assert still_active["active"] is True
+            assert still_active["current"]["client_turn_id"] == "turn-1"
+            assert still_active["current"]["thread_id"] == first_current["thread_id"]
+            assert still_active["current"]["turn_id"] == first_current["turn_id"]
+        finally:
+            await stop_lane_worker(app, lane_id)
+            blocker.set()
+
+        first_resp = await chat_task
+        assert first_resp.status_code == 200
+        assert first_resp.json().get("status") == "ok"
 
 
 def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
