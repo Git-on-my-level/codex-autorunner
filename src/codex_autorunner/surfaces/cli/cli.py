@@ -1540,23 +1540,6 @@ def kill(
 
 
 @app.command()
-def resume(
-    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-):
-    """Resume a paused/running ticket flow (now uses ticket_flow).
-
-    This command now uses ticket_flow for execution. For full control over
-    flows, use 'car flow' commands instead.
-    """
-    # Note: Resume is now handled by 'car flow ticket_flow/start' which
-    # will reuse an active/paused run automatically.
-    typer.echo("The 'resume' command has been deprecated in favor of ticket_flow.")
-    typer.echo("Use 'car flow ticket_flow/start' to resume existing flows.")
-    raise typer.Exit(code=0)
-
-
-@app.command()
 def log(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
