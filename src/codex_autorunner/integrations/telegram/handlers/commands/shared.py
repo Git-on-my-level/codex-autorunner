@@ -164,6 +164,45 @@ class SharedHelpers:
             return self._extract_opencode_session_path(session)
         return None
 
+    def _is_missing_opencode_session_error(self, exc: Exception) -> bool:
+        """Return true when an OpenCode error indicates a missing session."""
+
+        markers = (
+            "session not found",
+            "no session found",
+            "unknown session",
+            "session does not exist",
+            "session no longer exists",
+            "missing session",
+        )
+        current: Optional[BaseException] = exc
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, httpx.HTTPStatusError):
+                if current.response.status_code == 404:
+                    return True
+                detail = None
+                try:
+                    detail = self._extract_opencode_error_detail(
+                        current.response.json()
+                    )
+                except Exception:
+                    detail = None
+                candidates = [detail, current.response.text, str(current)]
+            else:
+                candidates = [str(current)]
+            for candidate in candidates:
+                if not isinstance(candidate, str):
+                    continue
+                lowered = candidate.lower()
+                if any(marker in lowered for marker in markers):
+                    return True
+                if "session" in lowered and "not found" in lowered:
+                    return True
+            current = current.__cause__ or current.__context__
+        return False
+
     def _interrupt_keyboard(self) -> dict[str, Any]:
         """Build interrupt button keyboard.
 

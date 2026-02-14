@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
+import httpx
 import pytest
 
 from codex_autorunner.core.app_server_threads import (
@@ -34,7 +35,10 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     handle_media_message,
 )
 from codex_autorunner.integrations.telegram.handlers.selections import SelectionState
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.integrations.telegram.state import (
+    TelegramTopicRecord,
+    ThreadSummary,
+)
 
 
 class _RouterStub:
@@ -785,3 +789,115 @@ async def test_pma_resume_uses_hub_root(tmp_path: Path) -> None:
 
     # Should not send "Topic not bound" error - PMA should use hub root
     assert not any("Topic not bound" in msg for msg in handler._sent)
+
+
+class _OpencodeResumeClientMissingSession:
+    async def get_session(self, session_id: str) -> dict[str, object]:
+        request = httpx.Request("GET", f"http://opencode.local/session/{session_id}")
+        response = httpx.Response(
+            404,
+            request=request,
+            json={"error": {"message": f"session not found: {session_id}"}},
+        )
+        raise httpx.HTTPStatusError(
+            f"Client error '404 Not Found' for url '{request.url}'",
+            request=request,
+            response=response,
+        )
+
+
+class _OpencodeResumeSupervisorStub:
+    def __init__(self, client: _OpencodeResumeClientMissingSession) -> None:
+        self._client = client
+
+    async def get_client(self, _root: Path) -> _OpencodeResumeClientMissingSession:
+        return self._client
+
+
+class _OpencodeResumeRouterStub:
+    def __init__(self, record: TelegramTopicRecord) -> None:
+        self._record = record
+
+    async def get_topic(self, _key: str) -> TelegramTopicRecord:
+        return self._record
+
+    async def update_topic(
+        self, _chat_id: int, _thread_id: Optional[int], apply: object
+    ) -> TelegramTopicRecord:
+        if callable(apply):
+            apply(self._record)
+        return self._record
+
+
+class _OpencodeResumeStoreStub:
+    def __init__(self, record: TelegramTopicRecord) -> None:
+        self._record = record
+
+    async def update_topic(self, _key: str, apply: object) -> None:
+        if callable(apply):
+            apply(self._record)
+
+
+class _OpencodeResumeHandler(WorkspaceCommands):
+    def __init__(self, record: TelegramTopicRecord) -> None:
+        self._logger = logging.getLogger("test")
+        self._router = _OpencodeResumeRouterStub(record)
+        self._store = _OpencodeResumeStoreStub(record)
+        self._resume_options: dict[str, SelectionState] = {}
+        self._config = SimpleNamespace()
+        self._opencode_supervisor = _OpencodeResumeSupervisorStub(
+            _OpencodeResumeClientMissingSession()
+        )
+        self.answers: list[str] = []
+        self.final_messages: list[str] = []
+
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        return f"{chat_id}:{thread_id}"
+
+    async def _answer_callback(self, _callback: object, text: str) -> None:
+        self.answers.append(text)
+
+    async def _finalize_selection(
+        self, _key: str, _callback: object, text: str
+    ) -> None:
+        self.final_messages.append(text)
+
+    async def _find_thread_conflict(
+        self, _thread_id: str, *, key: str
+    ) -> Optional[str]:
+        return None
+
+    def _canonical_workspace_root(
+        self, workspace_path: Optional[str]
+    ) -> Optional[Path]:
+        if not workspace_path:
+            return None
+        return Path(workspace_path).expanduser().resolve()
+
+
+@pytest.mark.anyio
+async def test_resume_opencode_missing_session_clears_stale_topic_state(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    stale_session = "session-stale"
+    record = TelegramTopicRecord(
+        workspace_path=str(workspace),
+        agent="opencode",
+        active_thread_id=stale_session,
+        thread_ids=[stale_session, "session-live"],
+    )
+    record.thread_summaries[stale_session] = ThreadSummary(
+        user_preview="stale",
+    )
+    handler = _OpencodeResumeHandler(record)
+    key = await handler._resolve_topic_key(-1001, 77)
+
+    await handler._resume_opencode_thread_by_id(key, stale_session)
+
+    assert record.active_thread_id is None
+    assert stale_session not in record.thread_ids
+    assert stale_session not in record.thread_summaries
+    assert handler.answers and handler.answers[-1] == "Thread missing"
+    assert any("Thread no longer exists." in text for text in handler.final_messages)

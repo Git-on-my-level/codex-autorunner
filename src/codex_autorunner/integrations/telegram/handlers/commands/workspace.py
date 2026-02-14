@@ -2380,6 +2380,35 @@ class WorkspaceCommands(SharedHelpers):
             client = await supervisor.get_client(workspace_root)
             session = await client.get_session(thread_id)
         except Exception as exc:
+            if self._is_missing_opencode_session_error(exc):
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.resume.missing_thread",
+                    topic_key=key,
+                    thread_id=thread_id,
+                    agent="opencode",
+                )
+
+                def clear_stale(record: "TelegramTopicRecord") -> None:
+                    if record.active_thread_id == thread_id:
+                        record.active_thread_id = None
+                    if thread_id in record.thread_ids:
+                        record.thread_ids.remove(thread_id)
+                    record.thread_summaries.pop(thread_id, None)
+
+                await self._store.update_topic(key, clear_stale)
+                await self._answer_callback(callback, "Thread missing")
+                await self._finalize_selection(
+                    key,
+                    callback,
+                    _with_conversation_id(
+                        "Thread no longer exists. Cleared stale state; use /new to start a fresh thread.",
+                        chat_id=chat_id,
+                        thread_id=thread_id_val,
+                    ),
+                )
+                return
             log_event(
                 self._logger,
                 logging.WARNING,
