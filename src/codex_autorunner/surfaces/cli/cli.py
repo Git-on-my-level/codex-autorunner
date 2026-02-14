@@ -1974,6 +1974,7 @@ def hub_worktree_cleanup(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
     )
     try:
@@ -1994,29 +1995,40 @@ def hub_worktree_cleanup(
 def hub_worktree_archive(
     worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to archive"),
     hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    delete_branch: bool = typer.Option(
+        False, "--delete-branch", help="Delete the local branch"
+    ),
+    delete_remote: bool = typer.Option(
+        False, "--delete-remote", help="Delete the remote branch"
+    ),
+    force_archive: bool = typer.Option(
+        False, "--force-archive", help="Continue cleanup if archive fails"
+    ),
     archive_note: Optional[str] = typer.Option(
         None, "--archive-note", help="Optional archive note"
     ),
 ):
-    """Archive a hub-managed worktree snapshot without removing it."""
+    """Archive and remove a hub-managed worktree (equivalent to cleanup --archive)."""
     config = _require_hub_config(hub)
     supervisor = HubSupervisor(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
     )
     try:
-        result = supervisor.archive_worktree(
+        supervisor.cleanup_worktree(
             worktree_repo_id=worktree_repo_id,
+            delete_branch=delete_branch,
+            delete_remote=delete_remote,
+            archive=True,
+            force_archive=force_archive,
             archive_note=archive_note,
         )
     except Exception as exc:
         _raise_exit(str(exc), cause=exc)
-    typer.echo(f"Archived: {result['snapshot_id']}")
-    typer.echo(f"Path: {result['snapshot_path']}")
-    typer.echo(f"Status: {result['status']}")
-    typer.echo(f"Files: {result['file_count']}, Bytes: {result['total_bytes']}")
+    typer.echo("ok")
 
 
 @hub_app.command("serve")

@@ -609,6 +609,60 @@ def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
     assert not worktree_path.exists()
 
 
+def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/dirty-guard",
+        start_point="HEAD",
+    )
+    (worktree.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="has uncommitted changes; commit or stash before archiving"
+    ):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+
+    assert worktree.path.exists()
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    assert manifest.get(worktree.id) is not None
+
+
+def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/dirty-no-archive",
+        start_point="HEAD",
+    )
+    (worktree.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    assert not worktree.path.exists()
+
+
 def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
