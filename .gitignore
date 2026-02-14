@@ -3,6 +3,7 @@ build/
 .env
 .venv/
 src/codex_autorunner.egg-info/
+codex-autorunner.override.yml
 
 # Python cache
 __pycache__/

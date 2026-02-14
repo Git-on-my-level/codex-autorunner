@@ -1,6 +1,0 @@
-agents:
-  opencode:
-    binary: /Users/dazheng/.opencode/bin/opencode
-telegram_bot:
-  progress_stream:
-    min_edit_interval_seconds: 5
