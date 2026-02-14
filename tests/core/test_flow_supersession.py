@@ -10,7 +10,6 @@ from codex_autorunner.core.flows import (
     FlowRunStatus,
     StepOutcome,
 )
-from codex_autorunner.core.flows.store import FlowStore
 
 pytestmark = pytest.mark.integration
 
@@ -181,6 +180,50 @@ async def test_superseded_status_is_terminal():
     assert FlowRunStatus.SUPERSEDED.is_terminal() is True
     assert FlowRunStatus.SUPERSEDED.is_active() is False
     assert FlowRunStatus.SUPERSEDED.is_paused() is False
+
+
+@pytest.mark.asyncio
+async def test_mark_run_superseded_only_affects_paused_runs(
+    temp_dir, simple_flow_definition
+):
+    db_path = temp_dir / ".codex-autorunner" / "flows.db"
+    artifacts_root = temp_dir / ".codex-autorunner" / "flows"
+    controller = FlowController(
+        definition=simple_flow_definition,
+        db_path=db_path,
+        artifacts_root=artifacts_root,
+    )
+    controller.initialize()
+
+    try:
+        record1 = await controller.start_flow(input_data={"test": "value1"})
+        record2 = await controller.start_flow(input_data={"test": "value2"})
+
+        controller.store.update_flow_run_status(
+            run_id=record1.id, status=FlowRunStatus.RUNNING
+        )
+
+        result = controller.store.mark_run_superseded(
+            record1.id, superseded_by=record2.id
+        )
+        assert result is None
+
+        unchanged = controller.store.get_flow_run(record1.id)
+        assert unchanged is not None
+        assert unchanged.status == FlowRunStatus.RUNNING
+        assert unchanged.metadata.get("superseded_by") is None
+
+        controller.store.update_flow_run_status(
+            run_id=record1.id, status=FlowRunStatus.PAUSED
+        )
+        result = controller.store.mark_run_superseded(
+            record1.id, superseded_by=record2.id
+        )
+        assert result is not None
+        assert result.status == FlowRunStatus.SUPERSEDED
+
+    finally:
+        controller.shutdown()
 
 
 @pytest.mark.asyncio

@@ -359,7 +359,8 @@ class FlowStore:
         now = now_iso()
         with self.transaction() as conn:
             existing = conn.execute(
-                "SELECT metadata FROM flow_runs WHERE id = ?", (run_id,)
+                "SELECT metadata FROM flow_runs WHERE id = ? AND status = ?",
+                (run_id, FlowRunStatus.PAUSED.value),
             ).fetchone()
             if existing is None:
                 return None
@@ -370,19 +371,22 @@ class FlowStore:
             metadata = dict(metadata)
             metadata["superseded_by"] = superseded_by
             metadata["superseded_at"] = now
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE flow_runs
                 SET status = ?, metadata = ?, finished_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ?
                 """,
                 (
                     FlowRunStatus.SUPERSEDED.value,
                     json.dumps(metadata),
                     now,
                     run_id,
+                    FlowRunStatus.PAUSED.value,
                 ),
             )
+            if cursor.rowcount == 0:
+                return None
             row = conn.execute(
                 "SELECT * FROM flow_runs WHERE id = ?", (run_id,)
             ).fetchone()
