@@ -81,6 +81,83 @@ def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch):
     assert spawned["count"] == 1
 
 
+def test_start_reuses_active_run_when_latest_is_terminal(tmp_path, monkeypatch):
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+
+    active_run_id = str(uuid.uuid4())
+    latest_terminal_run_id = str(uuid.uuid4())
+
+    active = store.create_flow_run(
+        run_id=active_run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        metadata={},
+        state={},
+        current_step="ticket_turn",
+    )
+    assert active.id == active_run_id
+    store.update_flow_run_status(active_run_id, FlowRunStatus.RUNNING)
+
+    latest = store.create_flow_run(
+        run_id=latest_terminal_run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        metadata={},
+        state={},
+        current_step="ticket_turn",
+    )
+    assert latest.id == latest_terminal_run_id
+    store.update_flow_run_status(latest_terminal_run_id, FlowRunStatus.STOPPED)
+    store.close()
+
+    artifacts_dir = tmp_path / ".codex-autorunner" / "flows" / active_run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    health = FlowWorkerHealth(
+        status="alive",
+        pid=4321,
+        cmdline=[
+            "python",
+            "-m",
+            "codex_autorunner",
+            "flow",
+            "worker",
+            "--run-id",
+            active_run_id,
+        ],
+        artifact_path=artifacts_dir / "worker.json",
+        message=None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda *a, **k: health,
+    )
+
+    spawned = {"count": 0}
+
+    def fake_start_worker(*_args, **_kwargs):
+        spawned["count"] += 1
+        return None
+
+    monkeypatch.setattr(flow_routes, "_start_flow_worker", fake_start_worker)
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/start", json={})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == active_run_id
+    assert payload["state"]["hint"] == "active_run_reused"
+    assert spawned["count"] == 1
+
+
 def test_bootstrap_honors_force_new(tmp_path, monkeypatch):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
