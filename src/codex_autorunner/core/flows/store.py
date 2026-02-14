@@ -337,6 +337,59 @@ class FlowStore:
         rows = conn.execute(query, params).fetchall()
         return [self._row_to_flow_run(row) for row in rows]
 
+    def list_paused_runs_for_supersession(
+        self, flow_type: str, exclude_run_id: str
+    ) -> List[FlowRunRecord]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT * FROM flow_runs
+            WHERE flow_type = ?
+              AND status = ?
+              AND id != ?
+            ORDER BY created_at DESC
+            """,
+            (flow_type, FlowRunStatus.PAUSED.value, exclude_run_id),
+        ).fetchall()
+        return [self._row_to_flow_run(row) for row in rows]
+
+    def mark_run_superseded(
+        self, run_id: str, superseded_by: str
+    ) -> Optional[FlowRunRecord]:
+        now = now_iso()
+        with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT metadata FROM flow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if existing is None:
+                return None
+            try:
+                metadata = json.loads(existing["metadata"] or "{}")
+            except Exception:
+                metadata = {}
+            metadata = dict(metadata)
+            metadata["superseded_by"] = superseded_by
+            metadata["superseded_at"] = now
+            conn.execute(
+                """
+                UPDATE flow_runs
+                SET status = ?, metadata = ?, finished_at = ?
+                WHERE id = ?
+                """,
+                (
+                    FlowRunStatus.SUPERSEDED.value,
+                    json.dumps(metadata),
+                    now,
+                    run_id,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM flow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            return self._row_to_flow_run(row)
+
     def create_event(
         self,
         event_id: str,

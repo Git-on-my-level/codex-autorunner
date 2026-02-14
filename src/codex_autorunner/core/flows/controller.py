@@ -88,7 +88,6 @@ class FlowController:
         initial_state: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> FlowRunRecord:
-        """Create a new flow run record without executing the flow."""
         if run_id is None:
             run_id = str(uuid.uuid4())
 
@@ -108,7 +107,30 @@ class FlowController:
                 current_step=self.definition.initial_step,
             )
 
+            self._supersede_older_paused_runs(run_id)
+
             return record
+
+    def _supersede_older_paused_runs(self, new_run_id: str) -> int:
+        paused_runs = self.store.list_paused_runs_for_supersession(
+            flow_type=self.definition.flow_type, exclude_run_id=new_run_id
+        )
+        superseded_count = 0
+        for old_run in paused_runs:
+            try:
+                result = self.store.mark_run_superseded(
+                    old_run.id, superseded_by=new_run_id
+                )
+                if result:
+                    superseded_count += 1
+                    _logger.info(
+                        "Marked run %s as superseded by %s", old_run.id, new_run_id
+                    )
+            except Exception as exc:
+                _logger.warning(
+                    "Failed to mark run %s as superseded: %s", old_run.id, exc
+                )
+        return superseded_count
 
     async def run_flow(
         self, run_id: str, initial_state: Optional[Dict[str, Any]] = None
@@ -146,8 +168,34 @@ class FlowController:
             if not record:
                 raise ValueError(f"Flow run {run_id} not found")
 
+            if record.status == FlowRunStatus.SUPERSEDED:
+                metadata = record.metadata or {}
+                superseded_by = metadata.get("superseded_by")
+                if superseded_by:
+                    raise ValueError(
+                        f"Flow run {run_id} has been superseded by {superseded_by}. "
+                        f"Resume the active run instead."
+                    )
+                raise ValueError(
+                    f"Flow run {run_id} has been superseded and cannot be resumed."
+                )
+
             if record.status == FlowRunStatus.RUNNING:
                 raise ValueError(f"Flow run {run_id} is already active")
+
+            active_runs = [
+                r
+                for r in self.store.list_flow_runs(flow_type=self.definition.flow_type)
+                if r.status == FlowRunStatus.RUNNING and r.id != run_id
+            ]
+            if active_runs:
+                active_run = active_runs[0]
+                raise ValueError(
+                    f"Another run ({active_run.id}) is already active for this flow. "
+                    f"Resume that run or stop it first."
+                )
+
+            self._clear_stale_worker_metadata(run_id)
 
             cleared = self.store.set_stop_requested(run_id, False)
             if not cleared:
@@ -183,7 +231,6 @@ class FlowController:
                 engine.pop("pause_context", None)
                 state["ticket_engine"] = engine
             state.pop("reason_summary", None)
-            # Clear stale failure diagnostics when resuming a run.
             state.pop("failure", None)
 
             updated = self.store.update_flow_run_status(
@@ -198,6 +245,19 @@ class FlowController:
             if not updated:
                 raise RuntimeError(f"Failed to get record for run {run_id}")
             return updated
+
+    def _clear_stale_worker_metadata(self, run_id: str) -> None:
+        from .worker_process import clear_worker_metadata
+
+        repo_root = self._repo_root()
+        if repo_root is None:
+            return
+        flows_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+        if flows_dir.exists():
+            try:
+                clear_worker_metadata(flows_dir)
+            except Exception:
+                pass
 
     def _repo_root(self) -> Optional[Path]:
         if not self.db_path:

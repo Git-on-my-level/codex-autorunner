@@ -28,9 +28,10 @@ class FlowRunStatus(str, Enum):
     STOPPED = "stopped"
     COMPLETED = "completed"
     FAILED = "failed"
+    SUPERSEDED = "superseded"
 
     def is_terminal(self) -> bool:
-        return self in {self.COMPLETED, self.FAILED, self.STOPPED}
+        return self in {self.COMPLETED, self.FAILED, self.STOPPED, self.SUPERSEDED}
 
     def is_active(self) -> bool:
         return self in {self.PENDING, self.RUNNING, self.STOPPING}
