@@ -1008,8 +1008,20 @@ def _gather_inbox(
                     FlowRunStatus.STOPPED,
                 ]
                 all_runs = store.list_flow_runs(flow_type="ticket_flow")
+                active_run_id: Optional[str] = None
+                for r in all_runs:
+                    if r.status == FlowRunStatus.RUNNING:
+                        active_run_id = str(r.id)
+                        break
+                if active_run_id is None:
+                    for r in all_runs:
+                        if r.status == FlowRunStatus.PAUSED:
+                            active_run_id = str(r.id)
+                            break
                 for record in all_runs:
                     if record.status not in active_statuses:
+                        continue
+                    if record.status == FlowRunStatus.SUPERSEDED:
                         continue
                     record_input = dict(record.input_data or {})
                     latest = _latest_dispatch(
@@ -1054,10 +1066,14 @@ def _gather_inbox(
                         has_pending_dispatch=has_dispatch,
                         dispatch_state_reason=dispatch_state_reason,
                     )
+                    run_state["active_run_id"] = active_run_id
                     is_terminal_failed = record.status in (
                         FlowRunStatus.FAILED,
                         FlowRunStatus.STOPPED,
                     )
+                    is_superseded = record.status == FlowRunStatus.SUPERSEDED
+                    if is_superseded:
+                        continue
                     if (
                         not run_state.get("attention_required")
                         and not is_terminal_failed
@@ -1074,6 +1090,7 @@ def _gather_inbox(
                         "status": record.status.value,
                         "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
                         "run_state": run_state,
+                        "active_run_id": active_run_id,
                     }
                     if has_dispatch:
                         dispatch_payload = latest_payload.get("dispatch")

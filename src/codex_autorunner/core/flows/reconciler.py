@@ -36,6 +36,7 @@ class FlowReconcileSummary:
     active: int = 0
     updated: int = 0
     locked: int = 0
+    superseded: int = 0
     errors: int = 0
 
 
