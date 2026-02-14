@@ -1075,6 +1075,12 @@ def _gather_inbox(
                     if is_superseded:
                         continue
                     if (
+                        is_terminal_failed
+                        and active_run_id
+                        and active_run_id != str(record.id)
+                    ):
+                        continue
+                    if (
                         not run_state.get("attention_required")
                         and not is_terminal_failed
                     ):
