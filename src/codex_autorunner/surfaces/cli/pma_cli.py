@@ -523,7 +523,7 @@ def pma_files(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """List files in PMA inbox and outbox."""
+    """List files in PMA inbox and outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
@@ -555,7 +555,9 @@ def pma_files(
             name = file.get("name", "")
             size = file.get("size", 0)
             modified = file.get("modified_at", "")
-            typer.echo(f"  - {name} ({size} bytes, {modified})")
+            source = file.get("source", "")
+            source_str = f", source={source}" if source else ""
+            typer.echo(f"  - {name} ({size} bytes, {modified}{source_str})")
 
         typer.echo(f"\nOutbox ({len(outbox)}):")
         for file in outbox:
@@ -564,7 +566,9 @@ def pma_files(
             name = file.get("name", "")
             size = file.get("size", 0)
             modified = file.get("modified_at", "")
-            typer.echo(f"  - {name} ({size} bytes, {modified})")
+            source = file.get("source", "")
+            source_str = f", source={source}" if source else ""
+            typer.echo(f"  - {name} ({size} bytes, {modified}{source_str})")
 
 
 @pma_app.command("upload")
@@ -574,7 +578,7 @@ def pma_upload(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Upload files to PMA inbox or outbox."""
+    """Upload files to PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
@@ -636,7 +640,7 @@ def pma_download(
     ),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Download a file from PMA inbox or outbox."""
+    """Download a file from PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
@@ -670,7 +674,7 @@ def pma_delete(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Delete files from PMA inbox or outbox."""
+    """Delete files from PMA inbox or outbox (FileBox-backed via /hub/pma/files)."""
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
