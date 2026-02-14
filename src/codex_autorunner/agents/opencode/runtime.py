@@ -529,34 +529,36 @@ def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
     if not isinstance(payload, dict):
         return None
     containers = [payload]
+    part_containers: list[dict[str, Any]] = []
 
-    def _append_part_containers(container: Any) -> None:
+    def _collect_part_containers(container: Any) -> None:
         if not isinstance(container, dict):
             return
         part = container.get("part")
         if isinstance(part, dict):
-            containers.append(part)
+            part_containers.append(part)
         parts = container.get("parts")
         if isinstance(parts, list):
-            containers.extend(entry for entry in parts if isinstance(entry, dict))
+            part_containers.extend(entry for entry in parts if isinstance(entry, dict))
 
     info = payload.get("info")
     if isinstance(info, dict):
         containers.append(info)
-        _append_part_containers(info)
+        _collect_part_containers(info)
     properties = payload.get("properties")
     if isinstance(properties, dict):
         containers.append(properties)
-        _append_part_containers(properties)
+        _collect_part_containers(properties)
         prop_info = properties.get("info")
         if isinstance(prop_info, dict):
             containers.append(prop_info)
-            _append_part_containers(prop_info)
+            _collect_part_containers(prop_info)
     response = payload.get("response")
     if isinstance(response, dict):
         containers.append(response)
-        _append_part_containers(response)
-    _append_part_containers(payload)
+        _collect_part_containers(response)
+    _collect_part_containers(payload)
+    containers.extend(part_containers)
     for container in containers:
         for key in (
             "usage",
@@ -811,8 +813,18 @@ async def collect_opencode_output_from_events(
     pending_no_id: list[str] = []
     no_id_role: Optional[str] = None
     fallback_message: Optional[tuple[Optional[str], Optional[str], str]] = None
-    last_usage_total: Optional[int] = None
-    last_context_window: Optional[int] = None
+    last_usage_signature: Optional[
+        tuple[
+            Optional[str],
+            Optional[str],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+        ]
+    ] = None
     part_types: dict[str, str] = {}
     seen_question_request_ids: set[tuple[Optional[str], str]] = set()
     logged_permission_errors: set[str] = set()
@@ -1019,7 +1031,7 @@ async def collect_opencode_output_from_events(
         return context_window
 
     async def _emit_usage_update(payload: Any, *, is_primary_session: bool) -> None:
-        nonlocal last_usage_total, last_context_window
+        nonlocal last_usage_signature
         if part_handler is None or not is_primary_session:
             return
         usage = _extract_usage_payload(payload)
@@ -1035,10 +1047,19 @@ async def collect_opencode_output_from_events(
                 provider_id, model_id
             )
         usage_details = _extract_usage_details(usage)
-        if total_tokens == last_usage_total and context_window == last_context_window:
+        usage_signature = (
+            provider_id,
+            model_id,
+            total_tokens,
+            usage_details.get("inputTokens"),
+            usage_details.get("cachedInputTokens"),
+            usage_details.get("outputTokens"),
+            usage_details.get("reasoningTokens"),
+            context_window,
+        )
+        if usage_signature == last_usage_signature:
             return
-        last_usage_total = total_tokens
-        last_context_window = context_window
+        last_usage_signature = usage_signature
         usage_snapshot: dict[str, Any] = {}
         if provider_id:
             usage_snapshot["providerID"] = provider_id
