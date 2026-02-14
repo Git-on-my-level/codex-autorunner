@@ -2497,6 +2497,70 @@ def _resolve_run_paths(record: FlowRunRecord, repo_root: Path):
     )
 
 
+def _cleanup_stale_flow_runs(
+    *,
+    repo_root: Path,
+    exclude_run_id: str,
+    older_than: Optional[str] = None,
+    delete_run: str = "true",
+) -> int:
+    """Clean up stale terminal runs for a repo, excluding the specified run.
+
+    Returns the number of runs archived.
+    """
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    if not db_path.exists():
+        return 0
+
+    cutoff = None
+    if older_than:
+        cutoff = datetime.now(timezone.utc) - _parse_duration(older_than)
+    parsed_delete_run = _parse_bool_text(delete_run, flag="--delete-run")
+
+    config = load_repo_config(repo_root)
+    store = FlowStore(db_path, durable=config.durable_writes)
+    try:
+        store.initialize()
+        records = store.list_flow_runs(flow_type="ticket_flow")
+    except Exception:
+        store.close()
+        return 0
+
+    stale_statuses = {
+        FlowRunStatus.COMPLETED,
+        FlowRunStatus.FAILED,
+        FlowRunStatus.STOPPED,
+    }
+    cleanup_count = 0
+
+    try:
+        for record in records:
+            if str(record.id) == exclude_run_id:
+                continue
+            if record.status not in stale_statuses:
+                continue
+            if cutoff is not None:
+                ts = _flow_timestamp(record)
+                if ts is None or ts > cutoff:
+                    continue
+            try:
+                _archive_flow_run_artifacts(
+                    repo_root=repo_root,
+                    store=store,
+                    record=record,
+                    force=False,
+                    delete_run=parsed_delete_run,
+                    dry_run=False,
+                )
+                cleanup_count += 1
+            except Exception as exc:
+                logger.warning("Failed to archive stale run %s: %s", record.id, exc)
+    finally:
+        store.close()
+
+    return cleanup_count
+
+
 def _archive_flow_run_artifacts(
     *,
     repo_root: Path,
@@ -3993,6 +4057,13 @@ def _resumable_run(records: list[FlowRunRecord]) -> tuple[Optional[FlowRunRecord
     return None, "new_run"
 
 
+def _stale_terminal_runs(records: list[FlowRunRecord]) -> list[FlowRunRecord]:
+    """Return list of FAILED/STOPPED runs that could be resumed instead of starting fresh."""
+    return [
+        r for r in records if r.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED)
+    ]
+
+
 def _ticket_flow_status_payload(
     engine: RuntimeContext, record: FlowRunRecord, store: Optional[FlowStore]
 ) -> dict:
@@ -4261,9 +4332,11 @@ def ticket_flow_bootstrap(
     ticket_path = ticket_dir / "TICKET-001.md"
 
     store = _open_flow_store(engine)
+    stale_terminal: list[FlowRunRecord] = []
     try:
+        records = store.list_flow_runs(flow_type="ticket_flow")
+        stale_terminal = _stale_terminal_runs(records)
         if not force_new:
-            records = store.list_flow_runs(flow_type="ticket_flow")
             existing_run, reason = _resumable_run(records)
             if existing_run and reason == "active":
                 _start_ticket_flow_worker(
@@ -4289,6 +4362,16 @@ def ticket_flow_bootstrap(
                     _raise_exit("Add --force-new to create a new run.")
     finally:
         store.close()
+
+    if stale_terminal:
+        typer.echo(
+            f"Warning: {len(stale_terminal)} stale run(s) found (FAILED/STOPPED)."
+        )
+        typer.echo(
+            f"Consider 'car flow ticket_flow resume --run-id {stale_terminal[0].id}' "
+            "to resume instead of starting fresh."
+        )
+        typer.echo("Use --force-new to suppress this warning and start a new run.")
 
     existing_tickets = list_ticket_paths(ticket_dir)
     seeded = False
@@ -4382,9 +4465,11 @@ def ticket_flow_start(
     ticket_dir.mkdir(parents=True, exist_ok=True)
 
     store = _open_flow_store(engine)
+    stale_terminal: list[FlowRunRecord] = []
     try:
+        records = store.list_flow_runs(flow_type="ticket_flow")
+        stale_terminal = _stale_terminal_runs(records)
         if not force_new:
-            records = store.list_flow_runs(flow_type="ticket_flow")
             existing_run, reason = _resumable_run(records)
             if existing_run and reason == "active":
                 report = _ticket_flow_preflight(engine, ticket_dir)
@@ -4416,6 +4501,16 @@ def ticket_flow_start(
 
     finally:
         store.close()
+
+    if stale_terminal:
+        typer.echo(
+            f"Warning: {len(stale_terminal)} stale run(s) found (FAILED/STOPPED)."
+        )
+        typer.echo(
+            f"Consider 'car flow ticket_flow resume --run-id {stale_terminal[0].id}' "
+            "to resume instead of starting fresh."
+        )
+        typer.echo("Use --force-new to suppress this warning and start a new run.")
 
     report = _ticket_flow_preflight(engine, ticket_dir)
     if report.has_errors():
@@ -4482,11 +4577,35 @@ def ticket_flow_resume(
         "--force",
         help="Force resume even when blocked without new reply/repo changes.",
     ),
+    cleanup_stale: bool = typer.Option(
+        False,
+        "--cleanup-stale",
+        help="Archive stale terminal runs (COMPLETED/FAILED/STOPPED) after resume.",
+    ),
+    older_than: Optional[str] = typer.Option(
+        None,
+        "--older-than",
+        help="Age threshold for cleanup (e.g., 30m, 12h, 7d). Requires --cleanup-stale.",
+    ),
+    delete_run: str = typer.Option(
+        "true",
+        "--delete-run",
+        help="Delete flow run records after archive (true|false). Requires --cleanup-stale.",
+    ),
 ):
-    """Resume a paused ticket_flow run."""
+    """Resume a paused ticket_flow run.
+
+    Use --cleanup-stale to archive older terminal runs after a successful resume.
+    This helps keep the inbox clean by removing stale runs that have an active sibling.
+    """
     engine = _require_repo_config(repo, hub)
     _guard_unregistered_hub_repo(engine.repo_root, hub)
     normalized_run_id = _normalize_flow_run_id(run_id)
+
+    if cleanup_stale:
+        if older_than:
+            _parse_duration(older_than)
+        _parse_bool_text(delete_run, flag="--delete-run")
 
     store = _open_flow_store(engine)
     try:
@@ -4518,6 +4637,16 @@ def ticket_flow_resume(
         except ValueError as exc:
             _raise_exit(str(exc), cause=exc)
         _start_ticket_flow_worker(engine.repo_root, normalized_run_id)
+
+        if cleanup_stale:
+            cleanup_count = _cleanup_stale_flow_runs(
+                repo_root=engine.repo_root,
+                exclude_run_id=normalized_run_id,
+                older_than=older_than,
+                delete_run=delete_run,
+            )
+            if cleanup_count > 0:
+                typer.echo(f"Archived {cleanup_count} stale run(s).")
     finally:
         controller.shutdown()
         asyncio.run(agent_pool.close())
