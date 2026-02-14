@@ -381,8 +381,8 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 
 ## PMA file handoff
 
-- User uploads arrive in `.codex-autorunner/pma/inbox/`.
-- Send user-facing files by writing to `.codex-autorunner/pma/outbox/`.
+- User uploads arrive in `.codex-autorunner/filebox/inbox/`.
+- Send user-facing files by writing to `.codex-autorunner/filebox/outbox/`.
 
 ## PMA dispatches (user attention)
 
