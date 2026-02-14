@@ -332,12 +332,17 @@ class FlowCommands(SharedHelpers):
         effective_args = args
 
         if argv:
-            resolved = self._resolve_workspace(argv[0])
-            consumed = 1
-            if not resolved and len(argv) >= 2:
+            resolved = None
+            consumed = 0
+            if len(argv) >= 2:
                 combined_repo_id = f"{argv[0]}--{argv[1]}"
                 resolved = self._resolve_workspace(combined_repo_id)
-                consumed = 2
+                if resolved:
+                    consumed = 2
+            if not resolved:
+                resolved = self._resolve_workspace(argv[0])
+                if resolved:
+                    consumed = 1
             if resolved:
                 target_repo_root = Path(resolved[0])
                 target_repo_id = resolved[1]

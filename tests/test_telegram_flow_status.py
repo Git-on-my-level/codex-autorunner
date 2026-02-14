@@ -279,6 +279,7 @@ class _PMAFlowStatusHandler(FlowCommands):
 class _FlowWorktreeTargetHandler(FlowCommands):
     def __init__(self, repo_root: Path) -> None:
         self._store = _TopicStoreStub(None)
+        self._base_root = (repo_root / "base").resolve()
         self._repo_root = repo_root.resolve()
         self.status_calls: list[tuple[Path, list[str], str | None]] = []
         self.sent: list[str] = []
@@ -287,6 +288,8 @@ class _FlowWorktreeTargetHandler(FlowCommands):
         return "topic"
 
     def _resolve_workspace(self, arg: str) -> tuple[str, str] | None:
+        if arg == "base":
+            return str(self._base_root), "base"
         if arg == "base--wt-1":
             return str(self._repo_root), "base--wt-1"
         return None
@@ -357,7 +360,9 @@ async def test_flow_default_unbound_topic_uses_hub_overview() -> None:
 
 
 @pytest.mark.anyio
-async def test_flow_repo_and_worktree_default_to_status(tmp_path: Path) -> None:
+async def test_flow_repo_and_worktree_default_to_status_when_both_resolve(
+    tmp_path: Path,
+) -> None:
     handler = _FlowWorktreeTargetHandler(tmp_path)
     message = TelegramMessage(
         update_id=1,
