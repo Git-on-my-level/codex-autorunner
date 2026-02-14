@@ -10,6 +10,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
+from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
@@ -418,9 +419,12 @@ def test_pma_files_upload_list_download_delete(hub_env) -> None:
     assert payload["inbox"][0]["name"] == "file.txt"
     assert payload["inbox"][0]["box"] == "inbox"
     assert payload["inbox"][0]["size"] == 11
-    assert payload["inbox"][0]["source"] == "pma"
+    assert payload["inbox"][0]["source"] == "filebox"
     assert "/hub/pma/files/inbox/file.txt" in payload["inbox"][0]["url"]
     assert payload["outbox"] == []
+    assert (
+        filebox.inbox_dir(hub_env.hub_root) / "file.txt"
+    ).read_bytes() == b"Hello, PMA!"
 
     # Download file
     resp = client.get("/hub/pma/files/inbox/file.txt")
@@ -458,6 +462,52 @@ def test_pma_files_invalid_box(hub_env) -> None:
     assert resp.status_code == 400
 
 
+def test_pma_files_list_includes_legacy_sources(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.inbox_dir(hub_env.hub_root) / "primary.txt").write_bytes(b"primary")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "inbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "legacy-pma.txt").write_bytes(b"legacy-pma")
+    legacy_telegram = (
+        hub_env.hub_root
+        / ".codex-autorunner"
+        / "uploads"
+        / "telegram-files"
+        / "topic-1"
+        / "inbox"
+    )
+    legacy_telegram.mkdir(parents=True, exist_ok=True)
+    (legacy_telegram / "legacy-telegram.txt").write_bytes(b"legacy-telegram")
+
+    resp = client.get("/hub/pma/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    entries = {item["name"]: item for item in payload["inbox"]}
+    assert entries["primary.txt"]["source"] == "filebox"
+    assert entries["legacy-pma.txt"]["source"] == "pma"
+    assert entries["legacy-telegram.txt"]["source"] == "telegram"
+
+
+def test_pma_files_download_resolves_legacy_path(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "inbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "legacy.txt").write_bytes(b"legacy")
+
+    resp = client.get("/hub/pma/files/inbox/legacy.txt")
+    assert resp.status_code == 200
+    assert resp.content == b"legacy"
+
+
 def test_pma_files_outbox(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
@@ -485,6 +535,72 @@ def test_pma_files_outbox(hub_env) -> None:
     assert resp.content == b"Output content"
 
 
+def test_pma_files_delete_removes_filebox_and_legacy_duplicates(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.inbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"primary")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "inbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "shared.txt").write_bytes(b"legacy-pma")
+    legacy_telegram = (
+        hub_env.hub_root
+        / ".codex-autorunner"
+        / "uploads"
+        / "telegram-files"
+        / "topic-2"
+        / "inbox"
+    )
+    legacy_telegram.mkdir(parents=True, exist_ok=True)
+    (legacy_telegram / "shared.txt").write_bytes(b"legacy-telegram")
+
+    resp = client.delete("/hub/pma/files/inbox/shared.txt")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    assert not (filebox.inbox_dir(hub_env.hub_root) / "shared.txt").exists()
+    assert not (legacy_pma / "shared.txt").exists()
+    assert not (legacy_telegram / "shared.txt").exists()
+
+
+def test_pma_files_bulk_delete_removes_all_visible_entries(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.outbox_dir(hub_env.hub_root) / "a.txt").write_bytes(b"a")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "outbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "b.txt").write_bytes(b"b")
+    legacy_telegram_pending = (
+        hub_env.hub_root
+        / ".codex-autorunner"
+        / "uploads"
+        / "telegram-files"
+        / "topic-3"
+        / "outbox"
+        / "pending"
+    )
+    legacy_telegram_pending.mkdir(parents=True, exist_ok=True)
+    (legacy_telegram_pending / "c.txt").write_bytes(b"c")
+    (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"primary")
+    (legacy_pma / "shared.txt").write_bytes(b"legacy")
+
+    resp = client.delete("/hub/pma/files/outbox")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    assert (client.get("/hub/pma/files").json()["outbox"]) == []
+    assert not (filebox.outbox_dir(hub_env.hub_root) / "a.txt").exists()
+    assert not (legacy_pma / "b.txt").exists()
+    assert not (legacy_telegram_pending / "c.txt").exists()
+    assert not (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").exists()
+    assert not (legacy_pma / "shared.txt").exists()
+
+
 def test_pma_files_rejects_invalid_filenames(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
@@ -496,7 +612,7 @@ def test_pma_files_rejects_invalid_filenames(hub_env) -> None:
         files = {"file": (filename, b"test", "text/plain")}
         resp = client.post("/hub/pma/files/inbox", files=files)
         assert resp.status_code == 400, f"Should reject filename: {filename}"
-        assert "Invalid filename" in resp.json()["detail"]
+        assert "filename" in resp.json()["detail"].lower()
 
 
 def test_pma_files_size_limit(hub_env) -> None:
