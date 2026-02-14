@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import importlib.metadata
 import ipaddress
 import json
@@ -7,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import site
 import subprocess
 import sys
@@ -44,6 +46,7 @@ from ...core.flows.worker_process import (
     clear_worker_metadata,
     register_worker_metadata,
     write_worker_crash_info,
+    write_worker_exit_info,
 )
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
@@ -4200,6 +4203,31 @@ def flow_worker(
 
     typer.echo(f"Starting flow worker for run {normalized_run_id}")
 
+    exit_code_holder = [0]
+    _repo_root = engine.repo_root
+    _artifacts_root = artifacts_root
+
+    def _write_exit_info() -> None:
+        try:
+            write_worker_exit_info(
+                _repo_root,
+                normalized_run_id,
+                returncode=exit_code_holder[0] or None,
+                artifacts_root=_artifacts_root,
+            )
+        except Exception:
+            pass
+
+    def _signal_handler(signum: int, frame) -> None:
+        exit_code_holder[0] = -signum
+        _write_exit_info()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    atexit.register(_write_exit_info)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
     async def _run_worker():
         typer.echo(f"Flow worker started for {normalized_run_id}")
         typer.echo(f"DB path: {db_path}")
@@ -4280,6 +4308,7 @@ def flow_worker(
                 f"Flow run {normalized_run_id} finished with status {final_record.status}"
             )
         except Exception as exc:
+            exit_code_holder[0] = 1
             last_event = None
             try:
                 app_event = controller.store.get_last_event_by_type(
@@ -4297,6 +4326,7 @@ def flow_worker(
                 engine.repo_root,
                 normalized_run_id,
                 worker_pid=os.getpid(),
+                exit_code=1,
                 last_event=last_event,
                 exception=f"{type(exc).__name__}: {exc}",
                 stack_trace=traceback.format_exc(),
