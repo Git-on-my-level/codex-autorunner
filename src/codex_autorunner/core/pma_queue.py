@@ -11,9 +11,12 @@ from typing import Any, Optional
 
 from .locks import file_lock
 from .time_utils import now_iso
+from .utils import atomic_write
 
 PMA_QUEUE_DIR = ".codex-autorunner/pma/queue"
 QUEUE_FILE_SUFFIX = ".jsonl"
+DEFAULT_COMPACTION_KEEP_LAST = 200
+COMPACTION_MIN_SIZE_BYTES = 256 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,14 @@ class QueueItemState(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     DEDUPED = "deduped"
+
+
+TERMINAL_STATES = {
+    QueueItemState.COMPLETED.value,
+    QueueItemState.FAILED.value,
+    QueueItemState.CANCELLED.value,
+    QueueItemState.DEDUPED.value,
+}
 
 
 @dataclass
@@ -207,12 +218,14 @@ class PmaQueue:
         if result is not None:
             item.result = result
         await self._update_in_file(item)
+        await self._maybe_compact_lane(item.lane_id)
 
     async def fail_item(self, item: PmaQueueItem, error: str) -> None:
         item.state = QueueItemState.FAILED
         item.finished_at = now_iso()
         item.error = error
         await self._update_in_file(item)
+        await self._maybe_compact_lane(item.lane_id)
 
     async def cancel_lane(self, lane_id: str) -> int:
         cancelled = 0
@@ -410,7 +423,70 @@ class PmaQueue:
                         lines.append(line)
 
                 if updated:
-                    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    atomic_write(path, "\n".join(lines) + "\n")
+
+    async def compact_lane(
+        self,
+        lane_id: str,
+        *,
+        keep_last: int = DEFAULT_COMPACTION_KEEP_LAST,
+    ) -> bool:
+        path = self._lane_queue_path(lane_id)
+        if not path.exists():
+            return False
+
+        keep_last = max(0, keep_last)
+        async with self._ensure_lane_lock(lane_id):
+            with file_lock(self._lane_queue_lock_path(lane_id)):
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except OSError:
+                    return False
+
+                raw_lines = [
+                    line.strip() for line in content.splitlines() if line.strip()
+                ]
+                if not raw_lines:
+                    return False
+
+                parsed: list[tuple[str, Optional[dict[str, Any]]]] = []
+                terminal_indexes: list[int] = []
+                for idx, line in enumerate(raw_lines):
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        data = None
+                    parsed.append((line, data))
+                    if isinstance(data, dict) and data.get("state") in TERMINAL_STATES:
+                        terminal_indexes.append(idx)
+
+                if len(terminal_indexes) <= keep_last:
+                    return False
+
+                keep_terminal_indexes = (
+                    set(terminal_indexes[-keep_last:]) if keep_last > 0 else set()
+                )
+                compacted_lines = [
+                    line
+                    for idx, (line, data) in enumerate(parsed)
+                    if not isinstance(data, dict)
+                    or data.get("state") not in TERMINAL_STATES
+                    or idx in keep_terminal_indexes
+                ]
+                if compacted_lines == raw_lines:
+                    return False
+
+                atomic_write(path, "\n".join(compacted_lines) + "\n")
+                return True
+
+    async def _maybe_compact_lane(self, lane_id: str) -> None:
+        path = self._lane_queue_path(lane_id)
+        try:
+            if path.stat().st_size < COMPACTION_MIN_SIZE_BYTES:
+                return
+        except OSError:
+            return
+        await self.compact_lane(lane_id)
 
     def _append_to_file_sync(self, item: PmaQueueItem) -> None:
         path = self._lane_queue_path(item.lane_id)
