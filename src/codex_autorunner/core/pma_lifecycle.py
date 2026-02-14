@@ -25,11 +25,13 @@ from .app_server_threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
+from .locks import file_lock
 from .logging_utils import log_event
 from .pma_audit import PmaActionType
 from .pma_queue import PmaQueue
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .time_utils import now_iso
+from .utils import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -506,18 +508,17 @@ class PmaLifecycleRouter:
         return f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     def _write_artifact(self, event_id: str, artifact: dict[str, Any]) -> Path:
-        """Write a durable artifact to disk."""
+        self._artifacts_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = self._artifacts_dir / f"{event_id}.json"
-        artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        atomic_write(artifact_path, json.dumps(artifact, indent=2))
         return artifact_path
 
     def _emit_event(self, event: dict[str, Any]) -> None:
-        """Emit an event record to the lifecycle events log."""
-        try:
+        self._artifacts_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self._events_log.with_suffix(".jsonl.lock")
+        with file_lock(lock_path):
             with open(self._events_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
-        except Exception:
-            logger.exception("Failed to emit lifecycle event")
 
 
 __all__ = [

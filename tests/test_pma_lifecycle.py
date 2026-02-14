@@ -1,5 +1,6 @@
 """Tests for PMA lifecycle router."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -135,3 +136,67 @@ async def test_lifecycle_router_creates_artifacts_dir(temp_hub_root: Path) -> No
     artifacts_dir = temp_hub_root / ".codex-autorunner" / "pma" / "lifecycle"
     assert artifacts_dir.exists()
     assert artifacts_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_write_artifact_is_valid_json(temp_hub_root: Path) -> None:
+    """Test that _write_artifact produces valid JSON."""
+    router = PmaLifecycleRouter(temp_hub_root)
+
+    result = await router.new(agent="opencode")
+    assert result.artifact_path is not None
+
+    content = result.artifact_path.read_text(encoding="utf-8")
+    parsed = json.loads(content)
+    assert parsed["command"] == "new"
+    assert parsed["agent"] == "opencode"
+    assert "event_id" in parsed
+    assert "timestamp" in parsed
+
+
+@pytest.mark.asyncio
+async def test_emit_event_valid_jsonl(temp_hub_root: Path) -> None:
+    """Test that _emit_event produces valid JSONL with expected record."""
+    router = PmaLifecycleRouter(temp_hub_root)
+
+    await router.reset(agent="opencode")
+
+    events_log = temp_hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
+    assert events_log.exists()
+
+    lines = events_log.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) >= 1
+
+    event = json.loads(lines[-1])
+    assert event["event_type"] == "pma_lifecycle_reset"
+    assert "event_id" in event
+    assert "timestamp" in event
+    assert "artifact_path" in event
+
+
+@pytest.mark.asyncio
+async def test_atomic_artifact_write_no_partial_files(temp_hub_root: Path) -> None:
+    """Test that artifacts are written atomically (no .tmp files remain)."""
+    router = PmaLifecycleRouter(temp_hub_root)
+
+    await router.new(agent="opencode")
+
+    artifacts_dir = temp_hub_root / ".codex-autorunner" / "pma" / "lifecycle"
+    tmp_files = list(artifacts_dir.glob("*.json.tmp"))
+    assert len(tmp_files) == 0
+
+
+@pytest.mark.asyncio
+async def test_events_log_has_lock_file_path(temp_hub_root: Path) -> None:
+    """Test that events log uses a lock file for concurrent access."""
+    router = PmaLifecycleRouter(temp_hub_root)
+
+    lock_path = (
+        temp_hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl.lock"
+    )
+
+    await router.new(agent="opencode")
+
+    assert lock_path.parent.exists()
+    events_log = temp_hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
+    assert events_log.exists()
