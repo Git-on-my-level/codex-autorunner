@@ -676,7 +676,7 @@ def test_pma_files_outbox(hub_env) -> None:
     assert resp.content == b"Output content"
 
 
-def test_pma_files_delete_removes_filebox_and_legacy_duplicates(hub_env) -> None:
+def test_pma_files_delete_removes_only_resolved_file(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -702,8 +702,8 @@ def test_pma_files_delete_removes_filebox_and_legacy_duplicates(hub_env) -> None
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
     assert not (filebox.inbox_dir(hub_env.hub_root) / "shared.txt").exists()
-    assert not (legacy_pma / "shared.txt").exists()
-    assert not (legacy_telegram / "shared.txt").exists()
+    assert (legacy_pma / "shared.txt").exists()
+    assert (legacy_telegram / "shared.txt").exists()
 
 
 def test_pma_files_bulk_delete_removes_all_visible_entries(hub_env) -> None:
@@ -728,8 +728,6 @@ def test_pma_files_bulk_delete_removes_all_visible_entries(hub_env) -> None:
     )
     legacy_telegram_pending.mkdir(parents=True, exist_ok=True)
     (legacy_telegram_pending / "c.txt").write_bytes(b"c")
-    (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"primary")
-    (legacy_pma / "shared.txt").write_bytes(b"legacy")
 
     resp = client.delete("/hub/pma/files/outbox")
     assert resp.status_code == 200
@@ -738,8 +736,28 @@ def test_pma_files_bulk_delete_removes_all_visible_entries(hub_env) -> None:
     assert not (filebox.outbox_dir(hub_env.hub_root) / "a.txt").exists()
     assert not (legacy_pma / "b.txt").exists()
     assert not (legacy_telegram_pending / "c.txt").exists()
+
+
+def test_pma_files_bulk_delete_preserves_hidden_legacy_duplicate(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"primary")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "outbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "shared.txt").write_bytes(b"legacy")
+
+    resp = client.delete("/hub/pma/files/outbox")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
     assert not (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").exists()
-    assert not (legacy_pma / "shared.txt").exists()
+    assert (legacy_pma / "shared.txt").exists()
+    payload = client.get("/hub/pma/files").json()
+    assert payload["outbox"][0]["name"] == "shared.txt"
+    assert payload["outbox"][0]["source"] == "pma"
 
 
 def test_pma_files_rejects_invalid_filenames(hub_env) -> None:

@@ -1727,19 +1727,16 @@ def build_pma_routes() -> APIRouter:
             logger.warning("File not found in PMA delete: %s", filename)
             raise HTTPException(status_code=404, detail="File not found")
         try:
-            deleted = filebox.delete_file(hub_root, box, filename)
-            if not deleted:
-                logger.warning("File not found in PMA delete: %s", filename)
-                raise HTTPException(status_code=404, detail="File not found")
+            entry.path.unlink()
             _get_safety_checker(request).record_action(
                 action_type=PmaActionType.FILE_DELETED,
                 details={"box": box, "filename": entry.name, "size": entry.size},
             )
         except HTTPException:
             raise
-        except ValueError as exc:
-            logger.warning("Invalid filename in PMA delete: %s (%s)", filename, exc)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError:
+            logger.warning("File not found in PMA delete: %s", filename)
+            raise HTTPException(status_code=404, detail="File not found") from None
         except Exception as exc:
             logger.warning("Failed to delete PMA file: %s", exc)
             raise HTTPException(
@@ -1759,9 +1756,9 @@ def build_pma_routes() -> APIRouter:
         entries = filebox.list_filebox(hub_root, include_legacy=True).get(box, [])
         for entry in entries:
             try:
-                if filebox.delete_file(hub_root, box, entry.name):
-                    deleted_files.append(entry.name)
-            except ValueError:
+                entry.path.unlink()
+                deleted_files.append(entry.name)
+            except FileNotFoundError:
                 continue
         _get_safety_checker(request).record_action(
             action_type=PmaActionType.FILE_BULK_DELETED,
