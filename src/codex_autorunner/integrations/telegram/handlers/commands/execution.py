@@ -83,6 +83,7 @@ from ...helpers import (
     find_github_links,
     format_public_error,
     is_interrupt_status,
+    parse_github_url,
 )
 from ...state import topic_key as build_topic_key
 
@@ -120,6 +121,14 @@ _GENERIC_TELEGRAM_ERRORS = {
     "Telegram file download failed",
     "Telegram API returned error",
 }
+
+_ISSUE_ONLY_LINK_WRAPPERS = (
+    "{link}",
+    "<{link}>",
+    "({link})",
+    "[{link}]",
+    "`{link}`",
+)
 
 _OPENCODE_USAGE_TOTAL_KEYS = ("totalTokens", "total_tokens", "total")
 _OPENCODE_USAGE_INPUT_KEYS = (
@@ -197,6 +206,29 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except Exception:
         return None
+
+
+def _issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
+    if not prompt_text or not links or len(links) != 1:
+        return None
+    stripped = prompt_text.strip()
+    if not stripped:
+        return None
+    link = links[0]
+    for wrapper in _ISSUE_ONLY_LINK_WRAPPERS:
+        if stripped == wrapper.format(link=link):
+            return link
+    return None
+
+
+def _issue_only_workflow_hint(issue_number: int) -> str:
+    return wrap_injected_context(
+        "Issue-only GitHub message detected (no extra context).\n"
+        f"Treat this as a request to implement issue #{issue_number}.\n"
+        "Create a new branch from the latest head branch (sync with the current origin default branch first), "
+        "implement the fix, and open a PR.\n"
+        f"Ensure the PR description includes `Closes #{issue_number}` so GitHub auto-closes the issue when merged."
+    )
 
 
 def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -517,6 +549,7 @@ class ExecutionCommands(SharedHelpers):
                 repo_root=str(repo_root),
             )
             return prompt_text, False
+        issue_only_link = _issue_only_link(prompt_text, links)
         for link in links:
             try:
                 result = await asyncio.to_thread(svc.build_context_file_from_url, link)
@@ -525,6 +558,14 @@ class ExecutionCommands(SharedHelpers):
             if result and result.get("hint"):
                 separator = "\n" if prompt_text.endswith("\n") else "\n\n"
                 hint = str(result["hint"])
+                parsed = parse_github_url(link)
+                if (
+                    issue_only_link
+                    and link == issue_only_link
+                    and parsed
+                    and parsed[1] == "issue"
+                ):
+                    hint = f"{hint}\n\n{_issue_only_workflow_hint(parsed[2])}"
                 log_event(
                     self._logger,
                     logging.INFO,
