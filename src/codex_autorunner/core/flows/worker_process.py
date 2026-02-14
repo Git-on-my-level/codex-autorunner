@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Literal, Optional, Tuple
 
+from ..utils import resolve_executable
+
 _WORKER_METADATA_FILENAME = "worker.json"
 _WORKER_EXIT_FILENAME = "worker.exit.json"
 _WORKER_CRASH_FILENAME = "crash.json"
@@ -237,6 +239,18 @@ def _read_process_cmdline(pid: int) -> list[str] | None:
             pass
 
     try:
+        # Use wide output first to avoid truncating long command lines (notably on macOS/BSD).
+        out = subprocess.check_output(
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
+            stderr=subprocess.DEVNULL,
+        )
+        cmd = out.decode().strip()
+        if cmd:
+            return cmd.split()
+    except Exception:
+        pass
+
+    try:
         out = subprocess.check_output(
             ["ps", "-p", str(pid), "-o", "command="],
             stderr=subprocess.DEVNULL,
@@ -249,11 +263,33 @@ def _read_process_cmdline(pid: int) -> list[str] | None:
     return None
 
 
+def _normalize_executable_token(token: str) -> str:
+    resolved = resolve_executable(token)
+    candidate = resolved or token
+    try:
+        return str(Path(candidate).resolve())
+    except Exception:
+        return candidate
+
+
 def _cmdline_matches(expected: list[str], actual: list[str]) -> bool:
     if not expected or not actual:
         return False
-    if len(actual) >= len(expected) and actual[-len(expected) :] == expected:
-        return True
+
+    if len(actual) >= len(expected):
+        tail = actual[-len(expected) :]
+        if tail == expected:
+            return True
+        if len(tail) == len(expected):
+            first_expected = expected[0]
+            first_actual = tail[0]
+            if (
+                _normalize_executable_token(first_expected)
+                == _normalize_executable_token(first_actual)
+                and tail[1:] == expected[1:]
+            ):
+                return True
+
     expected_str = " ".join(expected)
     actual_str = " ".join(actual)
     return expected_str in actual_str
