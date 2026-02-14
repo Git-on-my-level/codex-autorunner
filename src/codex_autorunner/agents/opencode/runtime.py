@@ -529,18 +529,34 @@ def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
     if not isinstance(payload, dict):
         return None
     containers = [payload]
+
+    def _append_part_containers(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        part = container.get("part")
+        if isinstance(part, dict):
+            containers.append(part)
+        parts = container.get("parts")
+        if isinstance(parts, list):
+            containers.extend(entry for entry in parts if isinstance(entry, dict))
+
     info = payload.get("info")
     if isinstance(info, dict):
         containers.append(info)
+        _append_part_containers(info)
     properties = payload.get("properties")
     if isinstance(properties, dict):
         containers.append(properties)
+        _append_part_containers(properties)
         prop_info = properties.get("info")
         if isinstance(prop_info, dict):
             containers.append(prop_info)
+            _append_part_containers(prop_info)
     response = payload.get("response")
     if isinstance(response, dict):
         containers.append(response)
+        _append_part_containers(response)
+    _append_part_containers(payload)
     for container in containers:
         for key in (
             "usage",
@@ -595,29 +611,48 @@ def _extract_context_window(
     payload: Any, usage: Optional[dict[str, Any]]
 ) -> Optional[int]:
     containers: list[dict[str, Any]] = []
+
+    def _append_part_containers(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        part = container.get("part")
+        if isinstance(part, dict):
+            containers.append(part)
+        parts = container.get("parts")
+        if isinstance(parts, list):
+            containers.extend(entry for entry in parts if isinstance(entry, dict))
+
     if isinstance(payload, dict):
         containers.append(payload)
+        _append_part_containers(payload)
         info = payload.get("info")
         if isinstance(info, dict):
             containers.append(info)
+            _append_part_containers(info)
         properties = payload.get("properties")
         if isinstance(properties, dict):
             containers.append(properties)
+            _append_part_containers(properties)
             prop_info = properties.get("info")
             if isinstance(prop_info, dict):
                 containers.append(prop_info)
+                _append_part_containers(prop_info)
         response = payload.get("response")
         if isinstance(response, dict):
             containers.append(response)
+            _append_part_containers(response)
             response_info = response.get("info")
             if isinstance(response_info, dict):
                 containers.append(response_info)
+                _append_part_containers(response_info)
             response_props = response.get("properties")
             if isinstance(response_props, dict):
                 containers.append(response_props)
+                _append_part_containers(response_props)
                 response_prop_info = response_props.get("info")
                 if isinstance(response_prop_info, dict):
                     containers.append(response_prop_info)
+                    _append_part_containers(response_prop_info)
         for key in ("model", "modelInfo", "model_info", "modelConfig", "model_config"):
             model = payload.get(key)
             if isinstance(model, dict):
@@ -982,6 +1017,41 @@ async def collect_opencode_output_from_events(
             break
         context_window_cache[cache_key] = context_window
         return context_window
+
+    async def _emit_usage_update(payload: Any, *, is_primary_session: bool) -> None:
+        nonlocal last_usage_total, last_context_window
+        if part_handler is None or not is_primary_session:
+            return
+        usage = _extract_usage_payload(payload)
+        if usage is None:
+            return
+        provider_id, model_id = _extract_model_ids(payload)
+        if not provider_id or not model_id:
+            provider_id, model_id = await _resolve_session_model_ids()
+        total_tokens = _extract_total_tokens(usage)
+        context_window = _extract_context_window(payload, usage)
+        if context_window is None:
+            context_window = await _resolve_context_window_from_providers(
+                provider_id, model_id
+            )
+        usage_details = _extract_usage_details(usage)
+        if total_tokens == last_usage_total and context_window == last_context_window:
+            return
+        last_usage_total = total_tokens
+        last_context_window = context_window
+        usage_snapshot: dict[str, Any] = {}
+        if provider_id:
+            usage_snapshot["providerID"] = provider_id
+        if model_id:
+            usage_snapshot["modelID"] = model_id
+        if total_tokens is not None:
+            usage_snapshot["totalTokens"] = total_tokens
+        if usage_details:
+            usage_snapshot.update(usage_details)
+        if context_window is not None:
+            usage_snapshot["modelContextWindow"] = context_window
+        if usage_snapshot:
+            await part_handler("usage", usage_snapshot, None)
 
     stream_factory = event_stream_factory
     if events is None and stream_factory is None:
@@ -1498,6 +1568,10 @@ async def collect_opencode_output_from_events(
                             last_full_text = text
                 elif part_handler and part_dict and part_type:
                     await part_handler(part_type, part_with_session or part_dict, None)
+                if part_type != "usage":
+                    await _emit_usage_update(
+                        payload, is_primary_session=is_primary_session
+                    )
             if event.event in ("message.completed", "message.updated"):
                 message_result = parse_message_response(payload)
                 msg_id = None
@@ -1533,40 +1607,7 @@ async def collect_opencode_output_from_events(
                             )
                     if message_result.error and not error:
                         error = message_result.error
-                if part_handler is not None and is_primary_session:
-                    usage = _extract_usage_payload(payload)
-                    if usage is not None:
-                        provider_id, model_id = _extract_model_ids(payload)
-                        if not provider_id or not model_id:
-                            provider_id, model_id = await _resolve_session_model_ids()
-                        total_tokens = _extract_total_tokens(usage)
-                        context_window = _extract_context_window(payload, usage)
-                        if context_window is None:
-                            context_window = (
-                                await _resolve_context_window_from_providers(
-                                    provider_id, model_id
-                                )
-                            )
-                        usage_details = _extract_usage_details(usage)
-                        if (
-                            total_tokens != last_usage_total
-                            or context_window != last_context_window
-                        ):
-                            last_usage_total = total_tokens
-                            last_context_window = context_window
-                            usage_snapshot: dict[str, Any] = {}
-                            if provider_id:
-                                usage_snapshot["providerID"] = provider_id
-                            if model_id:
-                                usage_snapshot["modelID"] = model_id
-                            if total_tokens is not None:
-                                usage_snapshot["totalTokens"] = total_tokens
-                            if usage_details:
-                                usage_snapshot.update(usage_details)
-                            if context_window is not None:
-                                usage_snapshot["modelContextWindow"] = context_window
-                            if usage_snapshot:
-                                await part_handler("usage", usage_snapshot, None)
+                await _emit_usage_update(payload, is_primary_session=is_primary_session)
             if event.event == "session.idle" or (
                 event.event == "session.status"
                 and _status_is_idle(_extract_status_type(payload))
