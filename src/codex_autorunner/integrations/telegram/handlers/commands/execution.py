@@ -1948,7 +1948,11 @@ class ExecutionCommands(SharedHelpers):
             if not isinstance(exc, CodexAppServerResponseError):
                 return False
             message = str(exc).lower()
-            return "thread not found" in message
+            missing_markers = (
+                "thread not found",
+                "no rollout found for thread id",
+            )
+            return any(marker in message for marker in missing_markers)
 
         async def _start_new_thread(agent: str) -> Optional[str]:
             nonlocal record

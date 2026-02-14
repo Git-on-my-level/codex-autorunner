@@ -438,12 +438,17 @@ async def test_thread_start_rejects_mismatched_workspace(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "missing_resume_scenario",
+    ["thread_resume_missing_thread", "thread_resume_missing_rollout"],
+)
 async def test_stale_active_thread_is_recovered_during_verification(
     tmp_path: Path,
+    missing_resume_scenario: str,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    config = make_config(tmp_path, fixture_command("thread_resume_missing_thread"))
+    config = make_config(tmp_path, fixture_command(missing_resume_scenario))
     service = TelegramBotService(config, hub_root=tmp_path)
     fake_bot = FakeBot()
     service._bot = fake_bot
@@ -496,10 +501,17 @@ async def test_new_surfaces_thread_start_errors(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_resume_missing_thread_clears_stale_topic_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "missing_resume_scenario",
+    ["thread_resume_missing_thread", "thread_resume_missing_rollout"],
+)
+async def test_resume_missing_thread_clears_stale_topic_state(
+    tmp_path: Path,
+    missing_resume_scenario: str,
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    config = make_config(tmp_path, fixture_command("thread_resume_missing_thread"))
+    config = make_config(tmp_path, fixture_command(missing_resume_scenario))
     service = TelegramBotService(config, hub_root=tmp_path)
     fake_bot = FakeBot()
     service._bot = fake_bot

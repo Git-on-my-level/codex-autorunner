@@ -226,6 +226,16 @@ class FixtureServer:
                         "error": {"code": -32602, "message": "Thread not found"},
                     }
                 )
+            elif self._scenario == "thread_resume_missing_rollout":
+                self.send(
+                    {
+                        "id": req_id,
+                        "error": {
+                            "code": -32600,
+                            "message": f"no rollout found for thread id {thread_id}",
+                        },
+                    }
+                )
             elif self._scenario == "thread_list_empty_refresh":
                 self.send(
                     {
