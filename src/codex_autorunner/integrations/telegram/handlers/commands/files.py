@@ -96,6 +96,7 @@ class MediaBatchResult:
     """Outcome of media batch processing."""
 
     saved_image_paths: list[Path]
+    saved_image_inbox_info: list[tuple[str, str, int]]
     saved_file_info: list[tuple[str, str, int]]
     stats: MediaBatchStats
 
@@ -331,9 +332,55 @@ class FilesCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return
-        prompt_text = caption_text.strip()
-        if not prompt_text:
-            prompt_text = self._config.media.image_prompt
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        image_inbox_path: Optional[Path] = None
+        pma_enabled = bool(getattr(record, "pma_enabled", False))
+        try:
+            image_inbox_path = self._save_inbox_file(
+                record.workspace_path,
+                key,
+                data,
+                candidate=candidate,
+                file_path=file_path,
+                pma_enabled=pma_enabled,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.image.inbox_save_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
+        prompt_parts = [caption_text.strip() or self._config.media.image_prompt]
+        if image_inbox_path is not None:
+            original_name = (
+                candidate.file_name
+                or (Path(file_path).name if file_path else None)
+                or image_inbox_path.name
+            )
+            prompt_parts.append(
+                "\n".join(
+                    [
+                        "Image details:",
+                        f"- Name: {original_name}",
+                        f"- Size: {file_size or len(data)} bytes",
+                        f"- Saved to: {image_inbox_path}",
+                    ]
+                )
+            )
+        prompt_parts.append(
+            self._build_files_hint(
+                workspace_path=record.workspace_path,
+                topic_key=key,
+                pma_enabled=pma_enabled,
+            )
+        )
+        prompt_text = "\n\n".join(prompt_parts)
         input_items = [
             {"type": "text", "text": prompt_text},
             {"type": "localImage", "path": str(image_path)},
@@ -346,6 +393,7 @@ class FilesCommands(SharedHelpers):
             thread_id=message.thread_id,
             message_id=message.message_id,
             path=str(image_path),
+            inbox_path=str(image_inbox_path) if image_inbox_path else None,
             prompt_len=len(prompt_text),
         )
         await self._handle_normal_message(
@@ -649,6 +697,7 @@ class FilesCommands(SharedHelpers):
         """Process all messages in the media batch and collect results."""
         stats = MediaBatchStats()
         saved_image_paths: list[Path] = []
+        saved_image_inbox_info: list[tuple[str, str, int]] = []
         saved_file_info: list[tuple[str, str, int]] = []
         for msg in context.sorted_messages:
             image_candidate = message_handlers.select_image_candidate(msg)
@@ -665,6 +714,7 @@ class FilesCommands(SharedHelpers):
                     context,
                     stats,
                     saved_image_paths,
+                    saved_image_inbox_info,
                 )
             if file_candidate and not skip_remaining:
                 await self._process_file_candidate(
@@ -676,6 +726,7 @@ class FilesCommands(SharedHelpers):
                 )
         return MediaBatchResult(
             saved_image_paths=saved_image_paths,
+            saved_image_inbox_info=saved_image_inbox_info,
             saved_file_info=saved_file_info,
             stats=stats,
         )
@@ -687,6 +738,7 @@ class FilesCommands(SharedHelpers):
         context: MediaBatchContext,
         stats: MediaBatchStats,
         saved_image_paths: list[Path],
+        saved_image_inbox_info: list[tuple[str, str, int]],
     ) -> bool:
         """Process a single image candidate; returns True to skip further work."""
         if not self._config.media.images:
@@ -752,6 +804,26 @@ class FilesCommands(SharedHelpers):
                 pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
             )
             saved_image_paths.append(image_path)
+            image_inbox_path = self._save_inbox_file(
+                context.record.workspace_path,
+                context.topic_key,
+                data,
+                candidate=candidate,
+                file_path=file_path,
+                pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
+            )
+            original_name = (
+                candidate.file_name
+                or (Path(file_path).name if file_path else None)
+                or image_inbox_path.name
+            )
+            saved_image_inbox_info.append(
+                (
+                    original_name,
+                    str(image_inbox_path),
+                    file_size or len(data),
+                )
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -887,6 +959,11 @@ class FilesCommands(SharedHelpers):
             prompt_parts.append(self._config.media.image_prompt)
         else:
             prompt_parts.append("Media received.")
+        if result.saved_image_inbox_info:
+            image_summary = ["\nImages:"]
+            for name, path, size in result.saved_image_inbox_info:
+                image_summary.append(f"- {name} ({size} bytes) -> {path}")
+            prompt_parts.append("\n".join(image_summary))
         if result.saved_file_info:
             file_summary = ["\nFiles:"]
             for name, path, size in result.saved_file_info:
