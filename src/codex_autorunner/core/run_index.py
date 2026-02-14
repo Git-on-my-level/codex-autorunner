@@ -4,14 +4,9 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
+from .coercion import coerce_int
 from .sqlite_utils import open_sqlite
 from .state import now_iso
-
-
-def _coerce_int(value: Any) -> Optional[int]:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    return None
 
 
 def _coerce_str(value: Any) -> Optional[str]:
@@ -106,9 +101,9 @@ class RunIndexStore:
         payload = json.dumps(entry, ensure_ascii=True)
         started_at = _coerce_str(entry.get("started_at"))
         finished_at = _coerce_str(entry.get("finished_at"))
-        exit_code = _coerce_int(entry.get("exit_code"))
-        start_offset = _coerce_int(entry.get("start_offset"))
-        end_offset = _coerce_int(entry.get("end_offset"))
+        exit_code = coerce_int(entry.get("exit_code"))
+        start_offset = coerce_int(entry.get("start_offset"))
+        end_offset = coerce_int(entry.get("end_offset"))
         log_path = _coerce_str(entry.get("log_path"))
         run_log_path = _coerce_str(entry.get("run_log_path"))
         updated_at = now_iso()

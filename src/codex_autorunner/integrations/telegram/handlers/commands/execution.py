@@ -33,6 +33,7 @@ from .....core.app_server_threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
+from .....core.coercion import coerce_int
 from .....core.config import load_repo_config
 from .....core.context_awareness import CAR_AWARENESS_BLOCK
 from .....core.injected_context import wrap_injected_context
@@ -84,6 +85,9 @@ from ...helpers import (
     format_public_error,
     is_interrupt_status,
     parse_github_url,
+)
+from ...payload_utils import (
+    extract_opencode_error_detail,
 )
 from ...state import topic_key as build_topic_key
 
@@ -199,15 +203,6 @@ class _RuntimeStub:
     interrupt_turn_id: Optional[str] = None
 
 
-def _coerce_int(value: Any) -> Optional[int]:
-    if isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except Exception:
-        return None
-
-
 def _issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
     if not prompt_text or not links or len(links) != 1:
         return None
@@ -233,24 +228,24 @@ def _issue_only_workflow_hint(issue_number: int) -> str:
 
 def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
     usage: dict[str, Any] = {}
-    total_tokens = _coerce_int(tokens.get("total"))
+    total_tokens = coerce_int(tokens.get("total"))
     if total_tokens is not None:
         usage["totalTokens"] = total_tokens
-    input_tokens = _coerce_int(tokens.get("input"))
+    input_tokens = coerce_int(tokens.get("input"))
     if input_tokens is not None:
         usage["inputTokens"] = input_tokens
-    output_tokens = _coerce_int(tokens.get("output"))
+    output_tokens = coerce_int(tokens.get("output"))
     if output_tokens is not None:
         usage["outputTokens"] = output_tokens
-    reasoning_tokens = _coerce_int(tokens.get("reasoning"))
+    reasoning_tokens = coerce_int(tokens.get("reasoning"))
     if reasoning_tokens is not None:
         usage["reasoningTokens"] = reasoning_tokens
     cache = tokens.get("cache")
     if isinstance(cache, dict):
-        cached_read = _coerce_int(cache.get("read"))
+        cached_read = coerce_int(cache.get("read"))
         if cached_read is not None:
             usage["cachedInputTokens"] = cached_read
-        cached_write = _coerce_int(cache.get("write"))
+        cached_write = coerce_int(cache.get("write"))
         if cached_write is not None:
             usage["cacheWriteTokens"] = cached_write
     if "totalTokens" not in usage:
@@ -291,7 +286,7 @@ def _extract_opencode_usage_value(
     payload: dict[str, Any], keys: tuple[str, ...]
 ) -> Optional[int]:
     for key in keys:
-        value = _coerce_int(payload.get(key))
+        value = coerce_int(payload.get(key))
         if value is not None:
             return value
     return None
@@ -351,24 +346,6 @@ def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, A
     return token_usage
 
 
-def _extract_opencode_error_detail(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    if isinstance(error, dict):
-        for key in ("message", "detail", "error", "reason"):
-            value = error.get(key)
-            if isinstance(value, str) and value:
-                return value
-    if isinstance(error, str) and error:
-        return error
-    for key in ("detail", "message", "reason"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
 def _format_opencode_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, OpenCodeSupervisorError):
         detail = str(exc).strip()
@@ -385,7 +362,7 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, httpx.HTTPStatusError):
         detail = None
         try:
-            detail = _extract_opencode_error_detail(exc.response.json())
+            detail = extract_opencode_error_detail(exc.response.json())
         except Exception:
             detail = None
         if detail:
@@ -399,25 +376,6 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
         if detail:
             return f"OpenCode request failed: {format_public_error(detail)}"
         return "OpenCode request failed."
-    return None
-
-
-def _extract_opencode_session_path(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("directory", "path", "workspace_path", "workspacePath"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        for key in ("directory", "path", "workspace_path", "workspacePath"):
-            value = properties.get(key)
-            if isinstance(value, str) and value:
-                return value
-    session = payload.get("session")
-    if isinstance(session, dict):
-        return _extract_opencode_session_path(session)
     return None
 
 

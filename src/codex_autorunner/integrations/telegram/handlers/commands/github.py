@@ -60,6 +60,7 @@ from ...helpers import (
     format_public_error,
     is_interrupt_status,
 )
+from ...payload_utils import extract_opencode_error_detail
 from ...types import ReviewCommitSelectionState, TurnContext
 from ..utils import _build_opencode_token_usage
 
@@ -1660,7 +1661,7 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, httpx.HTTPStatusError):
         detail = None
         try:
-            detail = _extract_opencode_error_detail(exc.response.json())
+            detail = extract_opencode_error_detail(exc.response.json())
         except Exception:
             detail = None
         if detail:
@@ -1674,23 +1675,4 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
         if detail:
             return f"OpenCode request failed: {format_public_error(detail)}"
         return "OpenCode request failed."
-    return None
-
-
-def _extract_opencode_error_detail(payload: Any) -> Optional[str]:
-    """Extract error detail from OpenCode response payload."""
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    if isinstance(error, dict):
-        for key in ("message", "detail", "error", "reason"):
-            value = error.get(key)
-            if isinstance(value, str) and value:
-                return value
-    if isinstance(error, str) and error:
-        return error
-    for key in ("detail", "message", "reason"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
     return None

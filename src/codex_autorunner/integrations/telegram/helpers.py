@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
+from ...core.coercion import coerce_int
 from ...core.redaction import redact_text
 from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
@@ -393,9 +394,7 @@ def _rate_limit_window_minutes(
     entry: dict[str, Any],
     section: Optional[str] = None,
 ) -> Optional[int]:
-    window_minutes = _coerce_int(
-        entry.get("window_minutes", entry.get("windowMinutes"))
-    )
+    window_minutes = coerce_int(entry.get("window_minutes", entry.get("windowMinutes")))
     if window_minutes is None:
         for candidate in (
             "window",
@@ -406,11 +405,11 @@ def _rate_limit_window_minutes(
             "duration_minutes",
             "durationMinutes",
         ):
-            window_minutes = _coerce_int(entry.get(candidate))
+            window_minutes = coerce_int(entry.get(candidate))
             if window_minutes is not None:
                 break
     if window_minutes is None:
-        window_seconds = _coerce_int(
+        window_seconds = coerce_int(
             entry.get("window_seconds", entry.get("windowSeconds"))
         )
         if window_seconds is not None:
@@ -467,13 +466,6 @@ def _coerce_number(value: Any) -> Optional[float]:
         except ValueError:
             return None
     return None
-
-
-def _coerce_int(value: Any) -> Optional[int]:
-    number = _coerce_number(value)
-    if number is None:
-        return None
-    return int(number)
 
 
 def _format_percent(value: Any) -> Optional[str]:

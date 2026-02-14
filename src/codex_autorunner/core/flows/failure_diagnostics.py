@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from ..coercion import coerce_int
 from .models import FailureReasonCode, FlowEventType, FlowRunRecord
 from .store import FlowStore, now_iso
 
@@ -13,12 +14,6 @@ _MAX_SUMMARY_CHARS = 160
 def _coerce_str(value: Any) -> Optional[str]:
     if isinstance(value, str) and value.strip():
         return value.strip()
-    return None
-
-
-def _coerce_int(value: Any) -> Optional[int]:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
     return None
 
 
@@ -428,7 +423,7 @@ def format_failure_summary(
     last_command = _coerce_str(payload.get("last_command"))
     if last_command:
         parts.append(f"cmd: {last_command}")
-    exit_code = _coerce_int(payload.get("exit_code"))
+    exit_code = coerce_int(payload.get("exit_code"))
     if exit_code is not None:
         parts.append(f"exit {exit_code}")
     stderr_tail = _coerce_str(payload.get("stderr_tail"))

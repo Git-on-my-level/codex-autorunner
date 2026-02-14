@@ -757,7 +757,8 @@ class TelegramStateStore:
                 payload = (
                     json.loads(payload_json) if isinstance(payload_json, str) else {}
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to parse topic JSON for key %s: %s", key, exc)
                 payload = {}
             record = TelegramTopicRecord.from_dict(
                 payload, default_approval_mode=self._default_approval_mode

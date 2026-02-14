@@ -20,6 +20,7 @@ from typing import (
 
 import httpx
 
+from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
 from ...core.utils import infer_home_from_workspace
 from .events import SSEEvent
@@ -469,21 +470,12 @@ def _permission_policy_reply(policy: str) -> str:
     return OPENCODE_PERMISSION_REJECT
 
 
-def _coerce_int(value: Any) -> Optional[int]:
-    if isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except Exception:
-        return None
-
-
 def _extract_usage_field(
     payload: dict[str, Any], keys: tuple[str, ...]
 ) -> Optional[int]:
     for key in keys:
         if key in payload:
-            value = _coerce_int(payload.get(key))
+            value = coerce_int(payload.get(key))
             if value is not None:
                 return value
     return None
@@ -491,24 +483,24 @@ def _extract_usage_field(
 
 def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
     usage: dict[str, Any] = {}
-    total_tokens = _coerce_int(tokens.get("total"))
+    total_tokens = coerce_int(tokens.get("total"))
     if total_tokens is not None:
         usage["totalTokens"] = total_tokens
-    input_tokens = _coerce_int(tokens.get("input"))
+    input_tokens = coerce_int(tokens.get("input"))
     if input_tokens is not None:
         usage["inputTokens"] = input_tokens
-    output_tokens = _coerce_int(tokens.get("output"))
+    output_tokens = coerce_int(tokens.get("output"))
     if output_tokens is not None:
         usage["outputTokens"] = output_tokens
-    reasoning_tokens = _coerce_int(tokens.get("reasoning"))
+    reasoning_tokens = coerce_int(tokens.get("reasoning"))
     if reasoning_tokens is not None:
         usage["reasoningTokens"] = reasoning_tokens
     cache = tokens.get("cache")
     if isinstance(cache, dict):
-        cached_read = _coerce_int(cache.get("read"))
+        cached_read = coerce_int(cache.get("read"))
         if cached_read is not None:
             usage["cachedInputTokens"] = cached_read
-        cached_write = _coerce_int(cache.get("write"))
+        cached_write = coerce_int(cache.get("write"))
         if cached_write is not None:
             usage["cacheWriteTokens"] = cached_write
     if "totalTokens" not in usage:
@@ -663,7 +655,7 @@ def _extract_context_window(
         containers.insert(0, usage)
     for container in containers:
         for key in _OPENCODE_CONTEXT_WINDOW_KEYS:
-            value = _coerce_int(container.get(key))
+            value = coerce_int(container.get(key))
             if value is not None and value > 0:
                 return value
     return None
@@ -1008,13 +1000,13 @@ async def collect_opencode_output_from_events(
                 limit = model_entry.get("limit") or model_entry.get("limits")
                 if isinstance(limit, dict):
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(limit.get(key))
+                        value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
                 if context_window is None:
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(model_entry.get(key))
+                        value = coerce_int(model_entry.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
@@ -1022,7 +1014,7 @@ async def collect_opencode_output_from_events(
                 limit = provider.get("limit") or provider.get("limits")
                 if isinstance(limit, dict):
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(limit.get(key))
+                        value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
