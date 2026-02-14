@@ -4603,6 +4603,11 @@ def ticket_flow_resume(
     _guard_unregistered_hub_repo(engine.repo_root, hub)
     normalized_run_id = _normalize_flow_run_id(run_id)
 
+    if cleanup_stale:
+        if older_than:
+            _parse_duration(older_than)
+        _parse_bool_text(delete_run, flag="--delete-run")
+
     store = _open_flow_store(engine)
     try:
         record = None

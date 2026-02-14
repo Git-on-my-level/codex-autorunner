@@ -124,12 +124,12 @@ def test_gather_inbox_hides_stale_when_active_run_exists(tmp_path: Path) -> None
 
     run_ids = {m.get("run_id") for m in messages}
 
-    assert "stale-run-1" not in run_ids, (
-        "FAILED run should be hidden when active sibling exists"
-    )
-    assert "stale-run-2" not in run_ids, (
-        "STOPPED run should be hidden when active sibling exists"
-    )
+    assert (
+        "stale-run-1" not in run_ids
+    ), "FAILED run should be hidden when active sibling exists"
+    assert (
+        "stale-run-2" not in run_ids
+    ), "STOPPED run should be hidden when active sibling exists"
 
 
 def test_gather_inbox_shows_stale_when_no_active_run(tmp_path: Path) -> None:
