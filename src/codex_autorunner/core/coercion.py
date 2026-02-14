@@ -11,7 +11,10 @@ def coerce_int(
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        try:
+            return int(value)
+        except (OverflowError, ValueError):
+            return default
     if isinstance(value, str):
         try:
             return int(value)
@@ -19,6 +22,6 @@ def coerce_int(
             pass
         try:
             return int(float(value))
-        except ValueError:
+        except (ValueError, OverflowError):
             pass
     return default
