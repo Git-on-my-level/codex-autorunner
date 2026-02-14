@@ -86,6 +86,9 @@ from ..helpers import (
     format_public_error,
     parse_codex_features_list,
 )
+from ..payload_utils import (
+    extract_opencode_error_detail,
+)
 from ..state import (
     parse_topic_key,
     topic_key,
@@ -143,24 +146,6 @@ class _RuntimeStub:
     interrupt_turn_id: Optional[str] = None
 
 
-def _extract_opencode_error_detail(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    if isinstance(error, dict):
-        for key in ("message", "detail", "error", "reason"):
-            value = error.get(key)
-            if isinstance(value, str) and value:
-                return value
-    if isinstance(error, str) and error:
-        return error
-    for key in ("detail", "message", "reason"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
 def _format_opencode_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, OpenCodeSupervisorError):
         detail = str(exc).strip()
@@ -177,7 +162,7 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, httpx.HTTPStatusError):
         detail = None
         try:
-            detail = _extract_opencode_error_detail(exc.response.json())
+            detail = extract_opencode_error_detail(exc.response.json())
         except Exception:
             detail = None
         if detail:
@@ -214,25 +199,6 @@ def _opencode_review_arguments(target: dict[str, Any]) -> str:
                 return f"uncommitted\n\n{instructions}"
         return "uncommitted"
     return json.dumps(target, sort_keys=True)
-
-
-def _extract_opencode_session_path(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("directory", "path", "workspace_path", "workspacePath"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        for key in ("directory", "path", "workspace_path", "workspacePath"):
-            value = properties.get(key)
-            if isinstance(value, str) and value:
-                return value
-    session = payload.get("session")
-    if isinstance(session, dict):
-        return _extract_opencode_session_path(session)
-    return None
 
 
 def _format_httpx_exception(exc: Exception) -> Optional[str]:
@@ -297,25 +263,6 @@ def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
     if len(cleaned) > limit:
         return f"{cleaned[: limit - 3]}..."
     return cleaned
-
-
-def _extract_opencode_session_path(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("directory", "path", "workspace_path", "workspacePath"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        for key in ("directory", "path", "workspace_path", "workspacePath"):
-            value = properties.get(key)
-            if isinstance(value, str) and value:
-                return value
-    session = payload.get("session")
-    if isinstance(session, dict):
-        return _extract_opencode_session_path(session)
-    return None
 
 
 def _format_media_batch_failure(

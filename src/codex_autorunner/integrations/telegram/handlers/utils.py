@@ -2,14 +2,11 @@
 
 from typing import Any, Optional
 
+from ....core.coercion import coerce_int
+
 
 def _coerce_int(value: Any) -> Optional[int]:
-    if isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except Exception:
-        return None
+    return coerce_int(value)
 
 
 _OPENCODE_USAGE_TOTAL_KEYS = ("totalTokens", "total_tokens", "total")

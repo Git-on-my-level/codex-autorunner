@@ -10,8 +10,13 @@ import httpx
 
 from .....agents.opencode.client import OpenCodeProtocolError
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
+from .....core.coercion import coerce_int
 from ...adapter import InlineButton, build_inline_keyboard, encode_cancel_callback
 from ...helpers import format_public_error
+from ...payload_utils import (
+    extract_opencode_error_detail,
+    extract_opencode_session_path,
+)
 
 if TYPE_CHECKING:
     pass
@@ -33,12 +38,7 @@ class SharedHelpers:
         Returns:
             Integer value if coercion succeeds and value is not bool, None otherwise.
         """
-        if isinstance(value, bool):
-            return None
-        try:
-            return int(value)
-        except Exception:
-            return None
+        return coerce_int(value)
 
     def _format_httpx_exception(self, exc: Exception) -> Optional[str]:
         """Format httpx exceptions for user-friendly error messages.
@@ -122,21 +122,7 @@ class SharedHelpers:
         Returns:
             Error detail string if found, None otherwise.
         """
-        if not isinstance(payload, dict):
-            return None
-        error = payload.get("error")
-        if isinstance(error, dict):
-            for key in ("message", "detail", "error", "reason"):
-                value = error.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        if isinstance(error, str) and error:
-            return error
-        for key in ("detail", "message", "reason"):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                return value
-        return None
+        return extract_opencode_error_detail(payload)
 
     def _extract_opencode_session_path(self, payload: Any) -> Optional[str]:
         """Extract session path from OpenCode payload.
@@ -147,22 +133,7 @@ class SharedHelpers:
         Returns:
             Session path string if found, None otherwise.
         """
-        if not isinstance(payload, dict):
-            return None
-        for key in ("directory", "path", "workspace_path", "workspacePath"):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                return value
-        properties = payload.get("properties")
-        if isinstance(properties, dict):
-            for key in ("directory", "path", "workspace_path", "workspacePath"):
-                value = properties.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        session = payload.get("session")
-        if isinstance(session, dict):
-            return self._extract_opencode_session_path(session)
-        return None
+        return extract_opencode_session_path(payload)
 
     def _is_missing_opencode_session_error(self, exc: Exception) -> bool:
         """Return true when an OpenCode error indicates a missing session."""
