@@ -861,6 +861,16 @@ class HubSupervisor:
             )
             return result
 
+    def _ensure_worktree_clean_for_archive(
+        self, *, worktree_repo_id: str, worktree_path: Path
+    ) -> None:
+        if not worktree_path.exists():
+            return
+        if git_available(worktree_path) and not git_is_clean(worktree_path):
+            raise ValueError(
+                f"Worktree {worktree_repo_id} has uncommitted changes; commit or stash before archiving"
+            )
+
     def cleanup_worktree(
         self,
         *,
@@ -890,6 +900,10 @@ class HubSupervisor:
             runner.stop()
 
         if archive:
+            self._ensure_worktree_clean_for_archive(
+                worktree_repo_id=worktree_repo_id,
+                worktree_path=worktree_path,
+            )
             self._archive_worktree_snapshot(
                 worktree_repo_id=worktree_repo_id,
                 archive_note=archive_note,
@@ -965,10 +979,10 @@ class HubSupervisor:
         if not worktree_path.exists():
             raise ValueError(f"Worktree path does not exist: {worktree_path}")
 
-        if git_available(worktree_path) and not git_is_clean(worktree_path):
-            raise ValueError(
-                "Worktree has uncommitted changes; commit or stash before archiving"
-            )
+        self._ensure_worktree_clean_for_archive(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
+        )
 
         result = self._archive_worktree_snapshot(
             worktree_repo_id=worktree_repo_id,

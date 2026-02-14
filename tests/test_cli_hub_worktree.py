@@ -268,3 +268,46 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
     assert calls["force_archive"] is True
     assert calls["archive_note"] == "save state"
     assert calls["has_backend_orchestrator_builder"] is True
+
+
+def test_cli_hub_worktree_archive_surfaces_failure_reason_cleanly(
+    tmp_path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    def _fake_cleanup(
+        self,
+        *,
+        worktree_repo_id,
+        delete_branch=False,
+        delete_remote=False,
+        archive=True,
+        force_archive=False,
+        archive_note=None,
+    ):
+        raise ValueError(
+            f"Worktree {worktree_repo_id} has uncommitted changes; commit or stash before archiving"
+        )
+
+    monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "worktree",
+            "archive",
+            "wt-1",
+            "--path",
+            str(hub_root),
+        ],
+    )
+    assert result.exit_code == 1
+    assert (
+        "Worktree wt-1 has uncommitted changes; commit or stash before archiving"
+        in result.output
+    )
+    assert "Traceback" not in result.output
