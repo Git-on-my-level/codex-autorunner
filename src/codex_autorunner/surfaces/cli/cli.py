@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import importlib.metadata
 import ipaddress
 import json
@@ -7,9 +8,8 @@ import os
 import re
 import shlex
 import shutil
-import site
-import atexit
 import signal
+import site
 import subprocess
 import sys
 import traceback
