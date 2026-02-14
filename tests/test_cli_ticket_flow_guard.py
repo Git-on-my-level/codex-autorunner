@@ -3,6 +3,8 @@ from typer.testing import CliRunner
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
 from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.surfaces.cli import cli as cli_module
 
 
 def test_ticket_flow_start_rejects_unregistered_worktree(tmp_path) -> None:
@@ -36,3 +38,41 @@ def test_ticket_flow_start_rejects_unregistered_worktree(tmp_path) -> None:
     )
     assert str(hub_root) in result.output
     assert str(repo_root) in result.output
+
+
+def test_resumable_run_prefers_non_latest_active_run() -> None:
+    records = [
+        FlowRunRecord(
+            id="latest-terminal",
+            flow_type="ticket_flow",
+            status=FlowRunStatus.STOPPED,
+            input_data={},
+            state={},
+            current_step=None,
+            stop_requested=False,
+            created_at="2026-02-14T10:00:00Z",
+            started_at="2026-02-14T10:00:10Z",
+            finished_at="2026-02-14T10:00:20Z",
+            error_message=None,
+            metadata={},
+        ),
+        FlowRunRecord(
+            id="older-active",
+            flow_type="ticket_flow",
+            status=FlowRunStatus.RUNNING,
+            input_data={},
+            state={},
+            current_step="ticket_turn",
+            stop_requested=False,
+            created_at="2026-02-14T09:00:00Z",
+            started_at="2026-02-14T09:00:05Z",
+            finished_at=None,
+            error_message=None,
+            metadata={},
+        ),
+    ]
+
+    run, reason = cli_module._resumable_run(records)
+    assert run is not None
+    assert run.id == "older-active"
+    assert reason == "active"

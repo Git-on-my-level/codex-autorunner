@@ -8,6 +8,7 @@ import pytest
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramDocument,
     TelegramMessage,
+    TelegramPhotoSize,
 )
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.service import TelegramBotService
@@ -83,6 +84,30 @@ def build_document_message(
         date=0,
         is_topic_message=thread_id is not None,
         document=document,
+    )
+
+
+def build_photo_message(
+    photos: tuple[TelegramPhotoSize, ...],
+    *,
+    chat_id: int = 123,
+    thread_id: Optional[int] = None,
+    user_id: int = 456,
+    message_id: int = 1,
+    update_id: int = 1,
+    caption: Optional[str] = None,
+) -> TelegramMessage:
+    return TelegramMessage(
+        update_id=update_id,
+        message_id=message_id,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        from_user_id=user_id,
+        text=None,
+        caption=caption,
+        date=0,
+        is_topic_message=thread_id is not None,
+        photos=photos,
     )
 
 
@@ -267,6 +292,100 @@ async def test_document_message_saves_inbox(tmp_path: Path) -> None:
     inbox_root = repo / ".codex-autorunner" / "uploads" / "telegram-files"
     inbox_files = [path for path in inbox_root.rglob("*") if path.is_file()]
     assert inbox_files
+
+
+@pytest.mark.anyio
+async def test_photo_batch_message_saves_inbox(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+
+    async def fake_download(
+        _file_id: str, *, max_bytes: Optional[int] = None
+    ) -> tuple[bytes, str, int]:
+        return b"img", "photos/sample.jpg", 3
+
+    service._download_telegram_file = fake_download
+    message = build_photo_message(
+        (TelegramPhotoSize("p1", None, 800, 600, 3),),
+        message_id=11,
+    )
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_media_batch([message])
+    finally:
+        await service._app_server_supervisor.close_all()
+    inbox_root = repo / ".codex-autorunner" / "uploads" / "telegram-files"
+    inbox_files = [path for path in inbox_root.rglob("*") if path.is_file()]
+    assert inbox_files
+    assert any(path.suffix.lower() == ".jpg" for path in inbox_files)
+
+
+@pytest.mark.anyio
+async def test_photo_batch_inbox_save_failure_still_processes_image(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+
+    async def fake_download(
+        _file_id: str, *, max_bytes: Optional[int] = None
+    ) -> tuple[bytes, str, int]:
+        return b"img", "photos/sample.jpg", 3
+
+    async def fake_handle_normal(
+        _message: TelegramMessage,
+        _runtime: object,
+        *,
+        text_override: Optional[str] = None,
+        input_items: Optional[list[dict[str, object]]] = None,
+        record: Optional[object] = None,
+        send_placeholder: bool = True,
+        transcript_message_id: Optional[int] = None,
+        transcript_text: Optional[str] = None,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        captured["text_override"] = text_override
+        captured["input_items"] = input_items
+
+    def fail_inbox_save(*_args: object, **_kwargs: object) -> Path:
+        raise OSError("simulated inbox write failure")
+
+    captured: dict[str, object] = {}
+    service._download_telegram_file = fake_download
+    service._handle_normal_message = fake_handle_normal  # type: ignore[assignment]
+    service._save_inbox_file = fail_inbox_save  # type: ignore[assignment]
+    message = build_photo_message(
+        (TelegramPhotoSize("p1", None, 800, 600, 3),),
+        message_id=11,
+    )
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_media_batch([message])
+    finally:
+        await service._app_server_supervisor.close_all()
+
+    prompt_text = captured.get("text_override")
+    assert isinstance(prompt_text, str)
+    assert "Failed to process 1 item(s)." not in prompt_text
+    input_items = captured.get("input_items")
+    assert isinstance(input_items, list)
+    assert any(
+        isinstance(item, dict) and item.get("type") == "localImage"
+        for item in input_items
+    )
+    image_root = repo / ".codex-autorunner" / "uploads" / "telegram-images"
+    image_files = [path for path in image_root.rglob("*") if path.is_file()]
+    assert image_files
 
 
 @pytest.mark.anyio

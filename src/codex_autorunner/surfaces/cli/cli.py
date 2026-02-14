@@ -3970,11 +3970,9 @@ def _open_flow_store(engine: RuntimeContext) -> FlowStore:
 
 
 def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-    if not records:
-        return None
-    latest = records[0]
-    if latest.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-        return latest
+    for record in records:
+        if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+            return record
     return None
 
 
@@ -3986,9 +3984,10 @@ def _resumable_run(records: list[FlowRunRecord]) -> tuple[Optional[FlowRunRecord
     """
     if not records:
         return None, "new_run"
+    active = _active_or_paused_run(records)
+    if active:
+        return active, "active"
     latest = records[0]
-    if latest.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-        return latest, "active"
     if latest.status == FlowRunStatus.COMPLETED:
         return latest, "completed_pending"
     return None, "new_run"

@@ -332,11 +332,21 @@ class FlowCommands(SharedHelpers):
         effective_args = args
 
         if argv:
-            resolved = self._resolve_workspace(argv[0])
+            resolved = None
+            consumed = 0
+            if len(argv) >= 2:
+                combined_repo_id = f"{argv[0]}--{argv[1]}"
+                resolved = self._resolve_workspace(combined_repo_id)
+                if resolved:
+                    consumed = 2
+            if not resolved:
+                resolved = self._resolve_workspace(argv[0])
+                if resolved:
+                    consumed = 1
             if resolved:
                 target_repo_root = Path(resolved[0])
                 target_repo_id = resolved[1]
-                argv = argv[1:]
+                argv = argv[consumed:]
                 # Reconstruct args for remainder logic (imperfect but sufficient for text commands)
                 effective_args = " ".join(argv)
 
@@ -376,7 +386,7 @@ class FlowCommands(SharedHelpers):
                 return
             await self._send_message(
                 message.chat_id,
-                "No workspace bound. Use `/flow <repo-id> status` to inspect a repo without binding, or `/bind <repo-id>` to attach this topic.",
+                "No workspace bound. Use `/flow <repo-id> <worktree-id>` to inspect a repo worktree without binding, or `/bind <repo-id>` to attach this topic.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 parse_mode="Markdown",
@@ -503,7 +513,7 @@ class FlowCommands(SharedHelpers):
             await self._answer_callback(callback, "No workspace bound")
             await self._edit_callback_message(
                 callback,
-                "No workspace bound. Use /flow <repo-id> status, or /bind to bind this topic to a repo first.",
+                "No workspace bound. Use /flow <repo-id> <worktree-id>, or /bind to bind this topic to a repo first.",
                 reply_markup={"inline_keyboard": []},
             )
             return
@@ -1099,7 +1109,7 @@ class FlowCommands(SharedHelpers):
             lines.append(
                 "Note: Unregistered worktrees detected. Run `car hub scan` to register them."
             )
-        lines.append("Tip: use `/flow <repo-id> status` for repo details.")
+        lines.append("Tip: use `/flow <repo-id> <worktree-id>` for repo details.")
 
         await self._send_message(
             message.chat_id,
