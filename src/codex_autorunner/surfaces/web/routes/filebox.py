@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse
 from ....core.filebox import (
     BOXES,
     FileBoxEntry,
-    delete_file,
     ensure_structure,
     list_filebox,
     migrate_legacy,
@@ -119,9 +118,17 @@ def build_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
-        removed = delete_file(repo_root, box, filename)
-        if not removed:
+        entry = resolve_file(repo_root, box, filename)
+        if entry is None:
             raise HTTPException(status_code=404, detail="File not found")
+        try:
+            entry.path.unlink()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found") from None
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail="Failed to delete file"
+            ) from exc
         return {"status": "ok"}
 
     return router
@@ -216,9 +223,17 @@ def build_hub_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        removed = delete_file(repo_root, box, filename)
-        if not removed:
+        entry = resolve_file(repo_root, box, filename)
+        if entry is None:
             raise HTTPException(status_code=404, detail="File not found")
+        try:
+            entry.path.unlink()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found") from None
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail="Failed to delete file"
+            ) from exc
         return {"status": "ok"}
 
     return router

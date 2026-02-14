@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -225,60 +224,9 @@ class PmaDispatchInterceptor:
             self._processing.discard(event_id)
 
 
-async def run_dispatch_interceptor(
-    hub_root: Path,
-    supervisor: Any,
-    interval_seconds: float = 5.0,
-    on_intercept: Optional[Callable[[str, InterceptionResult], None]] = None,
-) -> asyncio.Task[None]:
-    interceptor = PmaDispatchInterceptor(
-        hub_root=hub_root,
-        supervisor=supervisor,
-        on_intercept=on_intercept,
-    )
-
-    async def loop() -> None:
-        while True:
-            try:
-                lifecycle_store = supervisor.lifecycle_store
-                unprocessed = lifecycle_store.get_unprocessed(limit=50)
-
-                for event in unprocessed:
-                    if event.event_type != LifecycleEventType.DISPATCH_CREATED:
-                        continue
-
-                    repo_id = event.repo_id
-                    snapshots = supervisor.list_repos()
-                    repo_snapshot = None
-                    for snap in snapshots:
-                        if snap.id == repo_id:
-                            repo_snapshot = snap
-                            break
-
-                    if not repo_snapshot or not repo_snapshot.exists_on_disk:
-                        lifecycle_store.mark_processed(event.event_id)
-                        continue
-
-                    result = await interceptor.process_dispatch_event(
-                        event, repo_snapshot.path
-                    )
-
-                    if result and result.action != "ignore":
-                        lifecycle_store.mark_processed(event.event_id)
-
-                await asyncio.sleep(interval_seconds)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                logger.exception("Dispatch interceptor loop error")
-
-    return asyncio.create_task(loop())
-
-
 __all__ = [
     "DispatchInterceptRule",
     "InterceptionResult",
     "default_dispatch_rules",
     "PmaDispatchInterceptor",
-    "run_dispatch_interceptor",
 ]

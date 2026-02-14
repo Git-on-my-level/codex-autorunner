@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from .....core.filebox import inbox_dir as filebox_inbox_dir
+from .....core.filebox import outbox_dir as filebox_outbox_dir
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
@@ -114,7 +116,9 @@ class FilesCommands(SharedHelpers):
             "/files clear inbox|outbox|all",
         ]
         if pma:
-            lines.append("Note: PMA files live in .codex-autorunner/pma/inbox|outbox.")
+            lines.append(
+                "Note: PMA files live in .codex-autorunner/filebox/inbox|outbox."
+            )
         return "\n".join(lines)
 
     async def _send_pma_outbox_file(
@@ -1121,19 +1125,19 @@ class FilesCommands(SharedHelpers):
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
             return None
-        return Path(hub_root) / ".codex-autorunner" / "pma"
+        return Path(hub_root) / ".codex-autorunner" / "filebox"
 
     def _pma_inbox_dir(self) -> Optional[Path]:
-        pma_root = self._pma_root_dir()
-        if pma_root is None:
+        hub_root = getattr(self, "_hub_root", None)
+        if hub_root is None:
             return None
-        return pma_root / "inbox"
+        return filebox_inbox_dir(Path(hub_root))
 
     def _pma_outbox_dir(self) -> Optional[Path]:
-        pma_root = self._pma_root_dir()
-        if pma_root is None:
+        hub_root = getattr(self, "_hub_root", None)
+        if hub_root is None:
             return None
-        return pma_root / "outbox"
+        return filebox_outbox_dir(Path(hub_root))
 
     def _sanitize_topic_dir_name(self, key: str) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._-")
@@ -1530,8 +1534,10 @@ class FilesCommands(SharedHelpers):
             return
         pma_enabled = bool(getattr(record, "pma_enabled", False))
         if pma_enabled:
-            hub_root = getattr(self, "_hub_root", None)
-            if hub_root is None:
+            inbox_dir = self._pma_inbox_dir()
+            pending_dir = self._pma_outbox_dir()
+            sent_dir = pending_dir
+            if inbox_dir is None or pending_dir is None:
                 await self._send_message(
                     message.chat_id,
                     "PMA unavailable; hub root not configured.",
@@ -1539,11 +1545,6 @@ class FilesCommands(SharedHelpers):
                     reply_to=message.message_id,
                 )
                 return
-            pma_root = Path(hub_root) / ".codex-autorunner" / "pma"
-            inbox_dir = pma_root / "inbox"
-            outbox_dir = pma_root / "outbox"
-            pending_dir = outbox_dir
-            sent_dir = outbox_dir
         else:
             inbox_dir = self._files_inbox_dir(record.workspace_path, key)
             pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)

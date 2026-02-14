@@ -18,6 +18,7 @@ from ..tickets.models import Dispatch
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import resolve_reply_paths
 from .config import load_hub_config, load_repo_config
+from .filebox import list_filebox
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
 from .flows.models import FlowRunRecord, FlowRunStatus
 from .flows.store import FlowStore
@@ -302,6 +303,34 @@ def _load_template_scan_summary(
         return None
 
 
+def _snapshot_pma_files(
+    hub_root: Path,
+) -> tuple[dict[str, list[str]], dict[str, list[dict[str, str]]]]:
+    pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
+    pma_files_detail: dict[str, list[dict[str, str]]] = {"inbox": [], "outbox": []}
+    try:
+        filebox = list_filebox(hub_root, include_legacy=True)
+        for box in ("inbox", "outbox"):
+            entries = filebox.get(box) or []
+            names = sorted([e.name for e in entries])
+            pma_files[box] = names
+            pma_files_detail[box] = [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": box,
+                    "name": e.name,
+                    "source": e.source or "filebox",
+                    "size": str(e.size) if e.size is not None else "",
+                    "modified_at": e.modified_at or "",
+                }
+                for e in entries
+            ]
+    except Exception:
+        pass
+    return pma_files, pma_files_detail
+
+
 def _build_templates_snapshot(
     supervisor: HubSupervisor,
     *,
@@ -571,8 +600,8 @@ def format_pma_prompt(
         "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
         "Working context: `.codex-autorunner/pma/docs/active_context.md`.\n"
         "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
-        "To send a file to the user, write it to `.codex-autorunner/pma/outbox/`.\n"
-        "User uploaded files are in `.codex-autorunner/pma/inbox/`.\n\n"
+        "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
+        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n\n"
     )
 
     if pma_docs:
@@ -1217,33 +1246,9 @@ async def build_hub_snapshot(
     templates = _build_templates_snapshot(supervisor, hub_root=hub_root)
 
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
-    pma_files_detail: dict[str, list[dict[str, str]]] = {
-        "inbox": [],
-        "outbox": [],
-    }
+    pma_files_detail: dict[str, list[dict[str, str]]] = {"inbox": [], "outbox": []}
     if hub_root:
-        try:
-            pma_dir = hub_root / ".codex-autorunner" / "pma"
-            for box in ["inbox", "outbox"]:
-                box_dir = pma_dir / box
-                if box_dir.exists():
-                    files = [
-                        f.name
-                        for f in box_dir.iterdir()
-                        if f.is_file() and not f.name.startswith(".")
-                    ]
-                    pma_files[box] = sorted(files)
-                    pma_files_detail[box] = [
-                        {
-                            "item_type": "pma_file",
-                            "next_action": "process_uploaded_file",
-                            "box": box,
-                            "name": name,
-                        }
-                        for name in pma_files[box]
-                    ]
-        except Exception:
-            pass
+        pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
 
     return {
         "repos": repos,

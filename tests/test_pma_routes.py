@@ -10,9 +10,11 @@ import yaml
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
+from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
+from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 
@@ -299,6 +301,146 @@ async def test_pma_active_updates_during_running_turn(hub_env) -> None:
         assert resp.json().get("status") == "ok"
 
 
+@pytest.mark.anyio
+async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blocker = asyncio.Event()
+    turn_start_calls = 0
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            await blocker.wait()
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["ok"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            nonlocal turn_start_calls
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            turn_start_calls += 1
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    queue = PmaQueue(hub_env.hub_root)
+    lane_id = "pma:test-concurrency"
+    start_lane_worker = app.state.pma_lane_worker_start
+    stop_lane_worker = app.state.pma_lane_worker_stop
+    assert callable(start_lane_worker)
+    assert callable(stop_lane_worker)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        chat_task = asyncio.create_task(
+            client.post(
+                "/hub/pma/chat",
+                json={"message": "first turn", "client_turn_id": "turn-1"},
+            )
+        )
+        try:
+            with anyio.fail_after(2):
+                while True:
+                    active_resp = await client.get("/hub/pma/active")
+                    assert active_resp.status_code == 200
+                    active_payload = active_resp.json()
+                    current = active_payload.get("current") or {}
+                    if (
+                        active_payload.get("active")
+                        and current.get("thread_id")
+                        and current.get("turn_id")
+                    ):
+                        break
+                    await anyio.sleep(0.05)
+
+            first_current = dict(active_payload["current"])
+            assert first_current.get("client_turn_id") == "turn-1"
+            assert turn_start_calls == 1
+
+            second_item, _ = await queue.enqueue(
+                lane_id,
+                "pma:test-concurrency:key-2",
+                {
+                    "message": "second turn",
+                    "agent": "codex",
+                    "client_turn_id": "turn-2",
+                },
+            )
+            await start_lane_worker(app, lane_id)
+
+            second_result = None
+            with anyio.fail_after(2):
+                while True:
+                    items = await queue.list_items(lane_id)
+                    match = next(
+                        (
+                            entry
+                            for entry in items
+                            if entry.item_id == second_item.item_id
+                        ),
+                        None,
+                    )
+                    assert match is not None
+                    if match.state in (
+                        QueueItemState.COMPLETED,
+                        QueueItemState.FAILED,
+                    ):
+                        second_result = dict(match.result or {})
+                        break
+                    await anyio.sleep(0.05)
+
+            assert second_result is not None
+            assert second_result.get("status") == "error"
+            assert "already active" in (second_result.get("detail") or "").lower()
+            assert turn_start_calls == 1
+
+            still_active = (await client.get("/hub/pma/active")).json()
+            assert still_active["active"] is True
+            assert still_active["current"]["client_turn_id"] == "turn-1"
+            assert still_active["current"]["thread_id"] == first_current["thread_id"]
+            assert still_active["current"]["turn_id"] == first_current["turn_id"]
+        finally:
+            await stop_lane_worker(app, lane_id)
+            blocker.set()
+
+        first_resp = await chat_task
+        assert first_resp.status_code == 200
+        assert first_resp.json().get("status") == "ok"
+
+
 def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -418,9 +560,12 @@ def test_pma_files_upload_list_download_delete(hub_env) -> None:
     assert payload["inbox"][0]["name"] == "file.txt"
     assert payload["inbox"][0]["box"] == "inbox"
     assert payload["inbox"][0]["size"] == 11
-    assert payload["inbox"][0]["source"] == "pma"
+    assert payload["inbox"][0]["source"] == "filebox"
     assert "/hub/pma/files/inbox/file.txt" in payload["inbox"][0]["url"]
     assert payload["outbox"] == []
+    assert (
+        filebox.inbox_dir(hub_env.hub_root) / "file.txt"
+    ).read_bytes() == b"Hello, PMA!"
 
     # Download file
     resp = client.get("/hub/pma/files/inbox/file.txt")
@@ -458,6 +603,52 @@ def test_pma_files_invalid_box(hub_env) -> None:
     assert resp.status_code == 400
 
 
+def test_pma_files_list_includes_legacy_sources(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.inbox_dir(hub_env.hub_root) / "primary.txt").write_bytes(b"primary")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "inbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "legacy-pma.txt").write_bytes(b"legacy-pma")
+    legacy_telegram = (
+        hub_env.hub_root
+        / ".codex-autorunner"
+        / "uploads"
+        / "telegram-files"
+        / "topic-1"
+        / "inbox"
+    )
+    legacy_telegram.mkdir(parents=True, exist_ok=True)
+    (legacy_telegram / "legacy-telegram.txt").write_bytes(b"legacy-telegram")
+
+    resp = client.get("/hub/pma/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    entries = {item["name"]: item for item in payload["inbox"]}
+    assert entries["primary.txt"]["source"] == "filebox"
+    assert entries["legacy-pma.txt"]["source"] == "pma"
+    assert entries["legacy-telegram.txt"]["source"] == "telegram"
+
+
+def test_pma_files_download_resolves_legacy_path(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "inbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "legacy.txt").write_bytes(b"legacy")
+
+    resp = client.get("/hub/pma/files/inbox/legacy.txt")
+    assert resp.status_code == 200
+    assert resp.content == b"legacy"
+
+
 def test_pma_files_outbox(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
@@ -485,6 +676,90 @@ def test_pma_files_outbox(hub_env) -> None:
     assert resp.content == b"Output content"
 
 
+def test_pma_files_delete_removes_only_resolved_file(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.inbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"primary")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "inbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "shared.txt").write_bytes(b"legacy-pma")
+    legacy_telegram = (
+        hub_env.hub_root
+        / ".codex-autorunner"
+        / "uploads"
+        / "telegram-files"
+        / "topic-2"
+        / "inbox"
+    )
+    legacy_telegram.mkdir(parents=True, exist_ok=True)
+    (legacy_telegram / "shared.txt").write_bytes(b"legacy-telegram")
+
+    resp = client.delete("/hub/pma/files/inbox/shared.txt")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    assert not (filebox.inbox_dir(hub_env.hub_root) / "shared.txt").exists()
+    assert (legacy_pma / "shared.txt").exists()
+    assert (legacy_telegram / "shared.txt").exists()
+
+
+def test_pma_files_bulk_delete_removes_all_visible_entries(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.outbox_dir(hub_env.hub_root) / "a.txt").write_bytes(b"a")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "outbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "b.txt").write_bytes(b"b")
+    legacy_telegram_pending = (
+        hub_env.hub_root
+        / ".codex-autorunner"
+        / "uploads"
+        / "telegram-files"
+        / "topic-3"
+        / "outbox"
+        / "pending"
+    )
+    legacy_telegram_pending.mkdir(parents=True, exist_ok=True)
+    (legacy_telegram_pending / "c.txt").write_bytes(b"c")
+
+    resp = client.delete("/hub/pma/files/outbox")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    assert (client.get("/hub/pma/files").json()["outbox"]) == []
+    assert not (filebox.outbox_dir(hub_env.hub_root) / "a.txt").exists()
+    assert not (legacy_pma / "b.txt").exists()
+    assert not (legacy_telegram_pending / "c.txt").exists()
+
+
+def test_pma_files_bulk_delete_preserves_hidden_legacy_duplicate(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"primary")
+    legacy_pma = hub_env.hub_root / ".codex-autorunner" / "pma" / "outbox"
+    legacy_pma.mkdir(parents=True, exist_ok=True)
+    (legacy_pma / "shared.txt").write_bytes(b"legacy")
+
+    resp = client.delete("/hub/pma/files/outbox")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    assert not (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").exists()
+    assert (legacy_pma / "shared.txt").exists()
+    payload = client.get("/hub/pma/files").json()
+    assert payload["outbox"][0]["name"] == "shared.txt"
+    assert payload["outbox"][0]["source"] == "pma"
+
+
 def test_pma_files_rejects_invalid_filenames(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
@@ -496,7 +771,7 @@ def test_pma_files_rejects_invalid_filenames(hub_env) -> None:
         files = {"file": (filename, b"test", "text/plain")}
         resp = client.post("/hub/pma/files/inbox", files=files)
         assert resp.status_code == 400, f"Should reject filename: {filename}"
-        assert "Invalid filename" in resp.json()["detail"]
+        assert "filename" in resp.json()["detail"].lower()
 
 
 def test_pma_files_size_limit(hub_env) -> None:

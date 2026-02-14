@@ -102,6 +102,17 @@ def test_pma_delete_help():
     assert "--json" in output, "PMA delete should support --json output mode"
 
 
+def test_pma_file_commands_help_mentions_filebox():
+    """Verify PMA file commands mention FileBox as canonical source."""
+    runner = CliRunner()
+    for cmd in ["files", "upload", "download", "delete"]:
+        result = runner.invoke(pma_app, [cmd, "--help"])
+        assert result.exit_code == 0, f"{cmd} --help should succeed"
+        assert (
+            "FileBox" in result.stdout
+        ), f"{cmd} help should mention FileBox as canonical"
+
+
 def test_pma_active_help_shows_json_option():
     """Verify PMA active command supports JSON output mode."""
     runner = CliRunner()
