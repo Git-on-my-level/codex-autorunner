@@ -203,6 +203,21 @@ class SharedHelpers:
             current = current.__cause__ or current.__context__
         return False
 
+    def _opencode_session_stall_timeout_seconds(self) -> Optional[float]:
+        """Return configured OpenCode stream stall timeout when available."""
+
+        opencode_cfg = getattr(getattr(self, "_config", None), "opencode", None)
+        value = getattr(opencode_cfg, "session_stall_timeout_seconds", None)
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        return parsed
+
     def _interrupt_keyboard(self) -> dict[str, Any]:
         """Build interrupt button keyboard.
 
