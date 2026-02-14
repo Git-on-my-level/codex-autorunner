@@ -217,7 +217,7 @@ def _default_terminal_section() -> Dict[str, Any]:
 def _default_opencode_section() -> Dict[str, Any]:
     """Build the default opencode section."""
     return {
-        "session_stall_timeout_seconds": 60,
+        "session_stall_timeout_seconds": None,
         "max_text_chars": 20000,
     }
 

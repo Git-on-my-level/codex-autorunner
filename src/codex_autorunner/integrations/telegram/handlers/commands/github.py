@@ -1222,6 +1222,7 @@ class GitHubCommands(SharedHelpers):
                         should_stop=_should_stop,
                         part_handler=_handle_opencode_part,
                         ready_event=ready_event,
+                        stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
                     )
                 )
                 with suppress(asyncio.TimeoutError):

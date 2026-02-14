@@ -194,7 +194,7 @@
   },
   "opencode": {
     "max_text_chars": 20000,
-    "session_stall_timeout_seconds": 60
+    "session_stall_timeout_seconds": null
   },
   "prompt": {
     "prev_run_max_chars": 6000,
@@ -403,4 +403,3 @@
     "warn_on_remote_api": true
   }
 }
-
