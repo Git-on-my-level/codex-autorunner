@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import pytest
-import yaml
+from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -16,21 +16,18 @@ from codex_autorunner.core.config import (
 )
 
 
-def _write_yaml(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-
 def test_load_hub_config_prefers_config_over_root_overrides(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
 
-    _write_yaml(hub_root / "codex-autorunner.yml", {"server": {"port": 5000}})
-    _write_yaml(hub_root / "codex-autorunner.override.yml", {"server": {"port": 6000}})
+    write_test_config(hub_root / "codex-autorunner.yml", {"server": {"port": 5000}})
+    write_test_config(
+        hub_root / "codex-autorunner.override.yml", {"server": {"port": 6000}}
+    )
 
     config_dir = hub_root / ".codex-autorunner"
     config_dir.mkdir()
-    _write_yaml(
+    write_test_config(
         config_dir / "config.yml",
         {"mode": "hub", "server": {"port": 7000}},
     )
@@ -43,12 +40,14 @@ def test_load_hub_config_uses_root_override_when_config_missing(tmp_path: Path) 
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
 
-    _write_yaml(hub_root / "codex-autorunner.yml", {"server": {"port": 5000}})
-    _write_yaml(hub_root / "codex-autorunner.override.yml", {"server": {"port": 6000}})
+    write_test_config(hub_root / "codex-autorunner.yml", {"server": {"port": 5000}})
+    write_test_config(
+        hub_root / "codex-autorunner.override.yml", {"server": {"port": 6000}}
+    )
 
     config_dir = hub_root / ".codex-autorunner"
     config_dir.mkdir()
-    _write_yaml(config_dir / "config.yml", {"mode": "hub"})
+    write_test_config(config_dir / "config.yml", {"mode": "hub"})
 
     config = load_hub_config(hub_root)
     assert config.server_port == 6000
@@ -57,7 +56,7 @@ def test_load_hub_config_uses_root_override_when_config_missing(tmp_path: Path) 
 def test_load_repo_config_inherits_hub_shared_settings(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -75,7 +74,7 @@ def test_load_repo_config_inherits_hub_shared_settings(tmp_path: Path) -> None:
 def test_repo_override_file_overrides_repo_defaults(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -85,7 +84,7 @@ def test_repo_override_file_overrides_repo_defaults(tmp_path: Path) -> None:
 
     repo_root = hub_root / "repo"
     repo_root.mkdir()
-    _write_yaml(
+    write_test_config(
         repo_root / REPO_OVERRIDE_FILENAME,
         {"runner": {"sleep_seconds": 11}},
     )
@@ -97,14 +96,14 @@ def test_repo_override_file_overrides_repo_defaults(tmp_path: Path) -> None:
 def test_repo_override_rejects_mode_and_version(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub"},
     )
 
     repo_root = hub_root / "repo"
     repo_root.mkdir()
-    _write_yaml(
+    write_test_config(
         repo_root / REPO_OVERRIDE_FILENAME,
         {"mode": "repo", "version": 2},
     )
@@ -116,7 +115,7 @@ def test_repo_override_rejects_mode_and_version(tmp_path: Path) -> None:
 def test_repo_env_overrides_hub_env(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub"},
     )
@@ -156,7 +155,7 @@ def test_repo_docs_reject_absolute_path(tmp_path: Path) -> None:
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
     cfg["docs"]["active_context"] = "/tmp/active_context.md"
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"docs": cfg["docs"]}},
     )
@@ -173,7 +172,7 @@ def test_repo_docs_reject_parent_segments(tmp_path: Path) -> None:
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
     cfg["docs"]["spec"] = "../spec.md"
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"docs": cfg["docs"]}},
     )
@@ -190,7 +189,7 @@ def test_repo_log_rejects_absolute_path(tmp_path: Path) -> None:
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
     cfg["log"]["path"] = "/tmp/codex.log"
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"log": cfg["log"]}},
     )
@@ -207,7 +206,7 @@ def test_repo_log_rejects_parent_segments(tmp_path: Path) -> None:
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
     cfg["log"]["path"] = "../codex.log"
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"log": cfg["log"]}},
     )
@@ -224,7 +223,7 @@ def test_repo_server_log_rejects_absolute_path(tmp_path: Path) -> None:
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
     cfg["server_log"] = {"path": "/tmp/server.log"}
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"server_log": cfg["server_log"]}},
     )
@@ -241,7 +240,7 @@ def test_repo_server_log_rejects_parent_segments(tmp_path: Path) -> None:
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
     cfg["server_log"] = {"path": "../server.log"}
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"server_log": cfg["server_log"]}},
     )
@@ -256,7 +255,7 @@ def test_repo_server_log_rejects_parent_segments(tmp_path: Path) -> None:
 def test_repo_log_accepts_valid_relative_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -274,7 +273,7 @@ def test_repo_log_accepts_valid_relative_path(tmp_path: Path) -> None:
 def test_hub_log_rejects_absolute_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -300,7 +299,7 @@ def test_hub_log_rejects_absolute_path(tmp_path: Path) -> None:
 def test_hub_server_log_rejects_parent_segments(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -333,7 +332,7 @@ def test_static_assets_validation_rejects_negative_max_cache_entries(
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -356,7 +355,7 @@ def test_static_assets_validation_rejects_negative_max_cache_age_days(
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -379,7 +378,7 @@ def test_static_assets_validation_allows_null_max_cache_age_days(
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -399,7 +398,7 @@ def test_housekeeping_validation_rejects_invalid_interval_seconds(
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
@@ -419,7 +418,7 @@ def test_housekeeping_validation_rejects_negative_min_file_age_seconds(
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(
+    write_test_config(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",

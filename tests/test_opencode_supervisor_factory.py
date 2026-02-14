@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-import yaml
+from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -11,21 +11,16 @@ from codex_autorunner.core.config import (
 from codex_autorunner.integrations.agents import opencode_supervisor_factory
 
 
-def _write_yaml(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-
 def test_build_opencode_supervisor_from_repo_config(
     monkeypatch, tmp_path: Path
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
-    _write_yaml(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
 
     repo_root = hub_root / "repo"
     repo_root.mkdir()
-    _write_yaml(
+    write_test_config(
         repo_root / REPO_OVERRIDE_FILENAME,
         {
             "app_server": {

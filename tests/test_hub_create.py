@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.conftest import write_test_config
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
@@ -17,11 +18,6 @@ from codex_autorunner.integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
-
-
-def _write_config(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def _init_git_repo(path: Path) -> None:
@@ -48,7 +44,7 @@ def test_hub_create_repo_cli(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg["hub"]["repos_root"] = "workspace"
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     runner = CliRunner()
     result = runner.invoke(app, ["hub", "create", "demo", "--path", str(hub_root)])
@@ -67,7 +63,7 @@ def test_hub_create_repo_rejects_outside_repos_root(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg["hub"]["repos_root"] = "workspace"
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -82,7 +78,7 @@ def test_hub_create_repo_rejects_duplicate_id(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg["hub"]["repos_root"] = "workspace"
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -98,7 +94,7 @@ def test_hub_clone_repo_cli(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg["hub"]["repos_root"] = "workspace"
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     source_repo = tmp_path / "source"
     _init_git_repo(source_repo)
@@ -129,7 +125,7 @@ def test_hub_clone_repo_rejects_duplicate_id(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg["hub"]["repos_root"] = "workspace"
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     source_repo = tmp_path / "source"
     _init_git_repo(source_repo)
@@ -151,7 +147,7 @@ def test_hub_clone_repo_rejects_duplicate_id(tmp_path: Path):
 def test_hub_clone_repo_cli_failure_message(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     missing_repo = tmp_path / "missing"
 

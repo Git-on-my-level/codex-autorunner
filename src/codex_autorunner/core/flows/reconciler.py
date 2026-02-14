@@ -159,7 +159,7 @@ def _ensure_worker_crash_artifact(
             },
         )
     except Exception as exc:
-        _logger.debug("Failed to create crash artifact for %s: %s", run_id, exc)
+        _logger.warning("Failed to create crash artifact for %s: %s", run_id, exc)
 
 
 def _is_stale_crash_info(crash_info: Optional[dict[str, Any]]) -> bool:

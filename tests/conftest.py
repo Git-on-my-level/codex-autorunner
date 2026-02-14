@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
 DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
 os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
@@ -33,6 +34,11 @@ def _silence_event_loop_closed_unraisable(unraisable: sys.UnraisableHookArgs) ->
 
 
 sys.unraisablehook = _silence_event_loop_closed_unraisable
+
+
+def write_test_config(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def pytest_configure() -> None:

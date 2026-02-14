@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import yaml
+from tests.conftest import write_test_config
 
 from codex_autorunner.bootstrap import GITIGNORE_CONTENT, seed_repo_files
 from codex_autorunner.core.config import (
@@ -12,11 +13,6 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.discovery import discover_and_init
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
-
-
-def _write_config(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def test_manifest_creation_and_normalization(tmp_path: Path):
@@ -40,7 +36,7 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     config["hub"]["repos_root"] = "workspace"
     config_path = hub_root / CONFIG_FILENAME
-    _write_config(config_path, config)
+    write_test_config(config_path, config)
 
     repos_root = hub_root / "workspace"
     repo_dir = repos_root / "demo"
@@ -77,7 +73,7 @@ def test_discovery_sanitizes_repo_ids(tmp_path: Path):
     config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     config["hub"]["repos_root"] = "workspace"
     config_path = hub_root / CONFIG_FILENAME
-    _write_config(config_path, config)
+    write_test_config(config_path, config)
 
     repos_root = hub_root / "workspace"
     repo_dir = repos_root / "demo#repo"
@@ -105,7 +101,7 @@ def test_discovery_skips_hub_root_repo_by_default(tmp_path: Path):
     config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     config["hub"]["repos_root"] = "."
     config_path = hub_root / CONFIG_FILENAME
-    _write_config(config_path, config)
+    write_test_config(config_path, config)
 
     hub_config = load_hub_config(hub_root)
     _, records = discover_and_init(hub_config)
@@ -128,7 +124,7 @@ def test_discovery_includes_hub_root_repo_when_enabled(tmp_path: Path):
     config["hub"]["repos_root"] = "."
     config["hub"]["include_root_repo"] = True
     config_path = hub_root / CONFIG_FILENAME
-    _write_config(config_path, config)
+    write_test_config(config_path, config)
 
     hub_config = load_hub_config(hub_root)
     _, records = discover_and_init(hub_config)
@@ -156,7 +152,7 @@ def test_discovery_removes_existing_hub_root_repo_when_disabled(tmp_path: Path):
     config["hub"]["repos_root"] = "."
     config["hub"]["include_root_repo"] = False
     config_path = hub_root / CONFIG_FILENAME
-    _write_config(config_path, config)
+    write_test_config(config_path, config)
 
     manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
     manifest.ensure_repo(hub_root, hub_root, repo_id="hub", display_name="hub")
@@ -171,7 +167,7 @@ def test_discovery_removes_existing_hub_root_repo_when_disabled(tmp_path: Path):
 
 def test_load_repo_config_uses_nearest_hub_config(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    _write_config(hub_root / CONFIG_FILENAME, DEFAULT_HUB_CONFIG)
+    write_test_config(hub_root / CONFIG_FILENAME, DEFAULT_HUB_CONFIG)
     repo_dir = hub_root / "child"
     repo_dir.mkdir(parents=True)
     (repo_dir / ".git").mkdir()

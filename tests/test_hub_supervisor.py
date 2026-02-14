@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
-import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
+from tests.conftest import write_test_config
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -29,11 +29,6 @@ from codex_autorunner.integrations.agents.wiring import (
 )
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id
 from codex_autorunner.server import create_hub_app
-
-
-def _write_config(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def _init_git_repo(path: Path) -> None:
@@ -102,7 +97,7 @@ def test_scan_writes_hub_state(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -126,7 +121,7 @@ def test_locked_status_reported(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
     seed_repo_files(repo_dir, git_required=False)
@@ -150,7 +145,7 @@ def test_hub_api_lists_repos(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -167,7 +162,7 @@ def test_list_repos_thread_safety(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
 
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -219,7 +214,7 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -237,7 +232,7 @@ def test_hub_mount_enters_repo_lifespan(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -254,7 +249,7 @@ def test_hub_scan_starts_repo_lifespan(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
 
     app = create_hub_app(hub_root)
     with TestClient(app) as client:
@@ -279,7 +274,7 @@ def test_hub_scan_unmounts_repo_and_exits_lifespan(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -304,7 +299,7 @@ def test_hub_create_repo_keeps_existing_mounts(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "alpha"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -323,7 +318,7 @@ def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg["hub"]["auto_init_missing"] = False
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
 
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -349,7 +344,7 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
     repo_a = hub_root / "alpha"
     repo_b = hub_root / "beta"
     (repo_a / ".git").mkdir(parents=True, exist_ok=True)
@@ -388,7 +383,7 @@ def test_hub_clone_repo_endpoint(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
 
     source_repo = tmp_path / "source"
     _init_git_repo(source_repo)
@@ -411,7 +406,7 @@ def test_hub_remove_repo_with_worktrees(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg_path = hub_root / CONFIG_FILENAME
-    _write_config(cfg_path, cfg)
+    write_test_config(cfg_path, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -450,7 +445,7 @@ def test_hub_remove_repo_with_worktrees(tmp_path: Path):
 def test_sync_main_raises_when_local_default_diverges_from_origin(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     origin = tmp_path / "origin.git"
     origin.mkdir(parents=True, exist_ok=True)
@@ -483,7 +478,7 @@ def test_create_worktree_defaults_to_origin_default_branch_without_start_point(
 ):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -516,7 +511,7 @@ def test_create_worktree_fails_if_explicit_start_point_mismatches_existing_branc
 ):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -543,7 +538,7 @@ def test_create_worktree_fails_if_explicit_start_point_mismatches_existing_branc
 def test_create_worktree_runs_configured_setup_commands(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -573,7 +568,7 @@ def test_create_worktree_runs_configured_setup_commands(tmp_path: Path):
 def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -612,7 +607,7 @@ def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
 def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -642,7 +637,7 @@ def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
 def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -666,7 +661,7 @@ def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
 def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),

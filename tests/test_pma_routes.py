@@ -6,8 +6,8 @@ from typing import Optional
 import anyio
 import httpx
 import pytest
-import yaml
 from fastapi.testclient import TestClient
+from tests.conftest import write_test_config
 
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core import filebox
@@ -17,11 +17,6 @@ from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
-
-
-def _write_config(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def _enable_pma(
@@ -40,14 +35,14 @@ def _enable_pma(
         cfg["pma"]["reasoning"] = reasoning
     if max_text_chars is not None:
         cfg["pma"]["max_text_chars"] = max_text_chars
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
 def _disable_pma(hub_root: Path) -> None:
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg.setdefault("pma", {})
     cfg["pma"]["enabled"] = False
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
 def test_pma_agents_endpoint(hub_env) -> None:

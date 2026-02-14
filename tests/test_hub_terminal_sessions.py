@@ -4,8 +4,8 @@ import time
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
+from tests.conftest import write_test_config
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
@@ -44,11 +44,6 @@ class FakePTYSession:
         os.close(self._rfd)
 
 
-def _write_config(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-
-
 def _create_repo(root: Path, name: str) -> Path:
     repo_dir = root / name
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -74,7 +69,7 @@ def test_hub_terminal_sessions_stay_isolated(
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     repos_root = cfg["hub"]["repos_root"]
-    _write_config(hub_root / CONFIG_FILENAME, cfg)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     repo_root = hub_root / repos_root
     repo_root.mkdir(parents=True, exist_ok=True)

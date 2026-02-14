@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,8 @@ from .hub import HubSupervisor
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_summary import build_ticket_flow_summary
 from .utils import atomic_write
+
+_logger = logging.getLogger(__name__)
 
 PMA_MAX_REPOS = 25
 PMA_MAX_MESSAGES = 10
@@ -178,8 +181,8 @@ def maybe_auto_prune_active_context(
     }
     try:
         _save_active_context_state(hub_root, state)
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Could not save auto-prune state: %s", exc)
     return state
 
 
@@ -326,8 +329,8 @@ def _snapshot_pma_files(
                 }
                 for e in entries
             ]
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Could not list filebox contents: %s", exc)
     return pma_files, pma_files_detail
 
 
@@ -1008,7 +1011,10 @@ def get_latest_ticket_flow_run_state(
                 has_pending_dispatch=has_dispatch,
                 dispatch_state_reason=reason,
             )
-    except Exception:
+    except Exception as exc:
+        _logger.warning(
+            "Failed to get latest ticket flow run state for repo %s: %s", repo_id, exc
+        )
         return None
 
 
@@ -1167,7 +1173,8 @@ def _gather_inbox(
                                 ),
                             }
                         )
-        except Exception:
+        except Exception as exc:
+            _logger.warning("Failed to gather inbox for repo %s: %s", snap.id, exc)
             continue
     messages.sort(key=lambda m: (m.get("run_created_at") or ""), reverse=True)
     return messages
