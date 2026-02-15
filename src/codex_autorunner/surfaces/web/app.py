@@ -11,6 +11,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ...core.logging_utils import safe_log
+from ...core.managed_processes import reap_managed_processes
 from ...housekeeping import run_housekeeping_once
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
@@ -89,6 +90,22 @@ def create_hub_app(
     async def lifespan(app: FastAPI):
         tasks: list[asyncio.Task] = []
         app.state.hub_started = True
+        try:
+            cleanup = reap_managed_processes(context.root)
+            if cleanup.killed or cleanup.removed:
+                app.state.logger.info(
+                    "Managed process cleanup: killed=%s removed=%s skipped=%s",
+                    cleanup.killed,
+                    cleanup.removed,
+                    cleanup.skipped,
+                )
+        except Exception as exc:
+            safe_log(
+                app.state.logger,
+                logging.WARNING,
+                "Managed process reaper failed at hub startup",
+                exc,
+            )
         if app.state.config.housekeeping.enabled:
             interval = max(app.state.config.housekeeping.interval_seconds, 1)
 

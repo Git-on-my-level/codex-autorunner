@@ -25,6 +25,7 @@ from ....core.flows.worker_process import (
     write_worker_crash_info,
     write_worker_exit_info,
 )
+from ....core.managed_processes import reap_managed_processes
 from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
 from ....tickets import AgentPool
@@ -510,6 +511,14 @@ def register_flow_commands(
     ):
         """Start a flow worker process for an existing run."""
         engine = require_repo_config(repo, hub)
+        try:
+            cleanup = reap_managed_processes(engine.repo_root)
+            if cleanup.killed or cleanup.removed:
+                typer.echo(
+                    f"Managed process cleanup: killed {cleanup.killed}, removed {cleanup.removed} records, skipped {cleanup.skipped}"
+                )
+        except Exception as exc:
+            typer.echo(f"Managed process cleanup failed: {exc}", err=True)
         normalized_run_id = _normalize_flow_run_id(run_id)
         if not normalized_run_id:
             raise_exit("--run-id is required for worker command")

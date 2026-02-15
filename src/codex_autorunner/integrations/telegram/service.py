@@ -24,6 +24,7 @@ from ...core.flows.models import FlowRunRecord
 from ...core.hub import HubSupervisor
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
+from ...core.managed_processes import reap_managed_processes
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
@@ -585,6 +586,24 @@ class TelegramBotService(
                 f"Unsupported telegram_bot.mode '{self._config.mode}'"
             )
         self._config.validate()
+        try:
+            cleanup = reap_managed_processes(self._config.root)
+            if cleanup.killed or cleanup.removed:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.process_reaper.cleaned",
+                    killed=cleanup.killed,
+                    removed=cleanup.removed,
+                    skipped=cleanup.skipped,
+                )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.process_reaper.failed",
+                exc=exc,
+            )
         self._acquire_instance_lock()
         # Bind the semaphore to the running loop to avoid cross-loop await failures.
         self._turn_semaphore = asyncio.Semaphore(
