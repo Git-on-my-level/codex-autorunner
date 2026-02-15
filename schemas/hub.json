@@ -49,6 +49,18 @@
           "total_count": {"type": "integer"},
           "current_step": {"type": ["null", "integer"]}
         }
+      },
+      "ticket_flow_display": {
+        "type": ["null", "object"],
+        "properties": {
+          "status": {"type": "string"},
+          "status_label": {"type": "string"},
+          "status_icon": {"type": "string"},
+          "is_active": {"type": "boolean"},
+          "done_count": {"type": "integer"},
+          "total_count": {"type": "integer"},
+          "run_id": {"type": ["null", "string"]}
+        }
       }
     },
     "required": [

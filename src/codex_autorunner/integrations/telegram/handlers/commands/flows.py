@@ -31,7 +31,7 @@ from .....core.flows.worker_process import (
 from .....core.logging_utils import log_event
 from .....core.runtime import RuntimeContext
 from .....core.state import now_iso
-from .....core.ticket_flow_summary import get_latest_ticket_flow_run
+from .....core.ticket_flow_summary import build_ticket_flow_display
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....integrations.agents import build_backend_orchestrator
@@ -1247,46 +1247,24 @@ class FlowCommands(SharedHelpers):
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+                latest = runs[0] if runs else None
                 progress = ticket_progress(repo_root)
-                done = progress.get("done", 0)
-                total = progress.get("total", 0)
-                progress_label = f"{done}/{total}"
-                latest = get_latest_ticket_flow_run(store)
-                if latest:
-                    status_icon = "⚪"
-                    if latest.status == FlowRunStatus.RUNNING:
-                        status_icon = "🟢"
-                    elif latest.status in (
-                        FlowRunStatus.PENDING,
-                        FlowRunStatus.STOPPING,
-                    ):
-                        status_icon = "🟡"
-                    elif latest.status == FlowRunStatus.PAUSED:
-                        status_icon = "🔴"
-                    elif latest.status == FlowRunStatus.COMPLETED:
-                        status_icon = "🔵"
-                    elif latest.status in (
-                        FlowRunStatus.STOPPED,
-                        FlowRunStatus.FAILED,
-                    ):
-                        status_icon = "⚫"
-                    status_line = _format_status_line(
-                        label,
-                        status_icon=status_icon,
-                        status_value=latest.status.value,
-                        progress_label=progress_label,
-                        run_id=latest.id,
-                        indent=indent,
-                    )
-                else:
-                    status_line = _format_status_line(
-                        label,
-                        status_icon="🔵" if total > 0 and done >= total else "⚪",
-                        status_value="Done" if total > 0 and done >= total else "Idle",
-                        progress_label=progress_label,
-                        run_id=None,
-                        indent=indent,
-                    )
+                display = build_ticket_flow_display(
+                    status=latest.status.value if latest else None,
+                    done_count=progress.get("done", 0),
+                    total_count=progress.get("total", 0),
+                    run_id=latest.id if latest else None,
+                )
+                progress_label = f"{display['done_count']}/{display['total_count']}"
+                status_line = _format_status_line(
+                    label,
+                    status_icon=str(display["status_icon"]),
+                    status_value=str(display["status_label"]),
+                    progress_label=progress_label,
+                    run_id=display.get("run_id"),
+                    indent=indent,
+                )
             except Exception:
                 status_line = f"{indent}❓ {_code(label)}: Error reading state"
             finally:

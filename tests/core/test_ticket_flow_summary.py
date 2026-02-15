@@ -4,7 +4,10 @@ from pathlib import Path
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.core.ticket_flow_summary import build_ticket_flow_summary
+from codex_autorunner.core.ticket_flow_summary import (
+    build_ticket_flow_display,
+    build_ticket_flow_summary,
+)
 
 
 def test_build_ticket_flow_summary_includes_pr_and_final_review(tmp_path: Path) -> None:
@@ -111,3 +114,44 @@ def test_build_ticket_flow_summary_pr_url_only_from_open_pr_ticket(
     assert summary is not None
     assert summary["pr_url"] is None
     assert summary["pr_opened"] is False
+
+
+def test_build_ticket_flow_summary_without_run_uses_done_status(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001-a.md").write_text(
+        "---\nagent: codex\ndone: true\ntitle: A\n---\n\nA\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-002-b.md").write_text(
+        "---\nagent: codex\ndone: true\ntitle: B\n---\n\nB\n",
+        encoding="utf-8",
+    )
+
+    summary = build_ticket_flow_summary(repo_root, include_failure=False)
+    assert summary is not None
+    assert summary["status"] == "done"
+    assert summary["status_label"] == "Done"
+    assert summary["status_icon"] == "🔵"
+    assert summary["run_id"] is None
+    assert summary["done_count"] == 2
+    assert summary["total_count"] == 2
+
+
+def test_build_ticket_flow_display_maps_runtime_status() -> None:
+    display = build_ticket_flow_display(
+        status="running",
+        done_count=1,
+        total_count=4,
+        run_id="run-123",
+    )
+    assert display["status"] == "running"
+    assert display["status_label"] == "running"
+    assert display["status_icon"] == "🟢"
+    assert display["is_active"] is True
+    assert display["run_id"] == "run-123"
