@@ -18,6 +18,7 @@ class BackendOrchestrator(Protocol):
         reasoning: Optional[str] = None,
         session_key: Optional[str] = None,
         session_id: Optional[str] = None,
+        workspace_root: Optional[Any] = None,
     ) -> AsyncGenerator[RunEvent, None]: ...
 
     async def interrupt(self, agent_id: str, state: Any) -> None: ...

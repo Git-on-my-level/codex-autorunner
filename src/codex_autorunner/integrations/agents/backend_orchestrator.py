@@ -102,6 +102,7 @@ class BackendOrchestrator:
         agent_id: str,
         state: RunnerState,
         session_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
     ) -> str:
         """
         Start a backend session.
@@ -110,11 +111,12 @@ class BackendOrchestrator:
         """
         backend = await self.get_backend(agent_id, state)
 
-        context: dict[str, Any] = {"workspace": str(self._repo_root)}
+        effective_workspace = workspace_root or self._repo_root
+        context: dict[str, Any] = {"workspace": str(effective_workspace)}
         if session_id:
             context["session_id"] = session_id
 
-        target = {"workspace": str(self._repo_root)}
+        target = {"workspace": str(effective_workspace)}
 
         session = await backend.start_session(target, context)
 
@@ -138,6 +140,7 @@ class BackendOrchestrator:
         reasoning: Optional[str] = None,
         session_key: Optional[str] = None,
         session_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
     ) -> AsyncGenerator[RunEvent, None]:
         """
         Run a turn on the backend.
@@ -152,7 +155,10 @@ class BackendOrchestrator:
             effective_session_id = self._context.session_id
 
         effective_session_id = await self.start_session(
-            agent_id, state, session_id=effective_session_id
+            agent_id,
+            state,
+            session_id=effective_session_id,
+            workspace_root=workspace_root,
         )
         if reuse_session and session_key and effective_session_id:
             self.set_thread_id(session_key, effective_session_id)

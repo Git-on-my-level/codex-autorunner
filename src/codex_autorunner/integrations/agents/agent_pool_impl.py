@@ -168,6 +168,7 @@ class DefaultAgentPool:
                 model=model,
                 reasoning=reasoning,
                 session_id=req.conversation_id,
+                workspace_root=req.workspace_root,
             ):
                 if isinstance(event, Started):
                     conversation_id = event.session_id or conversation_id
