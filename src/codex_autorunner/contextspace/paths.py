@@ -8,6 +8,7 @@ from typing import Literal, cast
 
 from ..core import drafts as draft_utils
 from ..core.logging_utils import log_event
+from ..core.state_roots import resolve_repo_state_root
 
 ContextspaceDocKind = Literal["active_context", "decisions", "spec"]
 CONTEXTSPACE_DOC_KINDS: tuple[ContextspaceDocKind, ...] = (
@@ -35,7 +36,7 @@ def _normalize_kind(kind: str) -> ContextspaceDocKind:
 
 
 def contextspace_dir(repo_root: Path) -> Path:
-    return repo_root / ".codex-autorunner" / "contextspace"
+    return resolve_repo_state_root(repo_root) / "contextspace"
 
 
 PINNED_DOC_FILENAMES = {f"{kind}.md" for kind in CONTEXTSPACE_DOC_KINDS}

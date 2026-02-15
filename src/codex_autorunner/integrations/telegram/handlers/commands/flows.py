@@ -35,12 +35,12 @@ from .....core.ticket_flow_summary import get_latest_ticket_flow_run
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....integrations.agents import build_backend_orchestrator
+from .....integrations.agents.build_agent_pool import build_agent_pool
 from .....integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
 from .....manifest import load_manifest
-from .....tickets import AgentPool
 from .....tickets.files import list_ticket_paths
 from .....tickets.outbox import resolve_outbox_paths
 from ....github.service import GitHubError, GitHubService
@@ -197,7 +197,7 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
         app_server_supervisor_factory=build_app_server_supervisor_factory(config),
         agent_id_validator=validate_agent_id,
     )
-    agent_pool = AgentPool(engine.config)
+    agent_pool = build_agent_pool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()
     controller = FlowController(

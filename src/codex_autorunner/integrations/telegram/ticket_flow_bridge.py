@@ -14,8 +14,8 @@ from ...core.flows.worker_process import spawn_flow_worker
 from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow import build_ticket_flow_definition
+from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...manifest import load_manifest
-from ...tickets import AgentPool
 from .adapter import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import format_public_error
@@ -644,7 +644,7 @@ def _ticket_controller_for(repo_root: Path) -> FlowController:
         app_server_supervisor_factory=build_app_server_supervisor_factory(config),
         agent_id_validator=validate_agent_id,
     )
-    agent_pool = AgentPool(engine.config)
+    agent_pool = build_agent_pool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()
     controller = FlowController(

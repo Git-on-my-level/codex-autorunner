@@ -12,14 +12,14 @@
     "python:function:src/codex_autorunner/core/patch_utils.py:167:apply_patch_file",
     "python:function:src/codex_autorunner/core/patch_utils.py:176:preview_patch",
     "python:function:src/codex_autorunner/core/patch_utils.py:97:normalize_patch_text",
-    "python:function:src/codex_autorunner/core/review_context.py:64:build_spec_progress_review_context",
-    "python:function:src/codex_autorunner/core/state_roots.py:55:resolve_repo_state_root",
+    "python:function:src/codex_autorunner/core/state_roots.py:102:resolve_cache_root",
+    "python:function:src/codex_autorunner/core/state_roots.py:138:validate_path_within_roots",
+    "python:function:src/codex_autorunner/core/state_roots.py:166:get_canonical_roots",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:21:run_turn_with_backend",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:72:stream_turn_events",
     "python:function:src/codex_autorunner/integrations/github/service.py:257:parse_pr_input",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:138:log_stream",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:171:jsonl_event_stream",
-    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream",
-    "python:function:src/codex_autorunner/tickets/outbox.py:17:set_lifecycle_emitter"
+    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream"
   ]
 }

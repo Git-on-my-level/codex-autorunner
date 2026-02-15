@@ -5,12 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
 
-from ...core.app_server_ids import (
-    extract_thread_id,
-    extract_thread_id_for_turn,
-    extract_turn_id,
-)
 from ...core.sse import format_sse
+from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 
 TurnKey = tuple[str, str]
 LOGGER = logging.getLogger("codex_autorunner.app_server")

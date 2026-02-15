@@ -48,6 +48,12 @@ If you're working from a fresh clone of this repo, you can run the repo-local CL
 
 The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will bootstrap a local `.venv` and install CAR.
 
+## Architecture docs
+- [Architecture boundaries](docs/ARCHITECTURE_BOUNDARIES.md)
+- [Run history contract](docs/RUN_HISTORY.md)
+- [State roots contract](docs/STATE_ROOTS.md)
+- [Architecture refactor handoff (tickets 200-270)](docs/ARCHITECTURE_REFACTOR_HANDOFF.md)
+
 ## Supported models
 CAR currently supports:
 - Codex

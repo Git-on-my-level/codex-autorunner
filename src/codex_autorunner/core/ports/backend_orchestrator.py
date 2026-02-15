@@ -10,13 +10,15 @@ from .run_event import RunEvent
 class BackendOrchestrator(Protocol):
     def run_turn(
         self,
-        *,
         agent_id: str,
         state: Any,
         prompt: str,
-        model: Optional[str],
-        reasoning: Optional[str],
-        session_key: str,
+        *,
+        model: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        session_key: Optional[str] = None,
+        session_id: Optional[str] = None,
+        workspace_root: Optional[Any] = None,
     ) -> AsyncGenerator[RunEvent, None]: ...
 
     async def interrupt(self, agent_id: str, state: Any) -> None: ...

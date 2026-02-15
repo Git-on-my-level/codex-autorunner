@@ -44,8 +44,8 @@ from ....core.runtime import RuntimeContext
 from ....core.safe_paths import SafePathError, validate_single_filename
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
+from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService
-from ....tickets import AgentPool
 from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
 from ....tickets.files import (
     list_ticket_paths,
@@ -259,7 +259,7 @@ def _build_flow_definition(
             repo_root=repo_root,
             config=config,
         )
-        agent_pool = AgentPool(engine.config)
+        agent_pool = build_agent_pool(engine.config)
         definition = build_ticket_flow_definition(agent_pool=agent_pool)
     else:
         raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")

@@ -23,11 +23,6 @@ from typing import (
     no_type_check,
 )
 
-from ...core.app_server_utils import (
-    _extract_thread_id,
-    _extract_thread_id_for_turn,
-    _extract_turn_id,
-)
 from ...core.circuit_breaker import CircuitBreaker
 from ...core.exceptions import (
     AppServerError,
@@ -37,6 +32,7 @@ from ...core.exceptions import (
 )
 from ...core.logging_utils import log_event, sanitize_log_value
 from ...core.retry import retry_transient
+from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
@@ -326,7 +322,7 @@ class CodexAppServerClient:
         result = await self.request("thread/start", params)
         if not isinstance(result, dict):
             raise CodexAppServerProtocolError("thread/start returned non-object result")
-        thread_id = _extract_thread_id(result)
+        thread_id = extract_thread_id(result)
         if thread_id and "id" not in result:
             result = dict(result)
             result["id"] = thread_id
@@ -340,7 +336,7 @@ class CodexAppServerClient:
             raise CodexAppServerProtocolError(
                 "thread/resume returned non-object result"
             )
-        resumed_id = _extract_thread_id(result)
+        resumed_id = extract_thread_id(result)
         if resumed_id and "id" not in result:
             result = dict(result)
             result["id"] = resumed_id
@@ -398,7 +394,7 @@ class CodexAppServerClient:
         result = await self.request("turn/start", params)
         if not isinstance(result, dict):
             raise CodexAppServerProtocolError("turn/start returned non-object result")
-        turn_id = _extract_turn_id(result)
+        turn_id = extract_turn_id(result)
         if not turn_id:
             raise CodexAppServerProtocolError("turn/start response missing turn id")
         self._register_turn_state(turn_id, thread_id)
@@ -427,7 +423,7 @@ class CodexAppServerClient:
         result = await self.request("review/start", params)
         if not isinstance(result, dict):
             raise CodexAppServerProtocolError("review/start returned non-object result")
-        turn_id = _extract_turn_id(result)
+        turn_id = extract_turn_id(result)
         if not turn_id:
             raise CodexAppServerProtocolError("review/start response missing turn id")
         self._register_turn_state(turn_id, thread_id)
@@ -1089,11 +1085,11 @@ class CodexAppServerClient:
         params = message.get("params") or {}
         handled = False
         if isinstance(method, str):
-            turn_id_hint = _extract_turn_id(params) or _extract_turn_id(
+            turn_id_hint = extract_turn_id(params) or extract_turn_id(
                 params.get("turn") if isinstance(params, dict) else None
             )
             if turn_id_hint:
-                thread_id_hint = _extract_thread_id_for_turn(params)
+                thread_id_hint = extract_thread_id_for_turn(params)
                 _key, state = await self._find_turn_state(
                     turn_id_hint, thread_id=thread_id_hint
                 )
@@ -1101,9 +1097,9 @@ class CodexAppServerClient:
                     state.last_event_at = time.monotonic()
                     state.last_method = method
         if method == "item/agentMessage/delta":
-            turn_id = _extract_turn_id(params)
+            turn_id = extract_turn_id(params)
             if turn_id:
-                thread_id = _extract_thread_id_for_turn(params)
+                thread_id = extract_thread_id_for_turn(params)
                 _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
                 if state is None:
                     if thread_id:
@@ -1121,13 +1117,13 @@ class CodexAppServerClient:
                 _record_raw_event(state, message)
             handled = True
         elif method == "item/completed":
-            turn_id = _extract_turn_id(params) or _extract_turn_id(
+            turn_id = extract_turn_id(params) or extract_turn_id(
                 params.get("item") if isinstance(params, dict) else None
             )
             if not turn_id:
                 handled = True
                 return
-            thread_id = _extract_thread_id_for_turn(params)
+            thread_id = extract_thread_id_for_turn(params)
             _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
@@ -1139,11 +1135,11 @@ class CodexAppServerClient:
             self._apply_item_completed(state, message, params)
             handled = True
         elif method == "turn/completed":
-            turn_id = _extract_turn_id(params)
+            turn_id = extract_turn_id(params)
             if not turn_id:
                 handled = True
                 return
-            thread_id = _extract_thread_id_for_turn(params)
+            thread_id = extract_thread_id_for_turn(params)
             _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
@@ -1155,11 +1151,11 @@ class CodexAppServerClient:
             self._apply_turn_completed(state, message, params)
             handled = True
         elif method == "error":
-            turn_id = _extract_turn_id(params)
+            turn_id = extract_turn_id(params)
             if not turn_id:
                 handled = True
                 return
-            thread_id = _extract_thread_id_for_turn(params)
+            thread_id = extract_thread_id_for_turn(params)
             _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
@@ -1819,7 +1815,7 @@ def _extract_agent_messages_from_container(
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
-            entry_turn_id = _extract_turn_id(entry)
+            entry_turn_id = extract_turn_id(entry)
             if entry_turn_id and target_turn_id and entry_turn_id != target_turn_id:
                 continue
             text = _extract_agent_message_text(entry)
@@ -1845,7 +1841,7 @@ def _extract_turn_snapshot_from_resume(
         nonlocal status
         if not isinstance(turn, dict):
             return False
-        if _extract_turn_id(turn) != target_turn_id:
+        if extract_turn_id(turn) != target_turn_id:
             return False
         if status is None:
             status = _extract_status_value(turn.get("status"))
@@ -1870,7 +1866,7 @@ def _extract_turn_snapshot_from_resume(
         thread_items = thread.get("items")
         if isinstance(thread_items, list):
             for item in thread_items:
-                if _extract_turn_id(item) != target_turn_id:
+                if extract_turn_id(item) != target_turn_id:
                     continue
                 text = _extract_agent_message_text(item)
                 if text:
@@ -1888,7 +1884,7 @@ def _extract_turn_snapshot_from_resume(
     items = payload.get("items")
     if isinstance(items, list):
         for item in items:
-            if _extract_turn_id(item) != target_turn_id:
+            if extract_turn_id(item) != target_turn_id:
                 continue
             text = _extract_agent_message_text(item)
             if text:

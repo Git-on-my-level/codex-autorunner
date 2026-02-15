@@ -2,6 +2,7 @@ import asyncio
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -51,3 +52,48 @@ async def test_get_client_touches_handle_before_prune(tmp_path: Path) -> None:
 
     assert closed == 0
     assert workspace_id in supervisor._handles
+
+
+@pytest.mark.anyio
+async def test_get_client_same_workspace_reuses_single_client_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeClient:
+        instances: list["FakeClient"] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.start_calls = 0
+            self.close_calls = 0
+            FakeClient.instances.append(self)
+
+        async def start(self) -> None:
+            self.start_calls += 1
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.app_server.supervisor.CodexAppServerClient",
+        FakeClient,
+    )
+
+    def env_builder(
+        _workspace_root: Path, _workspace_id: str, _state_dir: Path
+    ) -> dict[str, str]:
+        return {}
+
+    supervisor = WorkspaceAppServerSupervisor(
+        [sys.executable, "-c", "print('noop')"],
+        state_root=tmp_path,
+        env_builder=env_builder,
+    )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    client_one = await supervisor.get_client(workspace)
+    client_two = await supervisor.get_client(workspace)
+
+    assert client_one is client_two
+    assert len(FakeClient.instances) == 1
+    assert FakeClient.instances[0].start_calls == 1

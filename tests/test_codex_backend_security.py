@@ -1,6 +1,7 @@
 import json
 import logging
 from io import StringIO
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,7 +26,8 @@ async def test_run_turn_does_not_log_prompt_content():
     logger, stream, handler = _make_buffer_logger()
 
     backend = CodexAppServerBackend(
-        command=["echo", "test"],
+        supervisor=MagicMock(),
+        workspace_root=Path.cwd(),
         logger=logger,
     )
 
@@ -72,7 +74,8 @@ async def test_run_turn_events_does_not_log_prompt_content():
     logger, stream, handler = _make_buffer_logger()
 
     backend = CodexAppServerBackend(
-        command=["echo", "test"],
+        supervisor=MagicMock(),
+        workspace_root=Path.cwd(),
         logger=logger,
     )
 
@@ -121,7 +124,8 @@ async def test_multiple_secrets_not_leaked_in_logs():
     logger, stream, handler = _make_buffer_logger()
 
     backend = CodexAppServerBackend(
-        command=["echo", "test"],
+        supervisor=MagicMock(),
+        workspace_root=Path.cwd(),
         logger=logger,
     )
 
