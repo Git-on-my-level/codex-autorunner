@@ -15,7 +15,7 @@ SCHEMA_BINDINGS = {
     "RepoSnapshot": {
         "typescript": "HubRepo",
         "python": "RepoSnapshot",
-        "python_extra": {"mounted", "mount_error", "ticket_flow"},
+        "python_extra": {"mounted", "mount_error", "ticket_flow", "ticket_flow_display"},
     },
     "HubState": {"typescript": "HubData", "python": "HubState"},
 }
