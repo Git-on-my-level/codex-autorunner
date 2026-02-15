@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.pma_audit import PmaActionType
+from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditEntry, PmaAuditLog
 from codex_autorunner.core.pma_safety import (
     PmaSafetyChecker,
     PmaSafetyConfig,
@@ -16,6 +16,71 @@ from codex_autorunner.core.pma_safety import (
 @pytest.fixture
 def hub_root(tmp_path: Path) -> Path:
     return tmp_path / "hub"
+
+
+class TestPmaAuditEntry:
+    def test_fingerprint_generated(self) -> None:
+        entry = PmaAuditEntry(
+            action_type=PmaActionType.CHAT_STARTED,
+            agent="codex",
+            details={"message": "test"},
+        )
+        assert entry.entry_id
+        assert entry.fingerprint
+        assert len(entry.fingerprint) == 16
+
+
+class TestPmaAuditLog:
+    def test_append_creates_file(self, tmp_path: Path) -> None:
+        log = PmaAuditLog(tmp_path)
+        entry = PmaAuditEntry(
+            action_type=PmaActionType.CHAT_STARTED,
+            agent="codex",
+            details={"message": "test"},
+        )
+        entry_id = log.append(entry)
+        assert entry_id == entry.entry_id
+        assert log.path.exists()
+
+    def test_list_recent_returns_limited_entries(self, tmp_path: Path) -> None:
+        log = PmaAuditLog(tmp_path)
+        for i in range(5):
+            entry = PmaAuditEntry(
+                action_type=PmaActionType.CHAT_STARTED,
+                agent="codex",
+                details={"message": f"test-{i}"},
+            )
+            log.append(entry)
+        entries = log.list_recent(limit=3)
+        assert len(entries) == 3
+        assert entries[0].details["message"] == "test-2"
+
+    def test_count_fingerprint_returns_count(self, tmp_path: Path) -> None:
+        log = PmaAuditLog(tmp_path)
+        entry = PmaAuditEntry(
+            action_type=PmaActionType.CHAT_STARTED,
+            agent="codex",
+            details={"message": "test"},
+        )
+        fingerprint = entry.fingerprint
+        log.append(entry)
+        log.append(entry)
+        count = log.count_fingerprint(fingerprint)
+        assert count == 2
+
+    def test_prune_old_removes_excess_entries(self, tmp_path: Path) -> None:
+        log = PmaAuditLog(tmp_path)
+        for i in range(10):
+            entry = PmaAuditEntry(
+                action_type=PmaActionType.CHAT_STARTED,
+                agent="codex",
+                details={"message": f"test-{i}"},
+            )
+            log.append(entry)
+        pruned = log.prune_old(keep_last=5)
+        assert pruned == 5
+        entries = log.list_recent(limit=100)
+        assert len(entries) == 5
 
 
 @pytest.fixture
