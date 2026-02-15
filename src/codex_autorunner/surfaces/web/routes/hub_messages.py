@@ -286,6 +286,7 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                             "dispatch": latest["dispatch"],
                             "message": latest["dispatch"],
                             "files": latest.get("files") or [],
+                            "dispatch_actionable": True,
                         }
                     else:
                         fallback_dispatch = latest.get("dispatch") if latest else None
@@ -313,6 +314,7 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                             "available_actions": run_state.get(
                                 "recommended_actions", []
                             ),
+                            "dispatch_actionable": False,
                         }
 
                     item_type = str(item_payload.get("item_type") or "run_dispatch")
