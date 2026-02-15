@@ -46,7 +46,27 @@ def _seed_failed_run(repo_root: Path, run_id: str) -> None:
         store.update_flow_run_status(run_id, FlowRunStatus.FAILED)
 
 
-def _write_dispatch_history(repo_root: Path, run_id: str, seq: int) -> None:
+def _seed_completed_run(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
+
+
+def _write_dispatch_history(
+    repo_root: Path, run_id: str, seq: int, *, mode: str = "pause"
+) -> None:
     entry_dir = (
         repo_root
         / ".codex-autorunner"
@@ -57,7 +77,7 @@ def _write_dispatch_history(repo_root: Path, run_id: str, seq: int) -> None:
     )
     entry_dir.mkdir(parents=True, exist_ok=True)
     (entry_dir / "DISPATCH.md").write_text(
-        "---\nmode: pause\ntitle: Needs input\n---\n\nPlease review.\n",
+        f"---\nmode: {mode}\ntitle: Needs input\n---\n\nPlease review.\n",
         encoding="utf-8",
     )
 
@@ -152,6 +172,7 @@ def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
         assert items[0]["run_id"] == run_id
         assert items[0]["seq"] == 2
         assert items[0]["item_type"] == "run_dispatch"
+        assert items[0]["dispatch_actionable"] is True
         run_state = items[0].get("run_state") or {}
         assert run_state.get("state") == "paused"
         assert run_state.get("recommended_action")
@@ -173,6 +194,7 @@ def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> N
         item = items[0]
         assert item["item_type"] == "run_state_attention"
         assert item["run_id"] == run_id
+        assert item["dispatch_actionable"] is False
         assert (
             "paused without an actionable dispatch"
             in (item.get("reason") or "").lower()
@@ -227,10 +249,44 @@ def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env) -> None:
         assert item["item_type"] == "run_state_attention"
         assert item["run_id"] == run_id
         assert item["seq"] == 2
+        assert item["dispatch_actionable"] is False
         assert "unreadable dispatch metadata" in (item.get("reason") or "").lower()
         assert item.get("dispatch") is None
         run_state = item.get("run_state") or {}
         assert run_state.get("state") == "blocked"
+
+
+def test_hub_messages_treats_turn_summary_as_non_actionable(hub_env) -> None:
+    run_id = "12121212-1212-1212-1212-121212121212"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1, mode="turn_summary")
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["item_type"] == "run_state_attention"
+        assert item["next_action"] == "inspect_and_resume"
+        assert item["dispatch_actionable"] is False
+        assert (item.get("dispatch") or {}).get("mode") == "turn_summary"
+        assert "informational" in (item.get("reason") or "").lower()
+
+
+def test_hub_messages_hides_older_paused_run_when_newer_run_exists(hub_env) -> None:
+    older_run_id = "13131313-1313-1313-1313-131313131313"
+    newer_run_id = "14141414-1414-1414-1414-141414141414"
+    _seed_paused_run(hub_env.repo_root, older_run_id)
+    _write_dispatch_history(hub_env.repo_root, older_run_id, seq=1)
+    _seed_completed_run(hub_env.repo_root, newer_run_id)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        assert res.json()["items"] == []
 
 
 def test_hub_messages_dismiss_filters_and_persists(hub_env) -> None:
