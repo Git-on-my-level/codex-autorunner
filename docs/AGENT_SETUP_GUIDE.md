@@ -168,7 +168,11 @@ Run `car hub scan` to discover existing git repositories, or use `car hub clone`
 Check `.codex-autorunner/config.yml` or run `car doctor` for diagnostics.
 
 ### ticket_flow resume blocked or stale
-If `car flow ticket_flow resume` fails because another run is active, or run status shows stale worker metadata (`worker.status: absent` / `worker metadata missing`), prefer starting a fresh run:
+If `car flow ticket_flow resume` fails because another run is active, inspect that active run before creating a new one.
+
+If the conflicting run is healthy (`status: running`, `worker.status: alive`), resume or stop that run instead of using `--force-new`.
+
+Use `--force-new` only when the conflicting active run is confirmed stale (`worker.status: absent` / `worker metadata missing`):
 
 `car flow ticket_flow start --repo <path> --force-new`
 
