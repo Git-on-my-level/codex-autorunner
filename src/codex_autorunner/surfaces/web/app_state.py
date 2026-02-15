@@ -12,10 +12,6 @@ from typing import Any, Mapping, Optional
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import validate_agent_id
 from ...bootstrap import ensure_hub_car_shim
-from ...core.app_server_threads import (
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
-)
 from ...core.config import (
     AppServerConfig,
     ConfigError,
@@ -45,6 +41,10 @@ from ...integrations.app_server.client import ApprovalHandler, NotificationHandl
 from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from ...integrations.app_server.threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from ...tickets.replies import resolve_reply_paths
 from .hub_jobs import HubJobManager
 from .runner_manager import RunnerManager

@@ -14,10 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
-from ...core.app_server_threads import (
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
-)
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
 from ...core.ports.backend_orchestrator import (
@@ -25,6 +21,10 @@ from ...core.ports.backend_orchestrator import (
 )
 from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
+from ...integrations.app_server.threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from .codex_backend import CodexAppServerBackend
 from .opencode_backend import OpenCodeBackend
 from .wiring import AgentBackendFactory, BackendFactory

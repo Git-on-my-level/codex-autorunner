@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from .....agents.opencode.runtime import extract_session_id
-from .....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
+from .....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from .....manifest import load_manifest
 from ....app_server.client import (
     CodexAppServerClient,

@@ -28,11 +28,6 @@ from .....agents.opencode.runtime import (
     split_model_id,
 )
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
-from .....core.app_server_threads import (
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
-    AppServerThreadRegistry,
-)
 from .....core.coercion import coerce_int
 from .....core.config import load_repo_config
 from .....core.context_awareness import CAR_AWARENESS_BLOCK
@@ -41,6 +36,11 @@ from .....core.logging_utils import log_event
 from .....core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
+from .....integrations.app_server.threads import (
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
+)
 from .....integrations.github.service import GitHubService
 from ....app_server.client import (
     CodexAppServerClient,
