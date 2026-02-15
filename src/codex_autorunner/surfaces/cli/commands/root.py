@@ -37,6 +37,7 @@ from ....core.usage import (
 from ....core.utils import RepoNotFoundError, default_editor, find_repo_root
 from ....manifest import load_manifest
 from ...web.app import create_hub_app
+from .utils import request_json
 
 logger = logging.getLogger("codex_autorunner.cli")
 
@@ -168,40 +169,6 @@ def _enforce_bind_auth(host: str, token_env: str) -> None:
     _raise_exit(
         "Refusing to bind to a non-loopback host without server.auth_token_env set."
     )
-
-
-def _request_json(
-    method: str,
-    url: str,
-    payload: Optional[dict] = None,
-    token_env: Optional[str] = None,
-) -> dict:
-    headers = None
-    if token_env:
-        token = _require_auth_token(token_env)
-        headers = {"Authorization": f"Bearer {token}"}
-    response = httpx.request(
-        method,
-        url,
-        json=payload,
-        timeout=2.0,
-        headers=headers,
-        follow_redirects=True,
-    )
-    response.raise_for_status()
-    try:
-        data = response.json()
-    except ValueError as exc:
-        preview = ""
-        try:
-            preview = (response.text or "")[:200].strip()
-        except Exception:
-            preview = ""
-        hint = f" body_preview={preview!r}" if preview else ""
-        raise httpx.HTTPError(
-            f"Non-JSON response from {response.url!s} (status={response.status_code}).{hint}"
-        ) from exc
-    return data if isinstance(data, dict) else {}
 
 
 def _has_nested_git(path: Path) -> bool:
@@ -388,7 +355,7 @@ def register_root_commands(app: typer.Typer) -> None:
         payload = None
         source = "server"
         try:
-            payload = _request_json("GET", url, token_env=config.server_auth_token_env)
+            payload = request_json("GET", url, token_env=config.server_auth_token_env)
         except (
             httpx.HTTPError,
             httpx.ConnectError,
@@ -460,7 +427,7 @@ def register_root_commands(app: typer.Typer) -> None:
         path = _resolve_repo_api_path(engine.repo_root, hub, "/api/sessions/stop")
         url = _build_server_url(config, path)
         try:
-            response = _request_json(
+            response = request_json(
                 "POST", url, payload, token_env=config.server_auth_token_env
             )
             stopped_id = response.get("session_id", payload.get("session_id", ""))

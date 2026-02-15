@@ -100,8 +100,8 @@ def _load_active_context_state(hub_root: Path) -> dict[str, Any]:
         payload = json.loads(raw)
         if isinstance(payload, dict):
             return payload
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Could not load active context state: %s", exc)
     return {}
 
 
@@ -148,7 +148,8 @@ def maybe_auto_prune_active_context(
     context_log_path = docs_dir / "context_log.md"
     try:
         active_content = active_context_path.read_text(encoding="utf-8")
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not read active context file: %s", exc)
         return None
     line_count = len(active_content.splitlines())
     if line_count <= max_lines:
@@ -161,7 +162,8 @@ def maybe_auto_prune_active_context(
     try:
         with context_log_path.open("a", encoding="utf-8") as f:
             f.write(snapshot_content)
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not write to context log: %s", exc)
         return None
 
     pruned_content = (
@@ -170,7 +172,8 @@ def maybe_auto_prune_active_context(
     )
     try:
         atomic_write(active_context_path, pruned_content)
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not write pruned active context: %s", exc)
         return None
 
     state = {
@@ -193,8 +196,8 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
     """
     try:
         ensure_pma_docs(hub_root)
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Could not ensure PMA docs: %s", exc)
 
     docs_max_chars = PMA_DOCS_MAX_CHARS
     active_context_max_lines = PMA_ACTIVE_CONTEXT_MAX_LINES
@@ -210,8 +213,8 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
             context_log_tail_lines = int(
                 getattr(pma_cfg, "context_log_tail_lines", context_log_tail_lines)
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Could not load PMA config: %s", exc)
 
     auto_prune_state = maybe_auto_prune_active_context(
         hub_root,
@@ -226,7 +229,8 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
     def _read(path: Path) -> str:
         try:
             return path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as exc:
+            _logger.warning("Could not read file %s: %s", path, exc)
             return ""
 
     agents = _truncate(_read(agents_path), docs_max_chars)
@@ -302,7 +306,8 @@ def _load_template_scan_summary(
                 str(payload.get("scanned_at", "")), max_field_chars
             ),
         }
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not load template scan summary: %s", exc)
         return None
 
 
@@ -370,11 +375,12 @@ def load_pma_prompt(hub_root: Path) -> str:
     path = pma_doc_path(hub_root, "prompt.md")
     try:
         ensure_pma_docs(hub_root)
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Could not ensure PMA docs for prompt: %s", exc)
     try:
         return path.read_text(encoding="utf-8")
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not read prompt file: %s", exc)
         return ""
 
 
@@ -594,8 +600,8 @@ def format_pma_prompt(
     if hub_root is not None:
         try:
             pma_docs = load_pma_workspace_docs(hub_root)
-        except Exception:
-            pma_docs = None
+        except Exception as exc:
+            _logger.warning("Could not load PMA workspace docs: %s", exc)
 
     prompt = f"{base_prompt}\n\n"
     prompt += (
@@ -688,7 +694,8 @@ def _latest_reply_history_seq(
             if len(name) == 4 and name.isdigit():
                 latest = max(latest, int(name))
         return latest
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not get latest reply history seq: %s", exc)
         return 0
 
 
@@ -821,7 +828,8 @@ def _latest_dispatch(
             "errors": [],
             "files": _list_files(selected_dir),
         }
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not get latest dispatch: %s", exc)
         return None
 
 
@@ -880,7 +888,8 @@ def build_ticket_flow_run_state(
         try:
             health = check_worker_health(repo_root, run_id)
             dead_worker = health.status in {"dead", "invalid", "mismatch"}
-        except Exception:
+        except Exception as exc:
+            _logger.warning("Could not check worker health: %s", exc)
             health = None
             dead_worker = False
 
@@ -889,7 +898,8 @@ def build_ticket_flow_run_state(
     if dead_worker:
         try:
             crash_info = read_worker_crash_info(repo_root, run_id)
-        except Exception:
+        except Exception as exc:
+            _logger.warning("Could not read worker crash info: %s", exc)
             crash_info = None
         if isinstance(crash_info, dict):
             parts: list[str] = []
@@ -1069,7 +1079,8 @@ def _gather_inbox(
     messages: list[dict[str, Any]] = []
     try:
         snapshots = supervisor.list_repos()
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Could not list repos for inbox: %s", exc)
         return []
     for snap in snapshots:
         if not (snap.initialized and snap.exists_on_disk):

@@ -279,6 +279,7 @@ class FlowController:
                 return None
             return f"{head}\n{status}"
         except Exception:
+            _logger.exception("Failed to get git state")
             return None
 
     def _has_new_user_reply_signal(
