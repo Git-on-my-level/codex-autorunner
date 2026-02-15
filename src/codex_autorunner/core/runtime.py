@@ -17,12 +17,13 @@ from .notifications import NotificationManager
 from .run_index import RunIndexStore
 from .runner_state import LockError, RunnerStateManager
 from .state import now_iso
+from .state_roots import REPO_STATE_DIR, resolve_repo_state_root
 from .utils import RepoNotFoundError, find_repo_root
 
 _logger = logging.getLogger(__name__)
 
-PMA_STATE_FILE = ".codex-autorunner/pma/state.json"
-PMA_QUEUE_DIR = ".codex-autorunner/pma/queue"
+PMA_STATE_FILE = f"{REPO_STATE_DIR}/pma/state.json"
+PMA_QUEUE_DIR = f"{REPO_STATE_DIR}/pma/queue"
 STUCK_LANE_THRESHOLD_MINUTES = 60
 
 
@@ -699,7 +700,7 @@ class RuntimeContext:
         self._backend_orchestrator = backend_orchestrator
 
         # Paths
-        self.state_root = repo_root / ".codex-autorunner"
+        self.state_root = resolve_repo_state_root(repo_root)
         self.state_path = self.state_root / "state.sqlite3"
         self.log_path = self.state_root / "codex-autorunner.log"
         self.lock_path = self.state_root / "lock"
