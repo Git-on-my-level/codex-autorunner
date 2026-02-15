@@ -206,7 +206,10 @@ class OpenCodeSupervisor:
             )
             try:
                 registry_root = self._registry_root(handle.workspace_root)
-                delete_process_record(registry_root, _PROCESS_KIND, handle.workspace_id)
+                if handle.process is not None:
+                    delete_process_record(
+                        registry_root, _PROCESS_KIND, handle.workspace_id
+                    )
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -325,6 +328,7 @@ class OpenCodeSupervisor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
+            start_new_session=True,
         )
         handle.process = process
         try:
@@ -407,6 +411,7 @@ class OpenCodeSupervisor:
 
         try:
             await self._attach_to_base_url(handle, record.base_url)
+            self._refresh_registry_ownership(handle, record)
             log_event(
                 self._logger,
                 logging.INFO,
@@ -532,6 +537,32 @@ class OpenCodeSupervisor:
                 self._logger,
                 logging.WARNING,
                 "opencode.registry.write_failed",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                exc=exc,
+            )
+
+    def _refresh_registry_ownership(
+        self, handle: OpenCodeHandle, record: ProcessRecord
+    ) -> None:
+        updated = ProcessRecord(
+            kind=record.kind,
+            workspace_id=record.workspace_id,
+            pid=record.pid,
+            pgid=record.pgid,
+            base_url=record.base_url,
+            command=record.command,
+            owner_pid=os.getpid(),
+            started_at=record.started_at,
+            metadata=record.metadata,
+        )
+        try:
+            write_process_record(self._registry_root(handle.workspace_root), updated)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.registry.refresh_failed",
                 workspace_id=handle.workspace_id,
                 workspace_root=str(handle.workspace_root),
                 exc=exc,

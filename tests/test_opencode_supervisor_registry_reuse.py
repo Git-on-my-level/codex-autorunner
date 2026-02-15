@@ -109,6 +109,7 @@ async def test_ensure_started_reuses_healthy_registry_record(
     )
     start_calls: list[str] = []
     attach_calls: list[str] = []
+    refresh_calls: list[ProcessRecord] = []
 
     async def _fake_start_process(_handle: OpenCodeHandle) -> None:
         start_calls.append("spawned")
@@ -120,18 +121,24 @@ async def test_ensure_started_reuses_healthy_registry_record(
         _handle.started = True
         _handle.openapi_spec = {"paths": {"/global/health": {}}}
 
+    def _capture_refresh(_handle: OpenCodeHandle, record: ProcessRecord) -> None:
+        refresh_calls.append(record)
+
     monkeypatch.setattr(
         supervisor_module, "read_process_record", lambda *_a, **_k: registry_record
     )
     monkeypatch.setattr(supervisor, "_pid_is_running", lambda _pid: True)
     monkeypatch.setattr(supervisor, "_attach_to_base_url", _fake_attach)
     monkeypatch.setattr(supervisor, "_start_process", _fake_start_process)
+    monkeypatch.setattr(supervisor, "_refresh_registry_ownership", _capture_refresh)
 
     await supervisor._ensure_started(handle)
 
     assert attach_calls == ["http://127.0.0.1:9001"]
     assert start_calls == []
     assert handle.started is True
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0].workspace_id == "ws-1"
 
 
 @pytest.mark.anyio
@@ -193,11 +200,44 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
 
 
 @pytest.mark.anyio
-async def test_close_handle_deletes_registry_record_best_effort(
+async def test_close_handle_skips_delete_when_process_not_owned(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     supervisor = OpenCodeSupervisor(["opencode", "serve"])
     handle = _handle(tmp_path)
+    assert handle.process is None
+    delete_calls: list[tuple[Path, str, str]] = []
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "delete_process_record",
+        lambda repo_root, kind, key: delete_calls.append((repo_root, kind, key))
+        or True,
+    )
+
+    await supervisor._close_handle(handle, reason="close_all")
+
+    assert delete_calls == []
+
+
+@pytest.mark.anyio
+async def test_close_handle_deletes_registry_record_when_process_owned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+
+    class _FakeProcess:
+        pid = 123
+        returncode = None
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+    handle.process = _FakeProcess()
     delete_calls: list[tuple[Path, str, str]] = []
 
     monkeypatch.setattr(
