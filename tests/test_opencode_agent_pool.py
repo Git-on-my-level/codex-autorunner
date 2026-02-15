@@ -6,7 +6,8 @@ import pytest
 
 from codex_autorunner.agents.opencode.constants import DEFAULT_TICKET_MODEL
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput, split_model_id
-from codex_autorunner.tickets.agent_pool import AgentPool, AgentTurnRequest
+from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
+from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 
 class _StubOpencodeClient:
@@ -109,13 +110,14 @@ async def test_opencode_turn_respects_model_override(monkeypatch, tmp_path: Path
         return OpenCodeTurnOutput(text="ok")
 
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.collect_opencode_output", _fake_collect
+        "codex_autorunner.integrations.agents.agent_pool_impl.collect_opencode_output",
+        _fake_collect,
     )
 
     cfg = SimpleNamespace(
         app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=42.0)
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._opencode_supervisor = supervisor
 
     result = await pool._run_opencode_turn(
@@ -152,13 +154,14 @@ async def test_opencode_turn_falls_back_to_default_model(monkeypatch, tmp_path: 
         return OpenCodeTurnOutput(text="ok")
 
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.collect_opencode_output", _fake_collect
+        "codex_autorunner.integrations.agents.agent_pool_impl.collect_opencode_output",
+        _fake_collect,
     )
 
     cfg = SimpleNamespace(
         app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=None)
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._opencode_supervisor = supervisor
 
     await pool._run_opencode_turn(
@@ -192,13 +195,14 @@ async def test_opencode_turn_with_additional_messages(monkeypatch, tmp_path: Pat
         return OpenCodeTurnOutput(text="combined response")
 
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.collect_opencode_output", _fake_collect
+        "codex_autorunner.integrations.agents.agent_pool_impl.collect_opencode_output",
+        _fake_collect,
     )
 
     cfg = SimpleNamespace(
         app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=None)
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._opencode_supervisor = supervisor
 
     additional_messages = [
@@ -235,13 +239,14 @@ async def test_opencode_turn_filters_empty_additional_messages(
         return OpenCodeTurnOutput(text="ok")
 
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.collect_opencode_output", _fake_collect
+        "codex_autorunner.integrations.agents.agent_pool_impl.collect_opencode_output",
+        _fake_collect,
     )
 
     cfg = SimpleNamespace(
         app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=None)
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._opencode_supervisor = supervisor
 
     additional_messages = [
@@ -277,13 +282,14 @@ async def test_opencode_turn_handles_non_dict_messages(monkeypatch, tmp_path: Pa
         return OpenCodeTurnOutput(text="ok")
 
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.collect_opencode_output", _fake_collect
+        "codex_autorunner.integrations.agents.agent_pool_impl.collect_opencode_output",
+        _fake_collect,
     )
 
     cfg = SimpleNamespace(
         app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=None)
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._opencode_supervisor = supervisor
 
     additional_messages = [
@@ -321,13 +327,14 @@ async def test_opencode_turn_applies_model_to_additional_messages(
         return OpenCodeTurnOutput(text="ok")
 
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.collect_opencode_output", _fake_collect
+        "codex_autorunner.integrations.agents.agent_pool_impl.collect_opencode_output",
+        _fake_collect,
     )
 
     cfg = SimpleNamespace(
         app_server=None, opencode=SimpleNamespace(session_stall_timeout_seconds=None)
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._opencode_supervisor = supervisor
 
     additional_messages = [{"text": "msg1"}, {"text": "msg2"}]
@@ -376,7 +383,7 @@ async def test_codex_turn_with_additional_messages(monkeypatch, tmp_path: Path):
         ),
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._app_server_supervisor = supervisor
 
     additional_messages = [
@@ -432,7 +439,7 @@ async def test_codex_turn_filters_empty_additional_messages(
         ),
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._app_server_supervisor = supervisor
 
     additional_messages = [
@@ -486,7 +493,7 @@ async def test_codex_turn_handles_non_dict_messages(monkeypatch, tmp_path: Path)
         ),
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._app_server_supervisor = supervisor
 
     additional_messages = [
@@ -540,7 +547,7 @@ async def test_codex_turn_without_additional_messages(monkeypatch, tmp_path: Pat
         ),
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._app_server_supervisor = supervisor
 
     await pool._run_codex_turn(

@@ -89,6 +89,7 @@ from ...core.utils import (
 )
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents import build_backend_orchestrator
+from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -4172,7 +4173,7 @@ def _ticket_flow_controller(
     engine: RuntimeContext,
 ) -> tuple[FlowController, AgentPool]:
     db_path, artifacts_root, _ = _ticket_flow_paths(engine)
-    agent_pool = AgentPool(engine.config)
+    agent_pool = build_agent_pool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()
     controller = FlowController(
@@ -4268,7 +4269,7 @@ def flow_worker(
             if flow_type == "pr_flow":
                 _raise_exit("PR flow is no longer supported. Use ticket_flow instead.")
             if flow_type == "ticket_flow":
-                agent_pool = AgentPool(engine.config)
+                agent_pool = build_agent_pool(engine.config)
                 return build_ticket_flow_definition(agent_pool=agent_pool)
             _raise_exit(f"Unknown flow type for run {normalized_run_id}: {flow_type}")
             return None
@@ -4336,7 +4337,7 @@ def flow_worker(
         finally:
             if agent_pool is not None:
                 try:
-                    await agent_pool.close()
+                    await agent_pool.close_all()
                 except Exception:
                     typer.echo("Failed to close agent pool cleanly", err=True)
 
@@ -4444,7 +4445,7 @@ You are the first ticket in a new ticket_flow run.
         _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
     finally:
         controller.shutdown()
-        asyncio.run(agent_pool.close())
+        asyncio.run(agent_pool.close_all())
 
     typer.echo(f"Started ticket_flow run: {run_id}")
     typer.echo(
@@ -4558,7 +4559,7 @@ def ticket_flow_start(
         _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
     finally:
         controller.shutdown()
-        asyncio.run(agent_pool.close())
+        asyncio.run(agent_pool.close_all())
 
     typer.echo(f"Started ticket_flow run: {run_id}")
     typer.echo(
@@ -4679,7 +4680,7 @@ def ticket_flow_resume(
                 typer.echo(f"Archived {cleanup_count} stale run(s).")
     finally:
         controller.shutdown()
-        asyncio.run(agent_pool.close())
+        asyncio.run(agent_pool.close_all())
 
     typer.echo(f"Resumed ticket_flow run: {updated.id}")
     typer.echo(
@@ -4717,7 +4718,7 @@ def ticket_flow_stop(
         updated = asyncio.run(controller.stop_flow(normalized_run_id))
     finally:
         controller.shutdown()
-        asyncio.run(agent_pool.close())
+        asyncio.run(agent_pool.close_all())
 
     typer.echo(f"Stop requested for run: {updated.id} (status={updated.status.value})")
 

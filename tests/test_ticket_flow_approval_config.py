@@ -4,11 +4,12 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.core.config import DEFAULT_REPO_CONFIG, _parse_app_server_config
+from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.integrations.app_server.client import TurnResult
 from codex_autorunner.integrations.app_server.supervisor import (
     WorkspaceAppServerSupervisor,
 )
-from codex_autorunner.tickets.agent_pool import AgentPool, AgentTurnRequest
+from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 
 class _DummyTurnHandle:
@@ -67,7 +68,7 @@ async def test_agent_pool_respects_ticket_flow_approval_defaults(
         return sup
 
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.WorkspaceAppServerSupervisor",
+        "codex_autorunner.integrations.agents.agent_pool_impl.WorkspaceAppServerSupervisor",
         _capture_supervisor,
     )
 
@@ -79,7 +80,7 @@ async def test_agent_pool_respects_ticket_flow_approval_defaults(
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
         ticket_flow={"approval_mode": "safe", "default_approval_decision": "cancel"},
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
 
     result = await pool._run_codex_turn(
         AgentTurnRequest(agent_id="codex", prompt="hi", workspace_root=tmp_path)
@@ -105,7 +106,7 @@ async def test_agent_pool_uses_yolo_policy_for_ticket_flow(monkeypatch, tmp_path
     )
     # Avoid creating new supervisor inside AgentPool.
     monkeypatch.setattr(
-        "codex_autorunner.tickets.agent_pool.WorkspaceAppServerSupervisor",
+        "codex_autorunner.integrations.agents.agent_pool_impl.WorkspaceAppServerSupervisor",
         lambda *a, **k: supervisor,
     )
 
@@ -117,7 +118,7 @@ async def test_agent_pool_uses_yolo_policy_for_ticket_flow(monkeypatch, tmp_path
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
         ticket_flow={"approval_mode": "yolo", "default_approval_decision": "accept"},
     )
-    pool = AgentPool(cfg)  # type: ignore[arg-type]
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
 
     await pool._run_codex_turn(
         AgentTurnRequest(agent_id="codex", prompt="hi", workspace_root=tmp_path)
