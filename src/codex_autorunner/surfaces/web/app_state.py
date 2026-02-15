@@ -30,6 +30,7 @@ from ...core.config import (
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import RuntimeContext
+from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
 from ...core.utils import atomic_write
 from ...integrations.agents import build_backend_orchestrator
@@ -70,6 +71,7 @@ class AppContext:
     app_server_events: AppServerEventBuffer
     opencode_supervisor: Optional[OpenCodeSupervisor]
     opencode_prune_interval: Optional[float]
+    runtime_services: RuntimeServices
     voice_config: Any
     voice_missing_reason: Optional[str]
     voice_service: Optional[Any]
@@ -100,6 +102,7 @@ class HubAppContext:
     app_server_events: AppServerEventBuffer
     opencode_supervisor: Optional[OpenCodeSupervisor]
     opencode_prune_interval: Optional[float]
+    runtime_services: RuntimeServices
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
@@ -592,6 +595,10 @@ def build_app_context(
         opencode_prune_interval = _app_server_prune_interval(
             config.app_server.idle_ttl_seconds
         )
+    runtime_services = RuntimeServices(
+        app_server_supervisor=app_server_supervisor,
+        opencode_supervisor=opencode_supervisor,
+    )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
         voice_service = None
@@ -696,6 +703,7 @@ def build_app_context(
         app_server_events=app_server_events,
         opencode_supervisor=opencode_supervisor,
         opencode_prune_interval=opencode_prune_interval,
+        runtime_services=runtime_services,
         voice_config=voice_config,
         voice_missing_reason=voice_missing_reason,
         voice_service=voice_service,
@@ -728,6 +736,7 @@ def apply_app_context(app, context: AppContext) -> None:
     app.state.app_server_events = context.app_server_events
     app.state.opencode_supervisor = context.opencode_supervisor
     app.state.opencode_prune_interval = context.opencode_prune_interval
+    app.state.runtime_services = context.runtime_services
     app.state.voice_config = context.voice_config
     app.state.voice_missing_reason = context.voice_missing_reason
     app.state.voice_service = context.voice_service
@@ -839,6 +848,10 @@ def build_hub_context(
         opencode_prune_interval = _app_server_prune_interval(
             config.app_server.idle_ttl_seconds
         )
+    runtime_services = RuntimeServices(
+        app_server_supervisor=app_server_supervisor,
+        opencode_supervisor=opencode_supervisor,
+    )
     static_dir, static_context = materialize_static_assets(
         config.static_assets.cache_root,
         max_cache_entries=config.static_assets.max_cache_entries,
@@ -868,6 +881,7 @@ def build_hub_context(
         app_server_events=app_server_events,
         opencode_supervisor=opencode_supervisor,
         opencode_prune_interval=opencode_prune_interval,
+        runtime_services=runtime_services,
         static_dir=static_dir,
         static_assets_context=static_context,
         asset_version=asset_version(static_dir),
@@ -886,6 +900,7 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.app_server_events = context.app_server_events
     app.state.opencode_supervisor = context.opencode_supervisor
     app.state.opencode_prune_interval = context.opencode_prune_interval
+    app.state.runtime_services = context.runtime_services
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version

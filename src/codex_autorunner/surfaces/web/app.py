@@ -188,28 +188,42 @@ def create_hub_app(
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             await mount_manager.stop_repo_mounts()
-            app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
-            if app_server_supervisor is not None:
+            runtime_services = getattr(app.state, "runtime_services", None)
+            if runtime_services is not None:
                 try:
-                    await app_server_supervisor.close_all()
+                    await runtime_services.close()
                 except Exception as exc:
                     safe_log(
                         app.state.logger,
                         logging.WARNING,
-                        "Hub app-server shutdown failed",
+                        "Hub runtime services shutdown failed",
                         exc,
                     )
-            opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
-            if opencode_supervisor is not None:
-                try:
-                    await opencode_supervisor.close_all()
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "Hub opencode shutdown failed",
-                        exc,
-                    )
+            else:
+                app_server_supervisor = getattr(
+                    app.state, "app_server_supervisor", None
+                )
+                if app_server_supervisor is not None:
+                    try:
+                        await app_server_supervisor.close_all()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub app-server shutdown failed",
+                            exc,
+                        )
+                opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
+                if opencode_supervisor is not None:
+                    try:
+                        await opencode_supervisor.close_all()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub opencode shutdown failed",
+                            exc,
+                        )
             static_context = getattr(app.state, "static_assets_context", None)
             if static_context is not None:
                 static_context.close()
