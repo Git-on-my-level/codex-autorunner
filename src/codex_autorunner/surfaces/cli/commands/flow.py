@@ -532,12 +532,13 @@ def register_flow_commands(
         _artifacts_root = artifacts_root
         shutdown_event = threading.Event()
 
-        def _write_exit_info() -> None:
+        def _write_exit_info(*, shutdown_intent: bool = False) -> None:
             try:
                 write_worker_exit_info(
                     _repo_root,
                     normalized_run_id,
                     returncode=exit_code_holder[0] or None,
+                    shutdown_intent=shutdown_intent,
                     artifacts_root=_artifacts_root,
                 )
             except Exception:

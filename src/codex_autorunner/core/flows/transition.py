@@ -60,7 +60,19 @@ def resolve_flow_transition(
 
         # A dead worker for a RUNNING flow is always abnormal, even if stale
         # ticket_engine state still says "paused" from a prior cycle.
+        # EXCEPTION: if shutdown_intent is True, the worker received SIGTERM/SIGINT
+        # and intended to shut down gracefully - treat as STOPPED instead of FAILED.
         if not health.is_alive:
+            if getattr(health, "shutdown_intent", False):
+                state = ensure_reason_summary(
+                    state, status=FlowRunStatus.STOPPED, default="Worker stopped"
+                )
+                return TransitionDecision(
+                    status=FlowRunStatus.STOPPED,
+                    finished_at=now,
+                    state=state,
+                    note="worker-shutdown-intent",
+                )
             new_status = FlowRunStatus.FAILED
             state = ensure_reason_summary(
                 state, status=new_status, default="Worker died"
