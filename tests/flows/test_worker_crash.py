@@ -234,3 +234,43 @@ def test_check_worker_health_reads_shutdown_intent(monkeypatch, tmp_path: Path) 
     assert health.status == "dead"
     assert health.shutdown_intent is True
     assert health.exit_code == -15
+
+
+def test_write_worker_exit_info_preserves_existing_shutdown_intent(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path
+    run_id = "723e4567-e89b-12d3-a456-426614174000"
+
+    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    from codex_autorunner.core.flows.worker_process import (
+        _worker_metadata_path,
+        _write_worker_metadata,
+    )
+
+    metadata_path = _worker_metadata_path(artifacts_dir)
+    _write_worker_metadata(metadata_path, 12347, ["python", "-m", "test"], repo_root)
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-15,
+        shutdown_intent=True,
+    )
+
+    exit_path = artifacts_dir / "worker.exit.json"
+    assert exit_path.exists()
+    payload = json.loads(exit_path.read_text(encoding="utf-8"))
+    assert payload["shutdown_intent"] is True
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-15,
+        shutdown_intent=False,
+    )
+
+    payload = json.loads(exit_path.read_text(encoding="utf-8"))
+    assert payload["shutdown_intent"] is True

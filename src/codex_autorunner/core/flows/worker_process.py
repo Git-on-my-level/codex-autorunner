@@ -137,10 +137,21 @@ def write_worker_exit_info(
         )
     except Exception:
         metadata = {}
+
+    existing_shutdown_intent = False
+    exit_path = _worker_exit_path(artifacts_dir)
+    if not shutdown_intent and exit_path.exists():
+        try:
+            existing = json.loads(exit_path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict) and existing.get("shutdown_intent") is True:
+                existing_shutdown_intent = True
+        except Exception:
+            pass
+
     data = {
         "run_id": normalized_run_id,
         "returncode": returncode,
-        "shutdown_intent": shutdown_intent,
+        "shutdown_intent": shutdown_intent or existing_shutdown_intent,
         "captured_at": time.time(),
         "pid": metadata.get("pid"),
         "spawned_at": metadata.get("spawned_at"),
@@ -148,9 +159,7 @@ def write_worker_exit_info(
         "stdout_tail": _tail_file(artifacts_dir / "worker.out.log"),
     }
     try:
-        _worker_exit_path(artifacts_dir).write_text(
-            json.dumps(data, indent=2), encoding="utf-8"
-        )
+        exit_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception:
         pass
 
