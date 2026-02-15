@@ -8,8 +8,10 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.reconciler import reconcile_flow_run
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import (
+    check_worker_health,
     read_worker_crash_info,
     write_worker_crash_info,
+    write_worker_exit_info,
 )
 
 
@@ -139,3 +141,136 @@ def test_reconcile_paused_dead_worker_creates_crash_dispatch(
 
     artifacts = store.get_artifacts(run_id)
     assert any(artifact.kind == "worker_crash" for artifact in artifacts)
+
+
+def test_write_worker_exit_info_with_shutdown_intent(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    run_id = "423e4567-e89b-12d3-a456-426614174000"
+
+    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    from codex_autorunner.core.flows.worker_process import (
+        _worker_metadata_path,
+        _write_worker_metadata,
+    )
+
+    metadata_path = _worker_metadata_path(artifacts_dir)
+    _write_worker_metadata(metadata_path, 12345, ["python", "-m", "test"], repo_root)
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-15,
+        shutdown_intent=True,
+    )
+
+    exit_path = artifacts_dir / "worker.exit.json"
+    assert exit_path.exists()
+    payload = json.loads(exit_path.read_text(encoding="utf-8"))
+    assert payload["returncode"] == -15
+    assert payload["shutdown_intent"] is True
+
+
+def test_write_worker_exit_info_without_shutdown_intent(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    run_id = "523e4567-e89b-12d3-a456-426614174000"
+
+    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    from codex_autorunner.core.flows.worker_process import (
+        _worker_metadata_path,
+        _write_worker_metadata,
+    )
+
+    metadata_path = _worker_metadata_path(artifacts_dir)
+    _write_worker_metadata(metadata_path, 12346, ["python", "-m", "test"], repo_root)
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=1,
+        shutdown_intent=False,
+    )
+
+    exit_path = artifacts_dir / "worker.exit.json"
+    assert exit_path.exists()
+    payload = json.loads(exit_path.read_text(encoding="utf-8"))
+    assert payload["returncode"] == 1
+    assert payload["shutdown_intent"] is False
+
+
+def test_check_worker_health_reads_shutdown_intent(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path
+    run_id = "623e4567-e89b-12d3-a456-426614174000"
+
+    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    from codex_autorunner.core.flows.worker_process import (
+        _worker_metadata_path,
+        _write_worker_metadata,
+    )
+
+    metadata_path = _worker_metadata_path(artifacts_dir)
+    _write_worker_metadata(metadata_path, 99999, ["python", "-m", "test"], repo_root)
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-15,
+        shutdown_intent=True,
+    )
+
+    def _fake_pid_running(pid: int) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_process._pid_is_running", _fake_pid_running
+    )
+
+    health = check_worker_health(repo_root, run_id)
+    assert health.status == "dead"
+    assert health.shutdown_intent is True
+    assert health.exit_code == -15
+
+
+def test_write_worker_exit_info_preserves_existing_shutdown_intent(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path
+    run_id = "723e4567-e89b-12d3-a456-426614174000"
+
+    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    from codex_autorunner.core.flows.worker_process import (
+        _worker_metadata_path,
+        _write_worker_metadata,
+    )
+
+    metadata_path = _worker_metadata_path(artifacts_dir)
+    _write_worker_metadata(metadata_path, 12347, ["python", "-m", "test"], repo_root)
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-15,
+        shutdown_intent=True,
+    )
+
+    exit_path = artifacts_dir / "worker.exit.json"
+    assert exit_path.exists()
+    payload = json.loads(exit_path.read_text(encoding="utf-8"))
+    assert payload["shutdown_intent"] is True
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-15,
+        shutdown_intent=False,
+    )
+
+    payload = json.loads(exit_path.read_text(encoding="utf-8"))
+    assert payload["shutdown_intent"] is True
