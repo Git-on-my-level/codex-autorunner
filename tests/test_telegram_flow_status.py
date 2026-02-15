@@ -341,6 +341,103 @@ class _FlowWorktreeTargetHandler(FlowCommands):
         self.sent.append(text)
 
 
+class _FlowManifestAliasHandler(FlowCommands):
+    def __init__(self, repo_root: Path) -> None:
+        self._store = _TopicStoreStub(None)
+        self._repo_root = repo_root.resolve()
+        self._manifest_path = repo_root / "manifest.yml"
+        self._hub_root = repo_root
+        self.status_calls: list[tuple[Path, list[str], str | None]] = []
+        self.sent: list[str] = []
+
+    async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
+        return "topic"
+
+    def _resolve_workspace(self, arg: str) -> tuple[str, str] | None:
+        if arg == "codex-autorunner--process-opencode-leak-remediation":
+            return str(self._repo_root), arg
+        if arg == "codex-autorunner--architecture-boundary-refactors":
+            return str(self._repo_root.parent / "other"), arg
+        return None
+
+    async def _handle_flow_status_action(
+        self,
+        _message: TelegramMessage,
+        repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: str | None = None,
+    ) -> None:
+        self.status_calls.append((repo_root, argv, repo_id))
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: int | None = None,
+        reply_to: int | None = None,
+        reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
+        self.sent.append(text)
+
+
+class _FlowActionTokenPriorityHandler(FlowCommands):
+    def __init__(self, repo_root: Path, workspace_root: Path) -> None:
+        self._store = _TopicStoreStub(
+            SimpleNamespace(workspace_path=str(workspace_root), pma_enabled=False)
+        )
+        self._repo_root = repo_root.resolve()
+        self._manifest_path = repo_root / "manifest.yml"
+        self._hub_root = repo_root
+        self.runs_calls: list[tuple[Path, list[str], str | None]] = []
+        self.status_calls: list[tuple[Path, list[str], str | None]] = []
+        self.sent: list[str] = []
+
+    async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
+        return "topic"
+
+    def _resolve_workspace(self, arg: str) -> tuple[str, str] | None:
+        if arg == "codex-autorunner--runs":
+            return str(self._repo_root), arg
+        return None
+
+    async def _handle_flow_runs(
+        self,
+        _message: TelegramMessage,
+        repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: str | None = None,
+    ) -> None:
+        self.runs_calls.append((repo_root, argv, repo_id))
+
+    async def _handle_flow_status_action(
+        self,
+        _message: TelegramMessage,
+        repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: str | None = None,
+    ) -> None:
+        self.status_calls.append((repo_root, argv, repo_id))
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: int | None = None,
+        reply_to: int | None = None,
+        reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
+        self.sent.append(text)
+
+
 @pytest.mark.anyio
 async def test_flow_default_in_pma_topic_uses_hub_overview() -> None:
     record = SimpleNamespace(pma_enabled=True, workspace_path=None)
@@ -401,6 +498,118 @@ async def test_flow_repo_and_worktree_default_to_status_when_both_resolve(
     await handler._handle_flow(message, "base wt-1")
 
     assert handler.status_calls == [(tmp_path.resolve(), [], "base--wt-1")]
+    assert not handler.sent
+
+
+@pytest.mark.anyio
+async def test_flow_repo_and_worktree_branch_aliases_resolve_target_worktree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    handler = _FlowManifestAliasHandler(tmp_path)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow architecture-boundary-refactors process-opencode-leak-remediation",
+        date=None,
+        is_topic_message=True,
+    )
+
+    manifest = SimpleNamespace(
+        repos=[
+            SimpleNamespace(
+                id="codex-autorunner",
+                enabled=True,
+                kind="base",
+                branch=None,
+                display_name="codex-autorunner",
+                worktree_of=None,
+                path=".",
+            ),
+            SimpleNamespace(
+                id="codex-autorunner--architecture-boundary-refactors",
+                enabled=True,
+                kind="worktree",
+                branch="architecture-boundary-refactors",
+                display_name="codex-autorunner--architecture-boundary-refactors",
+                worktree_of="codex-autorunner",
+                path=".",
+            ),
+            SimpleNamespace(
+                id="codex-autorunner--process-opencode-leak-remediation",
+                enabled=True,
+                kind="worktree",
+                branch="process-opencode-leak-remediation",
+                display_name="codex-autorunner--process-opencode-leak-remediation",
+                worktree_of="codex-autorunner",
+                path=".",
+            ),
+        ]
+    )
+    monkeypatch.setattr(flows_module, "load_manifest", lambda _path, _root: manifest)
+
+    await handler._handle_flow(
+        message, "architecture-boundary-refactors process-opencode-leak-remediation"
+    )
+
+    assert handler.status_calls == [
+        (
+            tmp_path.resolve(),
+            [],
+            "codex-autorunner--process-opencode-leak-remediation",
+        )
+    ]
+    assert not handler.sent
+
+
+@pytest.mark.anyio
+async def test_flow_action_token_not_shadowed_by_manifest_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    handler = _FlowActionTokenPriorityHandler(tmp_path / "target-repo", workspace_root)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow runs 7",
+        date=None,
+        is_topic_message=True,
+    )
+
+    manifest = SimpleNamespace(
+        repos=[
+            SimpleNamespace(
+                id="codex-autorunner",
+                enabled=True,
+                kind="base",
+                branch=None,
+                display_name="codex-autorunner",
+                worktree_of=None,
+                path=".",
+            ),
+            SimpleNamespace(
+                id="codex-autorunner--runs",
+                enabled=True,
+                kind="worktree",
+                branch="runs",
+                display_name="codex-autorunner--runs",
+                worktree_of="codex-autorunner",
+                path=".",
+            ),
+        ]
+    )
+    monkeypatch.setattr(flows_module, "load_manifest", lambda _path, _root: manifest)
+
+    await handler._handle_flow(message, "runs 7")
+
+    assert handler.runs_calls == [(workspace_root.resolve(), ["7"], None)]
+    assert not handler.status_calls
     assert not handler.sent
 
 
