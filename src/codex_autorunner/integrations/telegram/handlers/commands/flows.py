@@ -60,6 +60,21 @@ from .shared import SharedHelpers
 
 _logger = logging.getLogger(__name__)
 _FLOW_REPO_CONTEXT_CACHE_MAX = 512
+_FLOW_ACTION_TOKENS = {
+    "help",
+    "status",
+    "runs",
+    "bootstrap",
+    "issue",
+    "plan",
+    "resume",
+    "stop",
+    "recover",
+    "restart",
+    "archive",
+    "reply",
+    "start",
+}
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -360,6 +375,10 @@ class FlowCommands(SharedHelpers):
         if resolved:
             repo_root = canonicalize_path(Path(resolved[0]))
             return repo_root, resolved[1], consumed
+
+        # Preserve flow actions unless the token resolved as an exact repo/path above.
+        if (argv[0] or "").strip().lower() in _FLOW_ACTION_TOKENS:
+            return None, None, 0
 
         repos = self._flow_manifest_repos()
         if not repos:
