@@ -26,6 +26,24 @@ def _create_flow_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> Non
         store.update_flow_run_status(run_id, status)
 
 
+def _write_dispatch_history(
+    repo_root: Path, run_id: str, seq: int, *, mode: str = "pause"
+) -> None:
+    dispatch_dir = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / run_id
+        / "dispatch_history"
+        / f"{seq:04d}"
+    )
+    dispatch_dir.mkdir(parents=True)
+    (dispatch_dir / "DISPATCH.md").write_text(
+        f"---\nmode: {mode}\ntitle: dispatch-{seq}\n---\n\nPlease review.\n",
+        encoding="utf-8",
+    )
+
+
 def test_stale_terminal_runs_filters_correctly():
     """Test that _stale_terminal_runs only returns FAILED/STOPPED runs."""
     from codex_autorunner.core.flows.models import FlowRunRecord
@@ -178,8 +196,8 @@ def test_gather_inbox_shows_stale_when_no_active_run(tmp_path: Path) -> None:
     assert "stale-run" in run_ids
 
 
-def test_gather_inbox_shows_paused_with_active_run(tmp_path: Path) -> None:
-    """Test that PAUSED runs are still shown even when another run is active."""
+def test_gather_inbox_hides_paused_when_newer_run_is_active(tmp_path: Path) -> None:
+    """Test that older paused runs are hidden when a newer active run exists."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     tickets_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -188,19 +206,7 @@ def test_gather_inbox_shows_paused_with_active_run(tmp_path: Path) -> None:
     _create_flow_run(repo_root, "active-run", FlowRunStatus.RUNNING)
     _create_flow_run(repo_root, "paused-run", FlowRunStatus.PAUSED)
 
-    dispatch_dir = (
-        repo_root
-        / ".codex-autorunner"
-        / "runs"
-        / "paused-run"
-        / "dispatch_history"
-        / "0001"
-    )
-    dispatch_dir.mkdir(parents=True)
-    (dispatch_dir / "DISPATCH.md").write_text(
-        "---\nmode: pause\ntitle: Test dispatch\n---\n\nPlease review.\n",
-        encoding="utf-8",
-    )
+    _write_dispatch_history(repo_root, "paused-run", seq=1, mode="pause")
 
     from unittest.mock import MagicMock
 
@@ -236,4 +242,49 @@ def test_gather_inbox_shows_paused_with_active_run(tmp_path: Path) -> None:
 
     run_ids = {m.get("run_id") for m in messages}
 
-    assert "paused-run" in run_ids
+    assert "paused-run" not in run_ids
+
+
+def test_gather_inbox_hides_older_paused_when_newer_completed_exists(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".codex-autorunner" / "tickets").mkdir(parents=True)
+
+    _create_flow_run(repo_root, "older-paused", FlowRunStatus.PAUSED)
+    _write_dispatch_history(repo_root, "older-paused", seq=1, mode="pause")
+    _create_flow_run(repo_root, "newer-completed", FlowRunStatus.COMPLETED)
+
+    from unittest.mock import MagicMock
+
+    from codex_autorunner.core.hub import RepoSnapshot
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_repos.return_value = [
+        RepoSnapshot(
+            id="test-repo",
+            path=repo_root,
+            display_name="Test Repo",
+            enabled=True,
+            auto_run=False,
+            worktree_setup_commands=None,
+            kind="base",
+            worktree_of=None,
+            branch="main",
+            exists_on_disk=True,
+            is_clean=True,
+            initialized=True,
+            init_error=None,
+            status="idle",
+            lock_status="unlocked",
+            last_run_id="newer-completed",
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            last_exit_code=None,
+            runner_pid=None,
+        )
+    ]
+
+    messages = _gather_inbox(mock_supervisor, max_text_chars=1000)
+    assert messages == []

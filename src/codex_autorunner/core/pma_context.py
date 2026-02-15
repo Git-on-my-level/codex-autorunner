@@ -702,6 +702,35 @@ def _dispatch_dict(dispatch: Dispatch, *, max_text_chars: int) -> dict[str, Any]
     }
 
 
+def _dispatch_is_actionable(dispatch_payload: Any) -> bool:
+    if not isinstance(dispatch_payload, dict):
+        return False
+    if bool(dispatch_payload.get("is_handoff")):
+        return True
+    mode = str(dispatch_payload.get("mode") or "").strip().lower()
+    return mode == "pause"
+
+
+def _select_newest_run(
+    records: list[FlowRunRecord], *, preferred_run_id: Optional[str] = None
+) -> Optional[FlowRunRecord]:
+    if not records:
+        return None
+    if preferred_run_id:
+        preferred = next((r for r in records if str(r.id) == preferred_run_id), None)
+        if preferred is not None:
+            return preferred
+    return max(
+        records,
+        key=lambda r: (
+            str(r.created_at or ""),
+            str(r.started_at or ""),
+            str(r.finished_at or ""),
+            str(r.id),
+        ),
+    )
+
+
 def _latest_dispatch(
     repo_root: Path, run_id: str, input_data: dict, *, max_text_chars: int
 ) -> Optional[dict[str, Any]]:
@@ -972,7 +1001,9 @@ def get_latest_ticket_flow_run_state(
             records = store.list_flow_runs(flow_type="ticket_flow")
             if not records:
                 return None
-            record = records[0]
+            record = _select_newest_run(records)
+            if record is None:
+                return None
             latest = _latest_dispatch(
                 repo_root,
                 str(record.id),
@@ -985,11 +1016,12 @@ def get_latest_ticket_flow_run_state(
             dispatch_seq = (
                 int(latest.get("seq") or 0) if isinstance(latest, dict) else 0
             )
+            dispatch_payload = (
+                latest.get("dispatch") if isinstance(latest, dict) else None
+            )
+            dispatch_is_actionable = _dispatch_is_actionable(dispatch_payload)
             has_dispatch = bool(
-                latest
-                and latest.get("dispatch")
-                and dispatch_seq > 0
-                and reply_seq < dispatch_seq
+                dispatch_is_actionable and dispatch_seq > 0 and reply_seq < dispatch_seq
             )
             reason = None
             if record.status == FlowRunStatus.PAUSED and not has_dispatch:
@@ -999,8 +1031,21 @@ def get_latest_ticket_flow_run_state(
                     and latest.get("errors")
                 ):
                     reason = "Paused run has unreadable dispatch metadata"
-                elif dispatch_seq > 0 and reply_seq >= dispatch_seq:
+                elif (
+                    dispatch_is_actionable
+                    and dispatch_seq > 0
+                    and reply_seq >= dispatch_seq
+                ):
                     reason = "Latest dispatch already replied; run is still paused"
+                elif (
+                    dispatch_payload
+                    and not dispatch_is_actionable
+                    and dispatch_seq > 0
+                    and reply_seq < dispatch_seq
+                ):
+                    reason = (
+                        "Latest dispatch is informational and does not require reply"
+                    )
                 else:
                     reason = "Run is paused without an actionable dispatch"
             return build_ticket_flow_run_state(
@@ -1043,37 +1088,38 @@ def _gather_inbox(
                     FlowRunStatus.STOPPED,
                 ]
                 all_runs = store.list_flow_runs(flow_type="ticket_flow")
+                newest_record = _select_newest_run(
+                    all_runs, preferred_run_id=str(snap.last_run_id or "")
+                )
+                newest_run_id = str(newest_record.id) if newest_record else None
                 active_run_id: Optional[str] = None
-                for r in all_runs:
-                    if r.status == FlowRunStatus.RUNNING:
-                        active_run_id = str(r.id)
-                        break
-                if active_run_id is None:
-                    for r in all_runs:
-                        if r.status == FlowRunStatus.PAUSED:
-                            active_run_id = str(r.id)
-                            break
+                if newest_record and newest_record.status in (
+                    FlowRunStatus.RUNNING,
+                    FlowRunStatus.PAUSED,
+                ):
+                    active_run_id = str(newest_record.id)
                 for record in all_runs:
                     if record.status not in active_statuses:
                         continue
-                    if record.status == FlowRunStatus.SUPERSEDED:
+                    record_id = str(record.id)
+                    if newest_run_id and record_id != newest_run_id:
                         continue
                     record_input = dict(record.input_data or {})
                     latest = _latest_dispatch(
                         repo_root,
-                        str(record.id),
+                        record_id,
                         record_input,
                         max_text_chars=max_text_chars,
                     )
                     latest_payload = latest if isinstance(latest, dict) else {}
                     latest_reply_seq = _latest_reply_history_seq(
-                        repo_root, str(record.id), record_input
+                        repo_root, record_id, record_input
                     )
                     seq = int(latest_payload.get("seq") or 0)
+                    dispatch_payload = latest_payload.get("dispatch")
+                    dispatch_is_actionable = _dispatch_is_actionable(dispatch_payload)
                     has_dispatch = bool(
-                        latest_payload.get("dispatch")
-                        and seq > 0
-                        and latest_reply_seq < seq
+                        dispatch_is_actionable and seq > 0 and latest_reply_seq < seq
                     )
                     dispatch_state_reason = None
                     if record.status == FlowRunStatus.PAUSED and not has_dispatch:
@@ -1081,10 +1127,21 @@ def _gather_inbox(
                             dispatch_state_reason = (
                                 "Paused run has unreadable dispatch metadata"
                             )
-                        elif seq > 0 and latest_reply_seq >= seq:
+                        elif (
+                            dispatch_is_actionable
+                            and seq > 0
+                            and latest_reply_seq >= seq
+                        ):
                             dispatch_state_reason = (
                                 "Latest dispatch already replied; run is still paused"
                             )
+                        elif (
+                            dispatch_payload
+                            and not dispatch_is_actionable
+                            and seq > 0
+                            and latest_reply_seq < seq
+                        ):
+                            dispatch_state_reason = "Latest dispatch is informational and does not require reply"
                         else:
                             dispatch_state_reason = (
                                 "Run is paused without an actionable dispatch"
@@ -1106,13 +1163,10 @@ def _gather_inbox(
                         FlowRunStatus.FAILED,
                         FlowRunStatus.STOPPED,
                     )
-                    is_superseded = record.status == FlowRunStatus.SUPERSEDED
-                    if is_superseded:
-                        continue
                     if (
                         is_terminal_failed
                         and active_run_id
-                        and active_run_id != str(record.id)
+                        and active_run_id != record_id
                     ):
                         continue
                     if (
@@ -1129,12 +1183,11 @@ def _gather_inbox(
                         "run_id": record.id,
                         "run_created_at": record.created_at,
                         "status": record.status.value,
-                        "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
+                        "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record_id}",
                         "run_state": run_state,
                         "active_run_id": active_run_id,
                     }
                     if has_dispatch:
-                        dispatch_payload = latest_payload.get("dispatch")
                         messages.append(
                             {
                                 **base_item,
@@ -1142,6 +1195,7 @@ def _gather_inbox(
                                 "next_action": "reply_and_resume",
                                 "seq": seq,
                                 "dispatch": dispatch_payload,
+                                "dispatch_actionable": True,
                                 "files": latest_payload.get("files") or [],
                             }
                         )
@@ -1165,7 +1219,8 @@ def _gather_inbox(
                                 "item_type": item_type,
                                 "next_action": next_action,
                                 "seq": seq if seq > 0 else None,
-                                "dispatch": latest_payload.get("dispatch"),
+                                "dispatch": dispatch_payload,
+                                "dispatch_actionable": False,
                                 "files": latest_payload.get("files") or [],
                                 "reason": dispatch_state_reason,
                                 "available_actions": run_state.get(

@@ -42,7 +42,7 @@ from ...core.flows.failure_diagnostics import (
     format_failure_summary,
     get_failure_payload,
 )
-from ...core.flows.models import FlowRunStatus
+from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.reconciler import reconcile_flow_runs
 from ...core.flows.store import FlowStore
 from ...core.hub import HubSupervisor
@@ -345,6 +345,35 @@ def _latest_reply_history_seq(
     except OSError:
         return latest
     return latest
+
+
+def _dispatch_is_actionable(dispatch_payload: Any) -> bool:
+    if not isinstance(dispatch_payload, dict):
+        return False
+    if bool(dispatch_payload.get("is_handoff")):
+        return True
+    mode = str(dispatch_payload.get("mode") or "").strip().lower()
+    return mode == "pause"
+
+
+def _select_newest_run(
+    records: list[FlowRunRecord], *, preferred_run_id: Optional[str] = None
+) -> Optional[FlowRunRecord]:
+    if not records:
+        return None
+    if preferred_run_id:
+        preferred = next((r for r in records if str(r.id) == preferred_run_id), None)
+        if preferred is not None:
+            return preferred
+    return max(
+        records,
+        key=lambda r: (
+            str(r.created_at or ""),
+            str(r.started_at or ""),
+            str(r.finished_at or ""),
+            str(r.id),
+        ),
+    )
 
 
 def _app_server_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]:
@@ -1961,22 +1990,28 @@ def create_hub_app(
                             FlowRunStatus.STOPPED,
                         ]
                         all_runs = store.list_flow_runs(flow_type="ticket_flow")
+                        newest_record = _select_newest_run(
+                            all_runs, preferred_run_id=str(snap.last_run_id or "")
+                        )
+                        newest_run_id = str(newest_record.id) if newest_record else None
                 except Exception:
                     continue
                 for record in all_runs:
                     if record.status not in active_statuses:
                         continue
+                    record_id = str(record.id)
+                    if newest_run_id and record_id != newest_run_id:
+                        continue
                     record_input = dict(record.input_data or {})
-                    latest = _latest_dispatch(repo_root, str(record.id), record_input)
+                    latest = _latest_dispatch(repo_root, record_id, record_input)
                     seq = int(latest.get("seq") or 0) if isinstance(latest, dict) else 0
                     latest_reply_seq = _latest_reply_history_seq(
-                        repo_root, str(record.id), record_input
+                        repo_root, record_id, record_input
                     )
+                    dispatch_payload = latest.get("dispatch") if latest else None
+                    dispatch_is_actionable = _dispatch_is_actionable(dispatch_payload)
                     has_pending_dispatch = bool(
-                        latest
-                        and latest.get("dispatch")
-                        and seq > 0
-                        and latest_reply_seq < seq
+                        dispatch_is_actionable and seq > 0 and latest_reply_seq < seq
                     )
 
                     dispatch_state_reason = None
@@ -1988,10 +2023,21 @@ def create_hub_app(
                             dispatch_state_reason = (
                                 "Paused run has unreadable dispatch metadata"
                             )
-                        elif seq > 0 and latest_reply_seq >= seq:
+                        elif (
+                            dispatch_is_actionable
+                            and seq > 0
+                            and latest_reply_seq >= seq
+                        ):
                             dispatch_state_reason = (
                                 "Latest dispatch already replied; run is still paused"
                             )
+                        elif (
+                            dispatch_payload
+                            and not dispatch_is_actionable
+                            and seq > 0
+                            and latest_reply_seq < seq
+                        ):
+                            dispatch_state_reason = "Latest dispatch is informational and does not require reply"
                         else:
                             dispatch_state_reason = (
                                 "Run is paused without an actionable dispatch"
@@ -2038,7 +2084,7 @@ def create_hub_app(
                         "status": record.status.value,
                         "failure": failure_payload,
                         "failure_summary": failure_summary,
-                        "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
+                        "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record_id}",
                         "run_state": run_state,
                     }
                     item_payload: dict[str, Any]
@@ -2048,12 +2094,13 @@ def create_hub_app(
                             "item_type": "run_dispatch",
                             "next_action": "reply_and_resume",
                             "seq": latest["seq"],
-                            "dispatch": latest["dispatch"],
-                            "message": latest["dispatch"],
+                            "dispatch": dispatch_payload,
+                            "dispatch_actionable": True,
+                            "message": dispatch_payload,
                             "files": latest.get("files") or [],
                         }
                     else:
-                        fallback_dispatch = latest.get("dispatch") if latest else None
+                        fallback_dispatch = dispatch_payload
                         item_type = "run_state_attention"
                         next_action = "inspect_and_resume"
                         if record.status == FlowRunStatus.FAILED:
@@ -2068,6 +2115,7 @@ def create_hub_app(
                             "next_action": next_action,
                             "seq": seq if seq > 0 else None,
                             "dispatch": fallback_dispatch,
+                            "dispatch_actionable": False,
                             "message": fallback_dispatch
                             or {
                                 "title": "Run requires attention",
@@ -2094,7 +2142,7 @@ def create_hub_app(
                     )
                     if _find_message_resolution(
                         dismissals,
-                        run_id=str(record.id),
+                        run_id=record_id,
                         item_type=item_type,
                         seq=item_seq,
                     ):

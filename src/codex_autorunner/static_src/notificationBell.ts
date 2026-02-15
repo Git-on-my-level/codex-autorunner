@@ -8,6 +8,7 @@ interface HubMessageItem {
   seq?: number;
   item_type?: string;
   next_action?: string;
+  dispatch_actionable?: boolean;
   reason?: string;
   run_state?: {
     state?: string | null;
@@ -76,13 +77,21 @@ function renderList(items: HubMessageItem[]): void {
       const repoLabel = item.repo_display_name || item.repo_id;
       const href = item.open_url || `/repos/${item.repo_id}/?tab=inbox&run_id=${item.run_id}`;
       const seq = item.seq ? `#${item.seq}` : "";
-      const nextAction = item.run_state?.recommended_action
+      const isInformationalDispatch =
+        item.item_type === "run_dispatch" && item.dispatch_actionable === false;
+      const nextAction = isInformationalDispatch
+        ? "Info only"
+        : item.run_state?.recommended_action
         ? `Next: ${item.run_state.recommended_action}`
         : item.next_action === "reply_and_resume"
           ? "Next: Reply + resume run"
           : "";
       const stateLabel = item.run_state?.state || item.status || "attention";
-      const stateClass = stateLabel === "paused" ? "pill-warn" : "pill-caution";
+      const stateClass = isInformationalDispatch
+        ? "pill-info"
+        : stateLabel === "paused"
+          ? "pill-warn"
+          : "pill-caution";
       return `
         <div class="notification-item">
           <div class="notification-item-header">
