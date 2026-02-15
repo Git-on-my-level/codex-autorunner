@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import uuid
@@ -32,6 +33,7 @@ class FlowWorkerHealth:
     stderr_tail: Optional[str] = None
     crash_path: Optional[Path] = None
     crash_info: Optional[dict[str, Any]] = None
+    shutdown_intent: bool = False
 
     @property
     def is_alive(self) -> bool:
@@ -77,7 +79,10 @@ def _signal_from_returncode(returncode: Optional[int]) -> Optional[str]:
         return None
     if returncode >= 0:
         return None
-    return f"SIG{-returncode}"
+    try:
+        return signal.Signals(-returncode).name
+    except (ValueError, AttributeError):
+        return f"SIG{-returncode}"
 
 
 def _tail_file(
@@ -113,9 +118,19 @@ def write_worker_exit_info(
     run_id: str,
     *,
     returncode: Optional[int],
+    shutdown_intent: bool = False,
     artifacts_root: Optional[Path] = None,
 ) -> None:
-    """Persist worker exit status + log tails for fast postmortem debugging."""
+    """Persist worker exit status + log tails for fast postmortem debugging.
+
+    Parameters
+    ----------
+    shutdown_intent : bool
+        When True, indicates the worker received a signal (SIGTERM/SIGINT) and
+        intended to shut down gracefully. This is used by the transition logic
+        to distinguish between unexpected worker death (FAILED) and intentional
+        shutdown (STOPPED).
+    """
     import time
 
     normalized_run_id = _normalized_run_id(run_id)
@@ -128,12 +143,22 @@ def write_worker_exit_info(
     except Exception as e:
         logger.warning("failed to read worker metadata: %s", e)
         metadata = {}
+
+    existing_shutdown_intent = False
+    exit_path = _worker_exit_path(artifacts_dir)
+    if not shutdown_intent and exit_path.exists():
+        try:
+            existing = json.loads(exit_path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict) and existing.get("shutdown_intent") is True:
+                existing_shutdown_intent = True
+        except Exception:
+            pass
+
     data = {
         "run_id": normalized_run_id,
         "returncode": returncode,
+        "shutdown_intent": shutdown_intent or existing_shutdown_intent,
         "captured_at": time.time(),
-        # Guard against stale exit info: only trust it when it matches the current
-        # worker.json lifecycle metadata.
         "pid": metadata.get("pid"),
         "spawned_at": metadata.get("spawned_at"),
         "stderr_tail": _tail_file(artifacts_dir / "worker.err.log"),
@@ -387,13 +412,12 @@ def check_worker_health(
         exit_code = None
         stderr_tail = None
         crash_info = None
+        shutdown_intent = False
         crash_path = _worker_crash_path(artifacts_dir)
         if exit_path.exists():
             try:
                 exit_data = json.loads(exit_path.read_text(encoding="utf-8"))
                 if isinstance(exit_data, dict):
-                    # Only trust the cached exit info when it matches the current
-                    # worker.json (avoids stale exit payloads for reused run_ids).
                     if exit_data.get("pid") == pid and (
                         spawned_at is None or exit_data.get("spawned_at") == spawned_at
                     ):
@@ -403,6 +427,9 @@ def check_worker_health(
                         raw_tail = exit_data.get("stderr_tail")
                         if isinstance(raw_tail, str) and raw_tail.strip():
                             stderr_tail = raw_tail.strip()
+                        raw_shutdown = exit_data.get("shutdown_intent")
+                        if isinstance(raw_shutdown, bool):
+                            shutdown_intent = raw_shutdown
             except Exception:
                 exit_code = None
                 stderr_tail = None
@@ -432,6 +459,7 @@ def check_worker_health(
             stderr_tail=stderr_tail,
             crash_path=crash_path if crash_path.exists() else None,
             crash_info=crash_info if isinstance(crash_info, dict) else None,
+            shutdown_intent=shutdown_intent,
         )
 
     expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id, repo_root)
@@ -514,6 +542,7 @@ def spawn_flow_worker(
     proc = subprocess.Popen(
         cmd,
         cwd=repo_root,
+        start_new_session=True,
         stdout=stdout_handle,
         stderr=stderr_handle,
     )

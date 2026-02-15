@@ -15,7 +15,10 @@ from ....core.logging_utils import safe_log
 from ....core.pma_context import get_latest_ticket_flow_run_state
 from ....core.request_context import get_request_id
 from ....core.runtime import LockError
-from ....core.ticket_flow_summary import build_ticket_flow_summary
+from ....core.ticket_flow_summary import (
+    build_ticket_flow_display,
+    build_ticket_flow_summary,
+)
 from ..app_state import HubAppContext
 from ..schemas import (
     HubArchiveWorktreeRequest,
@@ -262,12 +265,36 @@ def build_hub_repo_routes(
         repo_dict = snapshot.to_dict(context.config.root)
         repo_dict = mount_manager.add_mount_info(repo_dict)
         if snapshot.initialized and snapshot.exists_on_disk:
-            repo_dict["ticket_flow"] = _get_ticket_flow_summary(snapshot.path)
+            ticket_flow = _get_ticket_flow_summary(snapshot.path)
+            repo_dict["ticket_flow"] = ticket_flow
+            if isinstance(ticket_flow, dict):
+                repo_dict["ticket_flow_display"] = build_ticket_flow_display(
+                    status=(
+                        str(ticket_flow.get("status"))
+                        if ticket_flow.get("status") is not None
+                        else None
+                    ),
+                    done_count=int(ticket_flow.get("done_count") or 0),
+                    total_count=int(ticket_flow.get("total_count") or 0),
+                    run_id=(
+                        str(ticket_flow.get("run_id"))
+                        if ticket_flow.get("run_id")
+                        else None
+                    ),
+                )
+            else:
+                repo_dict["ticket_flow_display"] = build_ticket_flow_display(
+                    status=None,
+                    done_count=0,
+                    total_count=0,
+                    run_id=None,
+                )
             repo_dict["run_state"] = get_latest_ticket_flow_run_state(
                 snapshot.path, snapshot.id
             )
         else:
             repo_dict["ticket_flow"] = None
+            repo_dict["ticket_flow_display"] = None
             repo_dict["run_state"] = None
         return repo_dict
 

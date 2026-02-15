@@ -22,6 +22,16 @@ interface HubTicketFlow {
   failure_summary?: string | null;
 }
 
+interface HubTicketFlowDisplay {
+  status: string;
+  status_label: string;
+  status_icon: string;
+  is_active: boolean;
+  done_count: number;
+  total_count: number;
+  run_id: string | null;
+}
+
 interface HubRepo {
   id: string;
   path: string;
@@ -46,6 +56,7 @@ interface HubRepo {
   mounted: boolean;
   mount_error?: string | null;
   ticket_flow?: HubTicketFlow | null;
+  ticket_flow_display?: HubTicketFlowDisplay | null;
 }
 
 interface HubData {
@@ -1142,32 +1153,40 @@ function renderRepos(repos: HubRepo[]): void {
         </span>
       </div>`;
 
+    const flowDisplay = repo.ticket_flow_display;
+
     // Ticket flow progress line
     let ticketFlowLine = "";
     const tf = repo.ticket_flow;
-    if (tf && tf.total_count > 0) {
-      const percent = Math.round((tf.done_count / tf.total_count) * 100);
-      const isActive = tf.status === "running" || tf.status === "paused";
+    if (flowDisplay && flowDisplay.total_count > 0) {
+      const percent = Math.round(
+        (flowDisplay.done_count / flowDisplay.total_count) * 100
+      );
+      const isActive = Boolean(flowDisplay.is_active);
+      const currentStep = tf?.current_step;
       const statusSuffix =
-        tf.status === "paused"
+        flowDisplay.status === "paused"
           ? " · paused"
-          : tf.current_step
-          ? ` · step ${tf.current_step}`
+          : currentStep
+          ? ` · step ${currentStep}`
           : "";
       ticketFlowLine = `
         <div class="hub-repo-flow-line${isActive ? " active" : ""}">
           <div class="hub-flow-bar">
             <div class="hub-flow-fill" style="width:${percent}%"></div>
           </div>
-          <span class="hub-flow-text">${tf.done_count}/${tf.total_count}${statusSuffix}</span>
+          <span class="hub-flow-text">${escapeHtml(
+            flowDisplay.status_label
+          )} ${flowDisplay.done_count}/${flowDisplay.total_count}${statusSuffix}</span>
         </div>`;
     }
 
+    const statusText = flowDisplay?.status_label || repo.status;
     card.innerHTML = `
       <div class="hub-repo-row">
         <div class="hub-repo-left">
             <span class="pill pill-small hub-status-pill">${escapeHtml(
-              repo.status
+              statusText
             )}</span>
             ${mountBadge}
             ${lockBadge}
@@ -1193,7 +1212,7 @@ function renderRepos(repos: HubRepo[]): void {
 
     const statusEl = card.querySelector(".hub-status-pill") as HTMLElement | null;
     if (statusEl) {
-      statusPill(statusEl, repo.status);
+      statusPill(statusEl, flowDisplay?.status || repo.status);
     }
 
     repoListEl.appendChild(card);

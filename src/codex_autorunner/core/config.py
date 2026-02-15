@@ -217,6 +217,7 @@ def _default_terminal_section() -> Dict[str, Any]:
 def _default_opencode_section() -> Dict[str, Any]:
     """Build the default opencode section."""
     return {
+        "server_scope": "workspace",
         "session_stall_timeout_seconds": None,
         "max_text_chars": 20000,
     }
@@ -742,6 +743,7 @@ class AppServerConfig:
 
 @dataclasses.dataclass
 class OpenCodeConfig:
+    server_scope: str
     session_stall_timeout_seconds: Optional[float]
     max_text_chars: Optional[int]
 
@@ -1276,6 +1278,12 @@ def _parse_opencode_config(
 ) -> OpenCodeConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
     defaults = defaults if isinstance(defaults, dict) else {}
+    server_scope_raw = cfg.get(
+        "server_scope", defaults.get("server_scope", "workspace")
+    )
+    server_scope = str(server_scope_raw).strip().lower() or "workspace"
+    if server_scope not in {"workspace", "global"}:
+        server_scope = "workspace"
     stall_timeout_raw = cfg.get(
         "session_stall_timeout_seconds",
         defaults.get("session_stall_timeout_seconds"),
@@ -1292,6 +1300,7 @@ def _parse_opencode_config(
         else None
     )
     return OpenCodeConfig(
+        server_scope=server_scope,
         session_stall_timeout_seconds=stall_timeout_seconds,
         max_text_chars=max_text_chars,
     )
@@ -2151,6 +2160,12 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(opencode_cfg, dict):
         raise ConfigError("opencode section must be a mapping if provided")
+    if "server_scope" in opencode_cfg and opencode_cfg.get("server_scope") is not None:
+        server_scope = opencode_cfg.get("server_scope")
+        if not isinstance(server_scope, str):
+            raise ConfigError("opencode.server_scope must be a string or null")
+        if server_scope.strip().lower() not in {"workspace", "global"}:
+            raise ConfigError("opencode.server_scope must be 'workspace' or 'global'")
     if (
         "session_stall_timeout_seconds" in opencode_cfg
         and opencode_cfg.get("session_stall_timeout_seconds") is not None

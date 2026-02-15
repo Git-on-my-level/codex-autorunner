@@ -2,21 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import signal
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 import httpx
 
 from ...core.logging_utils import log_event
+from ...core.managed_processes.registry import (
+    ProcessRecord,
+    delete_process_record,
+    read_process_record,
+    write_process_record,
+)
+from ...core.state_roots import resolve_global_state_root
 from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
 from ...core.utils import infer_home_from_workspace, subprocess_env
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient
 
 _LISTENING_RE = re.compile(r"listening on (https?://[^\s]+)")
+_PROCESS_KIND = "opencode"
+_SCOPE_WORKSPACE = "workspace"
+_SCOPE_GLOBAL = "global"
+_GLOBAL_HANDLE_ID = "__global__"
 
 
 class OpenCodeSupervisorError(Exception):
@@ -53,6 +67,7 @@ class OpenCodeSupervisor:
         password: Optional[str] = None,
         base_env: Optional[Mapping[str, str]] = None,
         base_url: Optional[str] = None,
+        server_scope: str = _SCOPE_WORKSPACE,
         subagent_models: Optional[Mapping[str, str]] = None,
         session_stall_timeout_seconds: Optional[float] = None,
         max_text_chars: Optional[int] = None,
@@ -68,6 +83,10 @@ class OpenCodeSupervisor:
         self._auth: Optional[tuple[str, str]] = (
             (username, password) if password and username else None
         )
+        normalized_scope = str(server_scope or _SCOPE_WORKSPACE).strip().lower()
+        if normalized_scope not in {_SCOPE_WORKSPACE, _SCOPE_GLOBAL}:
+            raise ValueError("server_scope must be 'workspace' or 'global'")
+        self._server_scope = normalized_scope
         self._base_env = base_env
         self._base_url = base_url
         self._subagent_models = subagent_models or {}
@@ -82,7 +101,10 @@ class OpenCodeSupervisor:
     async def get_client(self, workspace_root: Path) -> OpenCodeClient:
         canonical_root = canonical_workspace_root(workspace_root)
         workspace_id = workspace_id_for_path(canonical_root)
-        handle = await self._ensure_handle(workspace_id, canonical_root)
+        handle_id = (
+            _GLOBAL_HANDLE_ID if self._server_scope == _SCOPE_GLOBAL else workspace_id
+        )
+        handle = await self._ensure_handle(handle_id, canonical_root)
         await self._ensure_started(handle)
         handle.last_used_at = time.monotonic()
         if handle.client is None:
@@ -108,7 +130,11 @@ class OpenCodeSupervisor:
 
     async def mark_turn_started(self, workspace_root: Path) -> None:
         canonical_root = canonical_workspace_root(workspace_root)
-        workspace_id = workspace_id_for_path(canonical_root)
+        workspace_id = (
+            _GLOBAL_HANDLE_ID
+            if self._server_scope == _SCOPE_GLOBAL
+            else workspace_id_for_path(canonical_root)
+        )
         async with self._get_lock():
             handle = self._handles.get(workspace_id)
             if handle is None:
@@ -118,7 +144,11 @@ class OpenCodeSupervisor:
 
     async def mark_turn_finished(self, workspace_root: Path) -> None:
         canonical_root = canonical_workspace_root(workspace_root)
-        workspace_id = workspace_id_for_path(canonical_root)
+        workspace_id = (
+            _GLOBAL_HANDLE_ID
+            if self._server_scope == _SCOPE_GLOBAL
+            else workspace_id_for_path(canonical_root)
+        )
         async with self._get_lock():
             handle = self._handles.get(workspace_id)
             if handle is None:
@@ -174,6 +204,33 @@ class OpenCodeSupervisor:
                     handle.process.returncode if handle.process is not None else None
                 ),
             )
+            try:
+                registry_root = self._registry_root(handle.workspace_root)
+                if handle.process is not None:
+                    delete_process_record(
+                        registry_root, _PROCESS_KIND, handle.workspace_id
+                    )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.registry.delete_failed",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    exc=exc,
+                )
+            if self._server_scope == _SCOPE_GLOBAL and handle.client is not None:
+                try:
+                    await handle.client.dispose_instances()
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "opencode.global.dispose_failed",
+                        workspace_id=handle.workspace_id,
+                        workspace_root=str(handle.workspace_root),
+                        exc=exc,
+                    )
             if handle.client is not None:
                 await handle.client.close()
         finally:
@@ -194,12 +251,12 @@ class OpenCodeSupervisor:
                     await handle.process.wait()
 
     async def _ensure_handle(
-        self, workspace_id: str, workspace_root: Path
+        self, handle_id: str, workspace_root: Path
     ) -> OpenCodeHandle:
         handles_to_close: list[OpenCodeHandle] = []
         evicted_id: Optional[str] = None
         async with self._get_lock():
-            existing = self._handles.get(workspace_id)
+            existing = self._handles.get(handle_id)
             if existing is not None:
                 existing.last_used_at = time.monotonic()
                 return existing
@@ -209,7 +266,7 @@ class OpenCodeSupervisor:
                 evicted_id = evicted.workspace_id
                 handles_to_close.append(evicted)
             handle = OpenCodeHandle(
-                workspace_id=workspace_id,
+                workspace_id=handle_id,
                 workspace_root=workspace_root,
                 process=None,
                 client=None,
@@ -221,7 +278,7 @@ class OpenCodeSupervisor:
                 stdout_task=None,
                 last_used_at=time.monotonic(),
             )
-            self._handles[workspace_id] = handle
+            self._handles[handle_id] = handle
         for handle in handles_to_close:
             await self._close_handle(
                 handle,
@@ -233,21 +290,147 @@ class OpenCodeSupervisor:
 
     async def _ensure_started(self, handle: OpenCodeHandle) -> None:
         async with handle.start_lock:
-            if handle.started and handle.process and handle.process.returncode is None:
-                return
+            if handle.started:
+                if handle.process is None:
+                    return
+                if handle.process.returncode is None:
+                    return
             if self._base_url:
                 await self._ensure_started_base_url(handle)
             else:
+                reused = await self._ensure_started_from_registry(handle)
+                if reused:
+                    return
                 await self._start_process(handle)
 
     async def _ensure_started_base_url(self, handle: OpenCodeHandle) -> None:
         base_url = self._base_url
-        handle.health_info = None
-        handle.version = None
-
         if not base_url:
             return
+        await self._attach_to_base_url(handle, base_url)
 
+    async def _start_process(self, handle: OpenCodeHandle) -> None:
+        if self._base_url:
+            handle.health_info = {}
+            handle.version = "external"
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.external_mode",
+                base_url=self._base_url,
+            )
+            return
+
+        env = self._build_opencode_env(handle.workspace_root)
+        process = await asyncio.create_subprocess_exec(
+            *self._command,
+            cwd=handle.workspace_root,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+        handle.process = process
+        try:
+            base_url = await self._read_base_url(process)
+            if not base_url:
+                raise OpenCodeSupervisorError(
+                    "OpenCode server failed to report base URL"
+                )
+            handle.base_url = base_url
+            handle.client = OpenCodeClient(
+                base_url,
+                auth=self._auth,
+                timeout=self._request_timeout,
+                max_text_chars=self._max_text_chars,
+                logger=self._logger,
+            )
+            try:
+                handle.openapi_spec = await handle.client.fetch_openapi_spec()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.openapi.fetched",
+                    base_url=base_url,
+                    endpoints=(
+                        len(handle.openapi_spec.get("paths", {}))
+                        if isinstance(handle.openapi_spec, dict)
+                        else 0
+                    ),
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.openapi.fetch_failed",
+                    base_url=base_url,
+                    exc=exc,
+                )
+                handle.openapi_spec = {}
+            self._start_stdout_drain(handle)
+            handle.started = True
+            self._write_registry_record(handle)
+        except Exception:
+            handle.started = False
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+            raise
+
+    async def _ensure_started_from_registry(self, handle: OpenCodeHandle) -> bool:
+        registry_root = self._registry_root(handle.workspace_root)
+        try:
+            record = read_process_record(
+                registry_root, _PROCESS_KIND, handle.workspace_id
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.registry.read_failed",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                exc=exc,
+            )
+            return False
+
+        if record is None:
+            return False
+
+        if record.pid is None or not self._pid_is_running(record.pid):
+            self._delete_registry_record(handle)
+            return False
+
+        if not record.base_url:
+            self._terminate_record_process(record)
+            self._delete_registry_record(handle)
+            return False
+
+        try:
+            await self._attach_to_base_url(handle, record.base_url)
+            self._refresh_registry_ownership(handle, record)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.registry.reused",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                pid=record.pid,
+                pgid=record.pgid,
+                base_url=record.base_url,
+            )
+            return True
+        except Exception:
+            self._terminate_record_process(record)
+            self._delete_registry_record(handle)
+            return False
+
+    async def _attach_to_base_url(self, handle: OpenCodeHandle, base_url: str) -> None:
+        handle.health_info = None
+        handle.version = None
         try:
             health_url = f"{base_url.rstrip('/')}/global/health"
             async with httpx.AsyncClient(
@@ -315,74 +498,94 @@ class OpenCodeSupervisor:
                 f"OpenCode health check failed: {exc}"
             ) from exc
 
-    async def _start_process(self, handle: OpenCodeHandle) -> None:
-        if self._base_url:
-            handle.health_info = {}
-            handle.version = "external"
+    def _pid_is_running(self, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    def _write_registry_record(self, handle: OpenCodeHandle) -> None:
+        process = handle.process
+        if process is None or process.pid is None or not handle.base_url:
+            return
+        pgid: Optional[int] = None
+        if os.name != "nt":
+            try:
+                pgid = os.getpgid(process.pid)
+            except Exception:
+                pgid = None
+        record = ProcessRecord(
+            kind=_PROCESS_KIND,
+            workspace_id=handle.workspace_id,
+            pid=process.pid,
+            pgid=pgid,
+            base_url=handle.base_url,
+            command=list(self._command),
+            owner_pid=os.getpid(),
+            started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            metadata={"workspace_root": str(handle.workspace_root)},
+        )
+        try:
+            write_process_record(self._registry_root(handle.workspace_root), record)
+        except Exception as exc:
             log_event(
                 self._logger,
-                logging.INFO,
-                "opencode.external_mode",
-                base_url=self._base_url,
+                logging.WARNING,
+                "opencode.registry.write_failed",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                exc=exc,
             )
-            return
 
-        env = self._build_opencode_env(handle.workspace_root)
-        process = await asyncio.create_subprocess_exec(
-            *self._command,
-            cwd=handle.workspace_root,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=env,
+    def _refresh_registry_ownership(
+        self, handle: OpenCodeHandle, record: ProcessRecord
+    ) -> None:
+        updated = ProcessRecord(
+            kind=record.kind,
+            workspace_id=record.workspace_id,
+            pid=record.pid,
+            pgid=record.pgid,
+            base_url=record.base_url,
+            command=record.command,
+            owner_pid=os.getpid(),
+            started_at=record.started_at,
+            metadata=record.metadata,
         )
-        handle.process = process
         try:
-            base_url = await self._read_base_url(process)
-            if not base_url:
-                raise OpenCodeSupervisorError(
-                    "OpenCode server failed to report base URL"
-                )
-            handle.base_url = base_url
-            handle.client = OpenCodeClient(
-                base_url,
-                auth=self._auth,
-                timeout=self._request_timeout,
-                max_text_chars=self._max_text_chars,
-                logger=self._logger,
+            write_process_record(self._registry_root(handle.workspace_root), updated)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.registry.refresh_failed",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                exc=exc,
             )
-            try:
-                handle.openapi_spec = await handle.client.fetch_openapi_spec()
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "opencode.openapi.fetched",
-                    base_url=base_url,
-                    endpoints=(
-                        len(handle.openapi_spec.get("paths", {}))
-                        if isinstance(handle.openapi_spec, dict)
-                        else 0
-                    ),
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "opencode.openapi.fetch_failed",
-                    base_url=base_url,
-                    exc=exc,
-                )
-                handle.openapi_spec = {}
-            self._start_stdout_drain(handle)
-            handle.started = True
+
+    def _delete_registry_record(self, handle: OpenCodeHandle) -> None:
+        try:
+            registry_root = self._registry_root(handle.workspace_root)
+            delete_process_record(registry_root, _PROCESS_KIND, handle.workspace_id)
         except Exception:
-            handle.started = False
-            process.terminate()
+            pass
+
+    def _terminate_record_process(self, record: ProcessRecord) -> None:
+        if record.pgid is not None and os.name != "nt" and hasattr(os, "killpg"):
             try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-            raise
+                os.killpg(record.pgid, signal.SIGTERM)
+            except Exception:
+                pass
+        if record.pid is not None:
+            try:
+                os.kill(record.pid, signal.SIGTERM)
+            except Exception:
+                pass
 
     def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:
         env = subprocess_env(base_env=self._base_env)
@@ -406,6 +609,11 @@ class OpenCodeSupervisor:
             auth_path=str(inferred_auth),
         )
         return env
+
+    def _registry_root(self, workspace_root: Path) -> Path:
+        if self._server_scope != _SCOPE_GLOBAL:
+            return workspace_root
+        return resolve_global_state_root().resolve()
 
     def _opencode_auth_path_for_env(self, env: dict[str, str]) -> Optional[Path]:
         data_home = env.get("XDG_DATA_HOME")

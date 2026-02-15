@@ -6,6 +6,7 @@ from ...core.config import load_repo_config
 from ...core.hub import HubSupervisor as _HubSupervisor
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
+from .commands.cleanup import register_cleanup_commands
 from .commands.dispatch import register_dispatch_commands
 from .commands.doctor import (
     _find_hub_server_process,  # noqa: F401
@@ -90,6 +91,7 @@ hub_runs_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
 repos_app = typer.Typer(add_completion=False)
+cleanup_app = typer.Typer(add_completion=False)
 worktree_app = typer.Typer(add_completion=False)
 hub_tickets_app = typer.Typer(add_completion=False)
 doctor_app = typer.Typer(add_completion=False, invoke_without_command=True)
@@ -168,6 +170,7 @@ register_telegram_commands(
     require_optional_feature=_require_optional_feature,
 )
 app.add_typer(templates_app, name="templates")
+app.add_typer(cleanup_app, name="cleanup")
 register_templates_commands(
     templates_app,
     require_repo_config=_require_repo_config,
@@ -186,6 +189,10 @@ register_inbox_commands(
     build_server_url=_build_server_url,
     request_json=_request_json,
     raise_exit=_raise_exit,
+)
+register_cleanup_commands(
+    cleanup_app,
+    require_repo_config=_require_repo_config,
 )
 app.add_typer(doctor_app, name="doctor")
 register_doctor_commands(doctor_app)

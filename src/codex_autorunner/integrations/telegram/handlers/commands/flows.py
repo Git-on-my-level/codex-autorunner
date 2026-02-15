@@ -31,7 +31,7 @@ from .....core.flows.worker_process import (
 from .....core.logging_utils import log_event
 from .....core.runtime import RuntimeContext
 from .....core.state import now_iso
-from .....core.ticket_flow_summary import get_latest_ticket_flow_run
+from .....core.ticket_flow_summary import build_ticket_flow_display
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....integrations.agents import build_backend_orchestrator
@@ -250,6 +250,16 @@ def _select_latest_run(
 
 
 class FlowCommands(SharedHelpers):
+    def _ticket_controller_for(self, repo_root: Path) -> FlowController:
+        runtime_services = getattr(self, "_runtime_services", None)
+        if runtime_services is not None:
+            get_controller = getattr(
+                runtime_services, "get_ticket_flow_controller", None
+            )
+            if callable(get_controller):
+                return get_controller(repo_root)
+        return _get_ticket_controller(repo_root)
+
     def _flow_repo_context_cache(self) -> dict[str, str]:
         cache = getattr(self, "_flow_repo_context", None)
         if isinstance(cache, dict):
@@ -734,7 +744,7 @@ class FlowCommands(SharedHelpers):
             finally:
                 store.close()
             if error is None:
-                controller = _get_ticket_controller(repo_root)
+                controller = self._ticket_controller_for(repo_root)
                 try:
                     updated = await controller.resume_flow(record.id)
                 except ValueError as exc:
@@ -761,7 +771,7 @@ class FlowCommands(SharedHelpers):
             finally:
                 store.close()
             if error is None:
-                controller = _get_ticket_controller(repo_root)
+                controller = self._ticket_controller_for(repo_root)
                 self._stop_flow_worker(repo_root, record.id)
                 await controller.stop_flow(record.id)
                 notice = "Stopped."
@@ -1247,46 +1257,24 @@ class FlowCommands(SharedHelpers):
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+                latest = runs[0] if runs else None
                 progress = ticket_progress(repo_root)
-                done = progress.get("done", 0)
-                total = progress.get("total", 0)
-                progress_label = f"{done}/{total}"
-                latest = get_latest_ticket_flow_run(store)
-                if latest:
-                    status_icon = "⚪"
-                    if latest.status == FlowRunStatus.RUNNING:
-                        status_icon = "🟢"
-                    elif latest.status in (
-                        FlowRunStatus.PENDING,
-                        FlowRunStatus.STOPPING,
-                    ):
-                        status_icon = "🟡"
-                    elif latest.status == FlowRunStatus.PAUSED:
-                        status_icon = "🔴"
-                    elif latest.status == FlowRunStatus.COMPLETED:
-                        status_icon = "🔵"
-                    elif latest.status in (
-                        FlowRunStatus.STOPPED,
-                        FlowRunStatus.FAILED,
-                    ):
-                        status_icon = "⚫"
-                    status_line = _format_status_line(
-                        label,
-                        status_icon=status_icon,
-                        status_value=latest.status.value,
-                        progress_label=progress_label,
-                        run_id=latest.id,
-                        indent=indent,
-                    )
-                else:
-                    status_line = _format_status_line(
-                        label,
-                        status_icon="🔵" if total > 0 and done >= total else "⚪",
-                        status_value="Done" if total > 0 and done >= total else "Idle",
-                        progress_label=progress_label,
-                        run_id=None,
-                        indent=indent,
-                    )
+                display = build_ticket_flow_display(
+                    status=latest.status.value if latest else None,
+                    done_count=progress.get("done", 0),
+                    total_count=progress.get("total", 0),
+                    run_id=latest.id if latest else None,
+                )
+                progress_label = f"{display['done_count']}/{display['total_count']}"
+                status_line = _format_status_line(
+                    label,
+                    status_icon=str(display["status_icon"]),
+                    status_value=str(display["status_label"]),
+                    progress_label=progress_label,
+                    run_id=display.get("run_id"),
+                    indent=indent,
+                )
             except Exception:
                 status_line = f"{indent}❓ {_code(label)}: Error reading state"
             finally:
@@ -1542,7 +1530,7 @@ You are the first ticket in a new ticket_flow run.
                 first_ticket.write_text(template, encoding="utf-8")
                 seeded = True
 
-        controller = _get_ticket_controller(repo_root)
+        controller = self._ticket_controller_for(repo_root)
         flow_record = await controller.start_flow(
             input_data={},
             metadata={"seeded_ticket": seeded, "origin": "telegram"},
@@ -1688,7 +1676,7 @@ You are the first ticket in a new ticket_flow run.
             store.close()
 
         force = self._has_flag(argv, "--force")
-        controller = _get_ticket_controller(repo_root)
+        controller = self._ticket_controller_for(repo_root)
         try:
             updated = await controller.resume_flow(record.id, force=force)
         except ValueError as exc:
@@ -1757,7 +1745,7 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
 
-        controller = _get_ticket_controller(repo_root)
+        controller = self._ticket_controller_for(repo_root)
         self._stop_flow_worker(repo_root, record.id)
         updated = await controller.stop_flow(record.id)
         await self._send_message(
@@ -1840,7 +1828,7 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
         if record and not record.status.is_terminal():
-            controller = _get_ticket_controller(repo_root)
+            controller = self._ticket_controller_for(repo_root)
             self._stop_flow_worker(repo_root, record.id)
             await controller.stop_flow(record.id)
         await self._handle_flow_bootstrap(message, repo_root, argv=["--force-new"])

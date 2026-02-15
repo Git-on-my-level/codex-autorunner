@@ -24,7 +24,9 @@ from ...core.flows.models import FlowRunRecord
 from ...core.hub import HubSupervisor
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
+from ...core.managed_processes import reap_managed_processes
 from ...core.request_context import reset_conversation_id, set_conversation_id
+from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
 from ...core.text_delta_coalescer import TextDeltaCoalescer
@@ -82,7 +84,10 @@ from .state import (
     parse_topic_key,
     topic_key,
 )
-from .ticket_flow_bridge import TelegramTicketFlowBridge
+from .ticket_flow_bridge import (
+    TelegramTicketFlowBridge,
+    _build_ticket_flow_runtime_resources,
+)
 from .transport import TelegramMessageTransport
 from .types import (
     CompactState,
@@ -228,6 +233,11 @@ class TelegramBotService(
             config,
             logger=self._logger,
         )
+        self._runtime_services = RuntimeServices(
+            app_server_supervisor=self._app_server_supervisor,
+            opencode_supervisor=self._opencode_supervisor,
+            flow_runtime_builder=_build_ticket_flow_runtime_resources,
+        )
         poll_timeout = float(config.poll_timeout_seconds)
         request_timeout = config.poll_request_timeout_seconds
         if request_timeout is None:
@@ -284,6 +294,7 @@ class TelegramBotService(
             hub_root=hub_root,
             manifest_path=manifest_path,
             config_root=self._config.root,
+            runtime_services=self._runtime_services,
         )
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
@@ -585,6 +596,24 @@ class TelegramBotService(
                 f"Unsupported telegram_bot.mode '{self._config.mode}'"
             )
         self._config.validate()
+        try:
+            cleanup = reap_managed_processes(self._config.root)
+            if cleanup.killed or cleanup.removed:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.process_reaper.cleaned",
+                    killed=cleanup.killed,
+                    removed=cleanup.removed,
+                    skipped=cleanup.skipped,
+                )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.process_reaper.failed",
+                exc=exc,
+            )
         self._acquire_instance_lock()
         # Bind the semaphore to the running loop to avoid cross-loop await failures.
         self._turn_semaphore = asyncio.Semaphore(
@@ -714,12 +743,12 @@ class TelegramBotService(
                         exc=exc,
                     )
                 try:
-                    await self._app_server_supervisor.close_all()
+                    await self._runtime_services.close()
                 except Exception as exc:
                     log_event(
                         self._logger,
                         logging.WARNING,
-                        "telegram.app_server.close_failed",
+                        "telegram.runtime_services.close_failed",
                         exc=exc,
                     )
                 try:
