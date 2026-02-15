@@ -50,8 +50,9 @@ function normalizeHubItem(item) {
     const title = (item.dispatch?.title || "").trim();
     const fallbackTitle = title || mode || "Dispatch";
     const body = item.dispatch?.body || "";
-    const dispatchActionable = item.dispatch_actionable !== false;
-    const isHandoff = dispatchActionable && (Boolean(item.dispatch?.is_handoff) || mode === "pause");
+    const isInformationalDispatch = item.item_type === "run_dispatch" && item.dispatch_actionable === false;
+    const isHandoff = !isInformationalDispatch &&
+        (Boolean(item.dispatch?.is_handoff) || mode === "pause");
     const runId = String(item.run_id || "");
     const openUrl = item.open_url || `/repos/${repoId}/?tab=inbox&run_id=${runId}`;
     return {
@@ -66,7 +67,7 @@ function normalizeHubItem(item) {
         body,
         isHandoff,
         openUrl,
-        pillLabel: isHandoff ? "handoff" : dispatchActionable ? "paused" : "info",
+        pillLabel: isHandoff ? "handoff" : isInformationalDispatch ? "info" : "paused",
     };
 }
 function normalizePmaItem(item) {

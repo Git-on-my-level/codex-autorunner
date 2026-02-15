@@ -44,7 +44,8 @@ function renderList(items) {
         const repoLabel = item.repo_display_name || item.repo_id;
         const href = item.open_url || `/repos/${item.repo_id}/?tab=inbox&run_id=${item.run_id}`;
         const seq = item.seq ? `#${item.seq}` : "";
-        const nextAction = item.dispatch_actionable === false
+        const isInformationalDispatch = item.item_type === "run_dispatch" && item.dispatch_actionable === false;
+        const nextAction = isInformationalDispatch
             ? "Info only"
             : item.run_state?.recommended_action
                 ? `Next: ${item.run_state.recommended_action}`
@@ -52,7 +53,7 @@ function renderList(items) {
                     ? "Next: Reply + resume run"
                     : "";
         const stateLabel = item.run_state?.state || item.status || "attention";
-        const stateClass = item.dispatch_actionable === false
+        const stateClass = isInformationalDispatch
             ? "pill-info"
             : stateLabel === "paused"
                 ? "pill-warn"

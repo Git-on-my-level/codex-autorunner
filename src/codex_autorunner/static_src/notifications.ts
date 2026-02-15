@@ -15,6 +15,7 @@ interface HubMessageItem {
   run_id: string;
   status?: string;
   seq?: number;
+  item_type?: string;
   dispatch?: HubDispatch | null;
   dispatch_actionable?: boolean;
   open_url?: string;
@@ -114,9 +115,11 @@ function normalizeHubItem(item: HubMessageItem): NormalizedNotification {
   const title = (item.dispatch?.title || "").trim();
   const fallbackTitle = title || mode || "Dispatch";
   const body = item.dispatch?.body || "";
-  const dispatchActionable = item.dispatch_actionable !== false;
+  const isInformationalDispatch =
+    item.item_type === "run_dispatch" && item.dispatch_actionable === false;
   const isHandoff =
-    dispatchActionable && (Boolean(item.dispatch?.is_handoff) || mode === "pause");
+    !isInformationalDispatch &&
+    (Boolean(item.dispatch?.is_handoff) || mode === "pause");
   const runId = String(item.run_id || "");
   const openUrl = item.open_url || `/repos/${repoId}/?tab=inbox&run_id=${runId}`;
   return {
@@ -131,7 +134,7 @@ function normalizeHubItem(item: HubMessageItem): NormalizedNotification {
     body,
     isHandoff,
     openUrl,
-    pillLabel: isHandoff ? "handoff" : dispatchActionable ? "paused" : "info",
+    pillLabel: isHandoff ? "handoff" : isInformationalDispatch ? "info" : "paused",
   };
 }
 
