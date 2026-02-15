@@ -722,6 +722,23 @@ class TelegramBotService(
                         "telegram.app_server.close_failed",
                         exc=exc,
                     )
+                if self._opencode_supervisor is not None:
+                    try:
+                        before_count = len(self._opencode_supervisor._handles)
+                        await self._opencode_supervisor.close_all()
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "telegram.opencode_supervisor.closed",
+                            handle_count=before_count,
+                        )
+                    except Exception as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.opencode_supervisor.close_failed",
+                            exc=exc,
+                        )
                 try:
                     await self._store.close()
                 except Exception as exc:
