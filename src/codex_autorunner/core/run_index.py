@@ -8,6 +8,9 @@ from .coercion import coerce_int
 from .sqlite_utils import open_sqlite
 from .state import now_iso
 
+# Deprecated module: FlowStore (`core/flows/store.py`) is the canonical run history.
+# Removal plan: delete this module after remaining compatibility callers are removed.
+
 
 def _coerce_str(value: Any) -> Optional[str]:
     if isinstance(value, str) and value:
@@ -46,6 +49,12 @@ def _load_legacy_run_index(path: Path) -> dict[int, dict[str, Any]]:
 
 
 class RunIndexStore:
+    """Legacy run index storage (deprecated).
+
+    New run metadata/events/artifacts live in FlowStore. This compatibility layer
+    remains for legacy numeric run IDs and historical data migration only.
+    """
+
     def __init__(self, db_path: Path) -> None:
         self._path = db_path
 

@@ -735,7 +735,7 @@ class RuntimeContext:
 
     @property
     def run_index_store(self) -> RunIndexStore:
-        """Get run index store."""
+        """Get legacy run index store (deprecated; removal planned after FlowStore migration)."""
         if self._run_index_store is None:
             self._run_index_store = RunIndexStore(self.state_path)
         return self._run_index_store
@@ -793,7 +793,7 @@ class RuntimeContext:
             return ""
 
     def log_line(self, run_id: int, message: str) -> None:
-        """Append a line to the run log."""
+        """Append a line to the legacy per-run log file (deprecated)."""
         run_log_path = self._run_log_path(run_id)
         run_log_path.parent.mkdir(parents=True, exist_ok=True)
         timestamp = now_iso()
@@ -801,11 +801,11 @@ class RuntimeContext:
             f.write(f"[{timestamp}] {message}\n")
 
     def _run_log_path(self, run_id: int) -> Path:
-        """Get path to run log file."""
+        """Get path to legacy run log file (deprecated)."""
         return self.state_root / "runs" / str(run_id) / "run.log"
 
     def read_run_block(self, run_id: int) -> Optional[str]:
-        """Read the run log block for a given run ID."""
+        """Read a legacy run log block for a given run ID (deprecated)."""
         run_log_path = self._run_log_path(run_id)
         if not run_log_path.exists():
             return None
@@ -816,34 +816,12 @@ class RuntimeContext:
             return None
 
     def reconcile_run_index(self) -> None:
-        """Reconcile run index with run directories."""
-        runs_dir = self.state_root / "runs"
-        if not runs_dir.exists():
-            return
-        # Historical runs are stored under numeric directories like `runs/123/`.
-        # Be defensive: other artifacts (UUID directories, stray files) can exist and
-        # should not break reconciliation.
-        parsed: list[tuple[int, Path]] = []
-        try:
-            entries = list(runs_dir.iterdir())
-        except OSError:
-            return
-        for entry in entries:
-            try:
-                run_id = int(entry.name)
-            except ValueError:
-                continue
-            parsed.append((run_id, entry))
-        for run_id, _ in sorted(parsed, key=lambda pair: pair[0]):
-            self._merge_run_index_entry(run_id, {})
+        """Legacy no-op kept for compatibility.
 
-    def _merge_run_index_entry(self, run_id: int, extra: dict[str, Any]) -> None:
-        """Merge extra data into run index entry."""
-        # Ensure timestamp if missing
-        if "timestamp" not in extra:
-            extra["timestamp"] = now_iso()
-
-        self.run_index_store.merge_entry(run_id, extra)
+        FlowStore (`.codex-autorunner/flows.db`) is now the canonical run history source.
+        Numeric run directory reconciliation is deprecated and slated for removal.
+        """
+        return
 
 
 __all__ = [
