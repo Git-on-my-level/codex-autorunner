@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import uuid
@@ -74,7 +75,10 @@ def _signal_from_returncode(returncode: Optional[int]) -> Optional[str]:
         return None
     if returncode >= 0:
         return None
-    return f"SIG{-returncode}"
+    try:
+        return signal.Signals(-returncode).name
+    except (ValueError, AttributeError):
+        return f"SIG{-returncode}"
 
 
 def _tail_file(
