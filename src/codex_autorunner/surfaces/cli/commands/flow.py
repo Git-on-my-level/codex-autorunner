@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -524,8 +525,7 @@ def register_flow_commands(
         def _signal_handler(signum: int, _frame) -> None:
             exit_code_holder[0] = -signum
             _write_exit_info()
-            signal.signal(signum, signal.SIG_DFL)
-            os.kill(os.getpid(), signum)
+            sys.exit(exit_code_holder[0])
 
         atexit.register(_write_exit_info)
         signal.signal(signal.SIGTERM, _signal_handler)
