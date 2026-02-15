@@ -3141,9 +3141,6 @@ export class TerminalManager {
         this.textInputSendBtn = document.getElementById("terminal-text-send");
         this.textInputImageBtn = document.getElementById("terminal-text-image");
         this.textInputImageInputEl = document.getElementById("terminal-text-image-input");
-        if (this.textInputSendBtn) {
-            console.log("TerminalManager: initialized send button");
-        }
         if (!this.terminalSectionEl ||
             !this.textInputToggleBtn ||
             !this.textInputPanelEl ||
@@ -3165,7 +3162,6 @@ export class TerminalManager {
             if (now - this.lastSendTapAt < 300)
                 return;
             this.lastSendTapAt = now;
-            console.log("TerminalManager: sending text input");
             await this._sendFromTextarea();
         };
         this.textInputSendBtn.addEventListener("pointerup", (e) => {

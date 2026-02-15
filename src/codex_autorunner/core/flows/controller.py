@@ -256,8 +256,10 @@ class FlowController:
         if flows_dir.exists():
             try:
                 clear_worker_metadata(flows_dir)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning(
+                    "Failed to clear stale worker metadata for run %s: %s", run_id, exc
+                )
 
     def _repo_root(self) -> Optional[Path]:
         if not self.db_path:
