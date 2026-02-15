@@ -32,7 +32,6 @@ from ...core.config import (
     HubConfig,
     RepoConfig,
     _normalize_base_path,
-    collect_env_overrides,
     derive_repo_config,
     find_nearest_hub_config_path,
     load_hub_config,
@@ -50,7 +49,6 @@ from ...core.flows.worker_process import (
 )
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
-from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import (
     DoctorReport,
@@ -94,15 +92,7 @@ from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
-from ...integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
 from ...integrations.telegram.doctor import telegram_doctor_checks
-from ...integrations.telegram.service import (
-    TelegramBotConfig,
-    TelegramBotConfigError,
-    TelegramBotLockError,
-    TelegramBotService,
-)
-from ...integrations.telegram.state import TelegramStateStore
 from ...integrations.templates.scan_agent import (
     TemplateScanError,
     TemplateScanRejectedError,
@@ -135,10 +125,12 @@ from ...tickets.pack_import import (
     parse_assignment_specs,
     setup_ticket_pack,
 )
-from ...voice import VoiceConfig
 from ..web.app import create_hub_app
+from .commands.hub import register_hub_commands
+from .commands.repos import register_repos_commands
+from .commands.telegram import register_telegram_commands
+from .commands.worktree import register_worktree_commands
 from .pma_cli import pma_app as pma_cli_app
-from .template_repos import TemplatesConfigError, load_template_repos_manager
 
 logger = logging.getLogger("codex_autorunner.cli")
 
@@ -612,15 +604,50 @@ def _require_optional_feature(
         _raise_exit(str(exc), cause=exc)
 
 
+def _build_hub_supervisor(config: HubConfig) -> HubSupervisor:
+    return HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+        agent_id_validator=validate_agent_id,
+    )
+
+
 app.add_typer(hub_app, name="hub")
+register_hub_commands(
+    hub_app,
+    require_hub_config=_require_hub_config,
+    raise_exit=_raise_exit,
+    build_supervisor=_build_hub_supervisor,
+    enforce_bind_auth=_enforce_bind_auth,
+    build_server_url=_build_server_url,
+    request_json=_request_json,
+    normalize_base_path=_normalize_base_path,
+)
 hub_app.add_typer(dispatch_app, name="dispatch")
 hub_app.add_typer(inbox_app, name="inbox")
 hub_app.add_typer(hub_runs_app, name="runs")
 hub_app.add_typer(worktree_app, name="worktree")
+register_worktree_commands(
+    worktree_app,
+    require_hub_config=_require_hub_config,
+    raise_exit=_raise_exit,
+    build_supervisor=_build_hub_supervisor,
+)
 hub_app.add_typer(hub_tickets_app, name="tickets")
 app.add_typer(telegram_app, name="telegram")
+register_telegram_commands(
+    telegram_app,
+    raise_exit=_raise_exit,
+    require_optional_feature=_require_optional_feature,
+)
 app.add_typer(templates_app, name="templates")
 templates_app.add_typer(repos_app, name="repos")
+register_repos_commands(
+    repos_app,
+    raise_exit=_raise_exit,
+)
 app.add_typer(doctor_app, name="doctor")
 app.add_typer(flow_app, name="flow")
 app.add_typer(ticket_flow_app, name="ticket-flow")
@@ -1142,129 +1169,6 @@ def templates_apply(
     typer.echo(json.dumps(metadata, indent=2))
 
 
-@repos_app.command("list")
-def repos_list(
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-):
-    """List configured template repos."""
-    manager = load_template_repos_manager(hub)
-    repos = manager.list_repos()
-
-    if output_json:
-        payload = {"repos": repos}
-        typer.echo(json.dumps(payload, indent=2))
-        return
-
-    if not repos:
-        typer.echo("No template repos configured.")
-        return
-
-    typer.echo(f"Template repos ({len(repos)}):")
-    for repo in repos:
-        if not isinstance(repo, dict):
-            continue
-        repo_id = repo.get("id", "")
-        url = repo.get("url", "")
-        trusted = repo.get("trusted", False)
-        default_ref = repo.get("default_ref", "main")
-        trusted_text = "trusted" if trusted else "untrusted"
-        typer.echo(f"  - {repo_id}: {url} [{trusted_text}] (default_ref={default_ref})")
-
-
-@repos_app.command("add")
-def repos_add(
-    repo_id: str = typer.Argument(..., help="Unique repo ID"),
-    url: str = typer.Argument(..., help="Git repo URL or path"),
-    trusted: Optional[bool] = typer.Option(
-        None, "--trusted/--untrusted", help="Trust level (default: untrusted)"
-    ),
-    default_ref: str = typer.Option("main", "--default-ref", help="Default git ref"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-):
-    """Add a template repo to the hub config."""
-    manager = load_template_repos_manager(hub)
-    try:
-        manager.add_repo(repo_id, url, trusted, default_ref)
-    except TemplatesConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    try:
-        manager.save()
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    typer.echo(f"Added template repo '{repo_id}' to hub config.")
-
-
-@repos_app.command("remove")
-def repos_remove(
-    repo_id: str = typer.Argument(..., help="Repo ID to remove"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-):
-    """Remove a template repo from the hub config."""
-    manager = load_template_repos_manager(hub)
-    try:
-        manager.remove_repo(repo_id)
-    except TemplatesConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    try:
-        manager.save()
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    typer.echo(f"Removed template repo '{repo_id}' from hub config.")
-
-
-@repos_app.command("trust")
-def repos_trust(
-    repo_id: str = typer.Argument(..., help="Repo ID to trust"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-):
-    """Mark a template repo as trusted (skip scanning)."""
-    manager = load_template_repos_manager(hub)
-    try:
-        manager.set_trusted(repo_id, True)
-    except TemplatesConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    try:
-        manager.save()
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    typer.echo(f"Marked repo '{repo_id}' as trusted.")
-
-
-@repos_app.command("untrust")
-def repos_untrust(
-    repo_id: str = typer.Argument(..., help="Repo ID to untrust"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-):
-    """Mark a template repo as untrusted (require scanning)."""
-    manager = load_template_repos_manager(hub)
-    try:
-        manager.set_trusted(repo_id, False)
-    except TemplatesConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    try:
-        manager.save()
-    except OSError as exc:
-        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
-
-    typer.echo(f"Marked repo '{repo_id}' as untrusted.")
-
-
 @app.command()
 def sessions(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
@@ -1769,500 +1673,6 @@ def serve(
         root_path="",
         access_log=config.server_access_log,
     )
-
-
-@hub_app.command("create")
-def hub_create(
-    repo_id: str = typer.Argument(..., help="Base repo id to create and initialize"),
-    repo_path: Optional[Path] = typer.Option(
-        None,
-        "--repo-path",
-        help="Custom repo path relative to hub repos_root",
-    ),
-    path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
-    force: bool = typer.Option(False, "--force", help="Allow existing directory"),
-    git_init: bool = typer.Option(
-        True, "--git-init/--no-git-init", help="Run git init in the new repo"
-    ),
-):
-    """Create a new base git repo under the hub and initialize codex-autorunner files.
-
-    For worktrees, use `car hub worktree create`.
-    """
-    config = _require_hub_config(path)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        backend_orchestrator_builder=build_backend_orchestrator,
-        agent_id_validator=validate_agent_id,
-    )
-    try:
-        snapshot = supervisor.create_repo(
-            repo_id, repo_path, git_init=git_init, force=force
-        )
-    except Exception as exc:
-        _raise_exit(str(exc), cause=exc)
-    typer.echo(f"Created repo {snapshot.id} at {snapshot.path}")
-
-
-@hub_app.command("clone")
-def hub_clone(
-    git_url: str = typer.Option(
-        ..., "--git-url", help="Git URL or local path to clone"
-    ),
-    repo_id: Optional[str] = typer.Option(
-        None, "--id", help="Repo id to register (defaults from git URL)"
-    ),
-    repo_path: Optional[Path] = typer.Option(
-        None,
-        "--repo-path",
-        help="Custom repo path relative to hub repos_root",
-    ),
-    path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
-    force: bool = typer.Option(False, "--force", help="Allow existing directory"),
-):
-    """Clone a git repo under the hub and initialize codex-autorunner files."""
-    config = _require_hub_config(path)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        agent_id_validator=validate_agent_id,
-    )
-    try:
-        snapshot = supervisor.clone_repo(
-            git_url=git_url, repo_id=repo_id, repo_path=repo_path, force=force
-        )
-    except Exception as exc:
-        _raise_exit(str(exc), cause=exc)
-    typer.echo(
-        f"Cloned repo {snapshot.id} at {snapshot.path} (status={snapshot.status.value})"
-    )
-
-
-def _worktree_snapshot_payload(snapshot) -> dict:
-    return {
-        "id": snapshot.id,
-        "worktree_of": snapshot.worktree_of,
-        "branch": snapshot.branch,
-        "path": str(snapshot.path),
-        "initialized": snapshot.initialized,
-        "exists_on_disk": snapshot.exists_on_disk,
-        "status": snapshot.status.value,
-    }
-
-
-@worktree_app.command("create")
-def hub_worktree_create(
-    base_repo_id: str = typer.Argument(..., help="Base repo id to branch from"),
-    branch: str = typer.Argument(..., help="Branch name for the new worktree"),
-    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
-    force: bool = typer.Option(False, "--force", help="Allow existing directory"),
-    start_point: Optional[str] = typer.Option(
-        None,
-        "--start-point",
-        help="Optional git ref to branch from (default: origin/<default-branch>)",
-    ),
-):
-    """Create a new hub-managed worktree."""
-    config = _require_hub_config(hub)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        backend_orchestrator_builder=build_backend_orchestrator,
-        agent_id_validator=validate_agent_id,
-    )
-    try:
-        snapshot = supervisor.create_worktree(
-            base_repo_id=base_repo_id,
-            branch=branch,
-            force=force,
-            start_point=start_point,
-        )
-    except Exception as exc:
-        _raise_exit(str(exc), cause=exc)
-    typer.echo(
-        f"Created worktree {snapshot.id} (branch={snapshot.branch}) at {snapshot.path}"
-    )
-
-
-@worktree_app.command("list")
-def hub_worktree_list(
-    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-):
-    """List hub-managed worktrees."""
-    config = _require_hub_config(hub)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        agent_id_validator=validate_agent_id,
-    )
-    snapshots = [
-        snapshot
-        for snapshot in supervisor.list_repos(use_cache=False)
-        if snapshot.kind == "worktree"
-    ]
-    payload = [_worktree_snapshot_payload(snapshot) for snapshot in snapshots]
-    if output_json:
-        typer.echo(json.dumps({"worktrees": payload}, indent=2))
-        return
-    if not payload:
-        typer.echo("No worktrees found.")
-        return
-    typer.echo(f"Worktrees ({len(payload)}):")
-    for item in payload:
-        typer.echo(
-            "  - {id} (base={worktree_of}, branch={branch}, status={status}, initialized={initialized}, exists={exists_on_disk}, path={path})".format(
-                **item
-            )
-        )
-
-
-@worktree_app.command("scan")
-def hub_worktree_scan(
-    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
-):
-    """Scan hub root and list discovered worktrees."""
-    config = _require_hub_config(hub)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        agent_id_validator=validate_agent_id,
-    )
-    snapshots = [snap for snap in supervisor.scan() if snap.kind == "worktree"]
-    payload = [_worktree_snapshot_payload(snapshot) for snapshot in snapshots]
-    if output_json:
-        typer.echo(json.dumps({"worktrees": payload}, indent=2))
-        return
-    if not payload:
-        typer.echo("No worktrees found.")
-        return
-    typer.echo(f"Worktrees ({len(payload)}):")
-    for item in payload:
-        typer.echo(
-            "  - {id} (base={worktree_of}, branch={branch}, status={status}, initialized={initialized}, exists={exists_on_disk}, path={path})".format(
-                **item
-            )
-        )
-
-
-@worktree_app.command("cleanup")
-def hub_worktree_cleanup(
-    worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to remove"),
-    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
-    delete_branch: bool = typer.Option(
-        False, "--delete-branch", help="Delete the local branch"
-    ),
-    delete_remote: bool = typer.Option(
-        False, "--delete-remote", help="Delete the remote branch"
-    ),
-    archive: bool = typer.Option(
-        True, "--archive/--no-archive", help="Archive worktree snapshot"
-    ),
-    force_archive: bool = typer.Option(
-        False, "--force-archive", help="Continue cleanup if archive fails"
-    ),
-    archive_note: Optional[str] = typer.Option(
-        None, "--archive-note", help="Optional archive note"
-    ),
-):
-    """Cleanup a hub-managed worktree."""
-    config = _require_hub_config(hub)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        backend_orchestrator_builder=build_backend_orchestrator,
-        agent_id_validator=validate_agent_id,
-    )
-    try:
-        supervisor.cleanup_worktree(
-            worktree_repo_id=worktree_repo_id,
-            delete_branch=delete_branch,
-            delete_remote=delete_remote,
-            archive=archive,
-            force_archive=force_archive,
-            archive_note=archive_note,
-        )
-    except Exception as exc:
-        _raise_exit(str(exc), cause=exc)
-    typer.echo("ok")
-
-
-@worktree_app.command("archive")
-def hub_worktree_archive(
-    worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to archive"),
-    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
-    delete_branch: bool = typer.Option(
-        False, "--delete-branch", help="Delete the local branch"
-    ),
-    delete_remote: bool = typer.Option(
-        False, "--delete-remote", help="Delete the remote branch"
-    ),
-    force_archive: bool = typer.Option(
-        False, "--force-archive", help="Continue cleanup if archive fails"
-    ),
-    archive_note: Optional[str] = typer.Option(
-        None, "--archive-note", help="Optional archive note"
-    ),
-):
-    """Archive and remove a hub-managed worktree (equivalent to cleanup --archive)."""
-    config = _require_hub_config(hub)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        backend_orchestrator_builder=build_backend_orchestrator,
-        agent_id_validator=validate_agent_id,
-    )
-    try:
-        supervisor.cleanup_worktree(
-            worktree_repo_id=worktree_repo_id,
-            delete_branch=delete_branch,
-            delete_remote=delete_remote,
-            archive=True,
-            force_archive=force_archive,
-            archive_note=archive_note,
-        )
-    except Exception as exc:
-        _raise_exit(str(exc), cause=exc)
-    typer.echo("ok")
-
-
-@hub_app.command("serve")
-def hub_serve(
-    path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
-    host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
-    port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
-    base_path: Optional[str] = typer.Option(
-        None, "--base-path", help="Base path for the server"
-    ),
-):
-    """Start the hub supervisor server."""
-    config = _require_hub_config(path)
-    normalized_base = (
-        _normalize_base_path(base_path)
-        if base_path is not None
-        else config.server_base_path
-    )
-    bind_host = host or config.server_host
-    bind_port = port or config.server_port
-    _enforce_bind_auth(bind_host, config.server_auth_token_env)
-    typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
-    uvicorn.run(
-        create_hub_app(config.root, base_path=normalized_base),
-        host=bind_host,
-        port=bind_port,
-        root_path="",
-        access_log=config.server_access_log,
-    )
-
-
-@hub_app.command("scan")
-def hub_scan(path: Optional[Path] = typer.Option(None, "--path", help="Hub root path")):
-    """Trigger discovery/init and print repo statuses."""
-    config = _require_hub_config(path)
-    supervisor = HubSupervisor(
-        config,
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-        agent_id_validator=validate_agent_id,
-    )
-    snapshots = supervisor.scan()
-    typer.echo(f"Scanned hub at {config.root} (repos_root={config.repos_root})")
-    for snap in snapshots:
-        typer.echo(
-            f"- {snap.id}: {snap.status.value}, initialized={snap.initialized}, exists={snap.exists_on_disk}"
-        )
-
-
-@hub_app.command("snapshot")
-def hub_snapshot(
-    path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
-    output_json: bool = typer.Option(
-        True, "--json/--no-json", help="Emit JSON output (default: true)"
-    ),
-    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
-    base_path: Optional[str] = typer.Option(
-        None, "--base-path", help="Override hub server base path (e.g. /car)"
-    ),
-):
-    """Return a compact hub snapshot (repos + inbox items)."""
-    config = _require_hub_config(path)
-    repos_url = _build_server_url(config, "/hub/repos", base_path_override=base_path)
-    messages_url = _build_server_url(
-        config, "/hub/messages?limit=50", base_path_override=base_path
-    )
-
-    try:
-        repos_response = _request_json(
-            "GET", repos_url, token_env=config.server_auth_token_env
-        )
-        messages_response = _request_json(
-            "GET", messages_url, token_env=config.server_auth_token_env
-        )
-    except (
-        httpx.HTTPError,
-        httpx.ConnectError,
-        httpx.TimeoutException,
-        OSError,
-    ) as exc:
-        logger.debug("Failed to fetch hub snapshot from server: %s", exc)
-        _raise_exit(
-            "Failed to connect to hub server. Ensure 'car hub serve' is running.\n"
-            f"Attempted:\n- {repos_url}\n- {messages_url}\n"
-            "If the hub UI is served under a base path (commonly /car), either set "
-            "`server.base_path` in the hub config or pass `--base-path /car`.",
-            cause=exc,
-        )
-
-    repos_payload = repos_response if isinstance(repos_response, dict) else {}
-    messages_payload = messages_response if isinstance(messages_response, dict) else {}
-
-    repos = repos_payload.get("repos", []) if isinstance(repos_payload, dict) else []
-    messages_items = (
-        messages_payload.get("items", []) if isinstance(messages_payload, dict) else []
-    )
-
-    def _summarize_repo(repo: dict) -> dict:
-        if not isinstance(repo, dict):
-            return {}
-        ticket_flow = (
-            repo.get("ticket_flow") if isinstance(repo.get("ticket_flow"), dict) else {}
-        )
-        failure = ticket_flow.get("failure") if isinstance(ticket_flow, dict) else None
-        failure_summary = (
-            ticket_flow.get("failure_summary")
-            if isinstance(ticket_flow, dict)
-            else None
-        )
-        pr_url = ticket_flow.get("pr_url") if isinstance(ticket_flow, dict) else None
-        final_review_status = (
-            ticket_flow.get("final_review_status")
-            if isinstance(ticket_flow, dict)
-            else None
-        )
-        run_state = repo.get("run_state")
-        if not isinstance(run_state, dict):
-            run_state = {}
-        return {
-            "id": repo.get("id"),
-            "display_name": repo.get("display_name"),
-            "status": repo.get("status"),
-            "initialized": repo.get("initialized"),
-            "exists_on_disk": repo.get("exists_on_disk"),
-            "last_run_id": repo.get("last_run_id"),
-            "last_run_started_at": repo.get("last_run_started_at"),
-            "last_run_finished_at": repo.get("last_run_finished_at"),
-            "failure": failure,
-            "failure_summary": failure_summary,
-            "pr_url": pr_url,
-            "final_review_status": final_review_status,
-            "run_state": {
-                "state": run_state.get("state"),
-                "blocking_reason": run_state.get("blocking_reason"),
-                "current_ticket": run_state.get("current_ticket"),
-                "last_progress_at": run_state.get("last_progress_at"),
-                "recommended_action": run_state.get("recommended_action"),
-            },
-        }
-
-    def _summarize_message(msg: dict) -> dict:
-        if not isinstance(msg, dict):
-            return {}
-        dispatch = msg.get("dispatch", {})
-        if not isinstance(dispatch, dict):
-            dispatch = {}
-        body = dispatch.get("body", "")
-        title = dispatch.get("title", "")
-        truncated_body = (body[:200] + "...") if len(body) > 200 else body
-        run_state = msg.get("run_state")
-        if not isinstance(run_state, dict):
-            run_state = {}
-        return {
-            "item_type": msg.get("item_type"),
-            "next_action": msg.get("next_action"),
-            "repo_id": msg.get("repo_id"),
-            "repo_display_name": msg.get("repo_display_name"),
-            "run_id": msg.get("run_id"),
-            "run_created_at": msg.get("run_created_at"),
-            "status": msg.get("status"),
-            "seq": msg.get("seq"),
-            "dispatch": {
-                "mode": dispatch.get("mode"),
-                "title": title,
-                "body": truncated_body,
-                "is_handoff": dispatch.get("is_handoff"),
-            },
-            "files_count": (
-                len(msg.get("files", [])) if isinstance(msg.get("files"), list) else 0
-            ),
-            "reason": msg.get("reason"),
-            "run_state": {
-                "state": run_state.get("state"),
-                "blocking_reason": run_state.get("blocking_reason"),
-                "current_ticket": run_state.get("current_ticket"),
-                "last_progress_at": run_state.get("last_progress_at"),
-                "recommended_action": run_state.get("recommended_action"),
-            },
-        }
-
-    snapshot = {
-        "last_scan_at": (
-            repos_payload.get("last_scan_at")
-            if isinstance(repos_payload, dict)
-            else None
-        ),
-        "repos": [_summarize_repo(repo) for repo in repos],
-        "inbox_items": [_summarize_message(msg) for msg in messages_items],
-    }
-
-    if not output_json:
-        typer.echo(
-            f"Hub Snapshot (repos={len(snapshot['repos'])}, inbox={len(snapshot['inbox_items'])})"
-        )
-        for repo in snapshot["repos"]:
-            pr_url = repo.get("pr_url")
-            final_review_status = repo.get("final_review_status")
-            run_state = (
-                repo.get("run_state") if isinstance(repo.get("run_state"), dict) else {}
-            )
-            typer.echo(
-                f"- {repo.get('id')}: status={repo.get('status')}, "
-                f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}, "
-                f"final_review={final_review_status}, pr_url={pr_url}, "
-                f"run_state={run_state.get('state')}"
-            )
-            if run_state.get("blocking_reason"):
-                typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
-            if run_state.get("recommended_action"):
-                typer.echo(
-                    f"  recommended_action: {run_state.get('recommended_action')}"
-                )
-        for msg in snapshot["inbox_items"]:
-            run_state = (
-                msg.get("run_state") if isinstance(msg.get("run_state"), dict) else {}
-            )
-            typer.echo(
-                f"- Inbox: repo={msg.get('repo_id')}, run_id={msg.get('run_id')}, "
-                f"title={msg.get('dispatch', {}).get('title')}, state={run_state.get('state')}"
-            )
-            if run_state.get("blocking_reason"):
-                typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
-            if run_state.get("recommended_action"):
-                typer.echo(
-                    f"  recommended_action: {run_state.get('recommended_action')}"
-                )
-        return
-
-    indent = 2 if pretty else None
-    typer.echo(json.dumps(snapshot, indent=indent))
 
 
 def _filter_inbox_items_for_clear(
@@ -3590,136 +3000,6 @@ def hub_dispatch_reply(
     )
     if resume:
         typer.echo(f"Run resumed: status={resume_status or 'unknown'}")
-
-
-@telegram_app.command("start")
-def telegram_start(
-    path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
-):
-    """Start the Telegram bot (polling)."""
-    _require_optional_feature(
-        feature="telegram",
-        deps=[("httpx", "httpx")],
-        extra="telegram",
-    )
-    try:
-        config = load_hub_config(path or Path.cwd())
-    except ConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    telegram_cfg = TelegramBotConfig.from_raw(
-        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
-        root=config.root,
-        agent_binaries=getattr(config, "agents", None)
-        and {name: agent.binary for name, agent in config.agents.items()},
-    )
-    if not telegram_cfg.enabled:
-        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
-    try:
-        telegram_cfg.validate()
-    except TelegramBotConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
-    env_overrides = collect_env_overrides(env=os.environ, include_telegram=True)
-    if env_overrides:
-        logger.info("Environment overrides active: %s", ", ".join(env_overrides))
-    log_event(
-        logger,
-        logging.INFO,
-        "telegram.bot.starting",
-        root=str(config.root),
-        mode="hub",
-    )
-    voice_raw = config.repo_defaults.get("voice") if config.repo_defaults else None
-    voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
-    update_repo_url = config.update_repo_url
-    update_repo_ref = config.update_repo_ref
-
-    async def _run() -> None:
-        service = TelegramBotService(
-            telegram_cfg,
-            logger=logger,
-            hub_root=config.root,
-            manifest_path=config.manifest_path,
-            voice_config=voice_config,
-            housekeeping_config=config.housekeeping,
-            update_repo_url=update_repo_url,
-            update_repo_ref=update_repo_ref,
-            update_skip_checks=config.update_skip_checks,
-            app_server_auto_restart=config.app_server.auto_restart,
-        )
-        await service.run_polling()
-
-    try:
-        asyncio.run(_run())
-    except TelegramBotLockError as exc:
-        _raise_exit(str(exc), cause=exc)
-
-
-@telegram_app.command("health")
-def telegram_health(
-    path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
-    timeout: float = typer.Option(5.0, "--timeout", help="Timeout (seconds)"),
-):
-    """Check Telegram API connectivity for the configured bot."""
-    _require_optional_feature(
-        feature="telegram",
-        deps=[("httpx", "httpx")],
-        extra="telegram",
-    )
-    try:
-        config = load_hub_config(path or Path.cwd())
-    except ConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    telegram_cfg = TelegramBotConfig.from_raw(
-        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
-        root=config.root,
-        agent_binaries=getattr(config, "agents", None)
-        and {name: agent.binary for name, agent in config.agents.items()},
-    )
-    if not telegram_cfg.enabled:
-        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
-    bot_token = telegram_cfg.bot_token
-    if not bot_token:
-        _raise_exit(f"missing bot token env '{telegram_cfg.bot_token_env}'")
-    timeout_seconds = max(float(timeout), 0.1)
-
-    async def _run() -> None:
-        async with TelegramBotClient(bot_token) as client:
-            await asyncio.wait_for(client.get_me(), timeout=timeout_seconds)
-
-    try:
-        asyncio.run(_run())
-    except TelegramAPIError as exc:
-        _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
-
-
-@telegram_app.command("state-check")
-def telegram_state_check(
-    path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
-):
-    """Open the Telegram state DB and ensure schema migrations apply."""
-    try:
-        config = load_hub_config(path or Path.cwd())
-    except ConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    telegram_cfg = TelegramBotConfig.from_raw(
-        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
-        root=config.root,
-        agent_binaries=getattr(config, "agents", None)
-        and {name: agent.binary for name, agent in config.agents.items()},
-    )
-    if not telegram_cfg.enabled:
-        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
-
-    try:
-        store = TelegramStateStore(
-            telegram_cfg.state_file,
-            default_approval_mode=telegram_cfg.defaults.approval_mode,
-        )
-        # This will open the DB and apply schema/migrations.
-        store._connection_sync()  # type: ignore[attr-defined]
-    except Exception as exc:  # pragma: no cover - defensive runtime check
-        _raise_exit(f"Telegram state check failed: {exc}", cause=exc)
 
 
 def _normalize_flow_run_id(run_id: Optional[str]) -> Optional[str]:
