@@ -5,7 +5,6 @@ import atexit
 import json
 import os
 import signal
-import subprocess
 import threading
 import traceback
 import uuid
@@ -469,9 +468,21 @@ def register_flow_commands(
         if not health.pid:
             return
         try:
-            subprocess.run(["kill", str(health.pid)], check=False)
-        except Exception:
+            if os.name != "nt" and hasattr(os, "killpg"):
+                # Workers are spawned as session/group leaders, so pgid == pid.
+                os.killpg(health.pid, signal.SIGTERM)
+            else:
+                os.kill(health.pid, signal.SIGTERM)
+        except ProcessLookupError:
             pass
+        except PermissionError:
+            # Keep stop idempotent when process ownership changed unexpectedly.
+            pass
+        except Exception:
+            try:
+                os.kill(health.pid, signal.SIGTERM)
+            except Exception:
+                pass
 
     def _ticket_flow_controller(
         engine: RuntimeContext,

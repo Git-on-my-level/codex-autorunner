@@ -503,6 +503,7 @@ def spawn_flow_worker(
     proc = subprocess.Popen(
         cmd,
         cwd=repo_root,
+        start_new_session=True,
         stdout=stdout_handle,
         stderr=stderr_handle,
     )
