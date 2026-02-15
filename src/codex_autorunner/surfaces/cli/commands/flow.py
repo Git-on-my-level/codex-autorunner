@@ -510,12 +510,13 @@ def register_flow_commands(
         _repo_root = engine.repo_root
         _artifacts_root = artifacts_root
 
-        def _write_exit_info() -> None:
+        def _write_exit_info(*, shutdown_intent: bool = False) -> None:
             try:
                 write_worker_exit_info(
                     _repo_root,
                     normalized_run_id,
                     returncode=exit_code_holder[0] or None,
+                    shutdown_intent=shutdown_intent,
                     artifacts_root=_artifacts_root,
                 )
             except Exception:
@@ -523,7 +524,7 @@ def register_flow_commands(
 
         def _signal_handler(signum: int, _frame) -> None:
             exit_code_holder[0] = -signum
-            _write_exit_info()
+            _write_exit_info(shutdown_intent=True)
             signal.signal(signum, signal.SIG_DFL)
             os.kill(os.getpid(), signum)
 

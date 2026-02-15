@@ -70,3 +70,38 @@ def test_finished_at_set_when_completed_from_paused():
     )
     assert dec.status == FlowRunStatus.COMPLETED
     assert dec.finished_at == "2024-01-02T00:00:00Z"
+
+
+def _health_with_shutdown(alive: bool, shutdown_intent: bool) -> SimpleNamespace:
+    return SimpleNamespace(
+        is_alive=alive,
+        status="alive" if alive else "dead",
+        artifact_path=None,
+        pid=12345 if not alive else None,
+        message="worker PID not running" if not alive else None,
+        shutdown_intent=shutdown_intent,
+    )
+
+
+def test_shutdown_intent_transitions_to_stopped_not_failed():
+    state = {"ticket_engine": {"status": "running"}}
+    dec = resolve_flow_transition(
+        _rec(FlowRunStatus.RUNNING, state),
+        _health_with_shutdown(alive=False, shutdown_intent=True),
+        now="2024-01-02T00:00:00Z",
+    )
+    assert dec.status == FlowRunStatus.STOPPED
+    assert dec.note == "worker-shutdown-intent"
+    assert dec.finished_at == "2024-01-02T00:00:00Z"
+
+
+def test_no_shutdown_intent_still_fails():
+    state = {"ticket_engine": {"status": "running"}}
+    dec = resolve_flow_transition(
+        _rec(FlowRunStatus.RUNNING, state),
+        _health_with_shutdown(alive=False, shutdown_intent=False),
+        now="2024-01-02T00:00:00Z",
+    )
+    assert dec.status == FlowRunStatus.FAILED
+    assert dec.note == "worker-dead"
+    assert "Worker died" in (dec.error_message or "")
