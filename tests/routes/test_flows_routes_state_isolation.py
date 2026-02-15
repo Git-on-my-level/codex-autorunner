@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
-from codex_autorunner.routes import flows as flows_routes
+from codex_autorunner.surfaces.web.routes import flows as flows_routes
 
 
 def _seed_paused_run(repo_root: Path, run_id: str) -> None:
@@ -64,15 +64,15 @@ def test_state_isolation_between_apps(tmp_path, monkeypatch):
     assert state1 is not state2, "State should be isolated between apps"
 
     # Verify they have separate caches
-    assert id(state1.controller_cache) != id(
-        state2.controller_cache
-    ), "Controller caches should be separate"
-    assert id(state1.definition_cache) != id(
-        state2.definition_cache
-    ), "Definition caches should be separate"
-    assert id(state1.active_workers) != id(
-        state2.active_workers
-    ), "Active workers dicts should be separate"
+    assert id(state1.controller_cache) != id(state2.controller_cache), (
+        "Controller caches should be separate"
+    )
+    assert id(state1.definition_cache) != id(state2.definition_cache), (
+        "Definition caches should be separate"
+    )
+    assert id(state1.active_workers) != id(state2.active_workers), (
+        "Active workers dicts should be separate"
+    )
 
     # Both definition caches should be populated (from the requests we made)
     assert len(state1.definition_cache) > 0, "App1 definition cache should be populated"

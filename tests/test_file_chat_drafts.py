@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core import drafts as draft_utils
 from codex_autorunner.core.state import now_iso
-from codex_autorunner.routes import file_chat as file_chat_routes
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
 
 
 @pytest.fixture()

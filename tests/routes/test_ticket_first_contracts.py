@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.routes import base as base_routes
-from codex_autorunner.routes import flows as flow_routes
+from codex_autorunner.surfaces.web.routes import base as base_routes
+from codex_autorunner.surfaces.web.routes import flows as flow_routes
 
 
 def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(

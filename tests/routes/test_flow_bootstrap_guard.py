@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
-from codex_autorunner.routes import flows as flow_routes
+from codex_autorunner.surfaces.web.routes import flows as flow_routes
 from codex_autorunner.surfaces.web.routes.flows import FlowRoutesState
 
 

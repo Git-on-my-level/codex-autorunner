@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.routes import flows as flows_routes
-from codex_autorunner.routes import messages as messages_routes
+from codex_autorunner.surfaces.web.routes import flows as flows_routes
+from codex_autorunner.surfaces.web.routes import messages as messages_routes
 
 
 def _write_dispatch_history(repo_root: Path, run_id: str, seq: int = 1) -> None:
