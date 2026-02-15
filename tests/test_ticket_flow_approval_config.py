@@ -4,127 +4,83 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.core.config import DEFAULT_REPO_CONFIG, _parse_app_server_config
+from codex_autorunner.core.ports.run_event import Completed, Started
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
-from codex_autorunner.integrations.app_server.client import TurnResult
-from codex_autorunner.integrations.app_server.supervisor import (
-    WorkspaceAppServerSupervisor,
-)
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 
-class _DummyTurnHandle:
-    def __init__(self, client):
-        self._client = client
-
-    async def wait(self, *, timeout=None):
-        result = TurnResult(
-            turn_id="t-1",
-            status="ok",
-            final_message="ok",
-            agent_messages=["ok"],
-            errors=[],
-            raw_events=[],
-        )
-        result.error = None
-        result.duration_seconds = 0.0
-        result.token_usage = {}
-        return result
-
-
-class _DummyClient:
+class _FakeOrchestrator:
     def __init__(self):
-        self.thread_start_calls = []
-        self.turn_start_called = False
+        self.calls = []
 
-    async def thread_start(self, *, cwd, approvalPolicy, sandbox):
-        self.thread_start_calls.append(
-            {"cwd": cwd, "approvalPolicy": approvalPolicy, "sandbox": sandbox}
+    async def run_turn(self, agent_id, state, prompt, **kwargs):
+        self.calls.append(
+            {
+                "agent_id": agent_id,
+                "prompt": prompt,
+                "approval_policy": state.autorunner_approval_policy,
+                "sandbox_mode": state.autorunner_sandbox_mode,
+                **kwargs,
+            }
         )
-        return {"id": "thread-1"}
+        yield Started(timestamp="now", session_id="thread-1")
+        yield Completed(timestamp="now", final_message="ok")
 
-    async def turn_start(self, thread_id, message):
-        self.turn_start_called = True
-        return _DummyTurnHandle(self)
+    def get_context(self):
+        return None
 
+    def get_last_turn_id(self):
+        return "turn-1"
 
-class _CaptureSupervisor:
-    def __init__(self, *_, default_approval_decision="accept", **__):
-        self.default_approval_decision = default_approval_decision
-        self.client = _DummyClient()
-
-    async def get_client(self, workspace_root: Path):
-        return self.client
+    async def close_all(self):
+        return None
 
 
 @pytest.mark.asyncio
-async def test_agent_pool_respects_ticket_flow_approval_defaults(
-    monkeypatch, tmp_path: Path
-):
-    captured = {}
-
-    def _capture_supervisor(*args, **kwargs):
-        sup = _CaptureSupervisor(*args, **kwargs)
-        captured["default_approval_decision"] = sup.default_approval_decision
-        return sup
-
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.agent_pool_impl.WorkspaceAppServerSupervisor",
-        _capture_supervisor,
-    )
-
+async def test_agent_pool_respects_ticket_flow_approval_defaults(tmp_path: Path):
     app_server_cfg = _parse_app_server_config(
         None, tmp_path, DEFAULT_REPO_CONFIG["app_server"]
     )
     cfg = SimpleNamespace(
+        root=tmp_path,
         app_server=app_server_cfg,
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
         ticket_flow={"approval_mode": "safe", "default_approval_decision": "cancel"},
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
+    fake = _FakeOrchestrator()
+    pool._backend_orchestrator = fake  # type: ignore[assignment]
 
-    result = await pool._run_codex_turn(
+    result = await pool.run_turn(
         AgentTurnRequest(agent_id="codex", prompt="hi", workspace_root=tmp_path)
     )
 
     assert result.text == "ok"
-    assert captured["default_approval_decision"] == "cancel"
-    client = pool._app_server_supervisor.client  # type: ignore[attr-defined]
-    assert client.thread_start_calls[0]["approvalPolicy"] == "on-request"
+    assert fake.calls[0]["approval_policy"] == "on-request"
+    assert fake.calls[0]["sandbox_mode"] == "workspaceWrite"
 
 
 @pytest.mark.asyncio
-async def test_agent_pool_uses_yolo_policy_for_ticket_flow(monkeypatch, tmp_path: Path):
-    supervisor = _CaptureSupervisor()
-
-    async def _dummy_get_client(_self, workspace_root):
-        return supervisor.client
-
-    monkeypatch.setattr(
-        WorkspaceAppServerSupervisor,
-        "get_client",
-        _dummy_get_client,
-    )
-    # Avoid creating new supervisor inside AgentPool.
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.agent_pool_impl.WorkspaceAppServerSupervisor",
-        lambda *a, **k: supervisor,
-    )
-
+async def test_agent_pool_uses_yolo_policy_for_ticket_flow(tmp_path: Path):
     app_server_cfg = _parse_app_server_config(
         None, tmp_path, DEFAULT_REPO_CONFIG["app_server"]
     )
     cfg = SimpleNamespace(
+        root=tmp_path,
         app_server=app_server_cfg,
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
         ticket_flow={"approval_mode": "yolo", "default_approval_decision": "accept"},
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
+    fake = _FakeOrchestrator()
+    pool._backend_orchestrator = fake  # type: ignore[assignment]
 
-    await pool._run_codex_turn(
+    await pool.run_turn(
         AgentTurnRequest(agent_id="codex", prompt="hi", workspace_root=tmp_path)
     )
 
-    assert supervisor.client.thread_start_calls[0]["approvalPolicy"] == "never"
+    assert fake.calls[0]["approval_policy"] == "never"
+    assert fake.calls[0]["sandbox_mode"] == "dangerFullAccess"
 
 
 def test_parse_app_server_output_policy_default(tmp_path: Path) -> None:

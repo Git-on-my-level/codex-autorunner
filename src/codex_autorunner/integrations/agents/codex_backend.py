@@ -49,6 +49,7 @@ class CodexAppServerBackend(AgentBackend):
         restart_backoff_jitter_ratio: Optional[float] = None,
         output_policy: str = "final_only",
         notification_handler: Optional[NotificationHandler] = None,
+        default_approval_decision: str = "accept",
         logger: Optional[logging.Logger] = None,
     ):
         self._command = command
@@ -74,6 +75,12 @@ class CodexAppServerBackend(AgentBackend):
         self._restart_backoff_jitter_ratio = restart_backoff_jitter_ratio
         self._output_policy = output_policy
         self._notification_handler = notification_handler
+        self._default_approval_decision = (
+            default_approval_decision.strip()
+            if isinstance(default_approval_decision, str)
+            and default_approval_decision.strip()
+            else "accept"
+        )
         self._logger = logger or _logger
 
         self._client: Optional[CodexAppServerClient] = None
@@ -106,6 +113,7 @@ class CodexAppServerBackend(AgentBackend):
                 restart_backoff_jitter_ratio=self._restart_backoff_jitter_ratio,
                 output_policy=self._output_policy,
                 logger=self._logger,
+                default_approval_decision=self._default_approval_decision,
             )
             await self._client.start()
         return self._client
@@ -119,6 +127,7 @@ class CodexAppServerBackend(AgentBackend):
         reasoning_effort: Optional[str],
         turn_timeout_seconds: Optional[float],
         notification_handler: Optional[NotificationHandler],
+        default_approval_decision: Optional[str] = None,
     ) -> None:
         self._approval_policy = approval_policy
         self._sandbox_policy = sandbox_policy
@@ -126,6 +135,15 @@ class CodexAppServerBackend(AgentBackend):
         self._reasoning_effort = reasoning_effort
         self._turn_timeout_seconds = turn_timeout_seconds
         self._notification_handler = notification_handler
+        if (
+            isinstance(default_approval_decision, str)
+            and default_approval_decision.strip()
+        ):
+            self._default_approval_decision = default_approval_decision.strip()
+            if self._client is not None:
+                self._client._default_approval_decision = (
+                    self._default_approval_decision
+                )
 
     async def start_session(self, target: dict, context: dict) -> str:
         client = await self._ensure_client()
@@ -380,7 +398,11 @@ class CodexAppServerBackend(AgentBackend):
             )
         )
 
-        return {"approve": True}
+        decision = self._default_approval_decision.strip().lower()
+        return {
+            "approve": decision
+            in {"accept", "approve", "approved", "allow", "yes", "true"}
+        }
 
     async def _handle_notification(self, notification: Dict[str, Any]) -> None:
         if self._notification_handler is not None:

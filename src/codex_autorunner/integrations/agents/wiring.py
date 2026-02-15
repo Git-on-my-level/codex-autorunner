@@ -83,6 +83,14 @@ class AgentBackendFactory:
                 event_prefix="autorunner",
                 logger=self._logger,
             )
+            ticket_flow_cfg = (
+                self._config.ticket_flow
+                if isinstance(self._config.ticket_flow, dict)
+                else {}
+            )
+            default_approval_decision = str(
+                ticket_flow_cfg.get("default_approval_decision", "accept")
+            )
 
             cached = self._backend_cache.get(agent_id)
             if cached is None:
@@ -109,6 +117,7 @@ class AgentBackendFactory:
                     output_policy=self._config.app_server.output.policy,
                     notification_handler=notification_handler,
                     logger=self._logger,
+                    default_approval_decision=default_approval_decision,
                 )
                 self._backend_cache[agent_id] = cached
             else:
@@ -120,6 +129,7 @@ class AgentBackendFactory:
                         reasoning_effort=reasoning_effort,
                         turn_timeout_seconds=None,
                         notification_handler=notification_handler,
+                        default_approval_decision=default_approval_decision,
                     )
             return cached
 

@@ -137,6 +137,7 @@ class BackendOrchestrator:
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         session_key: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> AsyncGenerator[RunEvent, None]:
         """
         Run a turn on the backend.
@@ -144,15 +145,17 @@ class BackendOrchestrator:
         Yields RunEvent objects.
         """
         reuse_session = bool(getattr(self._config, "autorunner_reuse_session", False))
-        session_id: Optional[str] = None
-        if reuse_session and session_key:
-            session_id = self.get_thread_id(session_key)
-        if reuse_session and session_id is None and self._context is not None:
-            session_id = self._context.session_id
+        effective_session_id = session_id
+        if reuse_session and session_key and not effective_session_id:
+            effective_session_id = self.get_thread_id(session_key)
+        if reuse_session and effective_session_id is None and self._context is not None:
+            effective_session_id = self._context.session_id
 
-        session_id = await self.start_session(agent_id, state, session_id=session_id)
-        if reuse_session and session_key and session_id:
-            self.set_thread_id(session_key, session_id)
+        effective_session_id = await self.start_session(
+            agent_id, state, session_id=effective_session_id
+        )
+        if reuse_session and session_key and effective_session_id:
+            self.set_thread_id(session_key, effective_session_id)
 
         backend = self._active_backend
         assert backend is not None, "backend should be initialized before run_turn"
@@ -166,6 +169,11 @@ class BackendOrchestrator:
                 reasoning_effort=reasoning,
                 turn_timeout_seconds=None,
                 notification_handler=self._notification_handler,
+                default_approval_decision=str(
+                    getattr(self._config, "ticket_flow", {}).get(
+                        "default_approval_decision", "accept"
+                    )
+                ),
             )
         elif isinstance(backend, OpenCodeBackend):
             backend.configure(
@@ -174,7 +182,7 @@ class BackendOrchestrator:
                 approval_policy=state.autorunner_approval_policy,
             )
 
-        async for event in backend.run_turn_events(session_id, prompt):
+        async for event in backend.run_turn_events(effective_session_id, prompt):
             yield event
 
             # Update context from events
