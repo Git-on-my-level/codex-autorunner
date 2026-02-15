@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 
 import pytest
-from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -14,6 +13,7 @@ from codex_autorunner.core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from tests.conftest import write_test_config
 
 
 def test_load_hub_config_prefers_config_over_root_overrides(tmp_path: Path) -> None:

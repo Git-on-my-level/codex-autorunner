@@ -9,7 +9,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
-from tests.conftest import write_test_config
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -29,6 +28,7 @@ from codex_autorunner.integrations.agents.wiring import (
 )
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id
 from codex_autorunner.server import create_hub_app
+from tests.conftest import write_test_config
 
 
 def _init_git_repo(path: Path) -> None:
