@@ -9,7 +9,6 @@ from typing import Any, Awaitable, Callable, Optional
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
 from ...core.state import RunnerState
-from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.env import build_app_server_env
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from .codex_backend import CodexAppServerBackend
@@ -23,26 +22,6 @@ BackendFactory = Callable[
 SupervisorFactory = Callable[[str, Optional[NotificationHandler]], Any]
 
 
-def _build_workspace_env(
-    repo_root: Path,
-    config: RepoConfig,
-    *,
-    event_prefix: str,
-    logger: logging.Logger,
-) -> dict[str, str]:
-    workspace_root = canonical_workspace_root(repo_root)
-    workspace_id = workspace_id_for_path(workspace_root)
-    state_dir = config.app_server.state_root / workspace_id
-    state_dir.mkdir(parents=True, exist_ok=True)
-    return build_app_server_env(
-        config.app_server.command,
-        workspace_root,
-        state_dir,
-        logger=logger,
-        event_prefix=event_prefix,
-    )
-
-
 class AgentBackendFactory:
     def __init__(self, repo_root: Path, config: RepoConfig) -> None:
         self._repo_root = repo_root
@@ -50,6 +29,7 @@ class AgentBackendFactory:
         self._logger = logging.getLogger("codex_autorunner.app_server")
         self._backend_cache: dict[str, AgentBackend] = {}
         self._opencode_supervisor: Optional[Any] = None
+        self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = None
 
     def __call__(
         self,
@@ -77,12 +57,6 @@ class AgentBackendFactory:
                 state.autorunner_effort_override or self._config.codex_reasoning
             )
 
-            env = _build_workspace_env(
-                self._repo_root,
-                self._config,
-                event_prefix="autorunner",
-                logger=self._logger,
-            )
             ticket_flow_cfg = (
                 self._config.ticket_flow
                 if isinstance(self._config.ticket_flow, dict)
@@ -95,9 +69,8 @@ class AgentBackendFactory:
             cached = self._backend_cache.get(agent_id)
             if cached is None:
                 cached = CodexAppServerBackend(
-                    command=self._config.app_server.command,
-                    cwd=self._repo_root,
-                    env=env,
+                    supervisor=self._ensure_codex_supervisor(),
+                    workspace_root=self._repo_root,
                     approval_policy=approval_policy,
                     sandbox_policy=sandbox_policy,
                     model=model,
@@ -213,6 +186,52 @@ class AgentBackendFactory:
                     "Failed closing opencode supervisor", exc_info=True
                 )
             self._opencode_supervisor = None
+        if self._codex_supervisor is not None:
+            try:
+                await self._codex_supervisor.close_all()
+            except Exception:
+                self._logger.warning("Failed closing codex supervisor", exc_info=True)
+            self._codex_supervisor = None
+
+    def _ensure_codex_supervisor(self) -> WorkspaceAppServerSupervisor:
+        if self._codex_supervisor is not None:
+            return self._codex_supervisor
+        if not self._config.app_server.command:
+            raise ValueError("app_server.command is required for codex backend")
+
+        def _env_builder(
+            workspace_root: Path, _workspace_id: str, state_dir: Path
+        ) -> dict[str, str]:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            return build_app_server_env(
+                self._config.app_server.command,
+                workspace_root,
+                state_dir,
+                logger=self._logger,
+                event_prefix="autorunner",
+            )
+
+        self._codex_supervisor = WorkspaceAppServerSupervisor(
+            self._config.app_server.command,
+            state_root=self._config.app_server.state_root,
+            env_builder=_env_builder,
+            logger=self._logger,
+            auto_restart=self._config.app_server.auto_restart,
+            max_handles=self._config.app_server.max_handles,
+            idle_ttl_seconds=self._config.app_server.idle_ttl_seconds,
+            request_timeout=self._config.app_server.request_timeout,
+            turn_stall_timeout_seconds=self._config.app_server.turn_stall_timeout_seconds,
+            turn_stall_poll_interval_seconds=self._config.app_server.turn_stall_poll_interval_seconds,
+            turn_stall_recovery_min_interval_seconds=self._config.app_server.turn_stall_recovery_min_interval_seconds,
+            max_message_bytes=self._config.app_server.client.max_message_bytes,
+            oversize_preview_bytes=self._config.app_server.client.oversize_preview_bytes,
+            max_oversize_drain_bytes=self._config.app_server.client.max_oversize_drain_bytes,
+            restart_backoff_initial_seconds=self._config.app_server.client.restart_backoff_initial_seconds,
+            restart_backoff_max_seconds=self._config.app_server.client.restart_backoff_max_seconds,
+            restart_backoff_jitter_ratio=self._config.app_server.client.restart_backoff_jitter_ratio,
+            output_policy=self._config.app_server.output.policy,
+        )
+        return self._codex_supervisor
 
 
 def build_agent_backend_factory(repo_root: Path, config: RepoConfig) -> BackendFactory:

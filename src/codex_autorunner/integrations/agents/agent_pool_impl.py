@@ -5,7 +5,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional, cast
 
-from ...core.app_server_ids import extract_turn_id
 from ...core.flows.models import FlowEventType
 from ...core.ports.run_event import (
     Completed,
@@ -17,6 +16,7 @@ from ...core.ports.run_event import (
 )
 from ...core.state import RunnerState
 from ...tickets.agent_pool import AgentTurnRequest, AgentTurnResult, EmitEventFn
+from ..app_server.ids import extract_turn_id
 from .backend_orchestrator import BackendOrchestrator
 
 _logger = logging.getLogger(__name__)
