@@ -81,8 +81,11 @@ class _FlowCallbackHandler(FlowCommands):
         self.stopped_workers.append(run_id)
 
     def _resolve_workspace(self, arg: str) -> tuple[str, str] | None:
-        if self._repo_root and arg == "car-wt-3":
-            return str(self._repo_root), "car-wt-3"
+        if self._repo_root and arg in {
+            "car-wt-3",
+            "codex-autorunner--architecture-boundary-refactors",
+        }:
+            return str(self._repo_root), arg
         return None
 
 
@@ -198,6 +201,23 @@ async def test_flow_callback_refresh_uses_repo_id_when_topic_unbound(
 
     assert "Refreshing..." in handler.answers
     assert handler.rendered == [(tmp_path, "run-1", "car-wt-3")]
+
+
+@pytest.mark.anyio
+async def test_flow_callback_refresh_uses_cached_repo_context_when_repo_id_omitted(
+    tmp_path: Path,
+) -> None:
+    handler = _FlowCallbackHandler(None, resolved_repo_root=tmp_path)
+    repo_id = "codex-autorunner--architecture-boundary-refactors"
+    handler._flow_repo_context = {"run-1": repo_id}
+
+    await handler._handle_flow_callback(
+        _callback(),
+        FlowCallback(action="refresh", run_id="run-1"),
+    )
+
+    assert "Refreshing..." in handler.answers
+    assert handler.rendered == [(tmp_path, "run-1", repo_id)]
 
 
 class _SelectionFlowRunHandler(TelegramSelectionHandlers):

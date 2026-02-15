@@ -199,8 +199,29 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                         all_runs = store.list_flow_runs(flow_type="ticket_flow")
                 except Exception:
                     continue
+                newest_run_id: Optional[str] = None
+                newest_created_at: Optional[str] = None
+                for rec in all_runs:
+                    rec_created = str(rec.created_at or "")
+                    rec_id = str(rec.id)
+                    if (
+                        newest_created_at is None
+                        or rec_created > newest_created_at
+                        or (
+                            rec_created == newest_created_at
+                            and rec_id > (newest_run_id or "")
+                        )
+                    ):
+                        newest_created_at = rec_created
+                        newest_run_id = rec_id
                 for record in all_runs:
                     if record.status not in active_statuses:
+                        continue
+                    if (
+                        newest_run_id is not None
+                        and str(record.id) != newest_run_id
+                        and record.status == FlowRunStatus.PAUSED
+                    ):
                         continue
                     record_input = dict(record.input_data or {})
                     latest = _latest_dispatch(repo_root, str(record.id), record_input)
@@ -208,11 +229,15 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                     latest_reply_seq = _latest_reply_history_seq(
                         repo_root, str(record.id), record_input
                     )
+                    dispatch_mode = None
+                    if latest and latest.get("dispatch"):
+                        dispatch_mode = latest["dispatch"].get("mode")
                     has_pending_dispatch = bool(
                         latest
                         and latest.get("dispatch")
                         and seq > 0
                         and latest_reply_seq < seq
+                        and dispatch_mode != "turn_summary"
                     )
 
                     dispatch_state_reason = None
@@ -220,7 +245,11 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                         record.status == FlowRunStatus.PAUSED
                         and not has_pending_dispatch
                     ):
-                        if latest and latest.get("errors"):
+                        if dispatch_mode == "turn_summary":
+                            dispatch_state_reason = (
+                                "Run is paused with an informational turn summary"
+                            )
+                        elif latest and latest.get("errors"):
                             dispatch_state_reason = (
                                 "Paused run has unreadable dispatch metadata"
                             )

@@ -59,6 +59,7 @@ from ...types import PendingQuestion, SelectionState
 from .shared import SharedHelpers
 
 _logger = logging.getLogger(__name__)
+_FLOW_REPO_CONTEXT_CACHE_MAX = 512
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -234,6 +235,40 @@ def _select_latest_run(
 
 
 class FlowCommands(SharedHelpers):
+    def _flow_repo_context_cache(self) -> dict[str, str]:
+        cache = getattr(self, "_flow_repo_context", None)
+        if isinstance(cache, dict):
+            return cache
+        cache = {}
+        self._flow_repo_context = cache
+        return cache
+
+    def _remember_flow_repo_context(
+        self, run_id: Optional[str], repo_id: Optional[str]
+    ) -> None:
+        run_id = str(run_id or "").strip()
+        repo_id = str(repo_id or "").strip()
+        if not run_id or not repo_id:
+            return
+        cache = self._flow_repo_context_cache()
+        cache.pop(run_id, None)
+        cache[run_id] = repo_id
+        while len(cache) > _FLOW_REPO_CONTEXT_CACHE_MAX:
+            oldest_run_id = next(iter(cache))
+            cache.pop(oldest_run_id, None)
+
+    def _resolve_flow_repo_context(
+        self, run_id: Optional[str], repo_id: Optional[str]
+    ) -> Optional[str]:
+        repo_id = str(repo_id or "").strip() or None
+        if repo_id:
+            self._remember_flow_repo_context(run_id, repo_id)
+            return repo_id
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+        return self._flow_repo_context_cache().get(run_id)
+
     def _github_bootstrap_status(self, repo_root: Path) -> tuple[bool, Optional[str]]:
         result = bootstrap_check(repo_root, github_service_factory=GitHubService)
         return bool(result.github_available), result.repo_slug
@@ -503,8 +538,11 @@ class FlowCommands(SharedHelpers):
         key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
         record = await self._store.get_topic(key)
         repo_root: Optional[Path] = None
-        if parsed.repo_id:
-            resolved = self._resolve_workspace(parsed.repo_id)
+        effective_repo_id = self._resolve_flow_repo_context(
+            parsed.run_id, parsed.repo_id
+        )
+        if effective_repo_id:
+            resolved = self._resolve_workspace(effective_repo_id)
             if resolved:
                 repo_root = canonicalize_path(Path(resolved[0]))
         if repo_root is None and record and record.workspace_path:
@@ -524,7 +562,7 @@ class FlowCommands(SharedHelpers):
         if action in {"refresh", "status"}:
             await self._answer_callback(callback, "Refreshing...")
             await self._render_flow_status_callback(
-                callback, repo_root, run_id_raw, repo_id=parsed.repo_id
+                callback, repo_root, run_id_raw, repo_id=effective_repo_id
             )
             return
 
@@ -679,7 +717,7 @@ class FlowCommands(SharedHelpers):
         elif notice:
             await self._answer_callback(callback, notice)
         await self._render_flow_status_callback(
-            callback, repo_root, run_id_raw, repo_id=parsed.repo_id
+            callback, repo_root, run_id_raw, repo_id=effective_repo_id
         )
 
     def _resolve_run_id_input(
@@ -822,17 +860,27 @@ class FlowCommands(SharedHelpers):
         if status is None:
             return None
         run_id = record.id
+
+        def _flow_callback_data(action: str) -> str:
+            try:
+                return encode_flow_callback(action, run_id, repo_id=repo_id)
+            except ValueError as exc:
+                if repo_id and "callback_data exceeds Telegram limit" in str(exc):
+                    self._remember_flow_repo_context(run_id, repo_id)
+                    return encode_flow_callback(action, run_id)
+                raise
+
         rows: list[list[InlineButton]] = []
         if status == FlowRunStatus.PAUSED:
             rows.append(
                 [
                     InlineButton(
                         "Resume",
-                        encode_flow_callback("resume", run_id, repo_id=repo_id),
+                        _flow_callback_data("resume"),
                     ),
                     InlineButton(
                         "Restart",
-                        encode_flow_callback("restart", run_id, repo_id=repo_id),
+                        _flow_callback_data("restart"),
                     ),
                 ]
             )
@@ -840,7 +888,7 @@ class FlowCommands(SharedHelpers):
                 [
                     InlineButton(
                         "Archive",
-                        encode_flow_callback("archive", run_id, repo_id=repo_id),
+                        _flow_callback_data("archive"),
                     )
                 ]
             )
@@ -849,11 +897,11 @@ class FlowCommands(SharedHelpers):
                 [
                     InlineButton(
                         "Restart",
-                        encode_flow_callback("restart", run_id, repo_id=repo_id),
+                        _flow_callback_data("restart"),
                     ),
                     InlineButton(
                         "Archive",
-                        encode_flow_callback("archive", run_id, repo_id=repo_id),
+                        _flow_callback_data("archive"),
                     ),
                 ]
             )
@@ -861,7 +909,7 @@ class FlowCommands(SharedHelpers):
                 [
                     InlineButton(
                         "Refresh",
-                        encode_flow_callback("refresh", run_id, repo_id=repo_id),
+                        _flow_callback_data("refresh"),
                     )
                 ]
             )
@@ -871,11 +919,11 @@ class FlowCommands(SharedHelpers):
                     [
                         InlineButton(
                             "Recover",
-                            encode_flow_callback("recover", run_id, repo_id=repo_id),
+                            _flow_callback_data("recover"),
                         ),
                         InlineButton(
                             "Refresh",
-                            encode_flow_callback("refresh", run_id, repo_id=repo_id),
+                            _flow_callback_data("refresh"),
                         ),
                     ]
                 )
@@ -884,11 +932,11 @@ class FlowCommands(SharedHelpers):
                     [
                         InlineButton(
                             "Stop",
-                            encode_flow_callback("stop", run_id, repo_id=repo_id),
+                            _flow_callback_data("stop"),
                         ),
                         InlineButton(
                             "Refresh",
-                            encode_flow_callback("refresh", run_id, repo_id=repo_id),
+                            _flow_callback_data("refresh"),
                         ),
                     ]
                 )
@@ -897,7 +945,7 @@ class FlowCommands(SharedHelpers):
                     [
                         InlineButton(
                             "Refresh",
-                            encode_flow_callback("refresh", run_id, repo_id=repo_id),
+                            _flow_callback_data("refresh"),
                         )
                     ]
                 )
