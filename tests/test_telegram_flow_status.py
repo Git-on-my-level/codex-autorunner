@@ -14,7 +14,11 @@ from codex_autorunner.core.flows.models import (
     FlowRunStatus,
 )
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
+from codex_autorunner.integrations.telegram.adapter import (
+    FlowCallback,
+    TelegramMessage,
+    parse_callback_data,
+)
 from codex_autorunner.integrations.telegram.handlers.commands import (
     flows as flows_module,
 )
@@ -128,6 +132,25 @@ def test_flow_status_keyboard_terminal(tmp_path: Path) -> None:
     rows = keyboard["inline_keyboard"]
     texts = [button["text"] for row in rows for button in row]
     assert texts == ["Restart", "Archive", "Refresh"]
+
+
+def test_flow_status_keyboard_falls_back_when_repo_id_is_too_long(
+    tmp_path: Path,
+) -> None:
+    handler = FlowCommands()
+    record = _record(FlowRunStatus.PAUSED)
+    long_repo_id = "codex-autorunner--architecture-boundary-refactors"
+
+    keyboard = handler._build_flow_status_keyboard(
+        record, health=_health(tmp_path), repo_id=long_repo_id
+    )
+
+    assert keyboard is not None
+    callback_data = keyboard["inline_keyboard"][0][0]["callback_data"]
+    assert parse_callback_data(callback_data) == FlowCallback(
+        action="resume", run_id=record.id, repo_id=None
+    )
+    assert handler._flow_repo_context[record.id] == long_repo_id
 
 
 class _FlowStatusHandler(FlowCommands):
