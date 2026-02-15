@@ -340,8 +340,14 @@ def register_doctor_commands(
     def doctor_processes(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
         json_output: bool = typer.Option(False, "--json", help="Output JSON"),
-        save: bool = typer.Option(False, "--save", help="Save snapshot to .codex-autorunner/diagnostics/process-snapshot.json"),
-        top_n: int = typer.Option(5, "--top", help="Number of processes to show per category"),
+        save: bool = typer.Option(
+            False,
+            "--save",
+            help="Save snapshot to .codex-autorunner/diagnostics/process-snapshot.json",
+        ),
+        top_n: int = typer.Option(
+            5, "--top", help="Number of processes to show per category"
+        ),
     ):
         """
         Capture a snapshot of CAR-related processes (opencode, codex app-server).
@@ -379,6 +385,11 @@ def register_doctor_commands(
             typer.echo(f"  - {proc.pid}: {proc.command[:100]}")
 
         if save and hub_config:
-            output_path = hub_config.root / ".codex-autorunner" / "diagnostics" / "process-snapshot.json"
+            output_path = (
+                hub_config.root
+                / ".codex-autorunner"
+                / "diagnostics"
+                / "process-snapshot.json"
+            )
             write_snapshot_to_file(snapshot, output_path)
             typer.echo(f"\nSnapshot saved to: {output_path}")

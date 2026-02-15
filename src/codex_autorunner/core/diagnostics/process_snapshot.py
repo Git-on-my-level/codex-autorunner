@@ -27,7 +27,9 @@ class ProcessSnapshot:
     opencode_processes: list[ProcessInfo] = field(default_factory=list)
     app_server_processes: list[ProcessInfo] = field(default_factory=list)
     other_processes: list[ProcessInfo] = field(default_factory=list)
-    collected_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    collected_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {

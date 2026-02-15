@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -509,6 +510,7 @@ def register_flow_commands(
         exit_code_holder = [0]
         _repo_root = engine.repo_root
         _artifacts_root = artifacts_root
+        shutdown_event = threading.Event()
 
         def _write_exit_info() -> None:
             try:
@@ -523,9 +525,7 @@ def register_flow_commands(
 
         def _signal_handler(signum: int, _frame) -> None:
             exit_code_holder[0] = -signum
-            _write_exit_info()
-            signal.signal(signum, signal.SIG_DFL)
-            os.kill(os.getpid(), signum)
+            shutdown_event.set()
 
         atexit.register(_write_exit_info)
         signal.signal(signal.SIGTERM, _signal_handler)
@@ -590,32 +590,57 @@ def register_flow_commands(
                 durable=engine.config.durable_writes,
             )
             controller.initialize()
-
-            record = controller.get_status(normalized_run_id)
-            if not record:
-                typer.echo(f"Flow run {normalized_run_id} not found", err=True)
-                raise typer.Exit(code=1)
-
-            if record.status.is_terminal() and record.status not in {
-                FlowRunStatus.STOPPED,
-                FlowRunStatus.FAILED,
-            }:
-                typer.echo(
-                    f"Flow run {normalized_run_id} already completed (status={record.status})"
-                )
-                return
-
-            action = (
-                "Resuming" if record.status != FlowRunStatus.PENDING else "Starting"
-            )
-            typer.echo(
-                f"{action} flow run {normalized_run_id} from step: {record.current_step}"
-            )
+            shutdown_requested = False
             try:
-                final_record = await controller.run_flow(normalized_run_id)
-                typer.echo(
-                    f"Flow run {normalized_run_id} finished with status {final_record.status}"
+                record = controller.get_status(normalized_run_id)
+                if not record:
+                    typer.echo(f"Flow run {normalized_run_id} not found", err=True)
+                    raise typer.Exit(code=1)
+
+                if record.status.is_terminal() and record.status not in {
+                    FlowRunStatus.STOPPED,
+                    FlowRunStatus.FAILED,
+                }:
+                    typer.echo(
+                        f"Flow run {normalized_run_id} already completed (status={record.status})"
+                    )
+                    return
+
+                action = (
+                    "Resuming" if record.status != FlowRunStatus.PENDING else "Starting"
                 )
+                typer.echo(
+                    f"{action} flow run {normalized_run_id} from step: {record.current_step}"
+                )
+
+                run_task = asyncio.create_task(controller.run_flow(normalized_run_id))
+                shutdown_wait_task = asyncio.create_task(
+                    asyncio.to_thread(shutdown_event.wait)
+                )
+                done, _ = await asyncio.wait(
+                    {run_task, shutdown_wait_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                shutdown_requested = (
+                    shutdown_wait_task in done and shutdown_event.is_set()
+                )
+
+                if shutdown_requested and not run_task.done():
+                    await controller.stop_flow(normalized_run_id)
+                    run_task.cancel()
+
+                if run_task.done():
+                    final_record = await run_task
+                    typer.echo(
+                        f"Flow run {normalized_run_id} finished with status {final_record.status}"
+                    )
+                else:
+                    try:
+                        await run_task
+                    except asyncio.CancelledError:
+                        typer.echo(f"Flow run {normalized_run_id} cancelled by signal")
+                if not shutdown_wait_task.done():
+                    shutdown_wait_task.cancel()
             except Exception as exc:
                 exit_code_holder[0] = 1
                 last_event = None
@@ -643,11 +668,13 @@ def register_flow_commands(
                 )
                 raise
             finally:
+                controller.shutdown()
                 if agent_pool is not None:
                     try:
                         await agent_pool.close_all()
                     except Exception:
                         typer.echo("Failed to close agent pool cleanly", err=True)
+                _write_exit_info()
 
         asyncio.run(_run_worker())
 

@@ -1,12 +1,8 @@
-import pytest
-
 from codex_autorunner.core.diagnostics.process_snapshot import (
     ProcessCategory,
-    ProcessSnapshot,
     _classify_process,
     parse_ps_output,
 )
-
 
 SAMPLE_PS_OUTPUT = """\
 1234 /usr/bin/opencode serve --port 8080
@@ -25,15 +21,29 @@ class TestClassifyProcess:
         assert _classify_process("/usr/bin/opencode serve") == ProcessCategory.OPENCODE
 
     def test_codex_autorunner_in_command(self):
-        assert _classify_process("/usr/bin/codex_autorunner run") == ProcessCategory.OPENCODE
+        assert (
+            _classify_process("/usr/bin/codex_autorunner run")
+            == ProcessCategory.OPENCODE
+        )
 
     def test_app_server_classic_format(self):
-        assert _classify_process("/usr/bin/codex app-server") == ProcessCategory.APP_SERVER
+        assert (
+            _classify_process("/usr/bin/codex app-server") == ProcessCategory.APP_SERVER
+        )
 
     def test_app_server_alternative_formats(self):
-        assert _classify_process("codexapp-server --port 8080") == ProcessCategory.APP_SERVER
-        assert _classify_process("codex:app-server --workspace /foo") == ProcessCategory.APP_SERVER
-        assert _classify_process("codex -- app-server --port 9000") == ProcessCategory.APP_SERVER
+        assert (
+            _classify_process("codexapp-server --port 8080")
+            == ProcessCategory.APP_SERVER
+        )
+        assert (
+            _classify_process("codex:app-server --workspace /foo")
+            == ProcessCategory.APP_SERVER
+        )
+        assert (
+            _classify_process("codex -- app-server --port 9000")
+            == ProcessCategory.APP_SERVER
+        )
 
     def test_other_process(self):
         assert _classify_process("/usr/bin/some-other-process") == ProcessCategory.OTHER
