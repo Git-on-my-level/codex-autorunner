@@ -4,11 +4,13 @@ import logging
 import os
 import random
 import re
+import signal
 import time
 import uuid
 import weakref
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import (
@@ -31,6 +33,11 @@ from ...core.exceptions import (
     TransientError,
 )
 from ...core.logging_utils import log_event, sanitize_log_value
+from ...core.managed_processes.registry import (
+    ProcessRecord,
+    delete_process_record,
+    write_process_record,
+)
 from ...core.retry import retry_transient
 from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 
@@ -165,6 +172,7 @@ class CodexAppServerClient:
         output_policy: str = _DEFAULT_OUTPUT_POLICY,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
+        workspace_id: Optional[str] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._cwd = str(cwd) if cwd is not None else None
@@ -183,6 +191,7 @@ class CodexAppServerClient:
         self._request_timeout = request_timeout
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
+        self._workspace_id = workspace_id
         self._circuit_breaker = CircuitBreaker("App-Server", logger=self._logger)
         self._max_message_bytes = (
             max_message_bytes
@@ -220,6 +229,7 @@ class CodexAppServerClient:
         self._output_policy = _normalize_output_policy(output_policy)
 
         self._process: Optional[asyncio.subprocess.Process] = None
+        self._process_registry_key: Optional[str] = None
         self._reader_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
         self._start_lock: Optional[asyncio.Lock] = None
@@ -592,14 +602,19 @@ class CodexAppServerClient:
 
     async def _spawn_process(self) -> None:
         await self._terminate_process()
+        popen_kwargs: dict[str, Any] = {
+            "cwd": self._cwd,
+            "env": self._env,
+            "stdin": asyncio.subprocess.PIPE,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+        }
+        if os.name != "nt":
+            popen_kwargs["start_new_session"] = True
         self._process = await asyncio.create_subprocess_exec(
-            *self._command,
-            cwd=self._cwd,
-            env=self._env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            *self._command, **popen_kwargs
         )
+        self._register_process_record()
         log_event(
             self._logger,
             logging.INFO,
@@ -1497,14 +1512,92 @@ class CodexAppServerClient:
                 pass
         if self._process is None:
             return
+        self._unregister_process_record(self._process)
         if self._process.returncode is None:
-            self._process.terminate()
+            if os.name != "nt" and hasattr(os, "killpg"):
+                try:
+                    # Process is spawned as a session/group leader on POSIX.
+                    os.killpg(self._process.pid, signal.SIGTERM)
+                except Exception:
+                    pass
+            try:
+                os.kill(self._process.pid, signal.SIGTERM)
+            except Exception:
+                try:
+                    self._process.terminate()
+                except ProcessLookupError:
+                    pass
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=1)
             except asyncio.TimeoutError:
-                self._process.kill()
+                try:
+                    os.kill(self._process.pid, signal.SIGKILL)
+                except Exception:
+                    self._process.kill()
                 await self._process.wait()
         self._process = None
+
+    def _register_process_record(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        if self._cwd is None:
+            return
+        workspace_root = Path(self._cwd)
+        pgid: Optional[int] = None
+        if os.name != "nt":
+            try:
+                pgid = os.getpgid(process.pid)
+            except Exception:
+                pgid = None
+        record = ProcessRecord(
+            kind="codex_app_server",
+            workspace_id=self._workspace_id,
+            pid=process.pid,
+            pgid=pgid,
+            base_url=None,
+            command=list(self._command),
+            owner_pid=os.getpid(),
+            started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            metadata={"cwd": self._cwd},
+        )
+        try:
+            write_process_record(workspace_root, record)
+            self._process_registry_key = record.record_key()
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.registry.write_failed",
+                workspace_id=self._workspace_id,
+                cwd=self._cwd,
+                exc=exc,
+            )
+
+    def _unregister_process_record(
+        self, process: Optional[asyncio.subprocess.Process] = None
+    ) -> None:
+        if self._cwd is None:
+            return
+        workspace_root = Path(self._cwd)
+        key = self._process_registry_key
+        if key is None and process is not None and process.pid is not None:
+            key = str(process.pid)
+        if not key:
+            return
+        try:
+            delete_process_record(workspace_root, "codex_app_server", key)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.registry.delete_failed",
+                workspace_id=self._workspace_id,
+                cwd=self._cwd,
+                exc=exc,
+            )
+        finally:
+            self._process_registry_key = None
 
 
 def _summarize_params(method: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
