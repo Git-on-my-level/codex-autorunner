@@ -34,6 +34,7 @@ def build_opencode_supervisor_from_repo_config(
         request_timeout=config.app_server.request_timeout,
         max_handles=config.app_server.max_handles,
         idle_ttl_seconds=config.app_server.idle_ttl_seconds,
+        server_scope=config.opencode.server_scope,
         session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
         max_text_chars=config.opencode.max_text_chars,
         base_env=base_env,

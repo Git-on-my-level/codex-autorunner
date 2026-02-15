@@ -85,6 +85,38 @@ async def test_supervisor_reuses_handle(
 
 
 @pytest.mark.asyncio
+async def test_global_scope_uses_single_server_for_two_workspaces(
+    tmp_path: Path,
+) -> None:
+    """Global server scope should reuse one server process across workspaces."""
+    opencode_bin = get_opencode_bin()
+    assert opencode_bin is not None
+    workspace1 = tmp_path / "ws1"
+    workspace2 = tmp_path / "ws2"
+    workspace1.mkdir()
+    workspace2.mkdir()
+    (workspace1 / ".git").mkdir()
+    (workspace2 / ".git").mkdir()
+
+    supervisor = OpenCodeSupervisor(
+        [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"],
+        request_timeout=30.0,
+        server_scope="global",
+    )
+
+    try:
+        client1 = await supervisor.get_client(workspace1)
+        client2 = await supervisor.get_client(workspace2)
+        assert client1 is client2
+        assert len(supervisor._handles) == 1
+        handle = next(iter(supervisor._handles.values()))
+        assert handle.process is not None
+        assert handle.process.pid is not None
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
 async def test_supervisor_closes_handle(
     supervisor: OpenCodeSupervisor, workspace: Path
 ) -> None:

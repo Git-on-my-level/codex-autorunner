@@ -159,6 +159,7 @@ class WorkspaceAppServerSupervisor:
                 self._command,
                 cwd=workspace_root,
                 env=env,
+                workspace_id=workspace_id,
                 approval_handler=self._approval_handler,
                 default_approval_decision=self._default_approval_decision,
                 auto_restart=self._auto_restart,

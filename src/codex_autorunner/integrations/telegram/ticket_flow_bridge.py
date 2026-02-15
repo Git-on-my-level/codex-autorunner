@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Awaitable, Callable, Optional
 
 from ...core.config import load_repo_config
@@ -12,6 +13,7 @@ from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.worker_process import spawn_flow_worker
 from ...core.logging_utils import log_event
+from ...core.runtime_services import RuntimeServices
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
@@ -38,6 +40,7 @@ class TelegramTicketFlowBridge:
         hub_root: Optional[Path] = None,
         manifest_path: Optional[Path] = None,
         config_root: Optional[Path] = None,
+        runtime_services: Optional[RuntimeServices] = None,
     ) -> None:
         self._logger = logger
         self._store = store
@@ -49,6 +52,7 @@ class TelegramTicketFlowBridge:
         self._hub_root = hub_root
         self._manifest_path = manifest_path
         self._config_root = config_root
+        self._runtime_services = runtime_services
         self._last_default_notification: dict[Path, str] = {}
 
     @staticmethod
@@ -336,7 +340,12 @@ class TelegramTicketFlowBridge:
     async def auto_resume_run(self, workspace_root: Path, run_id: str) -> None:
         """Best-effort resume + worker spawn; failures are logged only."""
         try:
-            controller = _ticket_controller_for(workspace_root)
+            if self._runtime_services is not None:
+                controller = self._runtime_services.get_ticket_flow_controller(
+                    workspace_root
+                )
+            else:
+                controller = _ticket_controller_for(workspace_root)
             updated = await controller.resume_flow(run_id)
             if updated:
                 _spawn_ticket_worker(workspace_root, updated.id, self._logger)
@@ -622,6 +631,11 @@ class TelegramTicketFlowBridge:
 
 
 def _ticket_controller_for(repo_root: Path) -> FlowController:
+    resources = _build_ticket_flow_runtime_resources(repo_root)
+    return resources.controller
+
+
+def _build_ticket_flow_runtime_resources(repo_root: Path):
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
@@ -648,10 +662,13 @@ def _ticket_controller_for(repo_root: Path) -> FlowController:
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()
     controller = FlowController(
-        definition=definition, db_path=db_path, artifacts_root=artifacts_root
+        definition=definition,
+        db_path=db_path,
+        artifacts_root=artifacts_root,
+        durable=config.durable_writes,
     )
     controller.initialize()
-    return controller
+    return SimpleNamespace(controller=controller, agent_pool=agent_pool)
 
 
 def _spawn_ticket_worker(repo_root: Path, run_id: str, logger: logging.Logger) -> None:

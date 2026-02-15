@@ -1,3 +1,4 @@
+from .cleanup import register_cleanup_commands
 from .dispatch import register_dispatch_commands
 from .hub import register_hub_commands
 from .hub_tickets import register_hub_tickets_commands
@@ -15,6 +16,7 @@ from .worktree import register_worktree_commands
 
 __all__ = [
     "register_dispatch_commands",
+    "register_cleanup_commands",
     "register_hub_commands",
     "register_hub_tickets_commands",
     "register_inbox_commands",

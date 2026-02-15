@@ -8,6 +8,10 @@ from typing import Any, Optional
 import typer
 
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
+from ....core.diagnostics.process_snapshot import (
+    collect_processes,
+    write_snapshot_to_file,
+)
 from ....core.git_utils import run_git
 from ....core.runtime import (
     DoctorReport,
@@ -331,3 +335,61 @@ def register_doctor_commands(
             f"- source matches checkout: {mismatch.get('source_matches_checkout')}"
         )
         typer.echo(f"- mismatch detected: {mismatch.get('detected')}")
+
+    @doctor_app.command("processes")
+    def doctor_processes(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
+        json_output: bool = typer.Option(False, "--json", help="Output JSON"),
+        save: bool = typer.Option(
+            False,
+            "--save",
+            help="Save snapshot to .codex-autorunner/diagnostics/process-snapshot.json",
+        ),
+        top_n: int = typer.Option(
+            5, "--top", help="Number of processes to show per category"
+        ),
+    ):
+        """
+        Capture a snapshot of CAR-related processes (opencode, codex app-server).
+
+        Useful for diagnosing process leaks. Repro steps:
+        1. Start a ticket_flow worker
+        2. Stop it (SIGTERM)
+        3. Run this command before and after to compare process counts
+
+        This command shows counts and top N cmdlines for:
+        - opencode processes
+        - codex app-server processes
+        """
+        try:
+            start_path = repo or Path.cwd()
+            hub_config = load_hub_config(start_path)
+        except ConfigError:
+            hub_config = None
+
+        snapshot = collect_processes()
+
+        if json_output:
+            typer.echo(json.dumps(snapshot.to_dict(), indent=2))
+            return
+
+        typer.echo("Process Snapshot")
+        typer.echo(f"- collected at: {snapshot.collected_at}")
+
+        typer.echo(f"\nopencode processes: {snapshot.opencode_count}")
+        for proc in snapshot.opencode_processes[:top_n]:
+            typer.echo(f"  - {proc.pid}: {proc.command[:100]}")
+
+        typer.echo(f"\ncodex app-server processes: {snapshot.app_server_count}")
+        for proc in snapshot.app_server_processes[:top_n]:
+            typer.echo(f"  - {proc.pid}: {proc.command[:100]}")
+
+        if save and hub_config:
+            output_path = (
+                hub_config.root
+                / ".codex-autorunner"
+                / "diagnostics"
+                / "process-snapshot.json"
+            )
+            write_snapshot_to_file(snapshot, output_path)
+            typer.echo(f"\nSnapshot saved to: {output_path}")

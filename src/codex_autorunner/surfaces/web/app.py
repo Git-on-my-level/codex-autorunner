@@ -11,6 +11,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ...core.logging_utils import safe_log
+from ...core.managed_processes import reap_managed_processes
 from ...housekeeping import run_housekeeping_once
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
@@ -89,6 +90,22 @@ def create_hub_app(
     async def lifespan(app: FastAPI):
         tasks: list[asyncio.Task] = []
         app.state.hub_started = True
+        try:
+            cleanup = reap_managed_processes(context.root)
+            if cleanup.killed or cleanup.removed:
+                app.state.logger.info(
+                    "Managed process cleanup: killed=%s removed=%s skipped=%s",
+                    cleanup.killed,
+                    cleanup.removed,
+                    cleanup.skipped,
+                )
+        except Exception as exc:
+            safe_log(
+                app.state.logger,
+                logging.WARNING,
+                "Managed process reaper failed at hub startup",
+                exc,
+            )
         if app.state.config.housekeeping.enabled:
             interval = max(app.state.config.housekeeping.interval_seconds, 1)
 
@@ -171,28 +188,42 @@ def create_hub_app(
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             await mount_manager.stop_repo_mounts()
-            app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
-            if app_server_supervisor is not None:
+            runtime_services = getattr(app.state, "runtime_services", None)
+            if runtime_services is not None:
                 try:
-                    await app_server_supervisor.close_all()
+                    await runtime_services.close()
                 except Exception as exc:
                     safe_log(
                         app.state.logger,
                         logging.WARNING,
-                        "Hub app-server shutdown failed",
+                        "Hub runtime services shutdown failed",
                         exc,
                     )
-            opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
-            if opencode_supervisor is not None:
-                try:
-                    await opencode_supervisor.close_all()
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "Hub opencode shutdown failed",
-                        exc,
-                    )
+            else:
+                app_server_supervisor = getattr(
+                    app.state, "app_server_supervisor", None
+                )
+                if app_server_supervisor is not None:
+                    try:
+                        await app_server_supervisor.close_all()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub app-server shutdown failed",
+                            exc,
+                        )
+                opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
+                if opencode_supervisor is not None:
+                    try:
+                        await opencode_supervisor.close_all()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub opencode shutdown failed",
+                            exc,
+                        )
             static_context = getattr(app.state, "static_assets_context", None)
             if static_context is not None:
                 static_context.close()
