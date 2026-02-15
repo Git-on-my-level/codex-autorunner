@@ -210,3 +210,74 @@ async def test_close_handle_deletes_registry_record_best_effort(
     await supervisor._close_handle(handle, reason="close_all")
 
     assert delete_calls == [(tmp_path, "opencode", "ws-1")]
+
+
+@pytest.mark.anyio
+async def test_global_scope_reuses_single_handle_across_workspaces(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"], server_scope="global")
+    workspace_a = tmp_path / "a"
+    workspace_b = tmp_path / "b"
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+
+    starts: list[str] = []
+    client = object()
+
+    async def _fake_start_process(handle: OpenCodeHandle) -> None:
+        starts.append(handle.workspace_id)
+        handle.client = client
+        handle.started = True
+
+    async def _fake_registry_reuse(_handle: OpenCodeHandle) -> bool:
+        return False
+
+    monkeypatch.setattr(supervisor, "_start_process", _fake_start_process)
+    monkeypatch.setattr(
+        supervisor, "_ensure_started_from_registry", _fake_registry_reuse
+    )
+
+    client_a = await supervisor.get_client(workspace_a)
+    client_b = await supervisor.get_client(workspace_b)
+
+    assert client_a is client_b is client
+    assert starts == ["__global__"]
+    assert list(supervisor._handles.keys()) == ["__global__"]
+
+
+@pytest.mark.anyio
+async def test_global_scope_close_calls_dispose_before_client_close(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"], server_scope="global")
+    order: list[str] = []
+
+    class _Client:
+        async def dispose_instances(self) -> None:
+            order.append("dispose")
+
+        async def close(self) -> None:
+            order.append("close")
+
+    handle = OpenCodeHandle(
+        workspace_id="__global__",
+        workspace_root=tmp_path,
+        process=None,
+        client=_Client(),
+        base_url="http://127.0.0.1:8000",
+        health_info=None,
+        version=None,
+        openapi_spec=None,
+        start_lock=asyncio.Lock(),
+        started=True,
+    )
+    supervisor._handles["__global__"] = handle
+
+    monkeypatch.setattr(
+        supervisor_module, "delete_process_record", lambda *_a, **_k: True
+    )
+
+    await supervisor.close_all()
+
+    assert order == ["dispose", "close"]

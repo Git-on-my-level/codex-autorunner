@@ -211,6 +211,25 @@ agents:
       - serve
 ```
 
+### opencode.server_scope
+
+Controls whether OpenCode is managed per-workspace or shared across workspaces.
+
+- `workspace` (default): one server per workspace.
+- `global`: one shared server reused across workspaces.
+
+```yaml
+opencode:
+  server_scope: workspace
+```
+
+```yaml
+opencode:
+  server_scope: global
+```
+
+See `docs/opencode/global-server-scope.md` for tradeoffs.
+
 ### state_roots.global
 
 Controls the global state root used for cross-repo caches and locks (update cache,

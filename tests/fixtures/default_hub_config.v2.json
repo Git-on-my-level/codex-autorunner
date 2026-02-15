@@ -158,6 +158,7 @@
   "mode": "hub",
   "opencode": {
     "max_text_chars": 20000,
+    "server_scope": "workspace",
     "session_stall_timeout_seconds": null
   },
   "pma": {
@@ -245,6 +246,7 @@
     },
     "opencode": {
       "max_text_chars": 20000,
+      "server_scope": "workspace",
       "session_stall_timeout_seconds": null
     },
     "prompt": {

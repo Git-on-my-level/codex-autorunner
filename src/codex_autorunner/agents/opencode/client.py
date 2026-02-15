@@ -576,6 +576,10 @@ class OpenCodeClient:
                 "POST", f"/session/{session_id}/dispose", expect_json=False
             )
 
+    async def dispose_instances(self) -> Any:
+        """Dispose all global instances before server shutdown."""
+        return await self._request("POST", "/global/dispose", expect_json=False)
+
     async def stream_events(
         self,
         *,
