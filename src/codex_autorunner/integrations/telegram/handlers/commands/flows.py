@@ -269,6 +269,144 @@ class FlowCommands(SharedHelpers):
             return None
         return self._flow_repo_context_cache().get(run_id)
 
+    def _flow_manifest_repos(self) -> list[object]:
+        manifest_path = getattr(self, "_manifest_path", None)
+        hub_root = getattr(self, "_hub_root", None)
+        if not manifest_path or not hub_root:
+            return []
+        try:
+            manifest = load_manifest(manifest_path, hub_root)
+        except Exception:
+            return []
+        return [repo for repo in manifest.repos if getattr(repo, "enabled", True)]
+
+    def _flow_repo_base_id(self, repo: object) -> Optional[str]:
+        worktree_of = getattr(repo, "worktree_of", None)
+        if isinstance(worktree_of, str) and worktree_of.strip():
+            return worktree_of.strip()
+        repo_id = getattr(repo, "id", None)
+        if not isinstance(repo_id, str) or not repo_id.strip():
+            return None
+        repo_id = repo_id.strip()
+        if "--" in repo_id:
+            return repo_id.split("--", 1)[0]
+        return repo_id
+
+    def _flow_repo_aliases(self, repo: object) -> set[str]:
+        aliases: set[str] = set()
+        repo_id = getattr(repo, "id", None)
+        if isinstance(repo_id, str) and repo_id.strip():
+            repo_id = repo_id.strip()
+            aliases.add(repo_id.lower())
+            if "--" in repo_id:
+                _, suffix = repo_id.split("--", 1)
+                if suffix:
+                    aliases.add(suffix.lower())
+            leaf = _worktree_suffix(repo_id)
+            if leaf:
+                aliases.add(leaf.lower())
+        for attr in ("display_name", "branch", "worktree_of"):
+            value = getattr(repo, attr, None)
+            if isinstance(value, str) and value.strip():
+                aliases.add(value.strip().lower())
+        return aliases
+
+    def _flow_matching_manifest_repos(
+        self, token: str, repos: list[object]
+    ) -> list[object]:
+        normalized = (token or "").strip().lower()
+        if not normalized:
+            return []
+        return [repo for repo in repos if normalized in self._flow_repo_aliases(repo)]
+
+    def _flow_manifest_repo_id(self, repo: object) -> Optional[str]:
+        repo_id = getattr(repo, "id", None)
+        if not isinstance(repo_id, str):
+            return None
+        repo_id = repo_id.strip()
+        return repo_id or None
+
+    def _flow_match_base_selector(
+        self, selector_repos: list[object], selector_raw: str, base_repo_id: str
+    ) -> bool:
+        selector = (selector_raw or "").strip().lower()
+        if selector == base_repo_id.lower():
+            return True
+        for repo in selector_repos:
+            repo_id = self._flow_manifest_repo_id(repo)
+            if repo_id == base_repo_id:
+                return True
+            if self._flow_repo_base_id(repo) == base_repo_id:
+                return True
+        return False
+
+    def _resolve_flow_target_from_args(
+        self, argv: list[str]
+    ) -> tuple[Optional[Path], Optional[str], int]:
+        if not argv:
+            return None, None, 0
+
+        resolved = None
+        consumed = 0
+        if len(argv) >= 2:
+            combined_repo_id = f"{argv[0]}--{argv[1]}"
+            resolved = self._resolve_workspace(combined_repo_id)
+            if resolved:
+                consumed = 2
+        if not resolved:
+            resolved = self._resolve_workspace(argv[0])
+            if resolved:
+                consumed = 1
+        if resolved:
+            repo_root = canonicalize_path(Path(resolved[0]))
+            return repo_root, resolved[1], consumed
+
+        repos = self._flow_manifest_repos()
+        if not repos:
+            return None, None, 0
+
+        if len(argv) >= 2:
+            repo_candidates = self._flow_matching_manifest_repos(argv[0], repos)
+            worktree_candidates = self._flow_matching_manifest_repos(argv[1], repos)
+            pair_matches: set[str] = set()
+            for candidate in worktree_candidates:
+                candidate_id = self._flow_manifest_repo_id(candidate)
+                if not candidate_id:
+                    continue
+                kind = getattr(candidate, "kind", None)
+                if kind != "worktree" and "--" not in candidate_id:
+                    continue
+                base_repo_id = self._flow_repo_base_id(candidate)
+                if not base_repo_id:
+                    continue
+                if self._flow_match_base_selector(
+                    repo_candidates, argv[0], base_repo_id
+                ):
+                    pair_matches.add(candidate_id)
+            if len(pair_matches) == 1:
+                target_id = next(iter(pair_matches))
+                resolved = self._resolve_workspace(target_id)
+                if resolved:
+                    repo_root = canonicalize_path(Path(resolved[0]))
+                    return repo_root, resolved[1], 2
+
+        single_matches = {
+            repo_id
+            for repo_id in (
+                self._flow_manifest_repo_id(repo)
+                for repo in self._flow_matching_manifest_repos(argv[0], repos)
+            )
+            if repo_id
+        }
+        if len(single_matches) == 1:
+            target_id = next(iter(single_matches))
+            resolved = self._resolve_workspace(target_id)
+            if resolved:
+                repo_root = canonicalize_path(Path(resolved[0]))
+                return repo_root, resolved[1], 1
+
+        return None, None, 0
+
     def _github_bootstrap_status(self, repo_root: Path) -> tuple[bool, Optional[str]]:
         result = bootstrap_check(repo_root, github_service_factory=GitHubService)
         return bool(result.github_available), result.repo_slug
@@ -362,25 +500,15 @@ class FlowCommands(SharedHelpers):
     async def _handle_flow(self, message: TelegramMessage, args: str) -> None:
         argv = self._parse_command_args(args)
 
-        target_repo_root = None
+        target_repo_root: Optional[Path] = None
         target_repo_id: Optional[str] = None
         effective_args = args
 
         if argv:
-            resolved = None
-            consumed = 0
-            if len(argv) >= 2:
-                combined_repo_id = f"{argv[0]}--{argv[1]}"
-                resolved = self._resolve_workspace(combined_repo_id)
-                if resolved:
-                    consumed = 2
-            if not resolved:
-                resolved = self._resolve_workspace(argv[0])
-                if resolved:
-                    consumed = 1
-            if resolved:
-                target_repo_root = Path(resolved[0])
-                target_repo_id = resolved[1]
+            target_repo_root, target_repo_id, consumed = (
+                self._resolve_flow_target_from_args(argv)
+            )
+            if target_repo_root:
                 argv = argv[consumed:]
                 # Reconstruct args for remainder logic (imperfect but sufficient for text commands)
                 effective_args = " ".join(argv)
@@ -412,7 +540,7 @@ class FlowCommands(SharedHelpers):
             return
 
         if target_repo_root:
-            repo_root = canonicalize_path(target_repo_root)
+            repo_root = target_repo_root
         elif record and record.workspace_path:
             repo_root = canonicalize_path(Path(record.workspace_path))
         else:
