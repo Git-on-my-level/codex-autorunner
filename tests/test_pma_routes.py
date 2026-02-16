@@ -7,7 +7,6 @@ import anyio
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from tests.conftest import write_test_config
 
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core import filebox
@@ -17,6 +16,7 @@ from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
+from tests.conftest import write_test_config
 
 
 def _enable_pma(

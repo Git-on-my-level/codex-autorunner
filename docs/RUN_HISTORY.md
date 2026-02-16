@@ -10,7 +10,7 @@ Use `FlowStore` at `.codex-autorunner/flows.db` as the single source of truth fo
 - Timeline/events: `flow_events`
 - Artifacts: `flow_artifacts`
 
-Legacy `run_index` / numeric run directories are compatibility-only and must not be used for new run history features.
+Legacy numeric run directories are compatibility-only and must not be used for new run history features.
 
 ## What Runs Exist
 
@@ -51,12 +51,5 @@ Artifact discovery must come from `flow_artifacts` first. Filesystem scanning is
 
 ## Compatibility And Deprecation
 
-- `core/run_index.py` is deprecated (legacy migration/support only).
-- `RuntimeContext.reconcile_run_index()` is deprecated and now a compatibility no-op.
 - Legacy numeric run logs (`.codex-autorunner/runs/<int>/run.log`) are deprecated and not canonical for new runs.
-
-Removal plan:
-
-1. Keep read-only compatibility where old surfaces still reference legacy run ids/logs.
-2. Migrate remaining surfaces to FlowStore ids/events/artifacts.
-3. Remove legacy run-index APIs and numeric-run log plumbing in a dedicated cleanup ticket.
+- Legacy `run_index` storage/APIs have been removed from runtime code paths.

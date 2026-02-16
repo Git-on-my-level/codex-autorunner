@@ -1,14 +1,13 @@
 import logging
 from pathlib import Path
 
-from tests.conftest import write_test_config
-
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     REPO_OVERRIDE_FILENAME,
     load_repo_config,
 )
 from codex_autorunner.integrations.agents import opencode_supervisor_factory
+from tests.conftest import write_test_config
 
 
 def test_build_opencode_supervisor_from_repo_config(

@@ -1,0 +1,30 @@
+[
+  {
+    "method": "turn/streamDelta",
+    "params": {
+      "delta": "Debug"
+    }
+  },
+  {
+    "method": "turn/streamDelta",
+    "params": {
+      "delta": "ging"
+    }
+  },
+  {
+    "method": "turn/tokenUsage",
+    "params": {
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 8,
+        "total_tokens": 20
+      }
+    }
+  },
+  {
+    "method": "turn/error",
+    "params": {
+      "message": "permission denied"
+    }
+  }
+]

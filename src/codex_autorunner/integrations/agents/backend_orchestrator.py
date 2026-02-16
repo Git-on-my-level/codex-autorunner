@@ -14,10 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
-from ...core.app_server_threads import (
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
-)
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
 from ...core.ports.backend_orchestrator import (
@@ -25,8 +21,10 @@ from ...core.ports.backend_orchestrator import (
 )
 from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
-from .codex_backend import CodexAppServerBackend
-from .opencode_backend import OpenCodeBackend
+from ...integrations.app_server.threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from .wiring import AgentBackendFactory, BackendFactory
 
 NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -166,27 +164,18 @@ class BackendOrchestrator:
         backend = self._active_backend
         assert backend is not None, "backend should be initialized before run_turn"
 
-        # Configure backend if supported
-        if isinstance(backend, CodexAppServerBackend):
-            backend.configure(
-                approval_policy=state.autorunner_approval_policy or "never",
-                sandbox_policy=state.autorunner_sandbox_mode or "dangerFullAccess",
-                model=model,
-                reasoning_effort=reasoning,
-                turn_timeout_seconds=None,
-                notification_handler=self._notification_handler,
-                default_approval_decision=str(
-                    getattr(self._config, "ticket_flow", {}).get(
-                        "default_approval_decision", "accept"
-                    )
-                ),
-            )
-        elif isinstance(backend, OpenCodeBackend):
-            backend.configure(
-                model=model,
-                reasoning=reasoning,
-                approval_policy=state.autorunner_approval_policy,
-            )
+        backend.configure(
+            approval_policy=state.autorunner_approval_policy,
+            approval_policy_default="never",
+            sandbox_policy=state.autorunner_sandbox_mode,
+            sandbox_policy_default="dangerFullAccess",
+            model=model,
+            reasoning=reasoning,
+            reasoning_effort=reasoning,
+            turn_timeout_seconds=None,
+            notification_handler=self._notification_handler,
+            default_approval_decision=self._config.ticket_flow.default_approval_decision,
+        )
 
         async for event in backend.run_turn_events(effective_session_id, prompt):
             yield event

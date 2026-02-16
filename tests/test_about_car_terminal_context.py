@@ -5,7 +5,7 @@ from codex_autorunner.core.about_car import (
     ABOUT_CAR_REL_PATH,
 )
 from codex_autorunner.core.runtime import RuntimeContext
-from codex_autorunner.routes.shared import build_codex_terminal_cmd
+from codex_autorunner.surfaces.web.routes.shared import build_codex_terminal_cmd
 
 
 def test_about_car_is_seeded(repo: Path):

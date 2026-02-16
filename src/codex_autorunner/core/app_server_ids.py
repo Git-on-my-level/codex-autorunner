@@ -1,65 +1,27 @@
-from typing import Any, Optional
+"""Compatibility shim for app-server ID helpers."""
+
+from importlib import import_module
+from typing import Any, Optional, cast
+
+
+def _ids_module() -> Any:
+    return import_module("codex_autorunner.integrations.app_server.ids")
 
 
 def extract_turn_id(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("turnId", "turn_id", "id"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    turn = payload.get("turn")
-    if isinstance(turn, dict):
-        for key in ("id", "turnId", "turn_id"):
-            value = turn.get(key)
-            if isinstance(value, str):
-                return value
-    item = payload.get("item")
-    if isinstance(item, dict):
-        for key in ("turnId", "turn_id", "id"):
-            value = item.get(key)
-            if isinstance(value, str):
-                return value
-    return None
-
-
-def _extract_thread_id_from_container(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("threadId", "thread_id"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    thread = payload.get("thread")
-    if isinstance(thread, dict):
-        for key in ("id", "threadId", "thread_id"):
-            value = thread.get(key)
-            if isinstance(value, str):
-                return value
-    return None
+    return cast(Optional[str], _ids_module().extract_turn_id(payload))
 
 
 def extract_thread_id_for_turn(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for candidate in (payload, payload.get("turn"), payload.get("item")):
-        thread_id = _extract_thread_id_from_container(candidate)
-        if thread_id:
-            return thread_id
-    return None
+    return cast(Optional[str], _ids_module().extract_thread_id_for_turn(payload))
 
 
 def extract_thread_id(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("threadId", "thread_id", "id"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    thread = payload.get("thread")
-    if isinstance(thread, dict):
-        for key in ("id", "threadId", "thread_id"):
-            value = thread.get(key)
-            if isinstance(value, str):
-                return value
-    return None
+    return cast(Optional[str], _ids_module().extract_thread_id(payload))
+
+
+__all__ = [
+    "extract_turn_id",
+    "extract_thread_id_for_turn",
+    "extract_thread_id",
+]

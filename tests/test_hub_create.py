@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from tests.conftest import write_test_config
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
@@ -18,6 +17,7 @@ from codex_autorunner.integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
+from tests.conftest import write_test_config
 
 
 def _init_git_repo(path: Path) -> None:

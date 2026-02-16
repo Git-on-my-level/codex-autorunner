@@ -10,6 +10,10 @@ Layers are defined by module prefix:
 - Adapters: codex_autorunner.integrations*, codex_autorunner.agents*
 - Surfaces: codex_autorunner.surfaces*
 
+Top-level modules under ``codex_autorunner.<name>`` that do not match a
+package-prefix rule default to CONTROL_PLANE (for example: ``manifest``,
+``server``, ``bootstrap``). This prevents "unknown layer" escapes.
+
 Shim modules (*_shim.py) are allowed to break rules but must declare reason
 in a comment header containing "ARCHITECTURE_SHIM:".
 """
@@ -104,6 +108,11 @@ def classify_module(module_name: str) -> Layer:
                         ):
                             return Layer.ENGINE
                 return layer
+    # Harden boundary checks: classify unmatched top-level modules as
+    # Control Plane so imports like codex_autorunner.manifest are enforced.
+    parts = module_name.split(".")
+    if len(parts) == 2 and parts[0] == "codex_autorunner":
+        return Layer.CONTROL_PLANE
     return Layer.UNKNOWN
 
 
@@ -299,3 +308,65 @@ def test_engine_does_not_import_control_plane():
     assert (
         not violations
     ), "Engine modules should not import Control Plane:\n" + "\n".join(violations)
+
+
+def _engine_flows_forbidden_imports_for_module(
+    module_name: str, imports: list[str]
+) -> list[str]:
+    """Return forbidden codex_autorunner imports for a core.flows module."""
+    if not (
+        module_name.startswith("codex_autorunner.core.flows.")
+        or module_name == "codex_autorunner.core.flows"
+    ):
+        return []
+    violations: list[str] = []
+    for imported in imports:
+        if not imported.startswith("codex_autorunner."):
+            continue
+        if imported == "codex_autorunner.core.flows" or imported.startswith(
+            "codex_autorunner.core.flows."
+        ):
+            continue
+        if imported == "codex_autorunner.core.ports" or imported.startswith(
+            "codex_autorunner.core.ports."
+        ):
+            continue
+        violations.append(imported)
+    return violations
+
+
+def test_engine_flows_import_scope_is_restricted() -> None:
+    flow_files = collect_python_files(SRC_ROOT / "core" / "flows")
+    violations: list[str] = []
+    for path in flow_files:
+        module_name = module_name_from_path(path)
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        imports = extract_imports(source)
+        bad = _engine_flows_forbidden_imports_for_module(module_name, imports)
+        violations.extend(
+            f"{path.relative_to(SRC_ROOT.parent.parent)} imports {imported}"
+            for imported in bad
+        )
+
+    assert not violations, (
+        "core/flows modules may import only core/flows, core/ports, or external libs:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_engine_regression_detects_top_level_control_plane_import() -> None:
+    module_name = "codex_autorunner.core.flows.worker_process"
+    imports = [
+        "typing",
+        "codex_autorunner.core.flows.models",
+        "codex_autorunner.manifest",
+    ]
+    violations = _engine_flows_forbidden_imports_for_module(module_name, imports)
+    assert violations == ["codex_autorunner.manifest"]
+
+
+def test_top_level_module_is_not_unknown_layer() -> None:
+    assert classify_module("codex_autorunner.manifest") == Layer.CONTROL_PLANE

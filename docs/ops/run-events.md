@@ -36,3 +36,20 @@ Example payloads (non-exhaustive):
 
 Legacy run events are still written to `.codex-autorunner/runs/run-<id>.events.jsonl`
 for backward compatibility. New consumers should prefer the canonical stream.
+
+## Backend `RunEvent` contract
+
+Agent backends must emit a consistent `RunEvent` stream for each turn:
+
+- `Started` MUST be first.
+- Progress events MAY follow: `OutputDelta`, `ToolCall`, `ApprovalRequested`,
+  `TokenUsage` (when available), `RunNotice`.
+- Exactly one terminal event MUST be last: `Completed` or `Failed`.
+
+Canonical `OutputDelta.delta_type` values:
+
+- `user_message`
+- `assistant_stream`
+- `log_line`
+
+UI/storage code should rely on this contract and avoid backend-specific event hacks.

@@ -57,13 +57,8 @@ class AgentBackendFactory:
                 state.autorunner_effort_override or self._config.codex_reasoning
             )
 
-            ticket_flow_cfg = (
-                self._config.ticket_flow
-                if isinstance(self._config.ticket_flow, dict)
-                else {}
-            )
-            default_approval_decision = str(
-                ticket_flow_cfg.get("default_approval_decision", "accept")
+            default_approval_decision = (
+                self._config.ticket_flow.default_approval_decision
             )
 
             cached = self._backend_cache.get(agent_id)

@@ -5,6 +5,22 @@ from typing import Any, Optional, Union
 
 from ..time_utils import now_iso
 
+# Canonical backend RunEvent contract:
+# - A turn emits Started first.
+# - A turn emits OutputDelta/ToolCall/ApprovalRequested/TokenUsage/RunNotice as progress.
+# - A turn ends with exactly one terminal event: Completed or Failed.
+# - Backend deltas should use the canonical delta_type set below.
+RUN_EVENT_DELTA_TYPE_USER_MESSAGE = "user_message"
+RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM = "assistant_stream"
+RUN_EVENT_DELTA_TYPE_LOG_LINE = "log_line"
+RUN_EVENT_DELTA_TYPES = frozenset(
+    {
+        RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
+        RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    }
+)
+
 
 @dataclass(frozen=True)
 class Started:
@@ -74,7 +90,15 @@ RunEvent = Union[
 ]
 
 
+def is_terminal_run_event(event: RunEvent) -> bool:
+    return isinstance(event, (Completed, Failed))
+
+
 __all__ = [
+    "RUN_EVENT_DELTA_TYPE_USER_MESSAGE",
+    "RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM",
+    "RUN_EVENT_DELTA_TYPE_LOG_LINE",
+    "RUN_EVENT_DELTA_TYPES",
     "RunEvent",
     "Started",
     "OutputDelta",
@@ -84,5 +108,6 @@ __all__ = [
     "RunNotice",
     "Completed",
     "Failed",
+    "is_terminal_run_event",
     "now_iso",
 ]

@@ -16,10 +16,6 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
-from ...core.app_server_threads import (
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
-)
 from ...core.flows.models import FlowRunRecord
 from ...core.hub import HubSupervisor
 from ...core.locks import process_alive
@@ -32,6 +28,10 @@ from ...core.state_roots import resolve_global_state_root
 from ...core.text_delta_coalescer import TextDeltaCoalescer
 from ...core.utils import build_opencode_supervisor
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
+from ...integrations.app_server.threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from ...manifest import load_manifest
 from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService

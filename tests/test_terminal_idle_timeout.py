@@ -1,13 +1,13 @@
 from pathlib import Path
 
 import pytest
-from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     ConfigError,
     load_repo_config,
 )
+from tests.conftest import write_test_config
 
 
 def test_terminal_idle_timeout_loaded(tmp_path: Path) -> None:

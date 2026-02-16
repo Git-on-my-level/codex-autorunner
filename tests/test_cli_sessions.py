@@ -1,9 +1,8 @@
 from pathlib import Path
 
-from tests.conftest import write_test_config
-
 from codex_autorunner.cli import _resolve_repo_api_path
 from codex_autorunner.core.config import CONFIG_FILENAME
+from tests.conftest import write_test_config
 
 
 def test_resolve_repo_api_path_prefixes_repo_id(tmp_path: Path) -> None:

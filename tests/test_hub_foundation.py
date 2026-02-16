@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import yaml
-from tests.conftest import write_test_config
 
 from codex_autorunner.bootstrap import GITIGNORE_CONTENT, seed_repo_files
 from codex_autorunner.core.config import (
@@ -13,6 +12,7 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.discovery import discover_and_init
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
+from tests.conftest import write_test_config
 
 
 def test_manifest_creation_and_normalization(tmp_path: Path):

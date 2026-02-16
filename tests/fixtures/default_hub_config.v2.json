@@ -268,7 +268,6 @@
       "review": {
         "agent": null,
         "artifacts": {
-          "attach_to_last_run_index": true,
           "write_to_review_runs_dir": true
         },
         "context": {

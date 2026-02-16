@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from codex_autorunner.routes.system import _system_update_check
+from codex_autorunner.core.update import _system_update_check
 
 
 def _run(cmd: list[str], cwd: Path) -> None:

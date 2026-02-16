@@ -32,7 +32,6 @@ from ....bootstrap import (
     pma_prompt_content,
 )
 from ....core import filebox
-from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....core.logging_utils import log_event
 from ....core.pma_audit import PmaActionType, PmaAuditLog
 from ....core.pma_context import (
@@ -57,6 +56,7 @@ from ....core.pma_state import PmaStateStore
 from ....core.pma_transcripts import PmaTranscriptStore
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
+from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
 from ....integrations.telegram.adapter import chunk_message
 from ....integrations.telegram.config import DEFAULT_STATE_FILE

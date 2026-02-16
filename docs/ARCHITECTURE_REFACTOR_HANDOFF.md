@@ -61,7 +61,6 @@ This document is the canonical handoff artifact for the architecture-boundary re
 ### TICKET-240 (`78e970c5`)
 - `docs/RUN_HISTORY.md`
 - `src/codex_autorunner/core/review_context.py`
-- `src/codex_autorunner/core/run_index.py`
 - `src/codex_autorunner/core/runner_controller.py`
 - `src/codex_autorunner/core/runtime.py`
 - `src/codex_autorunner/surfaces/web/routes/repos.py`
@@ -109,6 +108,5 @@ This document is the canonical handoff artifact for the architecture-boundary re
 
 ## Remaining follow-up/debt
 
-- `core/run_index.py` remains as deprecated compatibility surface and can be removed in a later cleanup pass once external dependencies are confirmed absent.
 - `tests/test_core_web_boundary.py` remains in tree although architecture boundary enforcement is now centralized; consider decommissioning once no legacy value remains.
 - Continue opportunistic shrinkage of large extracted modules (for example `surfaces/web/routes/hub_repos.py`) as separate, low-risk refactors.

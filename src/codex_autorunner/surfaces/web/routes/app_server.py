@@ -7,12 +7,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from ....core.app_server_threads import normalize_feature_key
 from ....core.utils import is_within
 from ....integrations.app_server.client import (
     CodexAppServerError,
     CodexAppServerResponseError,
 )
+from ....integrations.app_server.threads import normalize_feature_key
 from ..schemas import (
     AppServerThreadArchiveRequest,
     AppServerThreadArchiveResponse,

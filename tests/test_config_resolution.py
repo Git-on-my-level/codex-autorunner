@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 
 import pytest
-from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -14,6 +13,7 @@ from codex_autorunner.core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from tests.conftest import write_test_config
 
 
 def test_load_hub_config_prefers_config_over_root_overrides(tmp_path: Path) -> None:
@@ -434,3 +434,40 @@ def test_housekeeping_validation_rejects_negative_min_file_age_seconds(
         ConfigError, match="housekeeping.min_file_age_seconds must be >= 0"
     ):
         load_hub_config(hub_root)
+
+
+def test_repo_ticket_flow_invalid_approval_mode_fails_fast(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {"ticket_flow": {"approval_mode": "invalid"}},
+        },
+    )
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(
+        ConfigError,
+        match="ticket_flow.approval_mode must be one of: yolo, review, safe",
+    ):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_repo_ticket_flow_safe_alias_normalizes_to_review(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {"ticket_flow": {"approval_mode": "safe"}},
+        },
+    )
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    assert config.ticket_flow.approval_mode == "review"

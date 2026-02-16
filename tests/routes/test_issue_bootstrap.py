@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.integrations.github.service import RepoInfo
-from codex_autorunner.routes import flows as flow_routes
+from codex_autorunner.surfaces.web.routes import flows as flow_routes
 
 
 def _reset_state() -> None:

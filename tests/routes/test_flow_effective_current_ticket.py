@@ -5,7 +5,7 @@ from pathlib import Path
 
 from codex_autorunner.core.flows import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.routes import flows as flow_routes
+from codex_autorunner.surfaces.web.routes import flows as flow_routes
 
 
 def test_runs_endpoint_surfaces_effective_current_ticket(tmp_path: Path):

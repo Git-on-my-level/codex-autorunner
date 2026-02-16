@@ -1,0 +1,22 @@
+[
+  {
+    "type": "textDelta",
+    "text": "Debug"
+  },
+  {
+    "type": "textDelta",
+    "text": "ging"
+  },
+  {
+    "type": "usage",
+    "usage": {
+      "input_tokens": 12,
+      "output_tokens": 8,
+      "total_tokens": 20
+    }
+  },
+  {
+    "type": "error",
+    "message": "permission denied"
+  }
+]

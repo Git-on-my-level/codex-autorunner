@@ -207,6 +207,7 @@ async def test_ticket_runner_completes_when_all_tickets_done(tmp_path: Path) -> 
     r2 = await runner.step(r1.state)
     assert r2.status == "completed"
     assert "All tickets done" in (r2.reason or "")
+    assert not (workspace_root / ".codex-autorunner" / "run_index.json").exists()
 
 
 @pytest.mark.asyncio

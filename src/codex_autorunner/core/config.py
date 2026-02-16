@@ -451,7 +451,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "max_doc_chars": 20000,
             },
             "artifacts": {
-                "attach_to_last_run_index": True,
                 "write_to_review_runs_dir": True,
             },
         },
@@ -659,6 +658,23 @@ class ConfigError(Exception):
     """Raised when configuration is invalid."""
 
 
+TICKET_FLOW_APPROVAL_MODE_YOLO = "yolo"
+TICKET_FLOW_APPROVAL_MODE_REVIEW = "review"
+TICKET_FLOW_APPROVAL_MODE_SAFE = "safe"  # backwards-compatible alias
+_TICKET_FLOW_APPROVAL_MODE_ALIASES = {
+    TICKET_FLOW_APPROVAL_MODE_YOLO: TICKET_FLOW_APPROVAL_MODE_YOLO,
+    TICKET_FLOW_APPROVAL_MODE_REVIEW: TICKET_FLOW_APPROVAL_MODE_REVIEW,
+    TICKET_FLOW_APPROVAL_MODE_SAFE: TICKET_FLOW_APPROVAL_MODE_REVIEW,
+}
+_TICKET_FLOW_APPROVAL_MODE_ALLOWED = ", ".join(
+    [
+        TICKET_FLOW_APPROVAL_MODE_YOLO,
+        TICKET_FLOW_APPROVAL_MODE_REVIEW,
+        TICKET_FLOW_APPROVAL_MODE_SAFE,
+    ]
+)
+
+
 __all__ = [
     "ConfigError",
     "ConfigPathError",
@@ -798,6 +814,14 @@ class TemplatesConfig:
     repos: List[TemplateRepoConfig]
 
 
+@dataclasses.dataclass(frozen=True)
+class TicketFlowConfig:
+    approval_mode: str
+    default_approval_decision: str
+    include_previous_ticket_context: bool
+    auto_resume: bool = False
+
+
 @dataclasses.dataclass
 class RepoConfig:
     raw: Dict[str, Any]
@@ -819,7 +843,7 @@ class RepoConfig:
     runner_max_wallclock_seconds: Optional[int]
     runner_no_progress_threshold: int
     autorunner_reuse_session: bool
-    ticket_flow: Dict[str, Any]
+    ticket_flow: TicketFlowConfig
     git_auto_commit: bool
     git_commit_message_template: str
     update_skip_checks: bool
@@ -910,6 +934,50 @@ class HubConfig:
 
 # Alias used by existing code paths that only support repo mode
 Config = RepoConfig
+
+
+def _normalize_ticket_flow_approval_mode(value: Any, *, scope: str) -> str:
+    if not isinstance(value, str):
+        raise ConfigError(f"{scope} must be a string")
+    normalized = value.strip().lower()
+    canonical = _TICKET_FLOW_APPROVAL_MODE_ALIASES.get(normalized)
+    if canonical is None:
+        raise ConfigError(
+            f"{scope} must be one of: {_TICKET_FLOW_APPROVAL_MODE_ALLOWED}"
+        )
+    return canonical
+
+
+def _parse_ticket_flow_config(
+    cfg: Optional[Dict[str, Any]],
+    defaults: Optional[Dict[str, Any]],
+) -> TicketFlowConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    approval_mode = _normalize_ticket_flow_approval_mode(
+        cfg.get("approval_mode", defaults.get("approval_mode", "yolo")),
+        scope="ticket_flow.approval_mode",
+    )
+    default_approval_decision = cfg.get(
+        "default_approval_decision", defaults.get("default_approval_decision", "accept")
+    )
+    if not isinstance(default_approval_decision, str):
+        raise ConfigError("ticket_flow.default_approval_decision must be a string")
+    include_previous_ticket_context = cfg.get(
+        "include_previous_ticket_context",
+        defaults.get("include_previous_ticket_context", False),
+    )
+    if not isinstance(include_previous_ticket_context, bool):
+        raise ConfigError("ticket_flow.include_previous_ticket_context must be boolean")
+    auto_resume = cfg.get("auto_resume", defaults.get("auto_resume", False))
+    if not isinstance(auto_resume, bool):
+        raise ConfigError("ticket_flow.auto_resume must be boolean")
+    return TicketFlowConfig(
+        approval_mode=approval_mode,
+        default_approval_decision=default_approval_decision,
+        include_previous_ticket_context=include_previous_ticket_context,
+        auto_resume=auto_resume,
+    )
 
 
 def _merge_defaults(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
@@ -1836,7 +1904,10 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
         update_skip_checks=update_skip_checks,
-        ticket_flow=cast(Dict[str, Any], cfg.get("ticket_flow") or {}),
+        ticket_flow=_parse_ticket_flow_config(
+            cfg.get("ticket_flow"),
+            cast(Dict[str, Any], DEFAULT_REPO_CONFIG.get("ticket_flow")),
+        ),
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,
@@ -2337,14 +2408,25 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     if ticket_flow_cfg is not None and not isinstance(ticket_flow_cfg, dict):
         raise ConfigError("ticket_flow section must be a mapping if provided")
     if isinstance(ticket_flow_cfg, dict):
-        if "approval_mode" in ticket_flow_cfg and not isinstance(
-            ticket_flow_cfg.get("approval_mode"), str
-        ):
-            raise ConfigError("ticket_flow.approval_mode must be a string")
+        if "approval_mode" in ticket_flow_cfg:
+            _normalize_ticket_flow_approval_mode(
+                ticket_flow_cfg.get("approval_mode"),
+                scope="ticket_flow.approval_mode",
+            )
         if "default_approval_decision" in ticket_flow_cfg and not isinstance(
             ticket_flow_cfg.get("default_approval_decision"), str
         ):
             raise ConfigError("ticket_flow.default_approval_decision must be a string")
+        if "include_previous_ticket_context" in ticket_flow_cfg and not isinstance(
+            ticket_flow_cfg.get("include_previous_ticket_context"), bool
+        ):
+            raise ConfigError(
+                "ticket_flow.include_previous_ticket_context must be boolean"
+            )
+        if "auto_resume" in ticket_flow_cfg and not isinstance(
+            ticket_flow_cfg.get("auto_resume"), bool
+        ):
+            raise ConfigError("ticket_flow.auto_resume must be boolean")
     ui_cfg = cfg.get("ui")
     if ui_cfg is not None and not isinstance(ui_cfg, dict):
         raise ConfigError("ui section must be a mapping if provided")

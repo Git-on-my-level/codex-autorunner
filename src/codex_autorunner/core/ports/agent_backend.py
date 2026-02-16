@@ -111,6 +111,10 @@ class AgentEvent:
 
 
 class AgentBackend:
+    def configure(self, **options: Any) -> None:
+        """Optional backend configuration hook; default is no-op."""
+        _ = options
+
     async def start_session(self, target: dict, context: dict) -> str:
         raise NotImplementedError
 

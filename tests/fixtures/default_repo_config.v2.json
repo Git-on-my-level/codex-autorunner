@@ -213,12 +213,11 @@
   "runner": {
     "max_wallclock_seconds": null,
     "no_progress_threshold": 3,
-    "review": {
-      "agent": null,
-      "artifacts": {
-        "attach_to_last_run_index": true,
-        "write_to_review_runs_dir": true
-      },
+      "review": {
+        "agent": null,
+        "artifacts": {
+          "write_to_review_runs_dir": true
+        },
       "context": {
         "include_docs": [
           "active_context"

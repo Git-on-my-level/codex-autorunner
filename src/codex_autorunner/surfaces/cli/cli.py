@@ -24,6 +24,7 @@ from .commands.hub_runs import (
 )
 from .commands.hub_tickets import register_hub_tickets_commands
 from .commands.inbox import register_inbox_commands
+from .commands.protocol import register_protocol_commands
 from .commands.repos import register_repos_commands
 from .commands.root import _resolve_repo_api_path, register_root_commands  # noqa: F401
 from .commands.telegram import register_telegram_commands
@@ -196,6 +197,9 @@ register_cleanup_commands(
 )
 app.add_typer(doctor_app, name="doctor")
 register_doctor_commands(doctor_app)
+protocol_app = typer.Typer(add_completion=False)
+app.add_typer(protocol_app, name="protocol")
+register_protocol_commands(protocol_app)
 app.add_typer(flow_app, name="flow")
 app.add_typer(ticket_flow_app, name="ticket-flow")
 flow_app.add_typer(ticket_flow_app, name="ticket_flow")

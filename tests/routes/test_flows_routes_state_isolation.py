@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
-from codex_autorunner.routes import flows as flows_routes
+from codex_autorunner.surfaces.web.routes import flows as flows_routes
 
 
 def _seed_paused_run(repo_root: Path, run_id: str) -> None:

@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test check preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners
+.PHONY: install dev hooks build test check preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -94,6 +94,13 @@ dom-check: npm-install
 	pnpm test:dom
 
 frontend-check: lint-html dom-check
+
+protocol-schemas-check:
+	$(PYTHON) -m pytest tests/test_protocol_schemas.py -q
+	$(PYTHON) scripts/check_protocol_drift.py
+
+protocol-schemas-refresh:
+	$(PYTHON) -m codex_autorunner.cli protocol refresh
 
 format:
 	$(PYTHON) -m black src tests
