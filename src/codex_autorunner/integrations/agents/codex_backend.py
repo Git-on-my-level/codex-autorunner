@@ -14,6 +14,7 @@ from ...core.ports.run_event import (
     OutputDelta,
     RunEvent,
     Started,
+    TokenUsage,
     ToolCall,
 )
 from ...integrations.app_server.client import CodexAppServerClient, CodexAppServerError
@@ -415,15 +416,15 @@ class CodexAppServerBackend(AgentBackend):
 
     def _map_to_run_event(self, event_data: Dict[str, Any]) -> Optional[RunEvent]:
         method = event_data.get("method", "")
+        params = event_data.get("params", {}) or {}
 
         if method == "turn/streamDelta":
-            content = event_data.get("params", {}).get("delta", "")
+            content = params.get("delta", "")
             return OutputDelta(
                 timestamp=now_iso(), content=content, delta_type="assistant_stream"
             )
 
         if method == "item/toolCall/start":
-            params = event_data.get("params", {})
             return ToolCall(
                 timestamp=now_iso(),
                 tool_name=params.get("name", ""),
@@ -433,8 +434,13 @@ class CodexAppServerBackend(AgentBackend):
         if method == "item/toolCall/end":
             return None
 
+        if method in {"turn/tokenUsage", "turn/usage"}:
+            usage = params.get("usage")
+            if isinstance(usage, dict):
+                return TokenUsage(timestamp=now_iso(), usage=usage)
+            return None
+
         if method == "turn/error":
-            params = event_data.get("params", {})
             error_message = params.get("message", "Unknown error")
             return Failed(timestamp=now_iso(), error_message=error_message)
 

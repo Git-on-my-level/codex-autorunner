@@ -8,11 +8,11 @@ from typing import Any, Optional
 from ...core.flows.models import FlowEventType
 from ...core.ports.run_event import (
     Completed,
-    Failed,
     OutputDelta,
     RunEvent,
     Started,
     TokenUsage,
+    is_terminal_run_event,
 )
 from ...core.state import RunnerState
 from ...tickets.agent_pool import AgentTurnRequest, AgentTurnResult, EmitEventFn
@@ -178,12 +178,13 @@ class DefaultAgentPool:
                         log_lines.append(event.content)
                 elif isinstance(event, TokenUsage):
                     token_usage = event.usage
-                elif isinstance(event, Completed):
-                    final_status = "completed"
-                    final_message = event.final_message or ""
-                elif isinstance(event, Failed):
-                    final_status = "failed"
-                    error = event.error_message
+                elif is_terminal_run_event(event):
+                    if isinstance(event, Completed):
+                        final_status = "completed"
+                        final_message = event.final_message or ""
+                    else:
+                        final_status = "failed"
+                        error = event.error_message
 
                 self._emit_run_event(
                     event,

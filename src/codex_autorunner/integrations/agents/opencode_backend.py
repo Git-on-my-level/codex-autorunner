@@ -439,6 +439,11 @@ class OpenCodeBackend(AgentBackend):
         elif payload_type == "toolCallEnd":
             pass
 
+        elif payload_type == "usage":
+            usage = payload.get("usage")
+            if isinstance(usage, dict):
+                events.append(TokenUsage(timestamp=now_iso(), usage=dict(usage)))
+
         elif payload_type == "messageEnd":
             final_message = payload.get("message", "")
             events.append(Completed(timestamp=now_iso(), final_message=final_message))
