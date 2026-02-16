@@ -209,6 +209,7 @@ def check_violations(files: list[Path]) -> list[Violation]:
     return violations
 
 
+@pytest.mark.slow
 def test_architecture_boundaries():
     if not SRC_ROOT.exists():
         pytest.skip(f"Source root not found: {SRC_ROOT}")

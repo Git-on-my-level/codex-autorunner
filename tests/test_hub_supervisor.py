@@ -295,6 +295,7 @@ def test_hub_scan_unmounts_repo_and_exits_lifespan(tmp_path: Path):
         assert _get_mounted_app(app, "/repos/demo") is None
 
 
+@pytest.mark.slow
 def test_hub_create_repo_keeps_existing_mounts(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -340,6 +341,7 @@ def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
     assert init_payload.get("mount_error") is None
 
 
+@pytest.mark.slow
 def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -402,6 +404,7 @@ def test_hub_clone_repo_endpoint(tmp_path: Path):
     assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
 
 
+@pytest.mark.slow
 def test_hub_remove_repo_with_worktrees(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
