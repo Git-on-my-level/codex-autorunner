@@ -9,6 +9,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     Iterable,
@@ -20,7 +21,8 @@ from typing import (
     cast,
 )
 
-from .config import RepoConfig, TemplateRepoConfig
+if TYPE_CHECKING:
+    from .config import RepoConfig, TemplateRepoConfig
 
 SUBCOMMAND_HINTS = ("exec", "resume")
 
@@ -412,8 +414,8 @@ def _command_available(
 
 
 def find_template_repo(
-    config: RepoConfig, repo_id: str
-) -> Optional[TemplateRepoConfig]:
+    config: "RepoConfig", repo_id: str
+) -> Optional["TemplateRepoConfig"]:
     for repo in config.templates.repos:
         if repo.id == repo_id:
             return repo
