@@ -116,6 +116,8 @@ const XTERM_COLOR_MODE_DEFAULT = 0;
 const XTERM_COLOR_MODE_PALETTE_16 = 0x01000000;
 const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
+const RECONNECT_MAX_ATTEMPTS = 3;
+const RECONNECT_STABLE_CONNECTION_MS = 15_000;
 
 const CAR_CONTEXT_HOOK_ID = "car_context";
 const CAR_CONTEXT_HINT = wrapInjectedContext(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT);
@@ -278,6 +280,7 @@ export class TerminalManager {
   intentionalDisconnect: boolean = false;
   reconnectTimer: number | null = null;
   reconnectAttempts: number = 0;
+  socketOpenedAt: number | null = null;
   lastConnectMode: string | null = null;
   suppressNextNotFoundFlash: boolean = false;
   currentSessionId: string | null = null;
@@ -405,6 +408,7 @@ export class TerminalManager {
     this.intentionalDisconnect = false;
     this.reconnectTimer = null;
     this.reconnectAttempts = 0;
+    this.socketOpenedAt = null;
     this.lastConnectMode = null;
     this.suppressNextNotFoundFlash = false;
     this.currentSessionId = null;
@@ -2217,6 +2221,7 @@ export class TerminalManager {
       }
     }
     this.socket = null;
+    this.socketOpenedAt = null;
     this.awaitingReplayEnd = false;
     this.replayBuffer = null;
     this.replayPrelude = null;
@@ -2376,6 +2381,9 @@ export class TerminalManager {
     this.sessionNotFound = false;
     if (!this._ensureTerminal()) return;
     if (this.socket && this.socket.readyState === WebSocket.OPEN) return;
+    if (!quiet) {
+      this.reconnectAttempts = 0;
+    }
 
     // Cancel any pending reconnect
     if (this.reconnectTimer) {
@@ -2448,7 +2456,7 @@ export class TerminalManager {
     this.socket.binaryType = "arraybuffer";
 
     this.socket.onopen = () => {
-      this.reconnectAttempts = 0;
+      this.socketOpenedAt = Date.now();
       this.overlayEl?.classList.add("hidden");
       this._markSessionActive();
       this._logTerminalDebug("socket open", {
@@ -2615,6 +2623,14 @@ export class TerminalManager {
     };
 
     this.socket.onclose = () => {
+      const openedAt = this.socketOpenedAt;
+      this.socketOpenedAt = null;
+      if (
+        typeof openedAt === "number" &&
+        Date.now() - openedAt >= RECONNECT_STABLE_CONNECTION_MS
+      ) {
+        this.reconnectAttempts = 0;
+      }
       this._updateButtons(false);
       this._updateTextInputSendUi();
 
@@ -2636,9 +2652,9 @@ export class TerminalManager {
         return;
       }
 
-      if (this.reconnectAttempts < 3) {
+      if (this.reconnectAttempts < RECONNECT_MAX_ATTEMPTS) {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 8000);
-        this._setStatus(`Reconnecting in ${Math.round(delay / 100)}s...`);
+        this._setStatus(`Reconnecting in ${Math.round(delay / 1000)}s...`);
         this.reconnectAttempts++;
         this.reconnectTimer = setTimeout(() => {
           this.suppressNextNotFoundFlash = true;

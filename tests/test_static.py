@@ -24,6 +24,7 @@ def test_static_mobile_terminal_compose_view_assets():
         )
         assert "mobile-terminal-view" in styles
         assert "_setMobileViewActive" in terminal_manager
+        assert "Math.round(delay / 1000)" in terminal_manager
     finally:
         if stack is not None:
             stack.close()
