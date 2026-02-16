@@ -598,12 +598,13 @@ class TelegramBotService(
         self._config.validate()
         try:
             cleanup = reap_managed_processes(self._config.root)
-            if cleanup.killed or cleanup.removed:
+            if cleanup.killed or cleanup.signaled or cleanup.removed:
                 log_event(
                     self._logger,
                     logging.INFO,
                     "telegram.process_reaper.cleaned",
                     killed=cleanup.killed,
+                    signaled=cleanup.signaled,
                     removed=cleanup.removed,
                     skipped=cleanup.skipped,
                 )

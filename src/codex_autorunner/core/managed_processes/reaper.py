@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,7 +25,25 @@ def _pid_is_running(pid: int) -> bool:
         return True
     except OSError:
         return False
+    if _pid_is_zombie(pid):
+        return False
     return True
+
+
+def _pid_is_zombie(pid: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0:
+        return False
+    state = result.stdout.strip()
+    return state != "" and state.split()[0].startswith("Z")
 
 
 def _parse_iso_timestamp(value: str) -> datetime:
@@ -50,6 +69,7 @@ def _is_older_than(record: ProcessRecord, max_age_seconds: int) -> bool:
 @dataclass
 class ReapSummary:
     killed: int = 0
+    signaled: int = 0
     removed: int = 0
     skipped: int = 0
 
@@ -61,6 +81,53 @@ def _kill_record_processes(record: ProcessRecord) -> bool:
         grace_seconds=REAPER_GRACE_SECONDS,
         kill_seconds=REAPER_KILL_SECONDS,
     )
+
+
+def _pgid_is_running(pgid: int) -> bool:
+    if os.name == "nt" or not hasattr(os, "killpg"):
+        return False
+
+    # `killpg(..., 0)` can return non-zero for permission/other failures.
+    # Fall back to `ps` when available to avoid false positives for zombie
+    # process groups and provide a more deterministic liveness decision.
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False
+    except OSError:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["ps", "-g", str(pgid), "-o", "pid=,stat="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return True
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        if fields[1].startswith("Z"):
+            continue
+        return True
+    return False
+
+
+def _record_is_running(record: ProcessRecord) -> bool:
+    if record.pid is not None and _pid_is_running(record.pid):
+        return True
+    if record.pgid is None:
+        return False
+    return _pgid_is_running(record.pgid)
 
 
 def reap_managed_processes(
@@ -85,12 +152,17 @@ def reap_managed_processes(
                 summary.killed += 1
             continue
 
-        kill_ok = _kill_record_processes(record)
-        if has_target and kill_ok:
-            summary.killed += 1
-        if has_target and not kill_ok:
+        was_running = _record_is_running(record)
+        _kill_record_processes(record)
+
+        still_running = _record_is_running(record) if has_target else False
+        if has_target and still_running:
+            summary.signaled += 1
             summary.skipped += 1
             continue
+
+        if has_target and was_running:
+            summary.killed += 1
 
         if delete_process_record(repo_root, record.kind, record.record_key()):
             summary.removed += 1

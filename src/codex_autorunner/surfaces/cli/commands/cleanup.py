@@ -27,5 +27,5 @@ def register_cleanup_commands(
         summary = reap_managed_processes(engine.repo_root, dry_run=dry_run)
         prefix = "Dry run: " if dry_run else ""
         typer.echo(
-            f"{prefix}killed {summary.killed}, removed {summary.removed} records, skipped {summary.skipped}"
+            f"{prefix}killed {summary.killed}, signaled {summary.signaled}, removed {summary.removed} records, skipped {summary.skipped}"
         )

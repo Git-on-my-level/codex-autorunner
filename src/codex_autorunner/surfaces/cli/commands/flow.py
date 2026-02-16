@@ -513,9 +513,9 @@ def register_flow_commands(
         engine = require_repo_config(repo, hub)
         try:
             cleanup = reap_managed_processes(engine.repo_root)
-            if cleanup.killed or cleanup.removed:
+            if cleanup.killed or cleanup.signaled or cleanup.removed:
                 typer.echo(
-                    f"Managed process cleanup: killed {cleanup.killed}, removed {cleanup.removed} records, skipped {cleanup.skipped}"
+                    f"Managed process cleanup: killed {cleanup.killed}, signaled {cleanup.signaled}, removed {cleanup.removed} records, skipped {cleanup.skipped}"
                 )
         except Exception as exc:
             typer.echo(f"Managed process cleanup failed: {exc}", err=True)
