@@ -39,8 +39,20 @@ CAR is a local-first, filesystem-backed agent orchestration system with multiple
 ### 7) Observability is a contract
 - Every run must leave enough signal to answer: what happened, why, where it failed.
 - A run that cannot be explained from artifacts is considered a failed run.
+- Observability must be bounded and cheap by default: prefer compact manifests and pointers over copied blobs.
+- Verbose artifacts are opt-in or retention-bounded, never an unconditional per-invocation default.
 
-### 8) Agents are executors, not authorities
+### 8) CAR is self-describing
+- Agents must be able to discover CAR basics from the local repo/worktree without relying on prior chat history.
+- CAR must provide a stable agent-facing introspection primitive (for example, `car describe --json`) as a first-class surface.
+- Self-description is local-first, version-coupled, and low-entropy: small canonical docs plus stable machine-readable CLI output.
+
+### 9) Ticket templates are first-class control plane
+- Templates are the canonical reusable behavior guidance system.
+- Templates must be discoverable and applicable from primary CAR surfaces.
+- Template application must record provenance (template reference/version) in durable artifacts.
+
+### 10) Agents are executors, not authorities
 - Agents propose and execute; files decide.
 - No hidden coupling to chat history; re-load truth from disk each run.
 
@@ -55,5 +67,6 @@ When documents conflict:
 
 ## Evolution rules
 - Prefer adding new primitives over overloading existing ones.
+- Prefer improving ticket templates and introspection primitives over adding new instruction layers.
 - Preserve backward compatibility at the adapter/surface boundary when feasible, not in engine semantics.
 - If an invariant must change, record the rationale in durable docs and update this constitution.
