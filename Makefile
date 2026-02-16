@@ -21,11 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-<<<<<<< HEAD
 .PHONY: install dev hooks build test check preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
-=======
-.PHONY: install dev hooks build test check preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners
->>>>>>> 3235c48 (Add hub startup preflight and refresh lifecycle smoke)
 
 _inject-static-banners:
 	pnpm run postbuild
