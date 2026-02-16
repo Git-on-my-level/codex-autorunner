@@ -23,6 +23,15 @@ import httpx
 from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
 from ...core.utils import infer_home_from_workspace
+from .constants import (
+    OPENCODE_CONTEXT_WINDOW_KEYS,
+    OPENCODE_MODEL_CONTEXT_KEYS,
+    OPENCODE_USAGE_CACHED_KEYS,
+    OPENCODE_USAGE_INPUT_KEYS,
+    OPENCODE_USAGE_OUTPUT_KEYS,
+    OPENCODE_USAGE_REASONING_KEYS,
+    OPENCODE_USAGE_TOTAL_KEYS,
+)
 from .events import SSEEvent
 
 PermissionDecision = str
@@ -51,43 +60,6 @@ _OPENCODE_IDLE_STATUS_VALUES = {
     "finished",
     "success",
 }
-_OPENCODE_USAGE_TOTAL_KEYS = ("totalTokens", "total_tokens", "total")
-_OPENCODE_USAGE_INPUT_KEYS = (
-    "inputTokens",
-    "input_tokens",
-    "promptTokens",
-    "prompt_tokens",
-)
-_OPENCODE_USAGE_CACHED_KEYS = (
-    "cachedTokens",
-    "cached_tokens",
-    "cachedInputTokens",
-    "cached_input_tokens",
-)
-_OPENCODE_USAGE_OUTPUT_KEYS = (
-    "outputTokens",
-    "output_tokens",
-    "completionTokens",
-    "completion_tokens",
-)
-_OPENCODE_USAGE_REASONING_KEYS = (
-    "reasoningTokens",
-    "reasoning_tokens",
-    "reasoningOutputTokens",
-    "reasoning_output_tokens",
-)
-_OPENCODE_CONTEXT_WINDOW_KEYS = (
-    "modelContextWindow",
-    "contextWindow",
-    "context_window",
-    "contextWindowSize",
-    "context_window_size",
-    "contextLength",
-    "context_length",
-    "maxTokens",
-    "max_tokens",
-)
-_OPENCODE_MODEL_CONTEXT_KEYS = ("context",) + _OPENCODE_CONTEXT_WINDOW_KEYS
 
 
 @dataclass(frozen=True)
@@ -572,13 +544,13 @@ def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
 
 
 def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
-    total = _extract_usage_field(usage, _OPENCODE_USAGE_TOTAL_KEYS)
+    total = _extract_usage_field(usage, OPENCODE_USAGE_TOTAL_KEYS)
     if total is not None:
         return total
-    input_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_INPUT_KEYS) or 0
-    cached_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_CACHED_KEYS) or 0
-    output_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_OUTPUT_KEYS) or 0
-    reasoning_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_REASONING_KEYS) or 0
+    input_tokens = _extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS) or 0
+    cached_tokens = _extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS) or 0
+    output_tokens = _extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS) or 0
+    reasoning_tokens = _extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS) or 0
     if input_tokens or cached_tokens or output_tokens or reasoning_tokens:
         return input_tokens + cached_tokens + output_tokens + reasoning_tokens
     return None
@@ -586,16 +558,16 @@ def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
 
 def _extract_usage_details(usage: dict[str, Any]) -> dict[str, int]:
     details: dict[str, int] = {}
-    input_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_INPUT_KEYS)
+    input_tokens = _extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS)
     if input_tokens is not None:
         details["inputTokens"] = input_tokens
-    cached_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_CACHED_KEYS)
+    cached_tokens = _extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS)
     if cached_tokens is not None:
         details["cachedInputTokens"] = cached_tokens
-    output_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_OUTPUT_KEYS)
+    output_tokens = _extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS)
     if output_tokens is not None:
         details["outputTokens"] = output_tokens
-    reasoning_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_REASONING_KEYS)
+    reasoning_tokens = _extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS)
     if reasoning_tokens is not None:
         details["reasoningTokens"] = reasoning_tokens
     return details
@@ -654,7 +626,7 @@ def _extract_context_window(
     if isinstance(usage, dict):
         containers.insert(0, usage)
     for container in containers:
-        for key in _OPENCODE_CONTEXT_WINDOW_KEYS:
+        for key in OPENCODE_CONTEXT_WINDOW_KEYS:
             value = coerce_int(container.get(key))
             if value is not None and value > 0:
                 return value
@@ -999,13 +971,13 @@ async def collect_opencode_output_from_events(
             if isinstance(model_entry, dict):
                 limit = model_entry.get("limit") or model_entry.get("limits")
                 if isinstance(limit, dict):
-                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                    for key in OPENCODE_MODEL_CONTEXT_KEYS:
                         value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
                 if context_window is None:
-                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                    for key in OPENCODE_MODEL_CONTEXT_KEYS:
                         value = coerce_int(model_entry.get(key))
                         if value is not None and value > 0:
                             context_window = value
@@ -1013,7 +985,7 @@ async def collect_opencode_output_from_events(
             if context_window is None:
                 limit = provider.get("limit") or provider.get("limits")
                 if isinstance(limit, dict):
-                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                    for key in OPENCODE_MODEL_CONTEXT_KEYS:
                         value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
