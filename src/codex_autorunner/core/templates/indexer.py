@@ -165,38 +165,38 @@ def get_template_by_ref(
 
     repo_id, path = template_ref.split(":", 1)
 
+    repo_match = next(
+        (repo for repo in hub_config.templates.repos if repo.id == repo_id),
+        None,
+    )
+    if repo_match is None:
+        return None
+    ref = repo_match.default_ref or "HEAD"
     if "@" in path:
-        path, ref = path.rsplit("@", 1)
-    else:
-        ref = "HEAD"
+        path, explicit_ref = path.rsplit("@", 1)
+        if explicit_ref:
+            ref = explicit_ref
 
-    for repo in hub_config.templates.repos:
-        if repo.id != repo_id:
-            continue
+    try:
+        git_dir = ensure_git_mirror(repo_match, hub_root)
+    except Exception:
+        return None
 
-        try:
-            git_dir = ensure_git_mirror(repo, hub_root)
-        except Exception:
-            return None
+    if not git_dir.exists():
+        return None
 
-        if not git_dir.exists():
-            return None
+    content = _get_file_content(git_dir, Path(path), ref)
+    if content is None:
+        return None
 
-        content = _get_file_content(git_dir, Path(path), ref)
-        if content is None:
-            return None
-
-        summary = _parse_template_summary(content)
-
-        return TemplateInfo(
-            repo_id=repo_id,
-            path=path,
-            name=Path(path).stem,
-            summary=summary,
-            ref=ref,
-        )
-
-    return None
+    summary = _parse_template_summary(content)
+    return TemplateInfo(
+        repo_id=repo_id,
+        path=path,
+        name=Path(path).stem,
+        summary=summary,
+        ref=ref,
+    )
 
 
 def search_templates(

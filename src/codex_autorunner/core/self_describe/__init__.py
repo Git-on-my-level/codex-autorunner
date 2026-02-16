@@ -8,6 +8,7 @@ from .contract import (
     SCHEMA_VERSION,
     default_runtime_schema_path,
 )
+from .runtime import collect_describe_data
 
 __all__ = [
     "CONFIG_PRECEDENCE",
@@ -15,5 +16,6 @@ __all__ = [
     "SCHEMA_FILENAME",
     "SCHEMA_ID",
     "SCHEMA_VERSION",
+    "collect_describe_data",
     "default_runtime_schema_path",
 ]

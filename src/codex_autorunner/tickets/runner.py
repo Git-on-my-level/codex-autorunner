@@ -245,7 +245,7 @@ def _load_ticket_context_block(
 
         try:
             raw = absolute.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             if entry.required:
                 missing_required.append(rel_path)
             blocks.append(

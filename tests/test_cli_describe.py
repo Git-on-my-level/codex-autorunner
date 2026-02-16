@@ -1,9 +1,13 @@
 import json
 import re
+from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
+from codex_autorunner.core.config import CONFIG_FILENAME
 from codex_autorunner.core.self_describe import SCHEMA_ID, SCHEMA_VERSION
 
 runner = CliRunner()
@@ -159,6 +163,32 @@ def test_describe_env_knobs_are_names_only(repo):
             assert not any(
                 c in knob for c in ["=", ":", "'", '"', "sk-", "ghp_", "gho_"]
             )
+
+
+def test_describe_with_hub_option_uses_explicit_hub(tmp_path: Path, repo):
+    """Test that --hub overrides implicit hub lookup."""
+    other_hub = tmp_path / "other-hub"
+    seed_hub_files(other_hub, force=True)
+
+    config_path = other_hub / CONFIG_FILENAME
+    config_data = config_path.read_text(encoding="utf-8")
+    base = yaml.safe_load(config_data) or {}
+    templates = base.get("templates") if isinstance(base, dict) else {}
+    if not isinstance(templates, dict):
+        templates = {}
+    templates["enabled"] = False
+    base["templates"] = templates
+    config_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["describe", "--repo", str(repo), "--hub", str(other_hub), "--json"],
+    )
+    assert result.exit_code == 0
+
+    parsed = json.loads(result.output)
+    templates = parsed["templates"]
+    assert templates["enabled"] is False
 
 
 def test_describe_on_uninitialized_repo(repo):

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from ....core import update as update_core
 from ....core.config import HubConfig
+from ....core.self_describe import collect_describe_data
 from ....core.update import (
     UpdateInProgressError,
     _normalize_update_ref,
@@ -17,6 +18,7 @@ from ....core.update import (
     _system_update_check,
 )
 from ....core.update_paths import resolve_update_paths
+from ....core.utils import find_repo_root
 from ..schemas import (
     SystemHealthResponse,
     SystemUpdateCheckResponse,
@@ -192,5 +194,16 @@ def build_system_routes() -> APIRouter:
         if status is None:
             return {"status": "unknown", "message": "No update status recorded."}
         return status
+
+    @router.get("/system/describe")
+    async def system_describe(request: Request):
+        try:
+            repo_root = find_repo_root(request.app.state.engine.repo_root)
+            return await asyncio.to_thread(collect_describe_data, repo_root)
+        except Exception as exc:
+            logger = getattr(getattr(request.app, "state", None), "logger", None)
+            if logger:
+                logger.error("Describe endpoint error: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return router

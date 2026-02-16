@@ -207,6 +207,54 @@ async def test_ticket_runner_marks_non_required_missing_context_in_prompt(
 
 
 @pytest.mark.asyncio
+async def test_ticket_runner_includes_read_error_for_binary_context_file(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    docs_dir = workspace_root / "docs"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    binary_path = docs_dir / "binary.txt"
+    binary_path.write_bytes(b"\xff\xfe\x00")
+
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(
+        ticket_path,
+        frontmatter_extra=(
+            "context:\n" "  - path: docs/binary.txt\n" "    required: false\n"
+        ),
+    )
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv",
+            turn_id="t1",
+            text="ok",
+        )
+    )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+    assert result.status == "continue"
+    assert len(pool.requests) == 1
+    prompt = pool.requests[0].prompt
+    assert "docs/binary.txt" in prompt
+    assert "read_error" in prompt
+
+
+@pytest.mark.asyncio
 async def test_ticket_runner_requested_context_respects_size_caps(
     tmp_path: Path,
 ) -> None:
