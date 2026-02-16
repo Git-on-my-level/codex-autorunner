@@ -8,6 +8,15 @@ DEFAULT_MAX_TOTAL_TURNS = 50
 
 
 @dataclass(frozen=True)
+class TicketContextEntry:
+    """Requested context file include from ticket frontmatter."""
+
+    path: str
+    max_bytes: Optional[int] = None
+    required: bool = False
+
+
+@dataclass(frozen=True)
 class TicketFrontmatter:
     """Parsed, validated ticket frontmatter.
 
@@ -22,6 +31,7 @@ class TicketFrontmatter:
     # Optional model/reasoning overrides for this ticket.
     model: Optional[str] = None
     reasoning: Optional[str] = None
+    context: tuple[TicketContextEntry, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
 
 

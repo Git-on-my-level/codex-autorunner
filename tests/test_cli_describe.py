@@ -32,6 +32,7 @@ def test_describe_json_output_valid_json(repo):
     assert parsed["schema_version"] == SCHEMA_VERSION
     template_apply = parsed["templates"]["commands"]["apply"]
     assert "car templates apply <repo_id>:<path>[@<ref>]" in template_apply
+    assert parsed["features"]["ticket_frontmatter_context_includes"] is True
 
 
 def test_describe_json_output_matches_schema_keys(repo):

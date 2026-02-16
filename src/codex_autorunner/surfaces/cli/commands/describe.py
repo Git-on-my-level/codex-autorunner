@@ -230,6 +230,7 @@ def _get_features(raw: dict[str, Any]) -> dict[str, Any]:
     """Get feature flags and configuration."""
     return {
         "templates_enabled": raw.get("templates", {}).get("enabled", True),
+        "ticket_frontmatter_context_includes": True,
         "telegram_enabled": raw.get("telegram_bot", {}).get("enabled", False),
         "voice_enabled": raw.get("voice", {}).get("enabled", False),
         "review_enabled": raw.get("review", {}).get("enabled", False),

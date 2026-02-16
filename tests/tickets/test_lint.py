@@ -70,6 +70,46 @@ def test_lint_ticket_frontmatter_allows_depends_on_as_extra() -> None:
     assert fm.extra.get("depends_on") == ["TICKET-001"]
 
 
+def test_lint_ticket_frontmatter_validates_context_entries() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        {
+            "agent": "codex",
+            "done": False,
+            "context": [
+                {"path": "docs/one.md", "max_bytes": 512, "required": True},
+                {"path": "notes/two.txt"},
+            ],
+        }
+    )
+    assert errors == []
+    assert fm is not None
+    assert len(fm.context) == 2
+    assert fm.context[0].path == "docs/one.md"
+    assert fm.context[0].max_bytes == 512
+    assert fm.context[0].required is True
+    assert fm.context[1].path == "notes/two.txt"
+    assert fm.context[1].max_bytes is None
+    assert fm.context[1].required is False
+
+
+def test_lint_ticket_frontmatter_rejects_invalid_context_entries() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        {
+            "agent": "codex",
+            "done": False,
+            "context": [
+                {"path": "../secrets.txt", "required": "yes"},
+                {"path": "/abs/path.txt"},
+                {"path": "ok.md", "max_bytes": 0},
+            ],
+        }
+    )
+    assert fm is None
+    assert any("context[0].path" in e for e in errors)
+    assert any("context[1].path" in e for e in errors)
+    assert any("context[2].max_bytes" in e for e in errors)
+
+
 def test_lint_dispatch_frontmatter_defaults_notify_and_validates_mode() -> None:
     normalized, errors = lint_dispatch_frontmatter({})
     assert errors == []

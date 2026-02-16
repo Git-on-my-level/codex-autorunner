@@ -11,7 +11,7 @@ from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory, lint_ticket_frontmatter
-from .models import TicketFrontmatter, TicketResult, TicketRunConfig
+from .models import TicketContextEntry, TicketFrontmatter, TicketResult, TicketRunConfig
 from .outbox import (
     archive_dispatch,
     create_turn_summary,
@@ -33,6 +33,8 @@ TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
 LOOP_NO_CHANGE_THRESHOLD = 2
 CAR_HUD_MAX_LINES = 14
 CAR_HUD_MAX_CHARS = 900
+TICKET_CONTEXT_DEFAULT_MAX_BYTES = 4096
+TICKET_CONTEXT_TOTAL_MAX_BYTES = 16384
 
 
 def _truncate_text_by_bytes(text: str, max_bytes: int) -> str:
@@ -189,6 +191,107 @@ def _build_car_hud() -> str:
     if len(hud) > CAR_HUD_MAX_CHARS:
         hud = hud[: CAR_HUD_MAX_CHARS - 3] + "..."
     return hud
+
+
+def _load_ticket_context_block(
+    *,
+    workspace_root: Path,
+    entries: tuple[TicketContextEntry, ...],
+) -> tuple[str, list[str]]:
+    """Resolve requested ticket context entries into a bounded prompt block."""
+
+    if not entries:
+        return "", []
+
+    missing_required: list[str] = []
+    blocks: list[str] = []
+    remaining_total = TICKET_CONTEXT_TOTAL_MAX_BYTES
+
+    for entry in entries:
+        rel_path = entry.path
+        absolute = workspace_root / rel_path
+        block_prefix = f"- path: {rel_path}\n- required: {str(entry.required).lower()}"
+        cap = min(
+            (
+                entry.max_bytes
+                if entry.max_bytes is not None
+                else TICKET_CONTEXT_DEFAULT_MAX_BYTES
+            ),
+            TICKET_CONTEXT_TOTAL_MAX_BYTES,
+        )
+        cap = min(cap, max(remaining_total, 0))
+
+        if not absolute.exists():
+            if entry.required:
+                missing_required.append(rel_path)
+            blocks.append(
+                "<CAR_CONTEXT_ENTRY>\n"
+                f"{block_prefix}\n"
+                "- status: missing\n"
+                "</CAR_CONTEXT_ENTRY>"
+            )
+            continue
+
+        if not absolute.is_file():
+            if entry.required:
+                missing_required.append(rel_path)
+            blocks.append(
+                "<CAR_CONTEXT_ENTRY>\n"
+                f"{block_prefix}\n"
+                "- status: not_a_file\n"
+                "</CAR_CONTEXT_ENTRY>"
+            )
+            continue
+
+        try:
+            raw = absolute.read_text(encoding="utf-8")
+        except OSError as exc:
+            if entry.required:
+                missing_required.append(rel_path)
+            blocks.append(
+                "<CAR_CONTEXT_ENTRY>\n"
+                f"{block_prefix}\n"
+                f"- status: read_error ({exc})\n"
+                "</CAR_CONTEXT_ENTRY>"
+            )
+            continue
+
+        content = (raw or "").strip()
+        if cap <= 0:
+            blocks.append(
+                "<CAR_CONTEXT_ENTRY>\n"
+                f"{block_prefix}\n"
+                "- status: skipped_budget_exhausted\n"
+                "</CAR_CONTEXT_ENTRY>"
+            )
+            continue
+        truncated = _truncate_text_by_bytes(content, cap)
+        payload = (
+            "<CAR_CONTEXT_ENTRY>\n"
+            f"{block_prefix}\n"
+            f"- max_bytes: {cap}\n"
+            "- status: included\n"
+            "CONTENT:\n"
+            f"{truncated}\n"
+            "</CAR_CONTEXT_ENTRY>"
+        )
+        payload_bytes = len(payload.encode("utf-8"))
+        if payload_bytes > remaining_total:
+            # Final strict clamp for total boundedness.
+            trimmed = _truncate_text_by_bytes(payload, max(remaining_total, 0))
+            blocks.append(trimmed)
+            remaining_total = 0
+            break
+        blocks.append(payload)
+        remaining_total -= payload_bytes
+
+    header = (
+        "Requested ticket context includes "
+        f"(bounded total bytes={TICKET_CONTEXT_TOTAL_MAX_BYTES}):"
+    )
+    rendered = "\n\n".join([header] + blocks)
+    rendered = _truncate_text_by_bytes(rendered, TICKET_CONTEXT_TOTAL_MAX_BYTES)
+    return rendered, missing_required
 
 
 class TicketRunner:
@@ -484,6 +587,25 @@ class TicketRunner:
         reply_context, reply_max_seq = self._build_reply_context(
             reply_paths=reply_paths, last_seq=reply_seq
         )
+        requested_context_block, missing_required_context = _load_ticket_context_block(
+            workspace_root=self._workspace_root,
+            entries=ticket_doc.frontmatter.context,
+        )
+        if missing_required_context:
+            details = "Missing required ticket context files:\n- " + "\n- ".join(
+                missing_required_context
+            )
+            state["status"] = "failed"
+            state["reason_code"] = "missing_required_context"
+            state["reason"] = "Required ticket context file missing."
+            state["reason_details"] = details
+            return TicketResult(
+                status="failed",
+                state=state,
+                reason="Required ticket context file missing.",
+                reason_details=details,
+                current_ticket=safe_relpath(current_path, self._workspace_root),
+            )
 
         previous_ticket_content: Optional[str] = None
         if self._config.include_previous_ticket_context:
@@ -518,6 +640,7 @@ class TicketRunner:
             outbox_paths=outbox_paths,
             lint_errors=lint_errors if lint_errors else None,
             reply_context=reply_context,
+            requested_context=requested_context_block,
             previous_ticket_content=previous_ticket_content,
             prior_no_change_turns=self._prior_no_change_turns(
                 state, safe_relpath(current_path, self._workspace_root)
@@ -1154,6 +1277,7 @@ class TicketRunner:
         outbox_paths,
         lint_errors: Optional[list[str]],
         reply_context: Optional[str] = None,
+        requested_context: Optional[str] = None,
         previous_ticket_content: Optional[str] = None,
         prior_no_change_turns: int = 0,
     ) -> str:
@@ -1208,6 +1332,9 @@ class TicketRunner:
         reply_block = ""
         if reply_context:
             reply_block = reply_context
+        requested_context_block = ""
+        if requested_context:
+            requested_context_block = requested_context
 
         workspace_block = ""
         workspace_docs: list[tuple[str, str, str]] = []
@@ -1269,6 +1396,7 @@ class TicketRunner:
             "prev_ticket_block": prev_ticket_block,
             "workspace_block": workspace_block,
             "reply_block": reply_block,
+            "requested_context_block": requested_context_block,
             "ticket_block": ticket_block,
         }
         car_hud = _build_car_hud()
@@ -1325,6 +1453,9 @@ class TicketRunner:
                 f"{commit_block}\n\n"
                 f"{lint_block}\n\n"
                 f"{loop_guard_block}\n\n"
+                "<CAR_REQUESTED_CONTEXT>\n"
+                f"{sections['requested_context_block']}\n"
+                "</CAR_REQUESTED_CONTEXT>\n\n"
                 "<CAR_WORKSPACE_DOCS>\n"
                 f"{sections['workspace_block']}\n"
                 "</CAR_WORKSPACE_DOCS>\n\n"
@@ -1349,6 +1480,7 @@ class TicketRunner:
                 "prev_block",
                 "prev_ticket_block",
                 "reply_block",
+                "requested_context_block",
                 "workspace_block",
                 "ticket_block",
             ],
