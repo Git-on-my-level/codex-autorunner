@@ -186,69 +186,75 @@ class OpenCodeSupervisor:
         )
 
     async def _close_handle(self, handle: OpenCodeHandle, *, reason: str) -> None:
-        try:
-            idle_seconds = None
-            if reason == "idle_ttl" and handle.last_used_at:
-                idle_seconds = max(0.0, time.monotonic() - handle.last_used_at)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "opencode.handle.closing",
-                reason=reason,
-                workspace_id=handle.workspace_id,
-                workspace_root=str(handle.workspace_root),
-                last_used_at=handle.last_used_at,
-                idle_seconds=idle_seconds,
-                active_turns=handle.active_turns,
-                returncode=(
-                    handle.process.returncode if handle.process is not None else None
-                ),
-            )
+        stdout_task = handle.stdout_task
+        handle.stdout_task = None
+        if stdout_task is not None and not stdout_task.done():
+            stdout_task.cancel()
             try:
-                registry_root = self._registry_root(handle.workspace_root)
-                if handle.process is not None:
-                    delete_process_record(
-                        registry_root, _PROCESS_KIND, handle.workspace_id
-                    )
+                await stdout_task
+            except asyncio.CancelledError:
+                pass
+
+        idle_seconds = None
+        if reason == "idle_ttl" and handle.last_used_at:
+            idle_seconds = max(0.0, time.monotonic() - handle.last_used_at)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "opencode.handle.closing",
+            reason=reason,
+            workspace_id=handle.workspace_id,
+            workspace_root=str(handle.workspace_root),
+            last_used_at=handle.last_used_at,
+            idle_seconds=idle_seconds,
+            active_turns=handle.active_turns,
+            returncode=(
+                handle.process.returncode if handle.process is not None else None
+            ),
+        )
+
+        if self._server_scope == _SCOPE_GLOBAL and handle.client is not None:
+            try:
+                await handle.client.dispose_instances()
             except Exception as exc:
                 log_event(
                     self._logger,
-                    logging.WARNING,
-                    "opencode.registry.delete_failed",
+                    logging.DEBUG,
+                    "opencode.global.dispose_failed",
                     workspace_id=handle.workspace_id,
                     workspace_root=str(handle.workspace_root),
                     exc=exc,
                 )
-            if self._server_scope == _SCOPE_GLOBAL and handle.client is not None:
-                try:
-                    await handle.client.dispose_instances()
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.DEBUG,
-                        "opencode.global.dispose_failed",
-                        workspace_id=handle.workspace_id,
-                        workspace_root=str(handle.workspace_root),
-                        exc=exc,
-                    )
-            if handle.client is not None:
-                await handle.client.close()
-        finally:
-            stdout_task = handle.stdout_task
-            handle.stdout_task = None
-            if stdout_task is not None and not stdout_task.done():
-                stdout_task.cancel()
-                try:
-                    await stdout_task
-                except asyncio.CancelledError:
-                    pass
-            if handle.process and handle.process.returncode is None:
-                handle.process.terminate()
-                try:
-                    await asyncio.wait_for(handle.process.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    handle.process.kill()
-                    await handle.process.wait()
+
+        if handle.client is not None:
+            await handle.client.close()
+
+        process = handle.process
+        if process is None or process.pid is None:
+            return
+
+        process_record = self._build_record_for_handle(handle, process.pid)
+        if self._record_is_running(process_record):
+            terminated = await self._terminate_record_process(process_record)
+            if not terminated or self._record_is_running(process_record):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.handle.close_failed",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    pid=process_record.pid,
+                    pgid=process_record.pgid,
+                )
+                return
+
+        if process.returncode is None:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+        if not self._record_is_running(process_record):
+            self._delete_registry_record(handle)
 
     async def _ensure_handle(
         self, handle_id: str, workspace_root: Path
@@ -405,7 +411,30 @@ class OpenCodeSupervisor:
             return False
 
         if not record.base_url:
-            await self._terminate_record_process(record)
+            if self._record_is_running(record):
+                terminated = await self._terminate_record_process(record)
+                if not terminated:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "opencode.handle.close_failed",
+                        workspace_id=handle.workspace_id,
+                        workspace_root=str(handle.workspace_root),
+                        pid=record.pid,
+                        pgid=record.pgid,
+                    )
+                    return False
+                if self._record_is_running(record):
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "opencode.handle.close_failed",
+                        workspace_id=handle.workspace_id,
+                        workspace_root=str(handle.workspace_root),
+                        pid=record.pid,
+                        pgid=record.pgid,
+                    )
+                    return False
             self._delete_registry_record(handle)
             return False
 
@@ -424,7 +453,19 @@ class OpenCodeSupervisor:
             )
             return True
         except Exception:
-            await self._terminate_record_process(record)
+            if self._record_is_running(record):
+                terminated = await self._terminate_record_process(record)
+                if not terminated or self._record_is_running(record):
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "opencode.handle.close_failed",
+                        workspace_id=handle.workspace_id,
+                        workspace_root=str(handle.workspace_root),
+                        pid=record.pid,
+                        pgid=record.pgid,
+                    )
+                    return False
             self._delete_registry_record(handle)
             return False
 
@@ -509,6 +550,50 @@ class OpenCodeSupervisor:
             return False
         return True
 
+    def _pgid_is_running(self, pgid: int) -> bool:
+        if os.name == "nt" or not hasattr(os, "killpg"):
+            return False
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return False
+        except OSError:
+            return False
+        return True
+
+    def _record_is_running(self, record: ProcessRecord) -> bool:
+        if record.pid is not None and self._pid_is_running(record.pid):
+            return True
+        if record.pgid is None:
+            return False
+        return self._pgid_is_running(record.pgid)
+
+    def _record_pid_and_pgid(self, pid: int | None) -> tuple[int | None, int | None]:
+        if pid is None or os.name == "nt":
+            return pid, None
+        try:
+            return pid, os.getpgid(pid)
+        except Exception:
+            return pid, None
+
+    def _build_record_for_handle(
+        self, handle: OpenCodeHandle, pid: int
+    ) -> ProcessRecord:
+        pgid = self._record_pid_and_pgid(pid)[1]
+        return ProcessRecord(
+            kind=_PROCESS_KIND,
+            workspace_id=handle.workspace_id,
+            pid=pid,
+            pgid=pgid,
+            base_url=handle.base_url,
+            command=list(self._command),
+            owner_pid=os.getpid(),
+            started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            metadata={"workspace_root": str(handle.workspace_root)},
+        )
+
     def _write_registry_record(self, handle: OpenCodeHandle) -> None:
         process = handle.process
         if process is None or process.pid is None or not handle.base_url:
@@ -575,10 +660,10 @@ class OpenCodeSupervisor:
         except Exception:
             pass
 
-    async def _terminate_record_process(self, record: ProcessRecord) -> None:
+    async def _terminate_record_process(self, record: ProcessRecord) -> bool:
         if record.pid is None and record.pgid is None:
-            return
-        await asyncio.to_thread(
+            return False
+        return await asyncio.to_thread(
             terminate_record,
             record.pid,
             record.pgid,

@@ -170,10 +170,14 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         start_calls.append("spawned")
         _handle.started = True
 
+    pid_state = {"running": True}
+
     monkeypatch.setattr(
         supervisor_module, "read_process_record", lambda *_a, **_k: registry_record
     )
-    monkeypatch.setattr(supervisor, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        supervisor, "_pid_is_running", lambda _pid: pid_state["running"]
+    )
     monkeypatch.setattr(supervisor, "_attach_to_base_url", _fake_attach)
     monkeypatch.setattr(supervisor, "_start_process", _fake_start_process)
     monkeypatch.setattr(
@@ -182,13 +186,24 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         lambda repo_root, kind, key: delete_calls.append((repo_root, kind, key))
         or True,
     )
+
+    def _fake_killpg(_pgid: int, _sig: int) -> None:
+        if _sig == 0:
+            raise OSError("process group ended")
+        killpg_calls.append((_pgid, _sig))
+        pid_state["running"] = False
+
+    def _fake_kill(_pid: int, _sig: int) -> None:
+        kill_calls.append((_pid, _sig))
+        pid_state["running"] = False
+
     monkeypatch.setattr(
         "codex_autorunner.core.process_termination.os.killpg",
-        lambda pgid, sig: killpg_calls.append((pgid, sig)),
+        _fake_killpg,
     )
     monkeypatch.setattr(
         "codex_autorunner.core.process_termination.os.kill",
-        lambda pid, sig: kill_calls.append((pid, sig)),
+        _fake_kill,
     )
 
     await supervisor._ensure_started(handle)
