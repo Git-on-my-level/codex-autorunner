@@ -22,7 +22,12 @@ from ....core.config import (
     load_hub_config,
     load_repo_config,
 )
-from ....core.utils import RepoNotFoundError, find_repo_root, is_within
+from ....core.utils import (
+    RepoNotFoundError,
+    find_repo_root,
+    find_template_repo,
+    is_within,
+)
 from ....manifest import load_manifest
 from ....tickets.files import list_ticket_paths, read_ticket, safe_relpath
 from ....tickets.lint import lint_ticket_directory, parse_ticket_index
@@ -305,13 +310,6 @@ def require_templates_enabled(config: RepoConfig) -> None:
         raise_exit(
             "Templates are disabled. Set templates.enabled=true in the hub config to enable."
         )
-
-
-def find_template_repo(config: RepoConfig, repo_id: str):
-    for repo in config.templates.repos:
-        if repo.id == repo_id:
-            return repo
-    return None
 
 
 def resolve_hub_config_path_for_cli(

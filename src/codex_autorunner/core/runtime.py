@@ -790,7 +790,8 @@ class RuntimeContext:
             with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
                 return "".join(lines[-tail:])
-        except Exception:
+        except Exception as e:
+            _logger.warning("Failed to tail log %s: %s", self.log_path, e)
             return ""
 
     def log_line(self, run_id: int, message: str) -> None:
@@ -813,7 +814,8 @@ class RuntimeContext:
         try:
             with open(run_log_path, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
-        except Exception:
+        except Exception as e:
+            _logger.warning("Failed to read run log block for run %s: %s", run_id, e)
             return None
 
     def reconcile_run_index(self) -> None:

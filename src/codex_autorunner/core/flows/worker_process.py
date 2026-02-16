@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import IO, Any, Literal, Optional, Tuple
 
 from ..utils import resolve_executable
+
+logger = logging.getLogger(__name__)
 
 _WORKER_METADATA_FILENAME = "worker.json"
 _WORKER_EXIT_FILENAME = "worker.exit.json"
@@ -85,6 +88,7 @@ def _signal_from_returncode(returncode: Optional[int]) -> Optional[str]:
 def _tail_file(
     path: Path, *, max_lines: int = 5, max_chars: int = 320
 ) -> Optional[str]:
+    text = ""
     try:
         if not path.exists() or not path.is_file():
             return None
@@ -95,7 +99,8 @@ def _tail_file(
                 fh.seek(start)
             chunk = fh.read()
         text = chunk.decode("utf-8", errors="replace")
-    except Exception:
+    except Exception as e:
+        logger.warning("failed to read tail of %s: %s", path, e)
         return None
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
@@ -135,7 +140,8 @@ def write_worker_exit_info(
         metadata = json.loads(
             _worker_metadata_path(artifacts_dir).read_text(encoding="utf-8")
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("failed to read worker metadata: %s", e)
         metadata = {}
 
     existing_shutdown_intent = False
@@ -159,9 +165,11 @@ def write_worker_exit_info(
         "stdout_tail": _tail_file(artifacts_dir / "worker.out.log"),
     }
     try:
-        exit_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+        _worker_exit_path(artifacts_dir).write_text(
+            json.dumps(data, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        logger.warning("failed to write worker exit info: %s", e)
 
 
 def write_worker_crash_info(
@@ -182,7 +190,8 @@ def write_worker_crash_info(
         artifacts_dir = _worker_artifacts_dir(
             repo_root, normalized_run_id, artifacts_root
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("failed to get artifacts dir for crash info: %s", e)
         return None
     if stderr_tail is None:
         stderr_tail = _tail_file(artifacts_dir / "worker.err.log")
@@ -199,7 +208,8 @@ def write_worker_crash_info(
     crash_path = _worker_crash_path(artifacts_dir)
     try:
         crash_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except Exception:
+    except Exception as e:
+        logger.warning("failed to write crash info: %s", e)
         return None
     return crash_path
 
@@ -212,14 +222,16 @@ def read_worker_crash_info(
 ) -> Optional[dict[str, Any]]:
     try:
         artifacts_dir = _worker_artifacts_dir(repo_root, run_id, artifacts_root)
-    except Exception:
+    except Exception as e:
+        logger.warning("failed to get artifacts dir for crash info: %s", e)
         return None
     crash_path = _worker_crash_path(artifacts_dir)
     if not crash_path.exists():
         return None
     try:
         raw = json.loads(crash_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        logger.warning("failed to read crash info: %s", e)
         return None
     return raw if isinstance(raw, dict) else None
 
@@ -377,7 +389,8 @@ def check_worker_health(
             spawned_at = None
         raw_cmd = data.get("cmd") or []
         cmd = [str(part) for part in raw_cmd] if isinstance(raw_cmd, list) else []
-    except Exception:
+    except Exception as e:
+        logger.warning("failed to read worker metadata: %s", e)
         return FlowWorkerHealth(
             status="invalid",
             pid=None,

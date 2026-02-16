@@ -1435,6 +1435,9 @@ class HubSupervisor:
                             repo_snapshot = snap
                             break
                 except Exception:
+                    logger.exception(
+                        "Failed to get repo snapshot for repo_id=%s", event.repo_id
+                    )
                     repo_snapshot = None
 
                 if repo_snapshot is None or not repo_snapshot.exists_on_disk:

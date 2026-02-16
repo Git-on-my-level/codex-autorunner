@@ -63,7 +63,8 @@ def _latest_app_server_event_details(
 ) -> tuple[Optional[str], Optional[str]]:
     try:
         event = store.get_last_event_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
-    except Exception:
+    except Exception as exc:
+        _logger.debug("Failed to get last app server event: %s", exc)
         return None, None
     if event is None:
         return None, None
@@ -134,7 +135,8 @@ def _ensure_worker_crash_artifact(
 ) -> None:
     try:
         existing = store.get_artifacts(run_id)
-    except Exception:
+    except Exception as exc:
+        _logger.debug("Failed to get artifacts for %s: %s", run_id, exc)
         existing = []
     for art in existing:
         if art.kind == "worker_crash":
@@ -490,6 +492,6 @@ def reconcile_flow_runs(
     finally:
         try:
             store.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("Failed to close store: %s", exc)
     return FlowReconcileResult(records=records, summary=summary)

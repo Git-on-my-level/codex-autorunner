@@ -26,6 +26,7 @@ from ....core.templates import (
     parse_template_ref,
 )
 from ....core.templates.scan_cache import TemplateScanRecord, get_scan_record, scan_lock
+from ....core.utils import find_template_repo
 from ....integrations.templates import (
     TemplateScanError,
     TemplateScanRejectedError,
@@ -62,13 +63,6 @@ def _require_templates_enabled(config: RepoConfig) -> None:
                 "Templates are disabled. Set templates.enabled=true in the hub config to enable.",
             ),
         )
-
-
-def _find_template_repo(config: RepoConfig, repo_id: str):
-    for repo in config.templates.repos:
-        if repo.id == repo_id:
-            return repo
-    return None
 
 
 def _resolve_hub_root(repo_root: Path) -> Path:
@@ -183,7 +177,7 @@ async def _fetch_template_with_scan(
         ) from exc
 
     config: RepoConfig = request.app.state.config
-    repo_cfg = _find_template_repo(config, parsed.repo_id)
+    repo_cfg = find_template_repo(config, parsed.repo_id)
     if repo_cfg is None:
         raise HTTPException(
             status_code=404,
@@ -419,7 +413,7 @@ def build_templates_routes() -> APIRouter:
         request: Request, repo_id: str, payload: TemplateRepoUpdateRequest
     ):
         config: RepoConfig = request.app.state.config
-        existing = _find_template_repo(config, repo_id)
+        existing = find_template_repo(config, repo_id)
         if existing is None:
             raise HTTPException(
                 status_code=404,
@@ -482,7 +476,7 @@ def build_templates_routes() -> APIRouter:
     @router.delete("/repos/{repo_id}", response_model=TemplateReposResponse)
     def delete_template_repo(request: Request, repo_id: str):
         config: RepoConfig = request.app.state.config
-        if _find_template_repo(config, repo_id) is None:
+        if find_template_repo(config, repo_id) is None:
             raise HTTPException(
                 status_code=404,
                 detail=_error_detail(

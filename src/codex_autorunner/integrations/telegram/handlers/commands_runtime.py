@@ -258,13 +258,6 @@ def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
     return chain
 
 
-def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
-    cleaned = " ".join(detail.split())
-    if len(cleaned) > limit:
-        return f"{cleaned[: limit - 3]}..."
-    return cleaned
-
-
 def _format_media_batch_failure(
     *,
     image_disabled: int,

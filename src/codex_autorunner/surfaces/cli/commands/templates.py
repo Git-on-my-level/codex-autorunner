@@ -28,6 +28,7 @@ from ....integrations.templates.scan_agent import (
 )
 from ....tickets.frontmatter import split_markdown_frontmatter
 from ....tickets.lint import parse_ticket_index
+from .utils import find_template_repo
 
 
 def register_templates_commands(
@@ -189,7 +190,7 @@ def _fetch_template_with_scan(
     except ValueError as exc:
         raise_exit(str(exc), cause=exc)
 
-    repo_cfg = _find_template_repo(config, parsed.repo_id)
+    repo_cfg = find_template_repo(config, parsed.repo_id)
     if repo_cfg is None:
         raise_exit(f"Template repo not configured: {parsed.repo_id}")
 
@@ -238,13 +239,6 @@ def _fetch_template_with_scan(
                 raise_exit(format_template_scan_rejection(scan_record))
 
     return fetched, scan_record, hub_root
-
-
-def _find_template_repo(config, repo_id: str):
-    for repo in config.templates.repos:
-        if repo.id == repo_id:
-            return repo
-    return None
 
 
 def _resolve_ticket_dir(repo_root: Path, ticket_dir: Optional[Path]) -> Path:
