@@ -183,18 +183,21 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         or True,
     )
     monkeypatch.setattr(
-        supervisor_module.os,
-        "killpg",
+        "codex_autorunner.core.process_termination.os.killpg",
         lambda pgid, sig: killpg_calls.append((pgid, sig)),
     )
     monkeypatch.setattr(
-        supervisor_module.os, "kill", lambda pid, sig: kill_calls.append((pid, sig))
+        "codex_autorunner.core.process_termination.os.kill",
+        lambda pid, sig: kill_calls.append((pid, sig)),
     )
 
     await supervisor._ensure_started(handle)
 
-    assert killpg_calls == [(9992, signal.SIGTERM)]
-    assert kill_calls == [(9992, signal.SIGTERM)]
+    assert killpg_calls == [
+        (9992, signal.SIGTERM),
+        (9992, signal.SIGKILL),
+    ]
+    assert kill_calls == [(9992, signal.SIGTERM), (9992, signal.SIGKILL)]
     assert delete_calls and delete_calls[0][1:] == ("opencode", "ws-1")
     assert start_calls == ["spawned"]
 

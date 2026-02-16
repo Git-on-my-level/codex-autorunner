@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
-import signal
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Final
 
+from ..process_termination import terminate_record
 from .registry import ProcessRecord, delete_process_record, list_process_records
+
+REAPER_GRACE_SECONDS: Final = 0.2
+REAPER_KILL_SECONDS: Final = 0.2
 
 DEFAULT_MAX_RECORD_AGE_SECONDS = 6 * 60 * 60
 
@@ -51,33 +55,12 @@ class ReapSummary:
 
 
 def _kill_record_processes(record: ProcessRecord) -> bool:
-    killed_any = False
-
-    if os.name != "nt" and hasattr(os, "killpg") and record.pgid is not None:
-        try:
-            os.killpg(record.pgid, signal.SIGTERM)
-            killed_any = True
-        except ProcessLookupError:
-            # Already gone.
-            killed_any = True
-        except PermissionError:
-            return False
-        except OSError:
-            # Fall back to pid termination below.
-            pass
-
-    if record.pid is not None:
-        try:
-            os.kill(record.pid, signal.SIGTERM)
-            killed_any = True
-        except ProcessLookupError:
-            killed_any = True
-        except PermissionError:
-            return False
-        except OSError:
-            pass
-
-    return killed_any
+    return terminate_record(
+        record.pid,
+        record.pgid,
+        grace_seconds=REAPER_GRACE_SECONDS,
+        kill_seconds=REAPER_KILL_SECONDS,
+    )
 
 
 def reap_managed_processes(

@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import re
-import signal
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +19,7 @@ from ...core.managed_processes.registry import (
     read_process_record,
     write_process_record,
 )
+from ...core.process_termination import terminate_record
 from ...core.state_roots import resolve_global_state_root
 from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
 from ...core.utils import infer_home_from_workspace, subprocess_env
@@ -405,7 +405,7 @@ class OpenCodeSupervisor:
             return False
 
         if not record.base_url:
-            self._terminate_record_process(record)
+            await self._terminate_record_process(record)
             self._delete_registry_record(handle)
             return False
 
@@ -424,7 +424,7 @@ class OpenCodeSupervisor:
             )
             return True
         except Exception:
-            self._terminate_record_process(record)
+            await self._terminate_record_process(record)
             self._delete_registry_record(handle)
             return False
 
@@ -575,17 +575,18 @@ class OpenCodeSupervisor:
         except Exception:
             pass
 
-    def _terminate_record_process(self, record: ProcessRecord) -> None:
-        if record.pgid is not None and os.name != "nt" and hasattr(os, "killpg"):
-            try:
-                os.killpg(record.pgid, signal.SIGTERM)
-            except Exception:
-                pass
-        if record.pid is not None:
-            try:
-                os.kill(record.pid, signal.SIGTERM)
-            except Exception:
-                pass
+    async def _terminate_record_process(self, record: ProcessRecord) -> None:
+        if record.pid is None and record.pgid is None:
+            return
+        await asyncio.to_thread(
+            terminate_record,
+            record.pid,
+            record.pgid,
+            grace_seconds=0.5,
+            kill_seconds=0.5,
+            logger=self._logger,
+            event_prefix="opencode.supervisor.terminate_record",
+        )
 
     def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:
         env = subprocess_env(base_env=self._base_env)

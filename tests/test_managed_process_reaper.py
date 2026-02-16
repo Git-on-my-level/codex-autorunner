@@ -48,11 +48,11 @@ def test_reaper_kills_process_group_and_pid_when_owner_is_dead(
         lambda _pid: False,
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.managed_processes.reaper.os.killpg",
+        "codex_autorunner.core.process_termination.os.killpg",
         lambda pgid, sig: killpg_calls.append((pgid, sig)),
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.managed_processes.reaper.os.kill",
+        "codex_autorunner.core.process_termination.os.kill",
         lambda pid, sig: kill_calls.append((pid, sig)),
     )
 
@@ -61,8 +61,8 @@ def test_reaper_kills_process_group_and_pid_when_owner_is_dead(
     assert summary.killed == 1
     assert summary.removed == 1
     assert summary.skipped == 0
-    assert killpg_calls == [(2999, signal.SIGTERM)]
-    assert kill_calls == [(2111, signal.SIGTERM)]
+    assert killpg_calls == [(2999, signal.SIGTERM), (2999, signal.SIGKILL)]
+    assert kill_calls == [(2111, signal.SIGTERM), (2111, signal.SIGKILL)]
     assert registry.read_process_record(tmp_path, "opencode", "ws-dead") is None
 
 
@@ -77,11 +77,11 @@ def test_reaper_dry_run_does_not_kill_or_delete(monkeypatch, tmp_path: Path) -> 
         lambda _pid: False,
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.managed_processes.reaper.os.killpg",
+        "codex_autorunner.core.process_termination.os.killpg",
         lambda pgid, sig: killpg_calls.append((pgid, sig)),
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.managed_processes.reaper.os.kill",
+        "codex_autorunner.core.process_termination.os.kill",
         lambda pid, sig: kill_calls.append((pid, sig)),
     )
 
@@ -137,11 +137,11 @@ def test_reaper_reaps_old_records_even_if_owner_running(
         lambda _pid: True,
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.managed_processes.reaper.os.killpg",
+        "codex_autorunner.core.process_termination.os.killpg",
         lambda pgid, sig: killpg_calls.append((pgid, sig)),
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.managed_processes.reaper.os.kill",
+        "codex_autorunner.core.process_termination.os.kill",
         lambda pid, sig: kill_calls.append((pid, sig)),
     )
 
@@ -150,5 +150,5 @@ def test_reaper_reaps_old_records_even_if_owner_running(
     assert summary.killed == 1
     assert summary.removed == 1
     assert summary.skipped == 0
-    assert killpg_calls == [(5111, signal.SIGTERM)]
-    assert kill_calls == [(5111, signal.SIGTERM)]
+    assert killpg_calls == [(5111, signal.SIGTERM), (5111, signal.SIGKILL)]
+    assert kill_calls == [(5111, signal.SIGTERM), (5111, signal.SIGKILL)]
