@@ -71,7 +71,7 @@ async def _fetch_openapi_spec(base_url: str) -> dict:
         return response.json()  # type: ignore[no-any-return]
 
 
-async def _run_opencode_and_fetch(base_url: str, opencode_bin: str) -> dict:
+async def _run_opencode_and_fetch(opencode_bin: str) -> dict:
     """Start OpenCode server and fetch OpenAPI spec."""
     proc = subprocess.Popen(
         [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"],
@@ -127,7 +127,7 @@ def register_protocol_commands(app: typer.Typer) -> None:
         target_dir: Optional[Path] = typer.Option(
             None,
             "--target-dir",
-            help="Target directory for schemas (defaults to docs/protocol_schemas)",
+            help="Target directory for schemas (defaults to vendor/protocols)",
         ),
     ) -> None:
         """Refresh protocol schema snapshots.
@@ -137,10 +137,14 @@ def register_protocol_commands(app: typer.Typer) -> None:
         """
         repo_root = Path(__file__).resolve().parents[4]
         if target_dir is None:
-            target_dir = repo_root / "docs" / "protocol_schemas"
+            target_dir = repo_root / "vendor" / "protocols"
 
-        codex_dir = target_dir / "codex-app-server"
-        opencode_dir = target_dir / "opencode"
+        if not codex and not opencode:
+            raise_exit("At least one of --codex or --opencode is required")
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        codex_output_path = target_dir / "codex.json"
+        opencode_output_path = target_dir / "opencode_openapi.json"
 
         codex_bin = _get_codex_bin()
         opencode_bin = _get_opencode_bin()
@@ -160,15 +164,7 @@ def register_protocol_commands(app: typer.Typer) -> None:
                         tmp_path = Path(tmp)
                         typer.echo(f"Generating Codex schema from {codex_bin}...")
                         schema = _generate_codex_schema(codex_bin, tmp_path)
-
-                        version = "unknown"
-                        if "title" in schema:
-                            version = schema["title"].lower().replace(" ", "-")
-
-                        version_dir = codex_dir / version
-                        version_dir.mkdir(parents=True, exist_ok=True)
-
-                        output_path = version_dir / "codex.json"
+                        output_path = codex_output_path
                         output_path.write_text(
                             json.dumps(schema, indent=2, sort_keys=True) + "\n",
                             encoding="utf-8",
@@ -188,20 +184,8 @@ def register_protocol_commands(app: typer.Typer) -> None:
             else:
                 try:
                     typer.echo("Starting OpenCode server to fetch OpenAPI spec...")
-                    spec = asyncio.run(
-                        _run_opencode_and_fetch("http://127.0.0.1:0", opencode_bin)
-                    )
-
-                    version = (spec.get("info") or {}).get("version", "unknown")
-                    if not version or version == "unknown":
-                        from datetime import datetime
-
-                        version = datetime.now().strftime("%Y%m%d-%H%M%S")
-
-                    version_dir = opencode_dir / version
-                    version_dir.mkdir(parents=True, exist_ok=True)
-
-                    output_path = version_dir / "openapi.json"
+                    spec = asyncio.run(_run_opencode_and_fetch(opencode_bin))
+                    output_path = opencode_output_path
                     output_path.write_text(
                         json.dumps(spec, indent=2, sort_keys=True) + "\n",
                         encoding="utf-8",
