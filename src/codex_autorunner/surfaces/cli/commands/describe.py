@@ -5,12 +5,14 @@ from typing import Any, Optional
 
 import typer
 
-from ....core.config import load_repo_config
+from ....core.config import load_hub_config, load_repo_config
 from ....core.self_describe import (
     SCHEMA_ID,
     SCHEMA_VERSION,
     default_runtime_schema_path,
 )
+from ....core.state_roots import resolve_hub_templates_root
+from ....core.templates import index_templates
 from ....core.utils import RepoNotFoundError, find_repo_root
 from .utils import get_car_version
 
@@ -83,6 +85,8 @@ def _collect_describe_data(repo_root: Path) -> dict[str, Any]:
 
     surfaces = _detect_active_surfaces(raw, car_dir)
 
+    template_info = _collect_template_info(repo_root, raw)
+
     data = {
         "schema_id": SCHEMA_ID,
         "schema_version": SCHEMA_VERSION,
@@ -96,6 +100,7 @@ def _collect_describe_data(repo_root: Path) -> dict[str, Any]:
         "features": _get_features(raw),
         "schema_path": str(schema_path) if schema_exists else None,
         "runtime_schema_exists": schema_exists,
+        "templates": template_info,
     }
 
     data = _redact_dict(data)
@@ -129,6 +134,69 @@ def _collect_env_knobs(raw: dict[str, Any]) -> list[str]:
             knobs.add(val)
 
     return sorted(knobs)
+
+
+def _collect_template_info(repo_root: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    """Collect template-related information."""
+    try:
+        hub_config = load_hub_config(repo_root)
+    except Exception:
+        return {
+            "enabled": False,
+            "root": None,
+            "repos": [],
+            "count": 0,
+        }
+
+    templates_config = raw.get("templates", {})
+    enabled = (
+        templates_config.get("enabled", True)
+        if isinstance(templates_config, dict)
+        else True
+    )
+
+    if not enabled:
+        return {
+            "enabled": False,
+            "root": None,
+            "repos": [],
+            "count": 0,
+        }
+
+    try:
+        hub_root = hub_config.root
+        templates_root = resolve_hub_templates_root(hub_root)
+    except Exception:
+        templates_root = None
+
+    repos = []
+    template_repos = (
+        templates_config.get("repos", []) if isinstance(templates_config, dict) else []
+    )
+    for repo in template_repos:
+        if isinstance(repo, dict):
+            repos.append(
+                {
+                    "id": repo.get("id"),
+                    "url": repo.get("url"),
+                    "trusted": repo.get("trusted", False),
+                }
+            )
+
+    template_count = 0
+    if templates_root and templates_root.exists():
+        try:
+            templates = index_templates(hub_config, hub_root)
+            template_count = len(templates)
+        except Exception:
+            pass
+
+    return {
+        "enabled": True,
+        "root": str(templates_root) if templates_root else None,
+        "repos": repos,
+        "count": template_count,
+    }
 
 
 def _detect_active_surfaces(raw: dict[str, Any], car_dir: Path) -> dict[str, bool]:

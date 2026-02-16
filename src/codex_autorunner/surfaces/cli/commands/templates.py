@@ -16,9 +16,12 @@ from ....core.templates import (
     TemplateNotFoundError,
     fetch_template,
     get_scan_record,
+    get_template_by_ref,
+    index_templates,
     inject_provenance,
     parse_template_ref,
     scan_lock,
+    search_templates,
 )
 from ....integrations.templates.scan_agent import (
     TemplateScanError,
@@ -28,7 +31,7 @@ from ....integrations.templates.scan_agent import (
 )
 from ....tickets.frontmatter import split_markdown_frontmatter
 from ....tickets.lint import parse_ticket_index
-from .utils import find_template_repo
+from .utils import find_template_repo, resolve_hub_config_path_for_cli
 
 
 def register_templates_commands(
@@ -307,3 +310,165 @@ def _apply_agent_override(
     data["agent"] = agent
     rendered = yaml.safe_dump(data, sort_keys=False).rstrip()
     return f"---\n{rendered}\n---{body}"
+
+
+def _get_hub_root(
+    ctx,
+    hub: Optional[Path],
+    raise_exit: Callable[..., None],
+) -> Path:
+    """Get the hub root path."""
+    hub_config_path = resolve_hub_config_path_for_cli(ctx.repo_root, hub)
+    if hub_config_path is None:
+        try:
+            hub_config = load_hub_config(ctx.repo_root)
+            return hub_config.root
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+    return hub_config_path.parent.parent.resolve()
+
+
+def register_template_index_commands(
+    app: typer.Typer,
+    require_repo_config: Callable[[Optional[Path], Optional[Path]], Any],
+    require_hub_config: Callable[[Optional[Path]], Any],
+    raise_exit: Callable[..., None],
+    resolve_hub_config_path_for_cli: Callable[[Path, Optional[Path]], Optional[Path]],
+) -> None:
+    """Register template list/show/search commands."""
+
+    @app.command("list")
+    def templates_list(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ):
+        """List available templates with id, name, and summary."""
+        ctx = require_repo_config(repo, hub)
+
+        try:
+            hub_config = load_hub_config(hub or ctx.repo_root)
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+
+        hub_root = _get_hub_root(ctx, hub, raise_exit)
+
+        templates = index_templates(hub_config, hub_root)
+
+        if output_json:
+            payload = {
+                "templates": [
+                    {
+                        "repo_id": t.repo_id,
+                        "path": t.path,
+                        "name": t.name,
+                        "summary": t.summary,
+                        "ref": t.ref,
+                    }
+                    for t in templates
+                ],
+                "count": len(templates),
+            }
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        if not templates:
+            typer.echo("No templates found.")
+            return
+
+        typer.echo(f"Available templates ({len(templates)}):")
+        for t in templates:
+            summary = t.summary[:50] + "..." if len(t.summary) > 50 else t.summary
+            typer.echo(f"  {t.repo_id}:{t.path}@{t.ref}")
+            typer.echo(f"    name: {t.name}")
+            typer.echo(f"    summary: {summary}")
+            typer.echo()
+
+    @app.command("show")
+    def templates_show(
+        template_ref: str = typer.Argument(
+            ..., help="Template ref (REPO_ID:PATH[@REF])"
+        ),
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ):
+        """Show details for a specific template."""
+        ctx = require_repo_config(repo, hub)
+
+        try:
+            hub_config = load_hub_config(hub or ctx.repo_root)
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+
+        hub_root = _get_hub_root(ctx, hub, raise_exit)
+
+        template = get_template_by_ref(hub_config, hub_root, template_ref)
+
+        if template is None:
+            raise_exit(f"Template not found: {template_ref}")
+
+        if output_json:
+            payload = {
+                "repo_id": template.repo_id,
+                "path": template.path,
+                "name": template.name,
+                "summary": template.summary,
+                "ref": template.ref,
+            }
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        typer.echo(f"Template: {template.repo_id}:{template.path}@{template.ref}")
+        typer.echo(f"Name: {template.name}")
+        typer.echo(f"Summary: {template.summary}")
+        typer.echo(f"Ref: {template.ref}")
+
+    @app.command("search")
+    def templates_search(
+        query: str = typer.Argument(..., help="Search query"),
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ):
+        """Search templates by name, path, or summary."""
+        ctx = require_repo_config(repo, hub)
+
+        try:
+            hub_config = load_hub_config(hub or ctx.repo_root)
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+
+        hub_root = _get_hub_root(ctx, hub, raise_exit)
+
+        templates = search_templates(hub_config, hub_root, query)
+
+        if output_json:
+            payload = {
+                "query": query,
+                "templates": [
+                    {
+                        "repo_id": t.repo_id,
+                        "path": t.path,
+                        "name": t.name,
+                        "summary": t.summary,
+                        "ref": t.ref,
+                    }
+                    for t in templates
+                ],
+                "count": len(templates),
+            }
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        if not templates:
+            typer.echo(f"No templates found matching: {query}")
+            return
+
+        typer.echo(f"Search results for '{query}' ({len(templates)}):")
+        for t in templates:
+            summary = t.summary[:50] + "..." if len(t.summary) > 50 else t.summary
+            typer.echo(f"  {t.repo_id}:{t.path}@{t.ref}")
+            typer.echo(f"    name: {t.name}")
+            typer.echo(f"    summary: {summary}")
+            typer.echo()

@@ -29,7 +29,10 @@ from .commands.protocol import register_protocol_commands
 from .commands.repos import register_repos_commands
 from .commands.root import _resolve_repo_api_path, register_root_commands  # noqa: F401
 from .commands.telegram import register_telegram_commands
-from .commands.templates import register_templates_commands
+from .commands.templates import (
+    register_template_index_commands,
+    register_templates_commands,
+)
 from .commands.utils import (
     build_hub_supervisor as _build_hub_supervisor,
 )
@@ -177,6 +180,14 @@ register_templates_commands(
     templates_app,
     require_repo_config=_require_repo_config,
     require_templates_enabled=_require_templates_enabled,
+    raise_exit=_raise_exit,
+    resolve_hub_config_path_for_cli=_resolve_hub_config_path_for_cli,
+)
+
+register_template_index_commands(
+    templates_app,
+    require_repo_config=_require_repo_config,
+    require_hub_config=_require_hub_config,
     raise_exit=_raise_exit,
     resolve_hub_config_path_for_cli=_resolve_hub_config_path_for_cli,
 )
