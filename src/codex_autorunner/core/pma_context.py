@@ -100,6 +100,8 @@ def _load_active_context_state(hub_root: Path) -> dict[str, Any]:
         payload = json.loads(raw)
         if isinstance(payload, dict):
             return payload
+    except FileNotFoundError:
+        pass
     except Exception as exc:
         _logger.warning("Could not load active context state: %s", exc)
     return {}

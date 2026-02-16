@@ -6,8 +6,6 @@ from typing import Optional
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 
-from codex_autorunner.surfaces.cli.commands.utils import find_template_repo
-
 from ....agents.registry import validate_agent_id
 from ....core.config import (
     ConfigError,
@@ -28,6 +26,7 @@ from ....core.templates import (
     parse_template_ref,
 )
 from ....core.templates.scan_cache import TemplateScanRecord, get_scan_record, scan_lock
+from ....core.utils import find_template_repo
 from ....integrations.templates import (
     TemplateScanError,
     TemplateScanRejectedError,

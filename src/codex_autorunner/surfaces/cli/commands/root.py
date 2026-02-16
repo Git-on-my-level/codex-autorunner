@@ -141,17 +141,6 @@ def _resolve_auth_token(env_name: str) -> Optional[str]:
     return value or None
 
 
-def _require_auth_token(env_name: Optional[str]) -> Optional[str]:
-    if not env_name:
-        return None
-    token = _resolve_auth_token(env_name)
-    if not token:
-        _raise_exit(
-            f"server.auth_token_env is set to {env_name}, but the environment variable is missing."
-        )
-    return token
-
-
 def _is_loopback_host(host: str) -> bool:
     if host == "localhost":
         return True

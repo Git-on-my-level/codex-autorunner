@@ -20,6 +20,8 @@ from typing import (
     cast,
 )
 
+from .config import RepoConfig, TemplateRepoConfig
+
 SUBCOMMAND_HINTS = ("exec", "resume")
 
 
@@ -407,3 +409,12 @@ def _command_available(
             path = workspace_root / path
         return path.is_file() and os.access(path, os.X_OK)
     return resolve_executable(entry, env=env) is not None
+
+
+def find_template_repo(
+    config: RepoConfig, repo_id: str
+) -> Optional[TemplateRepoConfig]:
+    for repo in config.templates.repos:
+        if repo.id == repo_id:
+            return repo
+    return None
