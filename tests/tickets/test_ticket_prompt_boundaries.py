@@ -5,7 +5,11 @@ from unittest.mock import MagicMock
 
 from codex_autorunner.tickets.files import read_ticket
 from codex_autorunner.tickets.models import TicketRunConfig
-from codex_autorunner.tickets.runner import TicketRunner
+from codex_autorunner.tickets.runner import (
+    CAR_HUD_MAX_CHARS,
+    CAR_HUD_MAX_LINES,
+    TicketRunner,
+)
 
 
 def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
@@ -48,10 +52,19 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
 
     assert "<CAR_TICKET_FLOW_PROMPT>" in prompt
     assert "</CAR_TICKET_FLOW_PROMPT>" in prompt
+    assert "<CAR_HUD>" in prompt
+    assert "</CAR_HUD>" in prompt
     assert "<CAR_CURRENT_TICKET_FILE>" in prompt
     assert "</CAR_CURRENT_TICKET_FILE>" in prompt
     assert "<TICKET_MARKDOWN>" in prompt
     assert "</TICKET_MARKDOWN>" in prompt
+
+    hud_start = prompt.index("<CAR_HUD>") + len("<CAR_HUD>\n")
+    hud_end = prompt.index("</CAR_HUD>")
+    hud = prompt[hud_start:hud_end].rstrip("\n")
+    assert len(hud) <= CAR_HUD_MAX_CHARS
+    assert len(hud.splitlines()) <= CAR_HUD_MAX_LINES
+    assert "car describe --json" in hud
 
     start = prompt.index("<CAR_CURRENT_TICKET_FILE>")
     end = prompt.index("</CAR_CURRENT_TICKET_FILE>")

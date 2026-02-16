@@ -31,6 +31,8 @@ _logger = logging.getLogger(__name__)
 WORKSPACE_DOC_MAX_CHARS = 4000
 TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
 LOOP_NO_CHANGE_THRESHOLD = 2
+CAR_HUD_MAX_LINES = 14
+CAR_HUD_MAX_CHARS = 900
 
 
 def _truncate_text_by_bytes(text: str, max_bytes: int) -> str:
@@ -167,6 +169,26 @@ def _shrink_prompt(
         prompt = _truncate_text_by_bytes(prompt, max_bytes)
 
     return prompt
+
+
+def _build_car_hud() -> str:
+    """Return a compact, deterministic CAR self-description block."""
+
+    lines = [
+        "CAR HUD (stable, bounded, non-secret-bearing):",
+        "- Runtime root: `.codex-autorunner/`",
+        "- Ticket flow semantics: process `TICKET-###*.md` in ascending index order; run the first ticket where frontmatter `done` is not `true`.",
+        "- Self-description command: `car describe --json`",
+        "- Canonical self-description docs: `.codex-autorunner/docs/self-description-contract.md`",
+        "- Canonical self-description schema: `.codex-autorunner/docs/car-describe.schema.json`",
+        "- Template discovery: `car templates repos list --json`",
+        "- Template apply: `car templates apply <repo_id>:<path>[@<ref>]`",
+    ]
+    clipped_lines = lines[:CAR_HUD_MAX_LINES]
+    hud = "\n".join(clipped_lines)
+    if len(hud) > CAR_HUD_MAX_CHARS:
+        hud = hud[: CAR_HUD_MAX_CHARS - 3] + "..."
+    return hud
 
 
 class TicketRunner:
@@ -1249,6 +1271,7 @@ class TicketRunner:
             "reply_block": reply_block,
             "ticket_block": ticket_block,
         }
+        car_hud = _build_car_hud()
 
         def render() -> str:
             return (
@@ -1295,6 +1318,9 @@ class TicketRunner:
                 f"Dispatch directory: {rel_dispatch_dir}\n"
                 f"DISPATCH.md path: {rel_dispatch_path}\n"
                 "</CAR_RUNTIME_PATHS>\n\n"
+                "<CAR_HUD>\n"
+                f"{car_hud}\n"
+                "</CAR_HUD>\n\n"
                 f"{checkpoint_block}\n\n"
                 f"{commit_block}\n\n"
                 f"{lint_block}\n\n"
