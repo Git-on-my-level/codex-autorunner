@@ -103,6 +103,48 @@ def test_reaper_kills_process_group_and_pid_when_owner_is_dead(
     assert registry.read_process_record(tmp_path, "opencode", "ws-dead") is None
 
 
+def test_reaper_kills_processes_for_pid_keyed_record(
+    monkeypatch, tmp_path: Path
+) -> None:
+    rec = _record(
+        workspace_id=None,
+        pid=6111,
+        pgid=6111,
+        owner_pid=1111,
+        started_at=_started_at(hours_ago=48),
+    )
+    registry.write_process_record(tmp_path, rec)
+
+    killpg_calls: list[tuple[int, int]] = []
+    kill_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pid_is_running",
+        lambda pid: pid == 1111,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pgid_is_running",
+        lambda _pgid: False,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.killpg",
+        lambda pgid, sig: killpg_calls.append((pgid, sig)),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.kill",
+        lambda pid, sig: kill_calls.append((pid, sig)),
+    )
+
+    summary = reap_managed_processes(tmp_path, max_record_age_seconds=60)
+
+    assert summary.killed == 0
+    assert summary.signaled == 0
+    assert summary.removed == 1
+    assert summary.skipped == 0
+    assert killpg_calls == [(6111, signal.SIGTERM), (6111, signal.SIGKILL)]
+    assert kill_calls == [(6111, signal.SIGTERM), (6111, signal.SIGKILL)]
+    assert registry.read_process_record(tmp_path, "opencode", "6111") is None
+
+
 def test_reaper_dry_run_does_not_kill_or_delete(monkeypatch, tmp_path: Path) -> None:
     rec = _record(workspace_id="ws-dry", pid=3111, pgid=3111, owner_pid=7777)
     registry.write_process_record(tmp_path, rec)

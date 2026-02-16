@@ -74,10 +74,20 @@ async def test_start_process_writes_registry_record(
         async def fetch_openapi_spec(self) -> dict[str, object]:
             return {"paths": {"/global/health": {}}}
 
+    written_records: list[ProcessRecord] = []
+    written_paths: list[Path] = []
+
     def _capture_write(repo_root: Path, record: ProcessRecord, **_kwargs):
         captured["repo_root"] = repo_root
-        captured["record"] = record
-        return repo_root / ".codex-autorunner" / "processes" / "opencode" / "ws-1.json"
+        written_records.append(record)
+        written_paths.append(
+            repo_root
+            / ".codex-autorunner"
+            / "processes"
+            / "opencode"
+            / f"{record.record_key()}.json"
+        )
+        return written_paths[-1]
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
     monkeypatch.setattr(supervisor, "_read_base_url", _fake_read_base_url)
@@ -89,8 +99,8 @@ async def test_start_process_writes_registry_record(
     await supervisor._start_process(handle)
 
     assert handle.started is True
-    assert isinstance(captured.get("record"), ProcessRecord)
-    record = captured["record"]
+    assert written_records
+    record = written_records[0]
     assert isinstance(record, ProcessRecord)
     assert record.kind == "opencode"
     assert record.workspace_id == "ws-1"
@@ -98,6 +108,17 @@ async def test_start_process_writes_registry_record(
     assert record.pgid == 4242
     assert record.base_url == "http://127.0.0.1:7788"
     assert record.command == ["opencode", "serve"]
+    workspace_record = next(
+        r for r in written_records if r.workspace_id == "ws-1" and r.pid == 4242
+    )
+    pid_record = next(
+        r for r in written_records if r.workspace_id is None and r.pid == 4242
+    )
+    assert workspace_record.metadata == {"workspace_root": str(tmp_path)}
+    assert pid_record.metadata["workspace_root"] == str(tmp_path)
+    assert pid_record.metadata["workspace_id"] == "ws-1"
+    assert written_paths[0].name == "ws-1.json"
+    assert written_paths[1].name == "4242.json"
 
 
 @pytest.mark.anyio
@@ -446,7 +467,10 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         (9992, signal.SIGKILL),
     ]
     assert kill_calls == [(9992, signal.SIGTERM), (9992, signal.SIGKILL)]
-    assert delete_calls and delete_calls[0][1:] == ("opencode", "ws-1")
+    assert delete_calls == [
+        (tmp_path, "opencode", "ws-1"),
+        (tmp_path, "opencode", "9992"),
+    ]
     assert start_calls == ["spawned"]
 
 
@@ -500,7 +524,10 @@ async def test_close_handle_deletes_registry_record_when_process_owned(
 
     await supervisor._close_handle(handle, reason="close_all")
 
-    assert delete_calls == [(tmp_path, "opencode", "ws-1")]
+    assert sorted((call[1], call[2]) for call in delete_calls) == [
+        ("opencode", "123"),
+        ("opencode", "ws-1"),
+    ]
 
 
 @pytest.mark.anyio

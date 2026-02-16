@@ -2,7 +2,9 @@
 
 CAR writes durable metadata for long-lived subprocesses under:
 
-- `.codex-autorunner/processes/<kind>/<workspace_id-or-pid>.json`
+- `.codex-autorunner/processes/<kind>/<workspace_id>.json`
+- `.codex-autorunner/processes/<kind>/<pid>.json` (for the same process, with
+  `workspace_id` in `metadata.workspace_id`)
 
 This registry is local state (not source code) and is intended for:
 
@@ -27,6 +29,8 @@ Each JSON file stores one `ProcessRecord`:
 ## Behavior
 
 - Writes are atomic via temp-file replace.
+- Workspace-keyed and pid-keyed records are written for OpenCode processes so either
+  key can be used by cleanup paths.
 - Reads and list operations validate schema.
 - Delete removes only the target record file.
 - All state is isolated under `.codex-autorunner/` (no shadow registry elsewhere).

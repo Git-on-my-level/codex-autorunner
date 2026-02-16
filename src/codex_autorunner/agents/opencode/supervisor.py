@@ -275,7 +275,7 @@ class OpenCodeSupervisor:
             except asyncio.TimeoutError:
                 pass
         if not self._record_is_running(process_record):
-            self._delete_registry_record(handle)
+            self._delete_registry_record(handle, pid=process_record.pid)
 
     async def _ensure_handle(
         self, handle_id: str, workspace_root: Path
@@ -431,7 +431,7 @@ class OpenCodeSupervisor:
                 return False
 
             if record.pid is None or not self._pid_is_running(record.pid):
-                self._delete_registry_record(handle)
+                self._delete_registry_record(handle, pid=record.pid)
                 return False
 
             if not record.base_url:
@@ -459,7 +459,7 @@ class OpenCodeSupervisor:
                             pgid=record.pgid,
                         )
                         return False
-                self._delete_registry_record(handle)
+                self._delete_registry_record(handle, pid=record.pid)
                 return False
 
             try:
@@ -479,20 +479,21 @@ class OpenCodeSupervisor:
             except OpenCodeSupervisorAttachAuthError:
                 raise
             except Exception:
+                terminated = False
                 if self._record_is_running(record):
                     terminated = await self._terminate_record_process(record)
-                    if not terminated or self._record_is_running(record):
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "opencode.handle.close_failed",
-                            workspace_id=handle.workspace_id,
-                            workspace_root=str(handle.workspace_root),
-                            pid=record.pid,
-                            pgid=record.pgid,
-                        )
-                        return False
-                self._delete_registry_record(handle)
+                if not terminated or self._record_is_running(record):
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "opencode.handle.close_failed",
+                        workspace_id=handle.workspace_id,
+                        workspace_root=str(handle.workspace_root),
+                        pid=record.pid,
+                        pgid=record.pgid,
+                    )
+                    return False
+                self._delete_registry_record(handle, pid=record.pid)
                 return False
 
     async def _attach_to_base_url(self, handle: OpenCodeHandle, base_url: str) -> None:
@@ -681,6 +682,15 @@ class OpenCodeSupervisor:
         except Exception:
             return pid, None
 
+    def _current_record_timestamp(self) -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _pid_record_metadata(self, handle: OpenCodeHandle) -> dict[str, str]:
+        return {
+            "workspace_root": str(handle.workspace_root),
+            "workspace_id": handle.workspace_id,
+        }
+
     def _build_record_for_handle(
         self, handle: OpenCodeHandle, pid: int
     ) -> ProcessRecord:
@@ -693,8 +703,23 @@ class OpenCodeSupervisor:
             base_url=handle.base_url,
             command=list(self._command),
             owner_pid=os.getpid(),
-            started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            started_at=self._current_record_timestamp(),
             metadata={"workspace_root": str(handle.workspace_root)},
+        )
+
+    def _build_pid_record(
+        self, handle: OpenCodeHandle, record: ProcessRecord
+    ) -> ProcessRecord:
+        return ProcessRecord(
+            kind=record.kind,
+            workspace_id=None,
+            pid=record.pid,
+            pgid=record.pgid,
+            base_url=record.base_url,
+            command=list(record.command),
+            owner_pid=record.owner_pid,
+            started_at=record.started_at,
+            metadata=self._pid_record_metadata(handle),
         )
 
     def _write_registry_record(self, handle: OpenCodeHandle) -> None:
@@ -715,20 +740,24 @@ class OpenCodeSupervisor:
             base_url=handle.base_url,
             command=list(self._command),
             owner_pid=os.getpid(),
-            started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            started_at=self._current_record_timestamp(),
             metadata={"workspace_root": str(handle.workspace_root)},
         )
-        try:
-            write_process_record(self._registry_root(handle.workspace_root), record)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "opencode.registry.write_failed",
-                workspace_id=handle.workspace_id,
-                workspace_root=str(handle.workspace_root),
-                exc=exc,
-            )
+        pid_record = self._build_pid_record(handle, record)
+        registry_root = self._registry_root(handle.workspace_root)
+        for registry_record in (record, pid_record):
+            try:
+                write_process_record(registry_root, registry_record)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.registry.write_failed",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    record_key=registry_record.record_key(),
+                    exc=exc,
+                )
 
     def _registry_lock_path(self, registry_root: Path, handle_id: str) -> Path:
         return (
@@ -753,8 +782,9 @@ class OpenCodeSupervisor:
             started_at=record.started_at,
             metadata=record.metadata,
         )
+        registry_root = self._registry_root(handle.workspace_root)
         try:
-            write_process_record(self._registry_root(handle.workspace_root), updated)
+            write_process_record(registry_root, updated)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -764,11 +794,40 @@ class OpenCodeSupervisor:
                 workspace_root=str(handle.workspace_root),
                 exc=exc,
             )
+        if record.pid is None:
+            return
+        pid_record = ProcessRecord(
+            kind=record.kind,
+            workspace_id=None,
+            pid=record.pid,
+            pgid=record.pgid,
+            base_url=record.base_url,
+            command=list(record.command),
+            owner_pid=os.getpid(),
+            started_at=record.started_at,
+            metadata=self._pid_record_metadata(handle),
+        )
+        try:
+            write_process_record(registry_root, pid_record)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.registry.refresh_failed",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                record_key=str(record.pid),
+                exc=exc,
+            )
 
-    def _delete_registry_record(self, handle: OpenCodeHandle) -> None:
+    def _delete_registry_record(
+        self, handle: OpenCodeHandle, *, pid: int | None = None
+    ) -> None:
         try:
             registry_root = self._registry_root(handle.workspace_root)
             delete_process_record(registry_root, _PROCESS_KIND, handle.workspace_id)
+            if pid is not None:
+                delete_process_record(registry_root, _PROCESS_KIND, str(pid))
         except Exception:
             pass
 
