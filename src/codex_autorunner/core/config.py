@@ -451,7 +451,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "max_doc_chars": 20000,
             },
             "artifacts": {
-                "attach_to_last_run_index": True,
                 "write_to_review_runs_dir": True,
             },
         },

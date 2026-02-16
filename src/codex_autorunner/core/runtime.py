@@ -14,7 +14,6 @@ from ..manifest import load_manifest
 from .config import HubConfig, RepoConfig, load_repo_config
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock
 from .notifications import NotificationManager
-from .run_index import RunIndexStore
 from .runner_state import LockError, RunnerStateManager
 from .state import now_iso
 from .state_roots import REPO_STATE_DIR, resolve_repo_state_root
@@ -712,9 +711,6 @@ class RuntimeContext:
             state_path=self.state_path,
         )
 
-        # Run index store
-        self._run_index_store: Optional[RunIndexStore] = None
-
         # Notification manager (for run-level events)
         self._notifier: Optional[NotificationManager] = None
 
@@ -733,13 +729,6 @@ class RuntimeContext:
     def config(self) -> RepoConfig:
         """Get repository config."""
         return self._config
-
-    @property
-    def run_index_store(self) -> RunIndexStore:
-        """Get legacy run index store (deprecated; removal planned after FlowStore migration)."""
-        if self._run_index_store is None:
-            self._run_index_store = RunIndexStore(self.state_path)
-        return self._run_index_store
 
     @property
     def notifier(self) -> NotificationManager:
@@ -815,14 +804,6 @@ class RuntimeContext:
                 return f.read()
         except Exception:
             return None
-
-    def reconcile_run_index(self) -> None:
-        """Legacy no-op kept for compatibility.
-
-        FlowStore (`.codex-autorunner/flows.db`) is now the canonical run history source.
-        Numeric run directory reconciliation is deprecated and slated for removal.
-        """
-        return
 
 
 __all__ = [
