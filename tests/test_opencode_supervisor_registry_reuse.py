@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 import signal
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
 
 from codex_autorunner.agents.opencode import supervisor as supervisor_module
 from codex_autorunner.agents.opencode.supervisor import (
     OpenCodeHandle,
     OpenCodeSupervisor,
+    OpenCodeSupervisorAttachAuthError,
+    OpenCodeSupervisorAttachEndpointMismatchError,
 )
 from codex_autorunner.core.managed_processes.registry import ProcessRecord
 
@@ -139,6 +143,159 @@ async def test_ensure_started_reuses_healthy_registry_record(
     assert handle.started is True
     assert len(refresh_calls) == 1
     assert refresh_calls[0].workspace_id == "ws-1"
+
+
+@pytest.mark.anyio
+async def test_attach_to_base_url_reuses_client_health_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(
+        ["opencode", "serve"], username="alice", password="s3cret", request_timeout=4.5
+    )
+    handle = _handle(tmp_path)
+    captured: dict[str, Any] = {}
+
+    class _FakeClient:
+        def __init__(
+            self,
+            base_url: str,
+            *,
+            auth: tuple[str, str] | None,
+            timeout: float | None,
+            max_text_chars: None | int,
+            logger: object,
+        ) -> None:
+            captured["base_url"] = base_url
+            captured["auth"] = auth
+            captured["timeout"] = timeout
+            captured["max_text_chars"] = max_text_chars
+            captured["logger"] = logger
+
+        async def health(self) -> dict[str, object]:
+            return {"version": "1.2.3"}
+
+        async def fetch_openapi_spec(self) -> dict[str, object]:
+            return {"paths": {"/global/health": {}}}
+
+    monkeypatch.setattr(supervisor_module, "OpenCodeClient", _FakeClient)
+
+    await supervisor._attach_to_base_url(handle, "http://127.0.0.1:9010")
+
+    assert handle.started is True
+    assert handle.base_url == "http://127.0.0.1:9010"
+    assert handle.health_info == {"version": "1.2.3"}
+    assert handle.version == "1.2.3"
+    assert captured["base_url"] == "http://127.0.0.1:9010"
+    assert captured["auth"] == ("alice", "s3cret")
+    assert captured["timeout"] == 4.5
+
+
+@pytest.mark.anyio
+async def test_attach_to_base_url_handles_auth_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+
+    class _FakeClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def health(self) -> dict[str, object]:
+            request = httpx.Request("GET", "http://127.0.0.1:9011/health")
+            response = httpx.Response(401, request=request)
+            raise httpx.HTTPStatusError(
+                "unauthorized", request=request, response=response
+            )
+
+        async def fetch_openapi_spec(self) -> dict[str, object]:
+            raise AssertionError("fetch_openapi_spec should not be called")
+
+    monkeypatch.setattr(supervisor_module, "OpenCodeClient", _FakeClient)
+
+    with pytest.raises(
+        OpenCodeSupervisorAttachAuthError, match="OPENCODE_SERVER_PASSWORD"
+    ):
+        await supervisor._attach_to_base_url(handle, "http://127.0.0.1:9011")
+
+
+@pytest.mark.anyio
+async def test_ensure_started_from_registry_skips_restart_on_auth_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    registry_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=9994,
+        pgid=9994,
+        base_url="http://127.0.0.1:9012",
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={},
+    )
+    delete_calls: list[tuple[Path, str, str]] = []
+    terminate_calls: list[tuple[int | None, int | None]] = []
+    start_calls: list[str] = []
+
+    async def _fake_attach(_handle: OpenCodeHandle, _base_url: str) -> None:
+        raise OpenCodeSupervisorAttachAuthError("auth failed", status_code=401)
+
+    async def _fake_start_process(_handle: OpenCodeHandle) -> None:
+        start_calls.append("spawned")
+        _handle.started = True
+
+    async def _fake_terminate(record) -> bool:
+        terminate_calls.append((record.pid, record.pgid))
+        return True
+
+    monkeypatch.setattr(
+        supervisor_module, "read_process_record", lambda *_a, **_k: registry_record
+    )
+    monkeypatch.setattr(supervisor, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(supervisor, "_attach_to_base_url", _fake_attach)
+    monkeypatch.setattr(supervisor, "_start_process", _fake_start_process)
+    monkeypatch.setattr(
+        supervisor_module,
+        "delete_process_record",
+        lambda repo_root, kind, key: delete_calls.append((repo_root, kind, key))
+        or True,
+    )
+    monkeypatch.setattr(supervisor, "_terminate_record_process", _fake_terminate)
+
+    with pytest.raises(OpenCodeSupervisorAttachAuthError):
+        await supervisor._ensure_started_from_registry(handle)
+
+    assert terminate_calls == []
+    assert delete_calls == []
+    assert start_calls == []
+
+
+@pytest.mark.anyio
+async def test_attach_to_base_url_handles_endpoint_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+
+    class _FakeClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def health(self) -> dict[str, object]:
+            request = httpx.Request("GET", "http://127.0.0.1:9013/global/health")
+            response = httpx.Response(404, request=request)
+            raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+        async def fetch_openapi_spec(self) -> dict[str, object]:
+            raise AssertionError("fetch_openapi_spec should not be called")
+
+    monkeypatch.setattr(supervisor_module, "OpenCodeClient", _FakeClient)
+
+    with pytest.raises(OpenCodeSupervisorAttachEndpointMismatchError):
+        await supervisor._attach_to_base_url(handle, "http://127.0.0.1:9013")
 
 
 @pytest.mark.anyio
