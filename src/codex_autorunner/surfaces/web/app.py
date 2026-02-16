@@ -91,7 +91,7 @@ def create_hub_app(
         tasks: list[asyncio.Task] = []
         app.state.hub_started = True
         try:
-            cleanup = reap_managed_processes(context.root)
+            cleanup = reap_managed_processes(context.config.root)
             if cleanup.killed or cleanup.removed:
                 app.state.logger.info(
                     "Managed process cleanup: killed=%s removed=%s skipped=%s",

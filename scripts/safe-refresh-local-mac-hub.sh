@@ -382,6 +382,29 @@ echo "Installing codex-autorunner from ${PACKAGE_SRC} into staged venv..."
 
 echo "Smoke-checking staged venv imports..."
 "${next_venv}/bin/python" -c "import codex_autorunner; from codex_autorunner.server import create_hub_app; print('ok')"
+echo "Smoke-checking hub startup lifecycle..."
+"${next_venv}/bin/python" - <<'PY'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from fastapi.testclient import TestClient
+
+from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.server import create_hub_app
+
+with TemporaryDirectory() as tmp:
+    hub_root = Path(tmp)
+    seed_hub_files(hub_root, force=True)
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        for path in ("/health", "/car/health"):
+            response = client.get(path)
+            if response.status_code == 200:
+                break
+        else:
+            raise SystemExit("hub startup smoke failed: /health endpoint unavailable")
+print("hub startup ok")
+PY
 echo "Smoke-checking telegram module..."
 "${next_venv}/bin/python" - <<'PY'
 import importlib.util
