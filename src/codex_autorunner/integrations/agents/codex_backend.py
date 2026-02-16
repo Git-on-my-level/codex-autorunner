@@ -99,23 +99,26 @@ class CodexAppServerBackend(AgentBackend):
         self._client._default_approval_decision = self._default_approval_decision
         return self._client
 
-    def configure(
-        self,
-        *,
-        approval_policy: Optional[str],
-        sandbox_policy: Optional[str],
-        model: Optional[str],
-        reasoning_effort: Optional[str],
-        turn_timeout_seconds: Optional[float],
-        notification_handler: Optional[NotificationHandler],
-        default_approval_decision: Optional[str] = None,
-    ) -> None:
+    def configure(self, **options: Any) -> None:
+        approval_policy = options.get("approval_policy")
+        if approval_policy is None:
+            approval_policy = options.get("approval_policy_default")
+
+        sandbox_policy = options.get("sandbox_policy")
+        if sandbox_policy is None:
+            sandbox_policy = options.get("sandbox_policy_default")
+
+        reasoning_effort = options.get("reasoning_effort")
+        if reasoning_effort is None:
+            reasoning_effort = options.get("reasoning")
+
         self._approval_policy = approval_policy
         self._sandbox_policy = sandbox_policy
-        self._model = model
+        self._model = options.get("model")
         self._reasoning_effort = reasoning_effort
-        self._turn_timeout_seconds = turn_timeout_seconds
-        self._notification_handler = notification_handler
+        self._turn_timeout_seconds = options.get("turn_timeout_seconds")
+        self._notification_handler = options.get("notification_handler")
+        default_approval_decision = options.get("default_approval_decision")
         if (
             isinstance(default_approval_decision, str)
             and default_approval_decision.strip()

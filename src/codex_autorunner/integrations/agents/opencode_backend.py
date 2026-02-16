@@ -82,16 +82,13 @@ class OpenCodeBackend(AgentBackend):
         self._last_token_total: Optional[dict[str, Any]] = None
         self._event_formatter = OpenCodeEventFormatter()
 
-    def configure(
-        self,
-        *,
-        model: Optional[str],
-        reasoning: Optional[str],
-        approval_policy: Optional[str],
-    ) -> None:
-        self._model = model
+    def configure(self, **options: Any) -> None:
+        self._model = options.get("model")
+        reasoning = options.get("reasoning")
+        if reasoning is None:
+            reasoning = options.get("reasoning_effort")
         self._reasoning = reasoning
-        self._approval_policy = approval_policy
+        self._approval_policy = options.get("approval_policy")
 
     async def start_session(self, target: dict, context: dict) -> str:
         client = await self._ensure_client()
