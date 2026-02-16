@@ -73,32 +73,62 @@ async def _fetch_openapi_spec(base_url: str) -> dict:
 
 async def _run_opencode_and_fetch(opencode_bin: str) -> dict:
     """Start OpenCode server and fetch OpenAPI spec."""
-    proc = subprocess.Popen(
-        [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
+    proc = await asyncio.create_subprocess_exec(
+        opencode_bin,
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "0",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
 
     try:
         server_url: Optional[str] = None
         start_time = time.monotonic()
         timeout = 60.0
+        if proc.stdout is None or proc.stderr is None:
+            raise RuntimeError("OpenCode process did not provide stdout/stderr pipes")
 
         while time.monotonic() - start_time < timeout:
-            assert proc.stdout is not None
-            line = proc.stdout.readline()
-            if not line:
-                assert proc.stderr is not None
-                stderr = proc.stderr.read()
-                raise RuntimeError(f"OpenCode server exited: {stderr}")
+            remaining = timeout - (time.monotonic() - start_time)
+            stdout_task = asyncio.create_task(proc.stdout.readline())
+            stderr_task = asyncio.create_task(proc.stderr.readline())
+            done, pending = await asyncio.wait(
+                [stdout_task, stderr_task],
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-            if "http://" in line:
-                match = re.search(r"https?://[^\s]+", line)
+            if not done:
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                raise RuntimeError("Timeout waiting for OpenCode server to start")
+
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+            for task in done:
+                line = task.result()
+                if not line:
+                    continue
+                decoded = line.decode("utf-8", errors="ignore").strip()
+                match = re.search(r"https?://[^\s]+", decoded)
                 if match:
                     server_url = match.group(0)
                     break
+
+            if proc.returncode is not None:
+                stderr_tail = await proc.stderr.read()
+                error_text = (
+                    stderr_tail.decode("utf-8", errors="ignore").strip()
+                    if stderr_tail
+                    else "(no stderr output)"
+                )
+                raise RuntimeError(f"OpenCode server exited before ready: {error_text}")
 
         if not server_url:
             raise RuntimeError("Timeout waiting for OpenCode server to start")
@@ -109,10 +139,10 @@ async def _run_opencode_and_fetch(opencode_bin: str) -> dict:
     finally:
         proc.terminate()
         try:
-            proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
             proc.kill()
-            proc.wait()
+            await proc.wait()
 
 
 def register_protocol_commands(app: typer.Typer) -> None:
@@ -135,7 +165,7 @@ def register_protocol_commands(app: typer.Typer) -> None:
         Requires Codex and/or OpenCode binaries to be available.
         Set CODEX_BIN and OPENCODE_BIN environment variables if not in PATH.
         """
-        repo_root = Path(__file__).resolve().parents[4]
+        repo_root = Path(__file__).resolve().parents[5]
         if target_dir is None:
             target_dir = repo_root / "vendor" / "protocols"
 
