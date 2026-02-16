@@ -203,7 +203,7 @@ class TestDuplicateDetection:
     def test_duplicate_detection_window_expiry(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:
-        config.dedup_window_seconds = 1
+        config.dedup_window_seconds = 0.1
         config.enable_rate_limit = False
         config.enable_circuit_breaker = False
         config.max_duplicate_actions = 2
@@ -220,7 +220,7 @@ class TestDuplicateDetection:
         assert result.allowed is False
         assert result.reason == "duplicate_action"
 
-        time.sleep(1.1)
+        time.sleep(0.15)
 
         result = checker.check_chat_start("agent1", "test")
         assert result.allowed is True
@@ -285,7 +285,7 @@ class TestRateLimiting:
     def test_rate_limit_window_sliding(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:
-        config.rate_limit_window_seconds = 1
+        config.rate_limit_window_seconds = 0.8
         config.max_actions_per_window = 2
         config.enable_dedup = False
         config.enable_circuit_breaker = False
@@ -363,7 +363,7 @@ class TestCircuitBreaker:
     def test_circuit_breaker_resets_after_cooldown(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:
-        config.circuit_breaker_cooldown_seconds = 1
+        config.circuit_breaker_cooldown_seconds = 0.1
         config.enable_dedup = False
         config.enable_rate_limit = False
         checker = PmaSafetyChecker(hub_root, config=config)
@@ -373,7 +373,7 @@ class TestCircuitBreaker:
 
         assert checker._is_circuit_breaker_active() is True
 
-        time.sleep(1.1)
+        time.sleep(0.15)
 
         result = checker.check_chat_start("agent1", "test")
         assert result.allowed is True
@@ -381,7 +381,7 @@ class TestCircuitBreaker:
     def test_circuit_breaker_reset_clears_failure_counts(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:
-        config.circuit_breaker_cooldown_seconds = 1
+        config.circuit_breaker_cooldown_seconds = 0.1
         checker = PmaSafetyChecker(hub_root, config=config)
 
         for _i in range(config.circuit_breaker_threshold):
@@ -390,7 +390,7 @@ class TestCircuitBreaker:
         assert checker._failure_counts["chat:agent1"] > 0
         assert checker._is_circuit_breaker_active() is True
 
-        time.sleep(1.1)
+        time.sleep(0.15)
         checker._is_circuit_breaker_active()
 
         assert checker._failure_counts == {}
@@ -710,7 +710,7 @@ class TestIntegration:
     def test_full_flow_circuit_breaker_activation_and_recovery(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:
-        config.circuit_breaker_cooldown_seconds = 1
+        config.circuit_breaker_cooldown_seconds = 0.1
         config.enable_dedup = False
         config.enable_rate_limit = False
         checker = PmaSafetyChecker(hub_root, config=config)
@@ -724,7 +724,7 @@ class TestIntegration:
         assert result.allowed is False
         assert result.reason == "circuit_breaker_active"
 
-        time.sleep(1.1)
+        time.sleep(0.15)
 
         result = checker.check_chat_start("agent1", "recovered")
         assert result.allowed is True
