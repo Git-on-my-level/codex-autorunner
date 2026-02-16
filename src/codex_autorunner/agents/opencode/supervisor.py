@@ -428,11 +428,13 @@ class OpenCodeSupervisor:
                 return False
 
             if record is None:
-                return False
+                await self._start_process(handle)
+                return True
 
             if record.pid is None or not self._pid_is_running(record.pid):
                 self._delete_registry_record(handle, pid=record.pid)
-                return False
+                await self._start_process(handle)
+                return True
 
             if not record.base_url:
                 if self._record_is_running(record):
@@ -460,7 +462,8 @@ class OpenCodeSupervisor:
                         )
                         return False
                 self._delete_registry_record(handle, pid=record.pid)
-                return False
+                await self._start_process(handle)
+                return True
 
             try:
                 await self._attach_to_base_url(handle, record.base_url)
@@ -494,7 +497,8 @@ class OpenCodeSupervisor:
                     )
                     return False
                 self._delete_registry_record(handle, pid=record.pid)
-                return False
+                await self._start_process(handle)
+                return True
 
     async def _attach_to_base_url(self, handle: OpenCodeHandle, base_url: str) -> None:
         handle.health_info = None
