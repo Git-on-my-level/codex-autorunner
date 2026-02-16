@@ -1,6 +1,7 @@
 import json
 import site
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -10,9 +11,9 @@ import typer
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
 from ....core.diagnostics.process_snapshot import (
     collect_processes,
-    write_snapshot_to_file,
 )
 from ....core.git_utils import run_git
+from ....core.managed_processes import list_process_records
 from ....core.runtime import (
     DoctorReport,
     doctor,
@@ -27,6 +28,47 @@ from ....core.utils import (
 )
 from ....integrations.telegram.doctor import telegram_doctor_checks
 from .utils import get_car_version, raise_exit
+
+
+def _build_process_registry_payload(
+    repo_root: Optional[Path],
+) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    if repo_root is None:
+        return {}, []
+
+    records = []
+    try:
+        process_records = list_process_records(repo_root)
+    except Exception:
+        process_records = []
+
+    for record in process_records:
+        record_key = "unknown"
+        try:
+            record_key = record.record_key()
+        except Exception:
+            pass
+        records.append(
+            {
+                "kind": record.kind,
+                "workspace_id": record.workspace_id,
+                "record_key": record_key,
+                "pid": record.pid,
+                "pgid": record.pgid,
+                "owner_pid": record.owner_pid,
+                "base_url": record.base_url,
+                "path": str(
+                    repo_root
+                    / ".codex-autorunner"
+                    / "processes"
+                    / record.kind
+                    / f"{record_key}.json"
+                ),
+            }
+        )
+
+    counts = dict(Counter(record.get("kind") for record in records))
+    return counts, records
 
 
 def _find_hub_server_process(port: Optional[int]) -> Optional[dict[str, Any]]:
@@ -368,9 +410,22 @@ def register_doctor_commands(
             hub_config = None
 
         snapshot = collect_processes()
+        repo_root: Optional[Path] = None
+        try:
+            repo_root = find_repo_root(start_path)
+        except RepoNotFoundError:
+            pass
+        registry_counts, registry_records = _build_process_registry_payload(repo_root)
 
         if json_output:
-            typer.echo(json.dumps(snapshot.to_dict(), indent=2))
+            payload = {
+                "snapshot": snapshot.to_dict(),
+                "registry": {
+                    "counts_by_kind": registry_counts,
+                    "records": registry_records,
+                },
+            }
+            typer.echo(json.dumps(payload, indent=2))
             return
 
         typer.echo("Process Snapshot")
@@ -378,11 +433,39 @@ def register_doctor_commands(
 
         typer.echo(f"\nopencode processes: {snapshot.opencode_count}")
         for proc in snapshot.opencode_processes[:top_n]:
-            typer.echo(f"  - {proc.pid}: {proc.command[:100]}")
+            typer.echo(
+                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}: "
+                f"{proc.command[:100]}"
+            )
 
         typer.echo(f"\ncodex app-server processes: {snapshot.app_server_count}")
         for proc in snapshot.app_server_processes[:top_n]:
-            typer.echo(f"  - {proc.pid}: {proc.command[:100]}")
+            typer.echo(
+                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}: "
+                f"{proc.command[:100]}"
+            )
+
+        typer.echo("\nProcess Registry")
+        if not registry_counts:
+            typer.echo("  - by kind: none")
+            typer.echo("  - records: none")
+        else:
+            typer.echo("  - by kind:")
+            for kind in sorted(registry_counts):
+                typer.echo(f"    - {kind}: {registry_counts[kind]}")
+            typer.echo("  - records: owner_pid identifies CAR owner")
+            for record in registry_records:
+                typer.echo(
+                    "    - {kind} {key} pid={pid} owner_pid={owner_pid} "
+                    "base_url={base_url} path={path}".format(
+                        kind=record.get("kind"),
+                        key=record.get("record_key"),
+                        pid=record.get("pid"),
+                        owner_pid=record.get("owner_pid"),
+                        base_url=record.get("base_url") or "n/a",
+                        path=record.get("path"),
+                    )
+                )
 
         if save and hub_config:
             output_path = (
@@ -391,5 +474,14 @@ def register_doctor_commands(
                 / "diagnostics"
                 / "process-snapshot.json"
             )
-            write_snapshot_to_file(snapshot, output_path)
+            payload = {
+                "snapshot": snapshot.to_dict(),
+                "registry": {
+                    "counts_by_kind": registry_counts,
+                    "records": registry_records,
+                },
+            }
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(payload, f, indent=2)
             typer.echo(f"\nSnapshot saved to: {output_path}")

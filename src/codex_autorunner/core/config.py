@@ -220,6 +220,8 @@ def _default_opencode_section() -> Dict[str, Any]:
         "server_scope": "workspace",
         "session_stall_timeout_seconds": None,
         "max_text_chars": 20000,
+        "max_handles": 20,
+        "idle_ttl_seconds": 3600,
     }
 
 
@@ -746,6 +748,8 @@ class OpenCodeConfig:
     server_scope: str
     session_stall_timeout_seconds: Optional[float]
     max_text_chars: Optional[int]
+    max_handles: Optional[int]
+    idle_ttl_seconds: Optional[int]
 
 
 @dataclasses.dataclass
@@ -1299,10 +1303,20 @@ def _parse_opencode_config(
         if isinstance(max_text_chars_raw, int) and max_text_chars_raw > 0
         else None
     )
+    max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
+    max_handles = int(max_handles_raw) if max_handles_raw is not None else None
+    if max_handles is not None and max_handles <= 0:
+        max_handles = None
+    idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
+    idle_ttl_seconds = int(idle_ttl_raw) if idle_ttl_raw is not None else None
+    if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
+        idle_ttl_seconds = None
     return OpenCodeConfig(
         server_scope=server_scope,
         session_stall_timeout_seconds=stall_timeout_seconds,
         max_text_chars=max_text_chars,
+        max_handles=max_handles,
+        idle_ttl_seconds=idle_ttl_seconds,
     )
 
 
@@ -2183,6 +2197,15 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
         max_text_chars = opencode_cfg.get("max_text_chars")
         if not isinstance(max_text_chars, int):
             raise ConfigError("opencode.max_text_chars must be an integer or null")
+    if "max_handles" in opencode_cfg and opencode_cfg.get("max_handles") is not None:
+        if not isinstance(opencode_cfg.get("max_handles"), int):
+            raise ConfigError("opencode.max_handles must be an integer or null")
+    if (
+        "idle_ttl_seconds" in opencode_cfg
+        and opencode_cfg.get("idle_ttl_seconds") is not None
+    ):
+        if not isinstance(opencode_cfg.get("idle_ttl_seconds"), int):
+            raise ConfigError("opencode.idle_ttl_seconds must be an integer or null")
 
 
 def _validate_update_config(cfg: Dict[str, Any]) -> None:

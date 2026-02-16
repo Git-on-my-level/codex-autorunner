@@ -21,10 +21,15 @@ def register_cleanup_commands(
         dry_run: bool = typer.Option(
             False, "--dry-run", help="Preview without sending signals"
         ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Terminate managed processes even when owner is still running",
+        ),
     ) -> None:
         """Reap stale CAR-managed subprocesses and clean up registry records."""
         engine = require_repo_config(repo, hub)
-        summary = reap_managed_processes(engine.repo_root, dry_run=dry_run)
+        summary = reap_managed_processes(engine.repo_root, dry_run=dry_run, force=force)
         prefix = "Dry run: " if dry_run else ""
         typer.echo(
             f"{prefix}killed {summary.killed}, signaled {summary.signaled}, removed {summary.removed} records, skipped {summary.skipped}"

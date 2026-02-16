@@ -135,12 +135,13 @@ def reap_managed_processes(
     *,
     dry_run: bool = False,
     max_record_age_seconds: int = DEFAULT_MAX_RECORD_AGE_SECONDS,
+    force: bool = False,
 ) -> ReapSummary:
     summary = ReapSummary()
     for record in list_process_records(repo_root):
         owner_running = _pid_is_running(record.owner_pid)
         record_old = _is_older_than(record, max_record_age_seconds)
-        should_reap = (not owner_running) or record_old
+        should_reap = force or (not owner_running) or record_old
 
         if not should_reap:
             summary.skipped += 1

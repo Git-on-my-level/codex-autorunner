@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 
@@ -18,6 +16,8 @@ class ProcessCategory(Enum):
 @dataclass
 class ProcessInfo:
     pid: int
+    ppid: int
+    pgid: int
     command: str
     category: ProcessCategory
 
@@ -35,13 +35,31 @@ class ProcessSnapshot:
         return {
             "collected_at": self.collected_at,
             "opencode": [
-                {"pid": p.pid, "command": p.command} for p in self.opencode_processes
+                {
+                    "pid": p.pid,
+                    "ppid": p.ppid,
+                    "pgid": p.pgid,
+                    "command": p.command,
+                }
+                for p in self.opencode_processes
             ],
             "app_server": [
-                {"pid": p.pid, "command": p.command} for p in self.app_server_processes
+                {
+                    "pid": p.pid,
+                    "ppid": p.ppid,
+                    "pgid": p.pgid,
+                    "command": p.command,
+                }
+                for p in self.app_server_processes
             ],
             "other": [
-                {"pid": p.pid, "command": p.command} for p in self.other_processes
+                {
+                    "pid": p.pid,
+                    "ppid": p.ppid,
+                    "pgid": p.pgid,
+                    "command": p.command,
+                }
+                for p in self.other_processes
             ],
         }
 
@@ -85,13 +103,26 @@ def parse_ps_output(
         line = line.strip()
         if not line:
             continue
-        parts = line.split(maxsplit=1)
-        if len(parts) != 2 or not parts[0].isdigit():
+        parts = line.split(maxsplit=3)
+        if len(parts) < 4:
             continue
-        pid = int(parts[0])
-        command = parts[1]
+        pid_raw = parts[0]
+        ppid_raw = parts[1]
+        pgid_raw = parts[2]
+        command = parts[3]
+        if not (pid_raw.isdigit() and ppid_raw.isdigit() and pgid_raw.isdigit()):
+            continue
+        pid = int(pid_raw)
+        ppid = int(ppid_raw)
+        pgid = int(pgid_raw)
         category = classifier(command)
-        info = ProcessInfo(pid=pid, command=command, category=category)
+        info = ProcessInfo(
+            pid=pid,
+            ppid=ppid,
+            pgid=pgid,
+            command=command,
+            category=category,
+        )
         if category == ProcessCategory.OPENCODE:
             snapshot.opencode_processes.append(info)
         elif category == ProcessCategory.APP_SERVER:
@@ -104,7 +135,18 @@ def parse_ps_output(
 def get_ps_output() -> str:
     try:
         proc = subprocess.run(
-            ["ps", "-ax", "-o", "pid=", "-o", "command="],
+            [
+                "ps",
+                "-ax",
+                "-o",
+                "pid=",
+                "-o",
+                "ppid=",
+                "-o",
+                "pgid=",
+                "-o",
+                "command=",
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -125,9 +167,3 @@ def collect_processes(
     else:
         output = get_ps_output()
     return parse_ps_output(output)
-
-
-def write_snapshot_to_file(snapshot: ProcessSnapshot, output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
-        json.dump(snapshot.to_dict(), f, indent=2)
