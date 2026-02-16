@@ -15,6 +15,7 @@ from typing import Any
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
+from codex_autorunner.core.report_retention import prune_report_directory
 
 runner = CliRunner()
 
@@ -227,5 +228,6 @@ def test_selfdescribe_smoke(hub_env, tmp_path: Path):
 
     report_content = "\n".join(report_lines)
     report_path.write_text(report_content, encoding="utf-8")
+    prune_report_directory(report_dir)
 
     assert results["status"] == "pass", f"Smoke test failed: {results['checks']}"
