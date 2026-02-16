@@ -254,20 +254,23 @@ class OpenCodeSupervisor:
         if process is None or process.pid is None:
             return
 
+        if process.returncode is not None:
+            self._delete_registry_record(handle, pid=process.pid)
+            return
+
         process_record = self._build_record_for_handle(handle, process.pid)
-        if self._record_is_running(process_record):
-            terminated = await self._terminate_record_process(process_record)
-            if not terminated or self._record_is_running(process_record):
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "opencode.handle.close_failed",
-                    workspace_id=handle.workspace_id,
-                    workspace_root=str(handle.workspace_root),
-                    pid=process_record.pid,
-                    pgid=process_record.pgid,
-                )
-                return
+        terminated = await self._terminate_record_process(process_record)
+        if not terminated or self._record_is_running(process_record):
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.handle.close_failed",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                pid=process_record.pid,
+                pgid=process_record.pgid,
+            )
+            return
 
         if process.returncode is None:
             try:
@@ -504,138 +507,53 @@ class OpenCodeSupervisor:
         handle.health_info = None
         handle.version = None
         handle.base_url = base_url
+        client = OpenCodeClient(
+            base_url,
+            auth=self._auth,
+            timeout=self._request_timeout,
+            max_text_chars=self._max_text_chars,
+            logger=self._logger,
+        )
         try:
-            handle.client = OpenCodeClient(
-                base_url,
-                auth=self._auth,
-                timeout=self._request_timeout,
-                max_text_chars=self._max_text_chars,
-                logger=self._logger,
-            )
-            try:
-                handle.health_info = await handle.client.health()
-            except httpx.HTTPStatusError as exc:
-                status_code = exc.response.status_code
-                if status_code in (401, 403):
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "opencode.attach.auth_failed",
-                        base_url=base_url,
-                        status_code=status_code,
-                        exc=exc,
-                    )
-                    raise OpenCodeSupervisorAttachAuthError(
-                        "OpenCode authentication failed while attaching to "
-                        "registry server. Set OPENCODE_SERVER_PASSWORD "
-                        "for this process and ensure it matches the server "
-                        "configuration.",
-                        status_code=status_code,
-                    ) from exc
-                if status_code in (404, 405):
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "opencode.attach.endpoint_mismatch",
-                        base_url=base_url,
-                        status_code=status_code,
-                        exc=exc,
-                    )
-                    raise OpenCodeSupervisorAttachEndpointMismatchError(
-                        "OpenCode health endpoint mismatch while attaching.",
-                        status_code=status_code,
-                    ) from exc
-                raise OpenCodeSupervisorAttachError(
-                    f"OpenCode health check failed: HTTP {status_code}",
-                    status_code=status_code,
-                ) from exc
-            except httpx.RequestError as exc:
+            health_info = await client.health()
+        except httpx.HTTPStatusError as exc:
+            await self._safe_close_client(client)
+            status_code = exc.response.status_code
+            if status_code in (401, 403):
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "opencode.attach.connect_failed",
+                    "opencode.attach.auth_failed",
                     base_url=base_url,
+                    status_code=status_code,
                     exc=exc,
                 )
-                raise OpenCodeSupervisorAttachConnectError(
-                    f"OpenCode server health check connection failed: {exc}"
-                ) from exc
-            except OpenCodeProtocolError as exc:
-                status_code = exc.status_code
-                if status_code in (401, 403):
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "opencode.attach.auth_failed",
-                        base_url=base_url,
-                        status_code=status_code,
-                        exc=exc,
-                    )
-                    raise OpenCodeSupervisorAttachAuthError(
-                        "OpenCode authentication failed while attaching to "
-                        "registry server. Set OPENCODE_SERVER_PASSWORD "
-                        "for this process and ensure it matches the server "
-                        "configuration.",
-                        status_code=status_code,
-                    ) from exc
-                if status_code in (404, 405):
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "opencode.attach.endpoint_mismatch",
-                        base_url=base_url,
-                        status_code=status_code,
-                        exc=exc,
-                    )
-                    raise OpenCodeSupervisorAttachEndpointMismatchError(
-                        "OpenCode health endpoint mismatch while attaching.",
-                        status_code=status_code,
-                    ) from exc
-                raise OpenCodeSupervisorAttachError(
-                    f"OpenCode health check failed: {exc}",
+                raise OpenCodeSupervisorAttachAuthError(
+                    "OpenCode authentication failed while attaching to "
+                    "registry server. Set OPENCODE_SERVER_PASSWORD "
+                    "for this process and ensure it matches the server "
+                    "configuration.",
                     status_code=status_code,
                 ) from exc
-
-            if not isinstance(handle.health_info, dict):
-                handle.health_info = {}
-
-            handle.version = str(handle.health_info.get("version", "unknown"))
-
-            log_event(
-                self._logger,
-                logging.INFO,
-                "opencode.health_check",
-                base_url=base_url,
-                version=handle.version,
-                health_info=bool(handle.health_info),
-                exc=None,
-            )
-            try:
-                handle.openapi_spec = await handle.client.fetch_openapi_spec()
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "opencode.openapi.fetched",
-                    base_url=base_url,
-                    endpoints=(
-                        len(handle.openapi_spec.get("paths", {}))
-                        if isinstance(handle.openapi_spec, dict)
-                        else 0
-                    ),
-                )
-            except Exception as exc:
+            if status_code in (404, 405):
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "opencode.openapi.fetch_failed",
+                    "opencode.attach.endpoint_mismatch",
                     base_url=base_url,
+                    status_code=status_code,
                     exc=exc,
                 )
-                handle.openapi_spec = {}
-            handle.started = True
-        except OpenCodeSupervisorAttachError:
-            raise
-        except Exception as exc:
+                raise OpenCodeSupervisorAttachEndpointMismatchError(
+                    "OpenCode health endpoint mismatch while attaching.",
+                    status_code=status_code,
+                ) from exc
+            raise OpenCodeSupervisorAttachError(
+                f"OpenCode health check failed: HTTP {status_code}",
+                status_code=status_code,
+            ) from exc
+        except httpx.RequestError as exc:
+            await self._safe_close_client(client)
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -644,8 +562,88 @@ class OpenCodeSupervisor:
                 exc=exc,
             )
             raise OpenCodeSupervisorAttachConnectError(
-                f"OpenCode attachment failed: {exc}"
+                f"OpenCode server health check connection failed: {exc}"
             ) from exc
+        except OpenCodeProtocolError as exc:
+            await self._safe_close_client(client)
+            status_code = exc.status_code
+            if status_code in (401, 403):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.attach.auth_failed",
+                    base_url=base_url,
+                    status_code=status_code,
+                    exc=exc,
+                )
+                raise OpenCodeSupervisorAttachAuthError(
+                    "OpenCode authentication failed while attaching to "
+                    "registry server. Set OPENCODE_SERVER_PASSWORD "
+                    "for this process and ensure it matches the server "
+                    "configuration.",
+                    status_code=status_code,
+                ) from exc
+            if status_code in (404, 405):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.attach.endpoint_mismatch",
+                    base_url=base_url,
+                    status_code=status_code,
+                    exc=exc,
+                )
+                raise OpenCodeSupervisorAttachEndpointMismatchError(
+                    "OpenCode health endpoint mismatch while attaching.",
+                    status_code=status_code,
+                ) from exc
+            raise OpenCodeSupervisorAttachError(
+                f"OpenCode health check failed: {exc}",
+                status_code=status_code,
+            ) from exc
+        except Exception:
+            await self._safe_close_client(client)
+            raise
+
+        if not isinstance(health_info, dict):
+            health_info = {}
+
+        handle.version = str(health_info.get("version", "unknown"))
+        handle.health_info = health_info
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "opencode.health_check",
+            base_url=base_url,
+            version=handle.version,
+            health_info=bool(handle.health_info),
+            exc=None,
+        )
+        try:
+            openapi_spec = await client.fetch_openapi_spec()
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.openapi.fetched",
+                base_url=base_url,
+                endpoints=(
+                    len(openapi_spec.get("paths", {}))
+                    if isinstance(openapi_spec, dict)
+                    else 0
+                ),
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.openapi.fetch_failed",
+                base_url=base_url,
+                exc=exc,
+            )
+            openapi_spec = {}
+        handle.openapi_spec = openapi_spec
+        handle.client = client
+        handle.started = True
 
     def _pid_is_running(self, pid: int) -> bool:
         try:
@@ -847,6 +845,12 @@ class OpenCodeSupervisor:
             logger=self._logger,
             event_prefix="opencode.supervisor.terminate_record",
         )
+
+    async def _safe_close_client(self, client: OpenCodeClient) -> None:
+        try:
+            await self._safe_close_client(client)
+        except Exception:
+            pass
 
     def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:
         env = subprocess_env(base_env=self._base_env)
