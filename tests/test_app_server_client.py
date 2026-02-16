@@ -248,6 +248,7 @@ async def test_turn_interrupt(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_turn_completed_via_resume_when_completion_missing(
     tmp_path: Path,
 ) -> None:

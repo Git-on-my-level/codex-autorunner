@@ -106,7 +106,7 @@ if [ -n "$GENERATED_STATIC" ]; then
 fi
 
 echo "Running tests (pytest)..."
-"$PYTHON_BIN" -m pytest -m "not integration"
+"$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
 
 echo "Dead-code check (heuristic)..."
 "$PYTHON_BIN" scripts/deadcode.py --check

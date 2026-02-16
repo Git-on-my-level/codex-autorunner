@@ -38,6 +38,7 @@ dev = [
   "pytest>=7.0",
   "pytest-asyncio>=0.23",
   "pytest-timeout>=2.0",
+  "pytest-xdist>=3.0",
   "ruff>=0.5.0",
   "types-PyYAML",
 ]
@@ -85,6 +86,7 @@ asyncio_default_fixture_loop_scope = "function"
 norecursedirs = ["worktrees", ".git", ".venv", ".codex-autorunner"]
 markers = [
     "integration: marks tests as integration tests that require external dependencies (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"' for fast runs)",
     "timeout(seconds): per-test timeout (provided by pytest-timeout)",
 ]
 filterwarnings = [

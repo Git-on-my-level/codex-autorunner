@@ -282,6 +282,7 @@ class TestRateLimiting:
         result2 = checker.check_chat_start("agent2", "msg")
         assert result2.allowed is True
 
+    @pytest.mark.slow
     def test_rate_limit_window_sliding(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:

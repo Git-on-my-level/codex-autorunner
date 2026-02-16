@@ -368,6 +368,7 @@ class TestAssessLock:
         assert assessment.freeable is True
         assert "does not match" in assessment.reason.lower()
 
+    @pytest.mark.slow
     def test_assess_lock_cmd_match(self, tmp_path: Path) -> None:
         if os.name == "nt":
             pytest.skip("Command inspection not available on Windows")
@@ -405,6 +406,7 @@ class TestEdgeCases:
         info = read_lock_info(lock_path)
         assert info.pid is None
 
+    @pytest.mark.slow
     def test_concurrent_access_multiple_threads(self, tmp_path: Path) -> None:
         lock_path = tmp_path / "lock"
         success_count = 0

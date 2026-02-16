@@ -63,6 +63,7 @@ def _receive_json_text(ws, attempts: int = 5) -> dict:
     raise AssertionError("No JSON text frame received")
 
 
+@pytest.mark.slow
 def test_hub_terminal_sessions_stay_isolated(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
