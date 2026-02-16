@@ -5,14 +5,14 @@ from codex_autorunner.core.diagnostics.process_snapshot import (
 )
 
 SAMPLE_PS_OUTPUT = """\
-1234 /usr/bin/opencode serve --port 8080
-1235 /usr/bin/codex_autorunner run
-1236 /usr/bin/codex app-server --port 9000
-1237 /usr/bin/some-other-process --arg
-1238 /Users/user/.local/bin/opencode
-1239 /opt/codex/bin/codex app-server --workspace /tmp/ws
-1240 /bin/bash -c /usr/bin/opencode
-1241 /usr/bin/other-tool
+1234 1000 1000 /usr/bin/opencode serve --port 8080
+1235 1000 1000 /usr/bin/codex_autorunner run
+1236 1100 1100 /usr/bin/codex app-server --port 9000
+1237 1100 1100 /usr/bin/some-other-process --arg
+1238 1200 1200 /Users/user/.local/bin/opencode
+1239 1200 1200 /opt/codex/bin/codex app-server --workspace /tmp/ws
+1240 1300 1300 /bin/bash -c /usr/bin/opencode
+1241 1300 1300 /usr/bin/other-tool
 """
 
 
@@ -80,9 +80,9 @@ class TestParsePsOutput:
 
     def test_malformed_lines_skipped(self):
         malformed = """\
-1234 good command
-not_a_pid bad line
-1235 another good command
+1234 1000 1000 good command
+not_a_pid 1000 1000 bad line
+1235 1000 1000 another good command
 """
         snapshot = parse_ps_output(malformed)
         assert len(snapshot.opencode_processes) + len(snapshot.other_processes) == 2

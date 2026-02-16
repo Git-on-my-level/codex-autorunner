@@ -92,10 +92,11 @@ def create_hub_app(
         app.state.hub_started = True
         try:
             cleanup = reap_managed_processes(context.config.root)
-            if cleanup.killed or cleanup.removed:
+            if cleanup.killed or cleanup.signaled or cleanup.removed:
                 app.state.logger.info(
-                    "Managed process cleanup: killed=%s removed=%s skipped=%s",
+                    "Managed process cleanup: killed=%s signaled=%s removed=%s skipped=%s",
                     cleanup.killed,
+                    cleanup.signaled,
                     cleanup.removed,
                     cleanup.skipped,
                 )

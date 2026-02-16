@@ -534,9 +534,11 @@ class FlowCommands(SharedHelpers):
         effective_args = args
 
         if argv:
-            target_repo_root, target_repo_id, consumed = (
-                self._resolve_flow_target_from_args(argv)
-            )
+            (
+                target_repo_root,
+                target_repo_id,
+                consumed,
+            ) = self._resolve_flow_target_from_args(argv)
             if target_repo_root:
                 argv = argv[consumed:]
                 # Reconstruct args for remainder logic (imperfect but sufficient for text commands)

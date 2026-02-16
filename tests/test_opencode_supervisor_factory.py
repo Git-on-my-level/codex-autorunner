@@ -31,6 +31,8 @@ def test_build_opencode_supervisor_from_repo_config(
                 "server_scope": "global",
                 "session_stall_timeout_seconds": 55,
                 "max_text_chars": 9999,
+                "max_handles": 7,
+                "idle_ttl_seconds": 2222,
             },
             "agents": {
                 "opencode": {
@@ -70,8 +72,8 @@ def test_build_opencode_supervisor_from_repo_config(
     assert captured["workspace_root"] == repo_root
     assert captured["logger"] is logger
     assert captured["request_timeout"] == 91
-    assert captured["max_handles"] == 3
-    assert captured["idle_ttl_seconds"] == 120
+    assert captured["max_handles"] == 7
+    assert captured["idle_ttl_seconds"] == 2222
     assert captured["server_scope"] == "global"
     assert captured["session_stall_timeout_seconds"] == 55
     assert captured["max_text_chars"] == 9999

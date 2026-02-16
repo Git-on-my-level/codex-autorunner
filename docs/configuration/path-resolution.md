@@ -230,6 +230,29 @@ opencode:
 
 See `docs/opencode/global-server-scope.md` for tradeoffs.
 
+### opencode.max_handles
+
+Maximum number of concurrent OpenCode handles to keep in-memory before evicting the
+least recently used handle in the same host process.
+
+- Type: integer or null
+- Default: `20`
+
+### opencode.idle_ttl_seconds
+
+How long an unused OpenCode handle may stay idle before being pruned.
+
+- Type: integer (seconds) or null
+- Default: `3600`
+
+Using both values in hub scope is helpful for host pressure control:
+
+```yaml
+opencode:
+  max_handles: 20
+  idle_ttl_seconds: 3600
+```
+
 ### state_roots.global
 
 Controls the global state root used for cross-repo caches and locks (update cache,

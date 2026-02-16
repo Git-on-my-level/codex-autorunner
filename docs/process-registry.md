@@ -2,7 +2,9 @@
 
 CAR writes durable metadata for long-lived subprocesses under:
 
-- `.codex-autorunner/processes/<kind>/<workspace_id-or-pid>.json`
+- `.codex-autorunner/processes/<kind>/<workspace_id>.json`
+- `.codex-autorunner/processes/<kind>/<pid>.json` (for the same process, with
+  `workspace_id` in `metadata.workspace_id`)
 
 This registry is local state (not source code) and is intended for:
 
@@ -27,6 +29,32 @@ Each JSON file stores one `ProcessRecord`:
 ## Behavior
 
 - Writes are atomic via temp-file replace.
+- Workspace-keyed and pid-keyed records are written for OpenCode processes so either
+  key can be used by cleanup paths.
 - Reads and list operations validate schema.
 - Delete removes only the target record file.
 - All state is isolated under `.codex-autorunner/` (no shadow registry elsewhere).
+
+## Diagnostic Workflow
+
+Use these checks to answer: which process records exist, who owns them, and which
+OS processes are still running?
+
+- `car doctor processes --repo <repo_root>`: counts live `ps` snapshot entries and
+  records under `.codex-autorunner/processes`.
+- `car cleanup processes --repo <repo_root>`: attempts normal reaping (skips active
+  owners).
+- `car cleanup processes --repo <repo_root> --force`: force reaps all records,
+  including when owners are still running (useful for stuck cleanup situations).
+
+Example output from `car cleanup processes --force` should show whether each record
+was killed and whether process records were removed.
+
+Recommended global defaults for long-lived OpenCode processes:
+
+- `opencode.max_handles`: default `20` (same behavior as app_server)
+- `opencode.idle_ttl_seconds`: default `3600`
+
+If a process becomes orphaned or a previous run crashed before cleanup, these
+commands let operators confirm ownership and recover without resorting to manual
+`pkill`.

@@ -193,6 +193,8 @@
     "tui_idle_seconds": 60
   },
   "opencode": {
+    "idle_ttl_seconds": 3600,
+    "max_handles": 20,
     "max_text_chars": 20000,
     "server_scope": "workspace",
     "session_stall_timeout_seconds": null
