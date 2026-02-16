@@ -12,6 +12,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import httpx
 
+from ...core.locks import file_lock
 from ...core.logging_utils import log_event
 from ...core.managed_processes.registry import (
     ProcessRecord,
@@ -408,88 +409,91 @@ class OpenCodeSupervisor:
 
     async def _ensure_started_from_registry(self, handle: OpenCodeHandle) -> bool:
         registry_root = self._registry_root(handle.workspace_root)
-        try:
-            record = read_process_record(
-                registry_root, _PROCESS_KIND, handle.workspace_id
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "opencode.registry.read_failed",
-                workspace_id=handle.workspace_id,
-                workspace_root=str(handle.workspace_root),
-                exc=exc,
-            )
-            return False
+        handle_id = handle.workspace_id
+        lock_path = self._registry_lock_path(registry_root, handle_id)
+        with file_lock(lock_path):
+            try:
+                record = read_process_record(
+                    registry_root, _PROCESS_KIND, handle.workspace_id
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.registry.read_failed",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    exc=exc,
+                )
+                return False
 
-        if record is None:
-            return False
+            if record is None:
+                return False
 
-        if record.pid is None or not self._pid_is_running(record.pid):
-            self._delete_registry_record(handle)
-            return False
+            if record.pid is None or not self._pid_is_running(record.pid):
+                self._delete_registry_record(handle)
+                return False
 
-        if not record.base_url:
-            if self._record_is_running(record):
-                terminated = await self._terminate_record_process(record)
-                if not terminated:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "opencode.handle.close_failed",
-                        workspace_id=handle.workspace_id,
-                        workspace_root=str(handle.workspace_root),
-                        pid=record.pid,
-                        pgid=record.pgid,
-                    )
-                    return False
+            if not record.base_url:
                 if self._record_is_running(record):
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "opencode.handle.close_failed",
-                        workspace_id=handle.workspace_id,
-                        workspace_root=str(handle.workspace_root),
-                        pid=record.pid,
-                        pgid=record.pgid,
-                    )
-                    return False
-            self._delete_registry_record(handle)
-            return False
+                    terminated = await self._terminate_record_process(record)
+                    if not terminated:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "opencode.handle.close_failed",
+                            workspace_id=handle.workspace_id,
+                            workspace_root=str(handle.workspace_root),
+                            pid=record.pid,
+                            pgid=record.pgid,
+                        )
+                        return False
+                    if self._record_is_running(record):
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "opencode.handle.close_failed",
+                            workspace_id=handle.workspace_id,
+                            workspace_root=str(handle.workspace_root),
+                            pid=record.pid,
+                            pgid=record.pgid,
+                        )
+                        return False
+                self._delete_registry_record(handle)
+                return False
 
-        try:
-            await self._attach_to_base_url(handle, record.base_url)
-            self._refresh_registry_ownership(handle, record)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "opencode.registry.reused",
-                workspace_id=handle.workspace_id,
-                workspace_root=str(handle.workspace_root),
-                pid=record.pid,
-                pgid=record.pgid,
-                base_url=record.base_url,
-            )
-            return True
-        except OpenCodeSupervisorAttachAuthError:
-            raise
-        except Exception:
-            if self._record_is_running(record):
-                terminated = await self._terminate_record_process(record)
-                if not terminated or self._record_is_running(record):
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "opencode.handle.close_failed",
-                        workspace_id=handle.workspace_id,
-                        workspace_root=str(handle.workspace_root),
-                        pid=record.pid,
-                        pgid=record.pgid,
-                    )
-                    return False
-            self._delete_registry_record(handle)
-            return False
+            try:
+                await self._attach_to_base_url(handle, record.base_url)
+                self._refresh_registry_ownership(handle, record)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.registry.reused",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    pid=record.pid,
+                    pgid=record.pgid,
+                    base_url=record.base_url,
+                )
+                return True
+            except OpenCodeSupervisorAttachAuthError:
+                raise
+            except Exception:
+                if self._record_is_running(record):
+                    terminated = await self._terminate_record_process(record)
+                    if not terminated or self._record_is_running(record):
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "opencode.handle.close_failed",
+                            workspace_id=handle.workspace_id,
+                            workspace_root=str(handle.workspace_root),
+                            pid=record.pid,
+                            pgid=record.pgid,
+                        )
+                        return False
+                self._delete_registry_record(handle)
+                return False
 
     async def _attach_to_base_url(self, handle: OpenCodeHandle, base_url: str) -> None:
         handle.health_info = None
@@ -725,6 +729,15 @@ class OpenCodeSupervisor:
                 workspace_root=str(handle.workspace_root),
                 exc=exc,
             )
+
+    def _registry_lock_path(self, registry_root: Path, handle_id: str) -> Path:
+        return (
+            registry_root
+            / ".codex-autorunner"
+            / "locks"
+            / "opencode"
+            / f"{handle_id}.lock"
+        )
 
     def _refresh_registry_ownership(
         self, handle: OpenCodeHandle, record: ProcessRecord

@@ -32,6 +32,12 @@ def _handle(workspace_root: Path, workspace_id: str = "ws-1") -> OpenCodeHandle:
     )
 
 
+def _expected_registry_lock_path(registry_root: Path, handle_id: str) -> Path:
+    return (
+        registry_root / ".codex-autorunner" / "locks" / "opencode" / f"{handle_id}.lock"
+    )
+
+
 @pytest.mark.anyio
 async def test_start_process_writes_registry_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -271,6 +277,76 @@ async def test_ensure_started_from_registry_skips_restart_on_auth_failure(
     assert terminate_calls == []
     assert delete_calls == []
     assert start_calls == []
+
+
+def test_registry_lock_path_uses_expected_directory() -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    registry_root = Path("/tmp/registry")
+    workspace_id = "ws-1"
+
+    assert supervisor._registry_lock_path(
+        registry_root, workspace_id
+    ) == _expected_registry_lock_path(registry_root, workspace_id)
+
+
+def test_registry_lock_path_supports_global_handle() -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"], server_scope="global")
+    registry_root = Path("/tmp/registry")
+
+    assert supervisor._registry_lock_path(
+        registry_root, "__global__"
+    ) == _expected_registry_lock_path(registry_root, "__global__")
+
+
+@pytest.mark.anyio
+async def test_ensure_started_from_registry_acquires_registry_lock_for_attach_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    registry_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=9994,
+        pgid=9994,
+        base_url="http://127.0.0.1:9012",
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={},
+    )
+
+    lock_events: list[str] = []
+    expected_lock_path = _expected_registry_lock_path(tmp_path, handle.workspace_id)
+
+    def _fake_lock(path: Path):
+        class _Context:
+            def __enter__(self) -> None:
+                lock_events.append(f"enter:{path}")
+
+            def __exit__(self, *_args) -> None:
+                lock_events.append(f"exit:{path}")
+
+        return _Context()
+
+    async def _fake_attach(_handle: OpenCodeHandle, base_url: str) -> None:
+        assert lock_events
+        assert lock_events[-1] == f"enter:{expected_lock_path}"
+        _handle.base_url = base_url
+        _handle.client = object()
+        _handle.started = True
+
+    monkeypatch.setattr(
+        supervisor_module, "read_process_record", lambda *_a, **_k: registry_record
+    )
+    monkeypatch.setattr(supervisor, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(supervisor, "_attach_to_base_url", _fake_attach)
+    monkeypatch.setattr(supervisor_module, "file_lock", _fake_lock)
+
+    await supervisor._ensure_started_from_registry(handle)
+
+    assert lock_events[0] == f"enter:{expected_lock_path}"
+    assert lock_events[-1] == f"exit:{expected_lock_path}"
 
 
 @pytest.mark.anyio
