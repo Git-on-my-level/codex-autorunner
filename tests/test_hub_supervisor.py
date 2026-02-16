@@ -205,9 +205,9 @@ def test_list_repos_thread_safety(tmp_path: Path):
         repo_ids_sets = [set(repo.id for repo in repos) for repos in results]
         first_ids = repo_ids_sets[0]
         for i, ids in enumerate(repo_ids_sets[1:], 1):
-            assert (
-                ids == first_ids
-            ), f"Result {i} has different repo IDs: {ids} vs {first_ids}"
+            assert ids == first_ids, (
+                f"Result {i} has different repo IDs: {ids} vs {first_ids}"
+            )
 
 
 def test_hub_home_served_and_repo_mounted(tmp_path: Path):

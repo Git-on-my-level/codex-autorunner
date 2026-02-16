@@ -265,9 +265,9 @@ def test_core_runtime_does_not_import_web_modules(monkeypatch):
         if name.startswith("codex_autorunner.surfaces.web")
         or name.startswith("codex_autorunner.web")
     ]
-    assert (
-        not leaked
-    ), f"core.runtime should not import web/surfaces modules, found {leaked}"
+    assert not leaked, (
+        f"core.runtime should not import web/surfaces modules, found {leaked}"
+    )
 
 
 def test_engine_does_not_import_control_plane():
@@ -306,9 +306,9 @@ def test_engine_does_not_import_control_plane():
                     f"{path.relative_to(SRC_ROOT.parent.parent)} imports {imported}"
                 )
 
-    assert (
-        not violations
-    ), "Engine modules should not import Control Plane:\n" + "\n".join(violations)
+    assert not violations, (
+        "Engine modules should not import Control Plane:\n" + "\n".join(violations)
+    )
 
 
 def _engine_flows_forbidden_imports_for_module(
