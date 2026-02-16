@@ -509,6 +509,45 @@ if updated:
 PY
 }
 
+_normalize_plist_process_limits() {
+  local plist_path
+  plist_path="$1"
+  if [[ -z "${plist_path}" || ! -f "${plist_path}" ]]; then
+    return 0
+  fi
+
+  "${HELPER_PYTHON}" - "$plist_path" <<'PY'
+from __future__ import annotations
+
+import plistlib
+import sys
+from pathlib import Path
+
+plist_path = Path(sys.argv[1])
+
+with plist_path.open("rb") as handle:
+    plist = plistlib.load(handle)
+
+updated = False
+for key in ("SoftResourceLimits", "HardResourceLimits"):
+    section = plist.get(key)
+    if not isinstance(section, dict):
+        continue
+    if "NumberOfProcesses" in section:
+        section.pop("NumberOfProcesses", None)
+        updated = True
+    if not section:
+        plist.pop(key, None)
+        updated = True
+    else:
+        plist[key] = section
+
+if updated:
+    with plist_path.open("wb") as handle:
+        plistlib.dump(plist, handle)
+PY
+}
+
 _service_pid() {
   launchctl print "${domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
 }
@@ -537,6 +576,7 @@ _reload() {
   _require_gui_domain
   pid="$(_service_pid)"
   _ensure_plist_has_opencode_path
+  _normalize_plist_process_limits "${PLIST_PATH}"
   launchctl unload -w "${PLIST_PATH}" >/dev/null 2>&1 || true
   if [[ -n "${pid}" && "${pid}" != "0" ]]; then
     if ! _wait_pid_exit "${pid}"; then
@@ -563,6 +603,7 @@ _reload_telegram() {
     fi
     _ensure_telegram_plist_uses_current_venv
     PLIST_PATH="${TELEGRAM_PLIST_PATH}" _ensure_plist_has_opencode_path
+    _normalize_plist_process_limits "${TELEGRAM_PLIST_PATH}"
     telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
     launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
     launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
@@ -581,6 +622,7 @@ _reload_telegram() {
   if [[ ! -f "${TELEGRAM_PLIST_PATH}" ]]; then
     return 0
   fi
+  _normalize_plist_process_limits "${TELEGRAM_PLIST_PATH}"
   telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
   launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
   launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
