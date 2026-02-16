@@ -7,6 +7,7 @@ from ...core.hub import HubSupervisor as _HubSupervisor
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from .commands.cleanup import register_cleanup_commands
+from .commands.describe import register_describe_commands
 from .commands.dispatch import register_dispatch_commands
 from .commands.doctor import (
     _find_hub_server_process,  # noqa: F401
@@ -205,6 +206,11 @@ app.add_typer(ticket_flow_app, name="ticket-flow")
 flow_app.add_typer(ticket_flow_app, name="ticket_flow")
 app.add_typer(pma_cli_app, name="pma")
 register_root_commands(app)
+register_describe_commands(
+    app,
+    require_repo_config=_require_repo_config,
+    raise_exit=_raise_exit,
+)
 
 
 FLOW_COMMANDS = register_flow_commands(
