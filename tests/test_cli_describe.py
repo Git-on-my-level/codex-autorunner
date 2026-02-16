@@ -26,9 +26,12 @@ def test_describe_json_output_valid_json(repo):
     assert "agents" in parsed
     assert "surfaces" in parsed
     assert "features" in parsed
+    assert "templates" in parsed
 
     assert parsed["schema_id"] == SCHEMA_ID
     assert parsed["schema_version"] == SCHEMA_VERSION
+    template_apply = parsed["templates"]["commands"]["apply"]
+    assert "car templates apply <repo_id>:<path>[@<ref>]" in template_apply
 
 
 def test_describe_json_output_matches_schema_keys(repo):
@@ -110,6 +113,7 @@ def test_describe_human_output_is_readable(repo):
     assert "Initialized:" in output
     assert "Active Surfaces:" in output or "Surfaces:" in output
     assert "Agents:" in output
+    assert "Template Apply:" in output
 
 
 def test_describe_schema_option(repo):

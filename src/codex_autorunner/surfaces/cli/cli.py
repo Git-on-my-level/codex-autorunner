@@ -175,6 +175,8 @@ register_telegram_commands(
     require_optional_feature=_require_optional_feature,
 )
 app.add_typer(templates_app, name="templates")
+# UX alias: allow singular form (`car template ...`) in addition to `car templates ...`.
+app.add_typer(templates_app, name="template")
 app.add_typer(cleanup_app, name="cleanup")
 register_templates_commands(
     templates_app,

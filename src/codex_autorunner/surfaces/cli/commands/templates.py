@@ -89,8 +89,9 @@ def register_templates_commands(
         ),
         ticket_dir: Optional[Path] = typer.Option(
             None,
+            "--out",
             "--ticket-dir",
-            help="Ticket directory (default .codex-autorunner/tickets)",
+            help="Output ticket directory (default .codex-autorunner/tickets)",
         ),
         at: Optional[int] = typer.Option(None, "--at", help="Explicit ticket index"),
         next_index: bool = typer.Option(
@@ -103,9 +104,9 @@ def register_templates_commands(
             None, "--set-agent", help="Override frontmatter agent"
         ),
         provenance: bool = typer.Option(
-            False,
+            True,
             "--provenance/--no-provenance",
-            help="Embed template provenance in ticket",
+            help="Embed template provenance in generated ticket(s)",
         ),
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),

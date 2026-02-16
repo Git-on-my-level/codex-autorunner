@@ -138,6 +138,16 @@ def _collect_env_knobs(raw: dict[str, Any]) -> list[str]:
 
 def _collect_template_info(repo_root: Path, raw: dict[str, Any]) -> dict[str, Any]:
     """Collect template-related information."""
+    commands = {
+        "list": [
+            "car templates repos list",
+            "car templates repos list --json",
+        ],
+        "apply": [
+            "car templates apply <repo_id>:<path>[@<ref>]",
+            "car template apply <repo_id>:<path>[@<ref>]",
+        ],
+    }
     try:
         hub_config = load_hub_config(repo_root)
     except Exception:
@@ -146,6 +156,7 @@ def _collect_template_info(repo_root: Path, raw: dict[str, Any]) -> dict[str, An
             "root": None,
             "repos": [],
             "count": 0,
+            "commands": commands,
         }
 
     templates_config = raw.get("templates", {})
@@ -161,6 +172,7 @@ def _collect_template_info(repo_root: Path, raw: dict[str, Any]) -> dict[str, An
             "root": None,
             "repos": [],
             "count": 0,
+            "commands": commands,
         }
 
     try:
@@ -196,6 +208,7 @@ def _collect_template_info(repo_root: Path, raw: dict[str, Any]) -> dict[str, An
         "root": str(templates_root) if templates_root else None,
         "repos": repos,
         "count": template_count,
+        "commands": commands,
     }
 
 
@@ -292,6 +305,15 @@ def _format_human(data: dict[str, Any]) -> str:
     schema_path = data.get("schema_path")
     if schema_path:
         lines.append(f"Schema: {schema_path}")
+    templates = data.get("templates", {})
+    if isinstance(templates, dict):
+        commands = templates.get("commands", {})
+        apply_cmds = commands.get("apply", []) if isinstance(commands, dict) else []
+        if apply_cmds:
+            lines.append("")
+            lines.append("Template Apply:")
+            for cmd in apply_cmds[:2]:
+                lines.append(f"  - {cmd}")
 
     return "\n".join(lines)
 
