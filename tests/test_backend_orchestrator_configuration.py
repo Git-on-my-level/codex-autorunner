@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator
 
 import pytest
 
+from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.ports.agent_backend import AgentBackend
 from codex_autorunner.core.ports.run_event import Completed, RunEvent, now_iso
 from codex_autorunner.core.state import RunnerState
@@ -83,7 +84,11 @@ async def test_backend_orchestrator_uses_generic_backend_configure(
 
     config = SimpleNamespace(
         autorunner_reuse_session=False,
-        ticket_flow={"default_approval_decision": "cancel"},
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="cancel",
+            include_previous_ticket_context=False,
+        ),
     )
     orchestrator = BackendOrchestrator(repo_root=tmp_path, config=config)
     state = RunnerState(None, "idle", None, None, None)

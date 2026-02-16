@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.flows.models import FlowEventType
 from codex_autorunner.core.ports.run_event import (
     Completed,
@@ -54,7 +55,14 @@ async def test_run_turn_maps_events_to_result_and_emits(tmp_path: Path):
         TokenUsage(timestamp="now", usage={"input": 3, "output": 5}),
         Completed(timestamp="now", final_message=""),
     ]
-    cfg = SimpleNamespace(root=tmp_path, ticket_flow={"approval_mode": "yolo"})
+    cfg = SimpleNamespace(
+        root=tmp_path,
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     fake = _FakeOrchestrator(events)
     pool._backend_orchestrator = fake  # type: ignore[assignment]
@@ -97,7 +105,14 @@ async def test_run_turn_handles_failure_and_fallback_turn_id(tmp_path: Path):
         Started(timestamp="now", session_id="session-1", turn_id=None),
         Failed(timestamp="now", error_message="boom"),
     ]
-    cfg = SimpleNamespace(root=tmp_path, ticket_flow={"approval_mode": "safe"})
+    cfg = SimpleNamespace(
+        root=tmp_path,
+        ticket_flow=TicketFlowConfig(
+            approval_mode="review",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     fake = _FakeOrchestrator(events)
     pool._backend_orchestrator = fake  # type: ignore[assignment]
@@ -128,7 +143,14 @@ async def test_run_turn_passes_model_reasoning_session_and_merges_messages(
         Started(timestamp="now", session_id="session-1", turn_id="turn-1"),
         Completed(timestamp="now", final_message="done"),
     ]
-    cfg = SimpleNamespace(root=tmp_path, ticket_flow={"approval_mode": "safe"})
+    cfg = SimpleNamespace(
+        root=tmp_path,
+        ticket_flow=TicketFlowConfig(
+            approval_mode="review",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     fake = _FakeOrchestrator(events)
     pool._backend_orchestrator = fake  # type: ignore[assignment]
@@ -162,7 +184,14 @@ async def test_run_turn_passes_model_reasoning_session_and_merges_messages(
 
 @pytest.mark.asyncio
 async def test_close_all_delegates_to_orchestrator(tmp_path: Path):
-    cfg = SimpleNamespace(root=tmp_path, ticket_flow={"approval_mode": "yolo"})
+    cfg = SimpleNamespace(
+        root=tmp_path,
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     fake = _FakeOrchestrator([])
     pool._backend_orchestrator = fake  # type: ignore[assignment]

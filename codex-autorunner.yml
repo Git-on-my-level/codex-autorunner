@@ -61,8 +61,12 @@ repo_defaults:
     reuse_session: false
 
   ticket_flow:
+    # Approval mode for ticket-flow agent turns: yolo|review (safe is an alias for review).
+    approval_mode: yolo
     # Keep ticket_flow deterministic by default; surfaces can tighten this.
     default_approval_decision: accept
+    # Auto-resume paused ticket_flow runs when Telegram replies are received.
+    auto_resume: false
     # Include previous ticket content in prompts (disabled by default to keep tickets isolated).
     # When enabled, previous ticket content is truncated to 16KB and clearly labeled.
     # Prefer using contextspace docs (active_context.md, decisions.md, spec.md) for cross-ticket context.

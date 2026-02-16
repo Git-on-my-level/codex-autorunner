@@ -174,11 +174,7 @@ class BackendOrchestrator:
             reasoning_effort=reasoning,
             turn_timeout_seconds=None,
             notification_handler=self._notification_handler,
-            default_approval_decision=str(
-                getattr(self._config, "ticket_flow", {}).get(
-                    "default_approval_decision", "accept"
-                )
-            ),
+            default_approval_decision=self._config.ticket_flow.default_approval_decision,
         )
 
         async for event in backend.run_turn_events(effective_session_id, prompt):

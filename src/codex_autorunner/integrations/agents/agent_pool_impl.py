@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 from ...core.flows.models import FlowEventType
 from ...core.ports.run_event import (
@@ -65,10 +65,7 @@ class DefaultAgentPool:
             _logger.exception("Failed emitting backend notification")
 
     def _ticket_flow_runner_state(self) -> RunnerState:
-        ticket_flow_cfg = cast(dict[str, Any], getattr(self._config, "ticket_flow", {}))
-        approval_mode = (
-            str(ticket_flow_cfg.get("approval_mode", "yolo") or "yolo").strip().lower()
-        )
+        approval_mode = self._config.ticket_flow.approval_mode
 
         if approval_mode == "yolo":
             approval_policy = "never"

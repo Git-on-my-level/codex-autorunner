@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.core.config import DEFAULT_REPO_CONFIG, _parse_app_server_config
+from codex_autorunner.core.config import (
+    DEFAULT_REPO_CONFIG,
+    TicketFlowConfig,
+    _parse_app_server_config,
+)
 from codex_autorunner.core.ports.run_event import Completed, Started
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
@@ -45,7 +49,11 @@ async def test_agent_pool_respects_ticket_flow_approval_defaults(tmp_path: Path)
         root=tmp_path,
         app_server=app_server_cfg,
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
-        ticket_flow={"approval_mode": "safe", "default_approval_decision": "cancel"},
+        ticket_flow=TicketFlowConfig(
+            approval_mode="review",
+            default_approval_decision="cancel",
+            include_previous_ticket_context=False,
+        ),
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     fake = _FakeOrchestrator()
@@ -69,7 +77,11 @@ async def test_agent_pool_uses_yolo_policy_for_ticket_flow(tmp_path: Path):
         root=tmp_path,
         app_server=app_server_cfg,
         opencode=SimpleNamespace(session_stall_timeout_seconds=None),
-        ticket_flow={"approval_mode": "yolo", "default_approval_decision": "accept"},
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     fake = _FakeOrchestrator()
