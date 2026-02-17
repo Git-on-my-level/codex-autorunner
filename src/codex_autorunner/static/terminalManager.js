@@ -46,6 +46,8 @@ const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
 const RECONNECT_MAX_ATTEMPTS = 3;
 const RECONNECT_STABLE_CONNECTION_MS = 15000;
+const WS_HEARTBEAT_INTERVAL_MS = 20000;
+const WS_HEARTBEAT_STALL_TIMEOUT_MS = 60000;
 const CAR_CONTEXT_HOOK_ID = "car_context";
 const CAR_CONTEXT_HINT = wrapInjectedContext(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT);
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
@@ -156,6 +158,8 @@ export class TerminalManager {
         this.reconnectTimer = null;
         this.reconnectAttempts = 0;
         this.socketOpenedAt = null;
+        this.socketHeartbeatTimer = null;
+        this.socketLastActivityAt = null;
         this.lastConnectMode = null;
         this.suppressNextNotFoundFlash = false;
         this.currentSessionId = null;
@@ -273,6 +277,8 @@ export class TerminalManager {
         this.reconnectTimer = null;
         this.reconnectAttempts = 0;
         this.socketOpenedAt = null;
+        this.socketHeartbeatTimer = null;
+        this.socketLastActivityAt = null;
         this.lastConnectMode = null;
         this.suppressNextNotFoundFlash = false;
         this.currentSessionId = null;
@@ -2073,6 +2079,7 @@ export class TerminalManager {
                 // ignore
             }
         }
+        this._stopSocketHeartbeat();
         this.socket = null;
         this.socketOpenedAt = null;
         this.awaitingReplayEnd = false;
@@ -2081,6 +2088,50 @@ export class TerminalManager {
         this.pendingReplayPrelude = null;
         this.clearTranscriptOnFirstLiveData = false;
         this.transcriptResetForConnect = false;
+    }
+    _noteSocketActivity() {
+        this.socketLastActivityAt = Date.now();
+    }
+    _startSocketHeartbeat() {
+        this._stopSocketHeartbeat();
+        this._noteSocketActivity();
+        this.socketHeartbeatTimer = window.setInterval(() => {
+            const socket = this.socket;
+            if (!socket || socket.readyState !== WebSocket.OPEN)
+                return;
+            const now = Date.now();
+            const lastActivity = this.socketLastActivityAt;
+            if (typeof lastActivity === "number" &&
+                now - lastActivity > WS_HEARTBEAT_STALL_TIMEOUT_MS) {
+                this._logTerminalDebug("heartbeat stalled; closing terminal socket", {
+                    idleMs: now - lastActivity,
+                });
+                try {
+                    socket.close();
+                }
+                catch (_err) {
+                    // ignore close errors and let reconnect logic handle recovery
+                }
+                return;
+            }
+            if (typeof lastActivity === "number" &&
+                now - lastActivity < WS_HEARTBEAT_INTERVAL_MS) {
+                return;
+            }
+            try {
+                socket.send(JSON.stringify({ type: "ping" }));
+            }
+            catch (_err) {
+                // ignore and rely on normal onclose handling
+            }
+        }, WS_HEARTBEAT_INTERVAL_MS);
+    }
+    _stopSocketHeartbeat() {
+        if (this.socketHeartbeatTimer !== null) {
+            clearInterval(this.socketHeartbeatTimer);
+            this.socketHeartbeatTimer = null;
+        }
+        this.socketLastActivityAt = null;
     }
     /**
      * Update button enabled states
@@ -2298,6 +2349,8 @@ export class TerminalManager {
         this.socket.binaryType = "arraybuffer";
         this.socket.onopen = () => {
             this.socketOpenedAt = Date.now();
+            this._noteSocketActivity();
+            this._startSocketHeartbeat();
             this.overlayEl?.classList.add("hidden");
             this._markSessionActive();
             this._logTerminalDebug("socket open", {
@@ -2327,6 +2380,7 @@ export class TerminalManager {
             }
         };
         this.socket.onmessage = (event) => {
+            this._noteSocketActivity();
             this._markSessionActive();
             if (typeof event.data === "string") {
                 try {
@@ -2462,6 +2516,7 @@ export class TerminalManager {
         this.socket.onclose = () => {
             const openedAt = this.socketOpenedAt;
             this.socketOpenedAt = null;
+            this._stopSocketHeartbeat();
             if (typeof openedAt === "number" &&
                 Date.now() - openedAt >= RECONNECT_STABLE_CONNECTION_MS) {
                 this.reconnectAttempts = 0;
