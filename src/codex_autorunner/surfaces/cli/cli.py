@@ -7,6 +7,7 @@ from ...core.hub import HubSupervisor as _HubSupervisor
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from .commands.cleanup import register_cleanup_commands
+from .commands.describe import register_describe_commands
 from .commands.dispatch import register_dispatch_commands
 from .commands.doctor import (
     _find_hub_server_process,  # noqa: F401
@@ -28,7 +29,10 @@ from .commands.protocol import register_protocol_commands
 from .commands.repos import register_repos_commands
 from .commands.root import _resolve_repo_api_path, register_root_commands  # noqa: F401
 from .commands.telegram import register_telegram_commands
-from .commands.templates import register_templates_commands
+from .commands.templates import (
+    register_template_index_commands,
+    register_templates_commands,
+)
 from .commands.utils import (
     build_hub_supervisor as _build_hub_supervisor,
 )
@@ -171,11 +175,21 @@ register_telegram_commands(
     require_optional_feature=_require_optional_feature,
 )
 app.add_typer(templates_app, name="templates")
+# UX alias: allow singular form (`car template ...`) in addition to `car templates ...`.
+app.add_typer(templates_app, name="template")
 app.add_typer(cleanup_app, name="cleanup")
 register_templates_commands(
     templates_app,
     require_repo_config=_require_repo_config,
     require_templates_enabled=_require_templates_enabled,
+    raise_exit=_raise_exit,
+    resolve_hub_config_path_for_cli=_resolve_hub_config_path_for_cli,
+)
+
+register_template_index_commands(
+    templates_app,
+    require_repo_config=_require_repo_config,
+    require_hub_config=_require_hub_config,
     raise_exit=_raise_exit,
     resolve_hub_config_path_for_cli=_resolve_hub_config_path_for_cli,
 )
@@ -205,6 +219,11 @@ app.add_typer(ticket_flow_app, name="ticket-flow")
 flow_app.add_typer(ticket_flow_app, name="ticket_flow")
 app.add_typer(pma_cli_app, name="pma")
 register_root_commands(app)
+register_describe_commands(
+    app,
+    require_repo_config=_require_repo_config,
+    raise_exit=_raise_exit,
+)
 
 
 FLOW_COMMANDS = register_flow_commands(

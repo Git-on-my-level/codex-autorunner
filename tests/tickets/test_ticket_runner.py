@@ -11,7 +11,10 @@ from codex_autorunner.tickets.models import (
     DEFAULT_MAX_TOTAL_TURNS,
     TicketRunConfig,
 )
-from codex_autorunner.tickets.runner import TicketRunner
+from codex_autorunner.tickets.runner import (
+    TICKET_CONTEXT_TOTAL_MAX_BYTES,
+    TicketRunner,
+)
 
 
 def _write_ticket(
@@ -20,11 +23,13 @@ def _write_ticket(
     agent: str = "codex",
     done: bool = False,
     body: str = "Do the thing",
+    frontmatter_extra: str = "",
 ) -> None:
     text = (
         "---\n"
         f"agent: {agent}\n"
         f"done: {str(done).lower()}\n"
+        f"{frontmatter_extra}"
         "title: Test\n"
         "goal: Finish the test\n"
         "---\n\n"
@@ -115,6 +120,186 @@ async def test_ticket_runner_pauses_when_no_tickets(tmp_path: Path) -> None:
     result = await runner.step({})
     assert result.status == "paused"
     assert "No tickets found" in (result.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_fails_when_required_context_file_missing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(
+        ticket_path,
+        frontmatter_extra=(
+            "context:\n" "  - path: docs/missing.md\n" "    required: true\n"
+        ),
+    )
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv",
+            turn_id="t1",
+            text="noop",
+        )
+    )
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+    assert result.status == "failed"
+    assert "Required ticket context file missing" in (result.reason or "")
+    assert "docs/missing.md" in (result.reason_details or "")
+    assert len(pool.requests) == 0
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_marks_non_required_missing_context_in_prompt(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(
+        ticket_path,
+        frontmatter_extra=(
+            "context:\n" "  - path: docs/optional-missing.md\n" "    required: false\n"
+        ),
+    )
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv",
+            turn_id="t1",
+            text="ok",
+        )
+    )
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+    assert result.status == "continue"
+    assert len(pool.requests) == 1
+    prompt = pool.requests[0].prompt
+    assert "<CAR_REQUESTED_CONTEXT>" in prompt
+    assert "docs/optional-missing.md" in prompt
+    assert "status: missing" in prompt
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_includes_read_error_for_binary_context_file(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    docs_dir = workspace_root / "docs"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    binary_path = docs_dir / "binary.txt"
+    binary_path.write_bytes(b"\xff\xfe\x00")
+
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(
+        ticket_path,
+        frontmatter_extra=(
+            "context:\n" "  - path: docs/binary.txt\n" "    required: false\n"
+        ),
+    )
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv",
+            turn_id="t1",
+            text="ok",
+        )
+    )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+    assert result.status == "continue"
+    assert len(pool.requests) == 1
+    prompt = pool.requests[0].prompt
+    assert "docs/binary.txt" in prompt
+    assert "read_error" in prompt
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_requested_context_respects_size_caps(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    docs_dir = workspace_root / "docs"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "large.txt").write_text("A" * (TICKET_CONTEXT_TOTAL_MAX_BYTES * 2))
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(
+        ticket_path,
+        frontmatter_extra=(
+            "context:\n"
+            "  - path: docs/large.txt\n"
+            f"    max_bytes: {TICKET_CONTEXT_TOTAL_MAX_BYTES * 2}\n"
+        ),
+    )
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv",
+            turn_id="t1",
+            text="ok",
+        )
+    )
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+    assert result.status == "continue"
+    prompt = pool.requests[0].prompt
+    start = prompt.index("<CAR_REQUESTED_CONTEXT>") + len("<CAR_REQUESTED_CONTEXT>\n")
+    end = prompt.index("</CAR_REQUESTED_CONTEXT>")
+    section = prompt[start:end].rstrip("\n")
+    assert len(section.encode("utf-8")) <= TICKET_CONTEXT_TOTAL_MAX_BYTES
 
 
 @pytest.mark.asyncio

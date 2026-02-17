@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from ..agents.registry import validate_agent_id
-from .models import TicketFrontmatter
+from .models import TicketContextEntry, TicketFrontmatter
 
 # Accept TICKET-###.md or TICKET-###<suffix>.md (suffix optional), case-insensitive.
 _TICKET_NAME_RE = re.compile(r"^TICKET-(\d{3,})(?:[^/]*)\.md$", re.IGNORECASE)
@@ -27,6 +27,65 @@ def _as_optional_str(value: Any) -> Optional[str]:
         cleaned = value.strip()
         return cleaned or None
     return None
+
+
+def _parse_context_entries(
+    raw: Any,
+) -> Tuple[tuple[TicketContextEntry, ...], list[str]]:
+    errors: list[str] = []
+    if raw is None:
+        return (), errors
+    if not isinstance(raw, list):
+        return (), ["frontmatter.context must be a list when provided."]
+
+    entries: list[TicketContextEntry] = []
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            errors.append(f"frontmatter.context[{idx}] must be a mapping.")
+            continue
+
+        path_raw = item.get("path")
+        path = _as_optional_str(path_raw)
+        if not path:
+            errors.append(f"frontmatter.context[{idx}].path is required.")
+            continue
+        if path.startswith("/"):
+            errors.append(f"frontmatter.context[{idx}].path must be repo-relative.")
+            continue
+        if "\\" in path:
+            errors.append(
+                f"frontmatter.context[{idx}].path may not include backslashes."
+            )
+            continue
+        if ".." in Path(path).parts:
+            errors.append(
+                f"frontmatter.context[{idx}].path may not include parent traversal."
+            )
+            continue
+
+        max_bytes_raw = item.get("max_bytes")
+        max_bytes: Optional[int] = None
+        if max_bytes_raw is not None:
+            if isinstance(max_bytes_raw, int) and max_bytes_raw > 0:
+                max_bytes = max_bytes_raw
+            else:
+                errors.append(
+                    f"frontmatter.context[{idx}].max_bytes must be a positive integer when provided."
+                )
+                continue
+
+        required_raw = item.get("required", False)
+        if not isinstance(required_raw, bool):
+            errors.append(
+                f"frontmatter.context[{idx}].required must be a boolean when provided."
+            )
+            continue
+
+        entries.append(
+            TicketContextEntry(path=path, max_bytes=max_bytes, required=required_raw)
+        )
+
+    return tuple(entries), errors
 
 
 def lint_ticket_frontmatter(
@@ -71,9 +130,11 @@ def lint_ticket_frontmatter(
     # Optional model/reasoning overrides.
     model = _as_optional_str(data.get("model"))
     reasoning = _as_optional_str(data.get("reasoning"))
+    context, context_errors = _parse_context_entries(data.get("context"))
+    errors.extend(context_errors)
 
     # Remove normalized keys from extra.
-    for key in ("agent", "done", "title", "goal", "model", "reasoning"):
+    for key in ("agent", "done", "title", "goal", "model", "reasoning", "context"):
         extra.pop(key, None)
 
     if errors:
@@ -89,6 +150,7 @@ def lint_ticket_frontmatter(
             goal=goal,
             model=model,
             reasoning=reasoning,
+            context=context,
             extra=extra,
         ),
         [],

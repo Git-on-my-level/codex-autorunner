@@ -90,7 +90,15 @@ def test_templates_apply_next_index_writes_file(hub_env, tmp_path: Path) -> None
     assert result.exit_code == 0
     created_path = ticket_dir / "TICKET-002.md"
     assert created_path.exists()
-    assert created_path.read_text(encoding="utf-8") == content
+    frontmatter, body = parse_markdown_frontmatter(
+        created_path.read_text(encoding="utf-8")
+    )
+    assert frontmatter["agent"] == "codex"
+    assert frontmatter["done"] is False
+    assert frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{branch}"
+    assert frontmatter["template_commit"]
+    assert frontmatter["template_blob"]
+    assert "Hello" in body
 
 
 def test_templates_apply_set_agent_overrides_frontmatter(
@@ -248,3 +256,50 @@ def test_templates_apply_without_provenance_no_metadata(
     # Original frontmatter keys should be preserved
     assert frontmatter["agent"] == "codex"
     assert frontmatter["done"] is False
+
+
+def test_template_apply_alias_with_out_writes_to_requested_directory(
+    hub_env, tmp_path: Path
+) -> None:
+    repo_path = tmp_path / "templates_repo"
+    branch = _init_repo(repo_path)
+    content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
+    _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+
+    _write_templates_config(
+        hub_env.hub_root,
+        enabled=True,
+        repos=[
+            {
+                "id": "local",
+                "url": str(repo_path),
+                "trusted": True,
+                "default_ref": branch,
+            }
+        ],
+    )
+
+    out_dir = hub_env.repo_root / ".codex-autorunner" / "tickets-out"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "template",
+            "apply",
+            "local:tickets/TICKET-REVIEW.md",
+            "--repo",
+            str(hub_env.repo_root),
+            "--out",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    created_path = out_dir / "TICKET-001.md"
+    assert created_path.exists()
+    frontmatter, _body = parse_markdown_frontmatter(
+        created_path.read_text(encoding="utf-8")
+    )
+    assert frontmatter["agent"] == "codex"
+    assert frontmatter["done"] is False
+    assert frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{branch}"
