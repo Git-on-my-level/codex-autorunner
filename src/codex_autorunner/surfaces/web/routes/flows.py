@@ -2,10 +2,12 @@ import json
 import logging
 import re
 import shutil
+import sqlite3
 import subprocess
 import threading
 import uuid
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import IO, Dict, Optional, Tuple, Union
 from urllib.parse import quote
@@ -71,6 +73,8 @@ from ..schemas import (
 _logger = logging.getLogger(__name__)
 
 _supported_flow_types = ("ticket_flow",)
+_FLOW_DB_CORRUPT_SUFFIX = ".corrupt"
+_FLOW_DB_NOTICE_SUFFIX = ".corrupt.json"
 
 
 @dataclass
@@ -87,6 +91,110 @@ class FlowRoutesState:
         self.controller_cache = {}
         self.definition_cache = {}
         self.lock = threading.Lock()
+
+
+def _utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _is_probably_corrupt_flow_db_error(exc: Exception, db_path: Path) -> bool:
+    if not isinstance(exc, sqlite3.Error):
+        return False
+    msg = str(exc).lower()
+    if "file is not a database" in msg or "database disk image is malformed" in msg:
+        return True
+    if "disk i/o error" in msg:
+        try:
+            header = db_path.read_bytes()[:16]
+        except Exception:
+            return False
+        return header not in (b"", b"SQLite format 3\x00")
+    return False
+
+
+def _rotate_corrupt_flow_db(db_path: Path, detail: str) -> Optional[Path]:
+    stamp = _utc_stamp()
+    backup_path = db_path.with_name(f"{db_path.name}{_FLOW_DB_CORRUPT_SUFFIX}.{stamp}")
+    notice_path = db_path.with_name(f"{db_path.name}{_FLOW_DB_NOTICE_SUFFIX}")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_value: str = ""
+    if db_path.exists():
+        try:
+            db_path.replace(backup_path)
+            backup_value = str(backup_path)
+        except Exception:
+            backup_value = ""
+
+    for suffix in ("-wal", "-shm"):
+        sidecar = db_path.with_name(f"{db_path.name}{suffix}")
+        try:
+            sidecar.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    notice = {
+        "status": "corrupt",
+        "message": "Flow store reset due to corrupted flows.db.",
+        "detail": detail,
+        "detected_at": stamp,
+        "backup_path": backup_value,
+    }
+    try:
+        atomic_write(notice_path, json.dumps(notice, indent=2) + "\n")
+    except Exception:
+        _logger.warning("Failed to write flow DB corruption notice at %s", notice_path)
+    return backup_path if backup_value else None
+
+
+def _evict_cached_controller(
+    repo_root: Path, flow_type: str, state: FlowRoutesState
+) -> None:
+    key = (repo_root.resolve(), flow_type)
+    with state.lock:
+        controller = state.controller_cache.pop(key, None)
+    if not controller:
+        return
+    try:
+        controller.shutdown()
+    except Exception:
+        pass
+
+
+def _recover_flow_store_if_possible(
+    repo_root: Path,
+    flow_type: str,
+    state: FlowRoutesState,
+    exc: Exception,
+) -> bool:
+    db_path, _ = _flow_paths(repo_root)
+    if not _is_probably_corrupt_flow_db_error(exc, db_path):
+        return False
+
+    backup_path = _rotate_corrupt_flow_db(db_path, str(exc))
+    _evict_cached_controller(repo_root, flow_type, state)
+    store = FlowStore(db_path)
+    try:
+        store.initialize()
+        _logger.warning(
+            "Recovered corrupted flow DB at %s (backup=%s, reason=%s)",
+            db_path,
+            str(backup_path) if backup_path else "unavailable",
+            exc,
+        )
+        return True
+    except Exception as recover_exc:
+        _logger.warning(
+            "Flow DB recovery failed at %s after error %s: %s",
+            db_path,
+            exc,
+            recover_exc,
+        )
+        return False
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -276,24 +384,51 @@ def _get_flow_controller(
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
     with state.lock:
-        if key in state.controller_cache:
-            return state.controller_cache[key]
+        cached = state.controller_cache.get(key)
+    if cached is not None:
+        try:
+            cached.initialize()
+            return cached
+        except Exception as exc:
+            if not _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+                _evict_cached_controller(repo_root, flow_type, state)
+                _logger.warning("Failed to initialize cached flow controller: %s", exc)
+                raise HTTPException(
+                    status_code=503,
+                    detail="Flows unavailable; initialize the repo first.",
+                ) from exc
 
     db_path, artifacts_root = _flow_paths(repo_root)
     definition = _build_flow_definition(repo_root, flow_type, state)
 
-    controller = FlowController(
-        definition=definition,
-        db_path=db_path,
-        artifacts_root=artifacts_root,
-    )
+    def _new_controller() -> FlowController:
+        return FlowController(
+            definition=definition,
+            db_path=db_path,
+            artifacts_root=artifacts_root,
+        )
+
+    controller = _new_controller()
     try:
         controller.initialize()
     except Exception as exc:
-        _logger.warning("Failed to initialize flow controller: %s", exc)
-        raise HTTPException(
-            status_code=503, detail="Flows unavailable; initialize the repo first."
-        ) from exc
+        if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+            controller = _new_controller()
+            try:
+                controller.initialize()
+            except Exception as retry_exc:
+                _logger.warning(
+                    "Failed to initialize flow controller after recovery: %s", retry_exc
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Flows unavailable; initialize the repo first.",
+                ) from retry_exc
+        else:
+            _logger.warning("Failed to initialize flow controller: %s", exc)
+            raise HTTPException(
+                status_code=503, detail="Flows unavailable; initialize the repo first."
+            ) from exc
     with state.lock:
         state.controller_cache[key] = controller
     return controller
@@ -305,6 +440,10 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
         raise HTTPException(status_code=503, detail="Flows database unavailable")
     try:
         record = store.get_flow_run(run_id)
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=503, detail="Flows database unavailable"
+        ) from exc
     finally:
         try:
             store.close()
@@ -746,11 +885,27 @@ def build_flow_routes() -> APIRouter:
 
         run_id = _normalize_run_id(uuid.uuid4())
 
-        record = await controller.start_flow(
-            input_data=request.input_data,
-            run_id=run_id,
-            metadata=request.metadata,
-        )
+        try:
+            record = await controller.start_flow(
+                input_data=request.input_data,
+                run_id=run_id,
+                metadata=request.metadata,
+            )
+        except Exception as exc:
+            if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+                controller = _get_flow_controller(repo_root, flow_type, state)
+                run_id = _normalize_run_id(uuid.uuid4())
+                record = await controller.start_flow(
+                    input_data=request.input_data,
+                    run_id=run_id,
+                    metadata=request.metadata,
+                )
+            elif isinstance(exc, sqlite3.Error):
+                raise HTTPException(
+                    status_code=503, detail="Flows database unavailable"
+                ) from exc
+            else:
+                raise
 
         _start_flow_worker(repo_root, run_id, state)
 
