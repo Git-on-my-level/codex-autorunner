@@ -21,8 +21,8 @@ importers:
         specifier: ^17.3.0
         version: 17.3.0
       html-validate:
-        specifier: ^10.7.0
-        version: 10.7.0
+        specifier: ^10.8.0
+        version: 10.8.0
       jsdom:
         specifier: ^28.1.0
         version: 28.1.0
@@ -237,8 +237,8 @@ packages:
   ajv@6.12.6:
     resolution: {integrity: sha512-j3fVLgvTo527anyYyJOGTYJbG+vnnQYvE0m5mmkc1TK+nxAppkCLMIL0aZ4dblVCNoGShhm+kzE4ZUykBoMg4g==}
 
-  ajv@8.17.1:
-    resolution: {integrity: sha512-B/gBuNg5SiMTrPkC+A2+cW0RszwxYmn6VYxB/inlBStS5nx6xHIt/ehKRhIMhqusl7a8LjQoZnjCs5vhwxOQ1g==}
+  ajv@8.18.0:
+    resolution: {integrity: sha512-PlXPeEWMXMZ7sPYOHqmDyCJzcfNrUr3fGNKtezX14ykXOEIvyK81d+qydx89KY5O71FKMPaQ2vBfBFI5NHR63A==}
 
   ansi-styles@4.3.0:
     resolution: {integrity: sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg==}
@@ -430,8 +430,8 @@ packages:
     resolution: {integrity: sha512-CV9TW3Y3f8/wT0BRFc1/KAVQ3TUHiXmaAb6VW9vtiMFf7SLoMd1PdAc4W3KFOFETBJUb90KatHqlsZMWV+R9Gg==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
 
-  html-validate@10.7.0:
-    resolution: {integrity: sha512-OdHvkFEHVK0uFUF6OM/SwDXvFu8WIgKPEw4VTgJZ2yQ1tkS2CydTV2bOfGoR8tZgu3I9Y8iJH0mGteDS78KQUA==}
+  html-validate@10.8.0:
+    resolution: {integrity: sha512-SJzCC9XzYOvyJWSHWYwXwqi8WIg6LcO3Pz+MGyxOSkMYiNerkUm/pv4uJsOM2pfHObX4r8EcPyhSjQ7jCdajnw==}
     engines: {node: ^20.19.0 || >= 22.12.0}
     hasBin: true
     peerDependencies:
@@ -623,11 +623,6 @@ packages:
   saxes@6.0.0:
     resolution: {integrity: sha512-xAg7SOnEhrm5zI3puOOKyy1OMcMlIJZYNJY7xLBwSze0UjhPLnWfj2GF2EpT0jmzaJKIWKHLsaSSajf35bcYnA==}
     engines: {node: '>=v12.22.7'}
-
-  semver@7.7.3:
-    resolution: {integrity: sha512-SdsKMrI9TdgjdweUSR9MweHA4EJ8YxHn8DFaDisvhVlUOe4BF1tLD7GAj0lIqWVl+dPb/rExr0Btby5loQm20Q==}
-    engines: {node: '>=10'}
-    hasBin: true
 
   semver@7.7.4:
     resolution: {integrity: sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==}
@@ -855,9 +850,9 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@sidvind/better-ajv-errors@4.0.1(ajv@8.17.1)':
+  '@sidvind/better-ajv-errors@4.0.1(ajv@8.18.0)':
     dependencies:
-      ajv: 8.17.1
+      ajv: 8.18.0
       kleur: 4.1.5
 
   '@types/estree@1.0.8': {}
@@ -970,7 +965,7 @@ snapshots:
       json-schema-traverse: 0.4.1
       uri-js: 4.4.1
 
-  ajv@8.17.1:
+  ajv@8.18.0:
     dependencies:
       fast-deep-equal: 3.1.3
       fast-uri: 3.1.0
@@ -1174,16 +1169,16 @@ snapshots:
     transitivePeerDependencies:
       - '@noble/hashes'
 
-  html-validate@10.7.0:
+  html-validate@10.8.0:
     dependencies:
       '@html-validate/stylish': 4.3.0
-      '@sidvind/better-ajv-errors': 4.0.1(ajv@8.17.1)
-      ajv: 8.17.1
+      '@sidvind/better-ajv-errors': 4.0.1(ajv@8.18.0)
+      ajv: 8.18.0
       glob: 13.0.5
       kleur: 4.1.5
       minimist: 1.2.8
       prompts: 2.4.2
-      semver: 7.7.3
+      semver: 7.7.4
 
   http-proxy-agent@7.0.2:
     dependencies:
@@ -1354,8 +1349,6 @@ snapshots:
   saxes@6.0.0:
     dependencies:
       xmlchars: 2.2.0
-
-  semver@7.7.3: {}
 
   semver@7.7.4: {}
 
