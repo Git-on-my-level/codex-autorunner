@@ -2467,6 +2467,17 @@ Summary applied.""",
         if not repo_ref:
             repo_ref = DEFAULT_UPDATE_REPO_REF
         update_dir = resolve_update_paths().cache_dir
+        update_backend = str(getattr(self, "_update_backend", "auto") or "auto")
+        update_services = getattr(self, "_update_linux_service_names", None)
+        linux_hub_service_name: Optional[str] = None
+        linux_telegram_service_name: Optional[str] = None
+        if isinstance(update_services, dict):
+            hub_service = update_services.get("hub")
+            telegram_service = update_services.get("telegram")
+            if isinstance(hub_service, str) and hub_service.strip():
+                linux_hub_service_name = hub_service.strip()
+            if isinstance(telegram_service, str) and telegram_service.strip():
+                linux_telegram_service_name = telegram_service.strip()
         notify_reply_to = reply_to
         if notify_reply_to is None and callback is not None:
             notify_reply_to = callback.message_id
@@ -2478,6 +2489,9 @@ Summary applied.""",
                 logger=self._logger,
                 update_target=update_target,
                 skip_checks=bool(getattr(self, "_update_skip_checks", False)),
+                update_backend=update_backend,
+                linux_hub_service_name=linux_hub_service_name,
+                linux_telegram_service_name=linux_telegram_service_name,
                 notify_chat_id=chat_id,
                 notify_thread_id=thread_id,
                 notify_reply_to=notify_reply_to,

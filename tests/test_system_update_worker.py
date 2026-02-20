@@ -25,6 +25,36 @@ def test_normalize_update_target(raw: str | None, expected: str) -> None:
     assert system._normalize_update_target(raw) == expected
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, "auto"),
+        ("", "auto"),
+        ("AUTO", "auto"),
+        ("launchd", "launchd"),
+        ("systemd-user", "systemd-user"),
+    ],
+)
+def test_normalize_update_backend(raw: str | None, expected: str) -> None:
+    assert system._normalize_update_backend(raw) == expected
+
+
+def test_resolve_update_backend_auto_linux(monkeypatch) -> None:
+    monkeypatch.setattr(system.sys, "platform", "linux", raising=False)
+    assert system._resolve_update_backend("auto") == "systemd-user"
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected"),
+    [
+        ("launchd", ("git", "bash", "curl", "launchctl")),
+        ("systemd-user", ("git", "bash", "curl", "systemctl")),
+    ],
+)
+def test_required_update_commands(backend: str, expected: tuple[str, ...]) -> None:
+    assert system._required_update_commands(backend) == expected
+
+
 def test_update_lock_active_clears_stale(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     lock_path = system._update_lock_path()
@@ -55,6 +85,9 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
         update_dir=update_dir,
         logger=logger,
         update_target="web",
+        update_backend="systemd-user",
+        linux_hub_service_name="car-hub",
+        linux_telegram_service_name="car-telegram",
     )
 
     status_path = system._update_status_path()
@@ -64,6 +97,10 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     cmd = calls["cmd"]
     assert "--repo-url" in cmd
     assert str(update_dir) in cmd
+    assert "--backend" in cmd
+    assert "systemd-user" in cmd
+    assert "--hub-service-name" in cmd
+    assert "car-hub" in cmd
 
 
 def test_system_update_worker_rejects_invalid_target(
@@ -85,6 +122,27 @@ def test_system_update_worker_rejects_invalid_target(
     assert payload["status"] == "error"
 
 
+def test_system_update_worker_rejects_invalid_backend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    logger = logging.getLogger("test")
+    update_dir = tmp_path / "update"
+
+    system._system_update_worker(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=update_dir,
+        logger=logger,
+        update_target="web",
+        update_backend="invalid-backend",
+    )
+
+    payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
+    assert payload["status"] == "error"
+    assert "Unsupported update backend" in str(payload["message"])
+
+
 def test_system_update_worker_missing_commands_releases_lock(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -104,3 +162,38 @@ def test_system_update_worker_missing_commands_releases_lock(
     payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
     assert payload["status"] == "error"
     assert not system._update_lock_path().exists()
+
+
+@pytest.mark.parametrize(
+    ("backend", "missing_cmd"),
+    [
+        ("launchd", "launchctl"),
+        ("systemd-user", "systemctl"),
+    ],
+)
+def test_system_update_worker_backend_specific_missing_command(
+    tmp_path: Path, monkeypatch, backend: str, missing_cmd: str
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def fake_which(cmd: str) -> str | None:
+        if cmd == missing_cmd:
+            return None
+        return f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr(system.shutil, "which", fake_which)
+    logger = logging.getLogger("test")
+    update_dir = tmp_path / "update"
+
+    system._system_update_worker(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=update_dir,
+        logger=logger,
+        update_target="web",
+        update_backend=backend,
+    )
+
+    payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
+    assert payload["status"] == "error"
+    assert missing_cmd in str(payload["message"])

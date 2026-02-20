@@ -314,6 +314,11 @@
       "editor": "vi"
     },
     "update": {
+      "backend": "auto",
+      "linux_service_names": {
+        "hub": "car-hub",
+        "telegram": "car-telegram"
+      },
       "skip_checks": false
     },
     "usage": {
@@ -464,6 +469,11 @@
     "idle_timeout_seconds": 43200
   },
   "update": {
+    "backend": "auto",
+    "linux_service_names": {
+      "hub": "car-hub",
+      "telegram": "car-telegram"
+    },
     "skip_checks": false
   },
   "usage": {

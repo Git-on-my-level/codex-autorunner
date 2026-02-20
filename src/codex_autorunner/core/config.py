@@ -260,7 +260,34 @@ def _default_update_section() -> Dict[str, Any]:
     """Build the default update section."""
     return {
         "skip_checks": False,
+        "backend": "auto",
+        "linux_service_names": _default_update_linux_service_names(),
     }
+
+
+def _default_update_linux_service_names() -> Dict[str, str]:
+    return {
+        "hub": "car-hub",
+        "telegram": "car-telegram",
+    }
+
+
+def _parse_update_backend(update_cfg: Mapping[str, Any]) -> str:
+    raw = update_cfg.get("backend", "auto")
+    value = str(raw).strip().lower()
+    return value or "auto"
+
+
+def _parse_update_linux_service_names(update_cfg: Mapping[str, Any]) -> Dict[str, str]:
+    merged = dict(_default_update_linux_service_names())
+    raw = update_cfg.get("linux_service_names")
+    if not isinstance(raw, dict):
+        return merged
+    for key in ("hub", "telegram"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            merged[key] = value.strip()
+    return merged
 
 
 def _default_housekeeping_rules_basic() -> list:
@@ -851,6 +878,8 @@ class RepoConfig:
     git_auto_commit: bool
     git_commit_message_template: str
     update_skip_checks: bool
+    update_backend: str
+    update_linux_service_names: Dict[str, str]
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     usage: UsageConfig
@@ -906,6 +935,8 @@ class HubConfig:
     update_repo_url: str
     update_repo_ref: str
     update_skip_checks: bool
+    update_backend: str
+    update_linux_service_names: Dict[str, str]
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     pma: PmaConfig
@@ -1883,6 +1914,8 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
     update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    update_backend = _parse_update_backend(update_cfg)
+    update_linux_service_names = _parse_update_linux_service_names(update_cfg)
     autorunner_cfg = cfg.get("autorunner")
     autorunner_cfg = cast(
         Dict[str, Any], autorunner_cfg if isinstance(autorunner_cfg, dict) else {}
@@ -1918,6 +1951,8 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
         update_skip_checks=update_skip_checks,
+        update_backend=update_backend,
+        update_linux_service_names=update_linux_service_names,
         ticket_flow=_parse_ticket_flow_config(
             cfg.get("ticket_flow"),
             cast(Dict[str, Any], DEFAULT_REPO_CONFIG.get("ticket_flow")),
@@ -2013,6 +2048,8 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
     update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    update_backend = _parse_update_backend(update_cfg)
+    update_linux_service_names = _parse_update_linux_service_names(update_cfg)
     storage_cfg = cfg.get("storage")
     storage_cfg = cast(
         Dict[str, Any], storage_cfg if isinstance(storage_cfg, dict) else {}
@@ -2039,6 +2076,8 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
         update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
         update_skip_checks=update_skip_checks,
+        update_backend=update_backend,
+        update_linux_service_names=update_linux_service_names,
         durable_writes=durable_writes,
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
@@ -2285,9 +2324,34 @@ def _validate_update_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(update_cfg, dict):
         raise ConfigError("update section must be a mapping if provided")
+    backend = update_cfg.get("backend")
+    if backend is not None:
+        if not isinstance(backend, str):
+            raise ConfigError("update.backend must be a string")
+        if backend.strip().lower() not in {"auto", "launchd", "systemd-user"}:
+            raise ConfigError(
+                "update.backend must be one of: auto, launchd, systemd-user"
+            )
     if "skip_checks" in update_cfg and update_cfg.get("skip_checks") is not None:
         if not isinstance(update_cfg.get("skip_checks"), bool):
             raise ConfigError("update.skip_checks must be boolean or null")
+    linux_services = update_cfg.get("linux_service_names")
+    if linux_services is None:
+        return
+    if not isinstance(linux_services, dict):
+        raise ConfigError("update.linux_service_names must be a mapping if provided")
+    hub_service = linux_services.get("hub")
+    telegram_service = linux_services.get("telegram")
+    if hub_service is not None:
+        if not isinstance(hub_service, str) or not hub_service.strip():
+            raise ConfigError(
+                "update.linux_service_names.hub must be a non-empty string"
+            )
+    if telegram_service is not None:
+        if not isinstance(telegram_service, str) or not telegram_service.strip():
+            raise ConfigError(
+                "update.linux_service_names.telegram must be a non-empty string"
+            )
 
 
 def _validate_usage_config(cfg: Dict[str, Any], *, root: Path) -> None:
