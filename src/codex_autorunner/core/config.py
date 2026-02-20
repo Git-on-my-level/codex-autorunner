@@ -273,7 +273,9 @@ def _default_update_linux_service_names() -> Dict[str, str]:
 
 
 def _parse_update_backend(update_cfg: Mapping[str, Any]) -> str:
-    raw = update_cfg.get("backend", "auto")
+    raw = update_cfg.get("backend")
+    if raw is None:
+        return "auto"
     value = str(raw).strip().lower()
     return value or "auto"
 

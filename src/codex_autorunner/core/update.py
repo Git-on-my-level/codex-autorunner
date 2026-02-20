@@ -546,6 +546,9 @@ def _system_update_worker(
         env["UPDATE_STATUS_PATH"] = str(status_path)
         env["UPDATE_TARGET"] = update_target
         env["UPDATE_BACKEND"] = resolved_backend
+        # Keep install/status writes bound to the running service interpreter.
+        if sys.executable:
+            env["HELPER_PYTHON"] = sys.executable
         if resolved_backend == "systemd-user":
             if linux_hub_service_name:
                 env["UPDATE_HUB_SERVICE_NAME"] = linux_hub_service_name

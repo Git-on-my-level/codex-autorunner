@@ -197,3 +197,49 @@ def test_system_update_worker_backend_specific_missing_command(
     payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
     assert payload["status"] == "error"
     assert missing_cmd in str(payload["message"])
+
+
+def test_system_update_worker_sets_helper_python_for_refresh_script(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    update_dir = tmp_path / "update"
+    (update_dir / ".git").mkdir(parents=True)
+    refresh_script = update_dir / "scripts" / "safe-refresh-local-linux-hub.sh"
+    refresh_script.parent.mkdir(parents=True, exist_ok=True)
+    refresh_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    monkeypatch.setattr(system.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr(system.update_core, "_is_valid_git_repo", lambda _path: True)
+    monkeypatch.setattr(system.update_core, "_run_cmd", lambda *_args, **_kwargs: None)
+
+    captured_env: dict[str, str] = {}
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdout: list[str] = []
+            self.returncode = 0
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text):  # type: ignore[no-untyped-def]
+        captured_env.update(env)
+        return _Proc()
+
+    monkeypatch.setattr(system.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(system.sys, "executable", "/opt/car/bin/python3", raising=False)
+    logger = logging.getLogger("test")
+
+    system._system_update_worker(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=update_dir,
+        logger=logger,
+        update_target="web",
+        update_backend="systemd-user",
+        skip_checks=True,
+    )
+
+    assert captured_env["HELPER_PYTHON"] == "/opt/car/bin/python3"
