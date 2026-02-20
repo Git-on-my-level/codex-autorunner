@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -412,3 +414,147 @@ def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch):
     assert resp.status_code == 200
     payload = resp.json()
     assert "id" in payload
+
+
+def test_bootstrap_retries_when_flow_db_recovery_succeeds(tmp_path, monkeypatch):
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
+    monkeypatch.setattr(
+        flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: True
+    )
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+
+    class FailController:
+        async def start_flow(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+
+    class OkController:
+        def __init__(self, backing_store: FlowStore):
+            self.store = backing_store
+
+        async def start_flow(self, input_data, run_id, metadata=None):
+            return self.store.create_flow_run(
+                run_id=run_id,
+                flow_type="ticket_flow",
+                input_data=input_data or {},
+                metadata=metadata or {},
+                state={},
+                current_step="bootstrap",
+            )
+
+    calls = {"count": 0}
+
+    def fake_get_controller(_repo_root, _flow_type, _state):
+        calls["count"] += 1
+        return FailController() if calls["count"] == 1 else OkController(store)
+
+    monkeypatch.setattr(flow_routes, "_get_flow_controller", fake_get_controller)
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+
+    assert resp.status_code == 200
+    assert calls["count"] == 2
+    store.close()
+
+
+def test_bootstrap_returns_503_on_sqlite_error_without_recovery(tmp_path, monkeypatch):
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
+    monkeypatch.setattr(
+        flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: False
+    )
+
+    class FailController:
+        async def start_flow(self, *_args, **_kwargs):
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_get_flow_controller",
+        lambda _repo_root, _flow_type, _state: FailController(),
+    )
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Flows database unavailable"
+
+
+def test_bootstrap_returns_503_when_retry_attempt_hits_sqlite_error(
+    tmp_path, monkeypatch
+):
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
+    monkeypatch.setattr(
+        flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: True
+    )
+
+    class FirstFailController:
+        async def start_flow(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+
+    class RetryFailController:
+        async def start_flow(self, *_args, **_kwargs):
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
+    calls = {"count": 0}
+
+    def fake_get_controller(_repo_root, _flow_type, _state):
+        calls["count"] += 1
+        return FirstFailController() if calls["count"] == 1 else RetryFailController()
+
+    monkeypatch.setattr(flow_routes, "_get_flow_controller", fake_get_controller)
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+
+    assert calls["count"] == 2
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Flows database unavailable"
+
+
+def test_recover_flow_store_rotates_corrupt_db(tmp_path):
+    repo_root = Path(tmp_path)
+    runtime_dir = repo_root / ".codex-autorunner"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    db_path = runtime_dir / "flows.db"
+    db_path.write_bytes(b"\n\x01=\x00E\x00\xe9\x00")
+    (runtime_dir / "flows.db-wal").write_text("wal", encoding="utf-8")
+    (runtime_dir / "flows.db-shm").write_text("shm", encoding="utf-8")
+
+    recovered = flow_routes._recover_flow_store_if_possible(
+        repo_root,
+        "ticket_flow",
+        FlowRoutesState(),
+        sqlite3.DatabaseError("file is not a database"),
+    )
+
+    assert recovered is True
+    assert db_path.exists()
+    assert db_path.read_bytes()[:16] == b"SQLite format 3\x00"
+
+    backups = list(runtime_dir.glob("flows.db.corrupt.*"))
+    assert backups
+
+    notice_path = runtime_dir / "flows.db.corrupt.json"
+    assert notice_path.exists()
+    notice = json.loads(notice_path.read_text(encoding="utf-8"))
+    assert notice["status"] == "corrupt"
+    assert notice["backup_path"]
