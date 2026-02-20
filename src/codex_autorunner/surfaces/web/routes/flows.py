@@ -895,11 +895,16 @@ def build_flow_routes() -> APIRouter:
             if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
                 controller = _get_flow_controller(repo_root, flow_type, state)
                 run_id = _normalize_run_id(uuid.uuid4())
-                record = await controller.start_flow(
-                    input_data=request.input_data,
-                    run_id=run_id,
-                    metadata=request.metadata,
-                )
+                try:
+                    record = await controller.start_flow(
+                        input_data=request.input_data,
+                        run_id=run_id,
+                        metadata=request.metadata,
+                    )
+                except sqlite3.Error as retry_exc:
+                    raise HTTPException(
+                        status_code=503, detail="Flows database unavailable"
+                    ) from retry_exc
             elif isinstance(exc, sqlite3.Error):
                 raise HTTPException(
                     status_code=503, detail="Flows database unavailable"

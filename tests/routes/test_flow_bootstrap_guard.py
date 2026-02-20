@@ -493,6 +493,43 @@ def test_bootstrap_returns_503_on_sqlite_error_without_recovery(tmp_path, monkey
     assert resp.json()["detail"] == "Flows database unavailable"
 
 
+def test_bootstrap_returns_503_when_retry_attempt_hits_sqlite_error(
+    tmp_path, monkeypatch
+):
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
+    monkeypatch.setattr(
+        flow_routes, "_recover_flow_store_if_possible", lambda *_, **__: True
+    )
+
+    class FirstFailController:
+        async def start_flow(self, *_args, **_kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+
+    class RetryFailController:
+        async def start_flow(self, *_args, **_kwargs):
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
+    calls = {"count": 0}
+
+    def fake_get_controller(_repo_root, _flow_type, _state):
+        calls["count"] += 1
+        return FirstFailController() if calls["count"] == 1 else RetryFailController()
+
+    monkeypatch.setattr(flow_routes, "_get_flow_controller", fake_get_controller)
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+
+    assert calls["count"] == 2
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Flows database unavailable"
+
+
 def test_recover_flow_store_rotates_corrupt_db(tmp_path):
     repo_root = Path(tmp_path)
     runtime_dir = repo_root / ".codex-autorunner"
