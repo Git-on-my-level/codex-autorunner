@@ -24,7 +24,6 @@ from ...adapter import (
 )
 from ...config import AppServerUnavailableError
 from ...constants import (
-    AGENT_PICKER_PROMPT,
     BIND_PICKER_PROMPT,
     DEFAULT_AGENT,
     DEFAULT_AGENT_MODELS,
@@ -63,106 +62,21 @@ from ...helpers import (
 from ...state import APPROVAL_MODE_YOLO, normalize_agent
 from ...types import SelectionState
 from .shared import SharedHelpers
+from .workspace_utils import (
+    _extract_opencode_session_path,
+    _handle_agent_command,
+    _model_list_all_with_agent_compat,
+)
+from .workspace_utils import (
+    _model_list_with_agent_compat as _workspace_model_list_with_agent_compat,
+)
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
-_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
-_MODEL_LIST_MAX_PAGES = 10
 
-
-def _extract_opencode_session_path(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("directory", "path", "workspace_path", "workspacePath"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        for key in ("directory", "path", "workspace_path", "workspacePath"):
-            value = properties.get(key)
-            if isinstance(value, str) and value:
-                return value
-    session = payload.get("session")
-    if isinstance(session, dict):
-        return _extract_opencode_session_path(session)
-    return None
-
-
-async def _model_list_with_agent_compat(
-    client: CodexAppServerClient,
-    *,
-    params: dict[str, Any],
-) -> Any:
-    # Avoid sending explicit nulls (for example cursor=None), which can trigger
-    # different pagination behavior on some app-server builds.
-    request_params = {key: value for key, value in params.items() if value is not None}
-    requested_agent = request_params.get("agent")
-    if not isinstance(requested_agent, str) or not requested_agent:
-        requested_agent = None
-        request_params.pop("agent", None)
-    try:
-        return await client.model_list(**request_params)
-    except CodexAppServerResponseError as exc:
-        if requested_agent is None or exc.code not in _INVALID_PARAMS_ERROR_CODES:
-            raise
-        fallback_params = dict(request_params)
-        fallback_params.pop("agent", None)
-        return await client.model_list(**fallback_params)
-
-
-def _coerce_model_list_entries(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [entry for entry in payload if isinstance(entry, dict)]
-    if isinstance(payload, dict):
-        for key in ("data", "models", "items", "results"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [entry for entry in value if isinstance(entry, dict)]
-    return []
-
-
-def _extract_model_list_cursor(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("nextCursor", "next_cursor"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-async def _model_list_all_with_agent_compat(
-    client: CodexAppServerClient,
-    *,
-    params: dict[str, Any],
-    max_pages: int = _MODEL_LIST_MAX_PAGES,
-) -> list[dict[str, Any]]:
-    request_params = dict(params)
-    merged_entries: list[dict[str, Any]] = []
-    seen_model_ids: set[str] = set()
-    seen_cursors: set[str] = set()
-    pages = 0
-    while True:
-        pages += 1
-        payload = await _model_list_with_agent_compat(client, params=request_params)
-        for entry in _coerce_model_list_entries(payload):
-            model_id = entry.get("model") or entry.get("id")
-            if isinstance(model_id, str) and model_id:
-                if model_id in seen_model_ids:
-                    continue
-                seen_model_ids.add(model_id)
-            merged_entries.append(entry)
-        if pages >= max_pages:
-            break
-        next_cursor = _extract_model_list_cursor(payload)
-        if not next_cursor or next_cursor in seen_cursors:
-            break
-        seen_cursors.add(next_cursor)
-        request_params = dict(request_params)
-        request_params["cursor"] = next_cursor
-    return merged_entries
+# Backward-compatible symbols kept for external tests/importers.
+_model_list_with_agent_compat = _workspace_model_list_with_agent_compat
 
 
 @dataclass
@@ -252,98 +166,7 @@ class WorkspaceCommands(SharedHelpers):
     async def _handle_agent(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
-        record = await self._router.ensure_topic(message.chat_id, message.thread_id)
-        current = self._effective_agent(record)
-        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        self._agent_options.pop(key, None)
-        argv = self._parse_command_args(args)
-        if not argv:
-            availability = "available"
-            if not self._opencode_available():
-                availability = "missing binary"
-            items = []
-            for agent in ("codex", "opencode"):
-                if agent not in VALID_AGENT_VALUES:
-                    continue
-                label = agent
-                if agent == current:
-                    label = f"{label} (current)"
-                if agent == "opencode" and availability != "available":
-                    label = f"{label} ({availability})"
-                items.append((agent, label))
-            state = SelectionState(items=items)
-            keyboard = self._build_agent_keyboard(state)
-            self._agent_options[key] = state
-            self._touch_cache_timestamp("agent_options", key)
-            await self._send_message(
-                message.chat_id,
-                self._selection_prompt(AGENT_PICKER_PROMPT, state),
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                reply_markup=keyboard,
-            )
-            return
-        desired = normalize_agent(argv[0])
-        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
-        if workspace_path is None:
-            await self._send_message(
-                message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        try:
-            client = await self._client_for_workspace(workspace_path)
-        except AppServerUnavailableError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.app_server.unavailable",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                "App server unavailable; try again or check logs.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if client is None:
-            await self._send_message(
-                message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if desired == "opencode" and not self._opencode_available():
-            await self._send_message(
-                message.chat_id,
-                "OpenCode binary not found. Install opencode or switch to /agent codex.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if desired == current:
-            await self._send_message(
-                message.chat_id,
-                f"Agent already set to {current}.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        note = await self._apply_agent_change(
-            message.chat_id, message.thread_id, desired
-        )
-        await self._send_message(
-            message.chat_id,
-            f"Agent set to {desired}{note}.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
+        await _handle_agent_command(self, message, args)
 
     def _effective_policies(
         self, record: "TelegramTopicRecord"
