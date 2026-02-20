@@ -320,3 +320,32 @@ async def test_oversize_line_drops_and_preserves_tail(
         assert result["value"] == "ok"
     finally:
         await client.close()
+
+
+@pytest.mark.anyio
+async def test_small_line_is_not_dropped_before_oversize_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notifications: list[dict] = []
+
+    async def on_notification(message: dict) -> None:
+        notifications.append(message)
+
+    monkeypatch.setattr(app_server_client, "_MAX_MESSAGE_BYTES", 80)
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        notification_handler=on_notification,
+    )
+    try:
+        result = await client.request(
+            "fixture/notification_then_response", {"value": "ok"}
+        )
+        assert result["value"] == "ok"
+        assert any(
+            event.get("method") == "fixture/ping"
+            and event.get("params", {}).get("value") == "ok"
+            for event in notifications
+        )
+    finally:
+        await client.close()

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 
@@ -74,7 +74,12 @@ PMA_BULK_DELETE_SAMPLE_LIMIT = 10
 
 
 def build_pma_routes() -> APIRouter:
-    router = APIRouter(prefix="/hub/pma")
+    def _require_pma_enabled(request: Request) -> None:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+    router = APIRouter(prefix="/hub/pma", dependencies=[Depends(_require_pma_enabled)])
     pma_lock = asyncio.Lock()
     pma_event: Optional[asyncio.Event] = None
     pma_active = False
@@ -921,9 +926,6 @@ def build_pma_routes() -> APIRouter:
     async def pma_active_status(
         request: Request, client_turn_id: Optional[str] = None
     ) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         async with pma_lock:
             current = dict(pma_current or {})
             last_result = dict(pma_last_result or {})
@@ -957,9 +959,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/history")
     def list_pma_history(request: Request, limit: int = 50) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         store = PmaTranscriptStore(hub_root)
         entries = store.list_recent(limit=limit)
@@ -967,9 +966,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/history/{turn_id}")
     def get_pma_history(turn_id: str, request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         store = PmaTranscriptStore(hub_root)
         transcript = store.read_transcript(turn_id)
@@ -979,9 +975,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         if (
             getattr(request.app.state, "app_server_supervisor", None) is None
             and getattr(request.app.state, "opencode_supervisor", None) is None
@@ -1003,9 +996,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/audit/recent")
     def get_pma_audit_log(request: Request, limit: int = 100):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         safety_checker = _get_safety_checker(request)
         entries = safety_checker._audit_log.list_recent(limit=limit)
         return {
@@ -1029,17 +1019,11 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/safety/stats")
     def get_pma_safety_stats(request: Request):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         safety_checker = _get_safety_checker(request)
         return safety_checker.get_stats()
 
     @router.get("/agents/{agent}/models")
     async def list_pma_agent_models(agent: str, request: Request):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         agent_id = (agent or "").strip().lower()
         hub_root = request.app.state.config.root
         if agent_id == "codex":
@@ -1298,8 +1282,6 @@ def build_pma_routes() -> APIRouter:
     @router.post("/chat")
     async def pma_chat(request: Request):
         pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         body = await request.json()
         message = (body.get("message") or "").strip()
         stream = bool(body.get("stream", False))
@@ -1377,18 +1359,12 @@ def build_pma_routes() -> APIRouter:
 
     @router.post("/interrupt")
     async def pma_interrupt(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         return await _interrupt_active(
             request, reason="PMA chat interrupted", source="user_request"
         )
 
     @router.post("/stop")
     async def pma_stop(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
 
         body = await request.json() if request.headers.get("content-type") else {}
         lane_id = (body.get("lane_id") or "pma:default").strip()
@@ -1415,9 +1391,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.post("/new")
     async def new_pma_session(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
 
         body = await request.json()
         agent = _normalize_optional_text(body.get("agent"))
@@ -1442,9 +1415,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.post("/reset")
     async def reset_pma_session(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
 
         body = await request.json() if request.headers.get("content-type") else {}
         raw_agent = (body.get("agent") or "").strip().lower()
@@ -1469,9 +1439,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.post("/compact")
     async def compact_pma_history(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
 
         body = await request.json()
         summary = (body.get("summary") or "").strip()
@@ -1502,9 +1469,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.post("/thread/reset")
     async def reset_pma_thread(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         body = await request.json()
         raw_agent = (body.get("agent") or "").strip().lower()
         agent = raw_agent or None
@@ -1529,9 +1493,6 @@ def build_pma_routes() -> APIRouter:
     async def stream_pma_turn_events(
         turn_id: str, request: Request, thread_id: str, agent: str = "codex"
     ):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         agent_id = (agent or "").strip().lower()
         if agent_id == "codex":
             events = getattr(request.app.state, "app_server_events", None)
@@ -1580,9 +1541,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/files")
     def list_pma_files(request: Request) -> dict[str, list[dict[str, Any]]]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         result: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
         listing = filebox.list_filebox(hub_root, include_legacy=True)
@@ -1596,9 +1554,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/queue")
     async def pma_queue_status(request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
 
         queue = _get_pma_queue(request)
         summary = await queue.get_queue_summary()
@@ -1606,9 +1561,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/queue/{lane_id:path}")
     async def pma_lane_queue_status(request: Request, lane_id: str) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
 
         queue = _get_pma_queue(request)
         items = await queue.list_items(lane_id)
@@ -1630,9 +1582,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.post("/files/{box}")
     async def upload_pma_file(box: str, request: Request):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
@@ -1686,9 +1635,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/files/{box}/{filename}")
     def download_pma_file(box: str, filename: str, request: Request):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
@@ -1712,9 +1658,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.delete("/files/{box}/{filename}")
     def delete_pma_file(box: str, filename: str, request: Request):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
@@ -1746,9 +1689,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.delete("/files/{box}")
     def delete_pma_box(box: str, request: Request):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
@@ -1772,9 +1712,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.post("/context/snapshot")
     def snapshot_pma_context(request: Request, body: Optional[dict[str, Any]] = None):
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         try:
             ensure_pma_docs(hub_root)
@@ -1915,9 +1852,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/docs/default/{name}")
     def get_pma_doc_default(name: str, request: Request) -> dict[str, str]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         if name not in PMA_DOC_SET:
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         content_fn = PMA_DOC_DEFAULTS.get(name)
@@ -1928,8 +1862,6 @@ def build_pma_routes() -> APIRouter:
     @router.get("/docs")
     def list_pma_docs(request: Request) -> dict[str, Any]:
         pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         try:
             ensure_pma_docs(hub_root)
@@ -1969,9 +1901,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/docs/{name}")
     def get_pma_doc(name: str, request: Request) -> dict[str, str]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
         doc_path = pma_doc_path(hub_root, name)
@@ -1989,9 +1918,6 @@ def build_pma_routes() -> APIRouter:
     def update_pma_doc(
         name: str, request: Request, body: dict[str, str]
     ) -> dict[str, str]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
         docs_dir = _pma_docs_dir(hub_root)
@@ -2031,9 +1957,6 @@ def build_pma_routes() -> APIRouter:
     def list_pma_doc_history(
         name: str, request: Request, limit: int = 50
     ) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         name = _normalize_doc_name(name)
         hub_root = request.app.state.config.root
         docs_dir = _pma_docs_dir(hub_root)
@@ -2069,9 +1992,6 @@ def build_pma_routes() -> APIRouter:
     def get_pma_doc_history(
         name: str, version_id: str, request: Request
     ) -> dict[str, str]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         name = _normalize_doc_name(name)
         version_id = _normalize_doc_name(version_id)
         hub_root = request.app.state.config.root
@@ -2091,9 +2011,6 @@ def build_pma_routes() -> APIRouter:
     def list_pma_dispatches_endpoint(
         request: Request, include_resolved: bool = False, limit: int = 100
     ) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         dispatches = list_pma_dispatches(
             hub_root, include_resolved=include_resolved, limit=limit
@@ -2116,9 +2033,6 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/dispatches/{dispatch_id}")
     def get_pma_dispatch(dispatch_id: str, request: Request) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         path = find_pma_dispatch_path(hub_root, dispatch_id)
         if not path:
@@ -2145,9 +2059,6 @@ def build_pma_routes() -> APIRouter:
     def resolve_pma_dispatch_endpoint(
         dispatch_id: str, request: Request
     ) -> dict[str, Any]:
-        pma_config = _get_pma_config(request)
-        if not pma_config.get("enabled", True):
-            raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         path = find_pma_dispatch_path(hub_root, dispatch_id)
         if not path:

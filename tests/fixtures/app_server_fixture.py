@@ -471,6 +471,21 @@ class FixtureServer:
                 sys.stdout.write(f"{oversized_line}\n{response_line}\n")
                 sys.stdout.flush()
             return
+        if method == "fixture/notification_then_response":
+            notification_payload = {
+                "method": "fixture/ping",
+                "params": {"value": params.get("value")},
+            }
+            response_payload = {
+                "id": req_id,
+                "result": {"value": params.get("value")},
+            }
+            notification_line = json.dumps(notification_payload, separators=(",", ":"))
+            response_line = json.dumps(response_payload, separators=(",", ":"))
+            with self._lock:
+                sys.stdout.write(f"{notification_line}\n{response_line}\n")
+                sys.stdout.flush()
+            return
         if method == "fixture/echo_no_newline":
             payload = {
                 "id": req_id,
