@@ -6,7 +6,7 @@ import ipaddress
 from pathlib import Path
 from typing import Any, Dict, Tuple, Type, Union
 
-from .config import (
+from .config_contract import (
     _TICKET_FLOW_APPROVAL_MODE_ALIASES,
     _TICKET_FLOW_APPROVAL_MODE_ALLOWED,
     CONFIG_VERSION,

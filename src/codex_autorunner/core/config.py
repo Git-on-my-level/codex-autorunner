@@ -10,6 +10,7 @@ from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
 import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
+from .config_contract import CONFIG_VERSION, ConfigError
 from .path_utils import ConfigPathError, resolve_config_path
 from .utils import atomic_write
 
@@ -45,7 +46,6 @@ CONFIG_FILENAME = ".codex-autorunner/config.yml"
 ROOT_CONFIG_FILENAME = "codex-autorunner.yml"
 ROOT_OVERRIDE_FILENAME = "codex-autorunner.override.yml"
 REPO_OVERRIDE_FILENAME = ".codex-autorunner/repo.override.yml"
-CONFIG_VERSION = 2
 TWELVE_HOUR_SECONDS = 12 * 60 * 60
 
 
@@ -653,27 +653,6 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "durable_writes": False,
     },
 }
-
-
-class ConfigError(Exception):
-    """Raised when configuration is invalid."""
-
-
-TICKET_FLOW_APPROVAL_MODE_YOLO = "yolo"
-TICKET_FLOW_APPROVAL_MODE_REVIEW = "review"
-TICKET_FLOW_APPROVAL_MODE_SAFE = "safe"  # backwards-compatible alias
-_TICKET_FLOW_APPROVAL_MODE_ALIASES = {
-    TICKET_FLOW_APPROVAL_MODE_YOLO: TICKET_FLOW_APPROVAL_MODE_YOLO,
-    TICKET_FLOW_APPROVAL_MODE_REVIEW: TICKET_FLOW_APPROVAL_MODE_REVIEW,
-    TICKET_FLOW_APPROVAL_MODE_SAFE: TICKET_FLOW_APPROVAL_MODE_REVIEW,
-}
-_TICKET_FLOW_APPROVAL_MODE_ALLOWED = ", ".join(
-    [
-        TICKET_FLOW_APPROVAL_MODE_YOLO,
-        TICKET_FLOW_APPROVAL_MODE_REVIEW,
-        TICKET_FLOW_APPROVAL_MODE_SAFE,
-    ]
-)
 
 # Import validation helpers after approval-mode constants are defined.
 from .config_validation import (  # noqa: E402,I001

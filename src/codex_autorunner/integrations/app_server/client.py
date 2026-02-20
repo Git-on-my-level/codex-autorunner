@@ -842,6 +842,7 @@ class CodexAppServerClient:
         self, chunk: bytes, *, buffer: bytearray, state: _ReadLoopState
     ) -> None:
         buffer.extend(chunk)
+        await self._drain_buffer_lines(buffer=buffer)
         if self._initializing or len(buffer) <= self._max_message_bytes:
             return
         oversized = bytes(buffer)
