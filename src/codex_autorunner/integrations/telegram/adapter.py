@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import (
@@ -32,12 +31,12 @@ from .api_schemas import (
     parse_message_payload,
     parse_update_payload,
 )
+from .callback_codec import parse_callback_payload
+from .command_parsing import parse_command_payload
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .retry import _extract_retry_after_seconds
 
 _RATE_LIMIT_BUFFER_SECONDS = 0.0
-
-_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 INTERRUPT_ALIASES = {
     "^c",
@@ -287,62 +286,15 @@ def parse_command(
     entities: Optional[Sequence[TelegramMessageEntity]] = None,
     bot_username: Optional[str] = None,
 ) -> Optional[TelegramCommand]:
-    if not text:
+    parsed = parse_command_payload(
+        text,
+        entities=entities,
+        bot_username=bot_username,
+    )
+    if parsed is None:
         return None
-
-    # Primary path: use entities if available
-    if entities:
-        command_entity = next(
-            (
-                entity
-                for entity in entities
-                if entity.type == "bot_command" and entity.offset == 0
-            ),
-            None,
-        )
-        if command_entity is not None:
-            if command_entity.length <= 1:
-                return None
-            if command_entity.length > len(text):
-                return None
-            command_text = text[: command_entity.length]
-            if not command_text.startswith("/"):
-                return None
-            command = command_text.lstrip("/")
-            tail = text[command_entity.length :].strip()
-            if not command:
-                return None
-            if "@" in command:
-                name, _, target = command.partition("@")
-                if bot_username and target.lower() != bot_username.lower():
-                    return None
-                command = name
-            return TelegramCommand(
-                name=command.lower(), args=tail.strip(), raw=text.strip()
-            )
-        return None
-
-    # Fallback: simple text-based parsing when entities are missing
-    # Validates against command name regex (^[a-z0-9_]{1,32}$) to avoid false positives
-    trimmed = text.strip()
-    if trimmed.startswith("/"):
-        parts = trimmed.split(None, 1)
-        command = parts[0].lstrip("/")
-        if not command:
-            return None
-        if "@" in command:
-            name, _, target = command.partition("@")
-            if bot_username and target.lower() != bot_username.lower():
-                return None
-            command = name
-        if not command:
-            return None
-        if not _COMMAND_NAME_RE.fullmatch(command):
-            return None
-        args = parts[1].strip() if len(parts) > 1 else ""
-        return TelegramCommand(name=command.lower(), args=args, raw=trimmed)
-
-    return None
+    name, args, raw = parsed
+    return TelegramCommand(name=name, args=args, raw=raw)
 
 
 def is_interrupt_alias(text: Optional[str]) -> bool:
@@ -815,123 +767,34 @@ def parse_callback_data(
         PageCallback,
     ]
 ]:
-    if not data:
+    parsed = parse_callback_payload(data)
+    if parsed is None:
         return None
-    if data.startswith("appr:"):
-        _, _, rest = data.partition(":")
-        decision, sep, request_id = rest.partition(":")
-        if not decision or not sep or not request_id:
-            return None
-        return ApprovalCallback(decision=decision, request_id=request_id)
-    if data.startswith("qopt:"):
-        _, _, rest = data.partition(":")
-        question_raw, sep, rest = rest.partition(":")
-        option_raw, sep2, request_id = rest.partition(":")
-        if not question_raw or not sep or not option_raw or not sep2 or not request_id:
-            return None
-        if not question_raw.isdigit() or not option_raw.isdigit():
-            return None
-        return QuestionOptionCallback(
-            request_id=request_id,
-            question_index=int(question_raw),
-            option_index=int(option_raw),
-        )
-    if data.startswith("qdone:"):
-        _, _, request_id = data.partition(":")
-        if not request_id:
-            return None
-        return QuestionDoneCallback(request_id=request_id)
-    if data.startswith("qcustom:"):
-        _, _, request_id = data.partition(":")
-        if not request_id:
-            return None
-        return QuestionCustomCallback(request_id=request_id)
-    if data.startswith("qcancel:"):
-        _, _, request_id = data.partition(":")
-        if not request_id:
-            return None
-        return QuestionCancelCallback(request_id=request_id)
-    if data.startswith("resume:"):
-        _, _, thread_id = data.partition(":")
-        if not thread_id:
-            return None
-        return ResumeCallback(thread_id=thread_id)
-    if data.startswith("bind:"):
-        _, _, repo_id = data.partition(":")
-        if not repo_id:
-            return None
-        return BindCallback(repo_id=repo_id)
-    if data.startswith("agent:"):
-        _, _, agent = data.partition(":")
-        if not agent:
-            return None
-        return AgentCallback(agent=agent)
-    if data.startswith("model:"):
-        _, _, model_id = data.partition(":")
-        if not model_id:
-            return None
-        return ModelCallback(model_id=model_id)
-    if data.startswith("effort:"):
-        _, _, effort = data.partition(":")
-        if not effort:
-            return None
-        return EffortCallback(effort=effort)
-    if data.startswith("update:"):
-        _, _, target = data.partition(":")
-        if not target:
-            return None
-        return UpdateCallback(target=target)
-    if data.startswith("update_confirm:"):
-        _, _, decision = data.partition(":")
-        if not decision:
-            return None
-        return UpdateConfirmCallback(decision=decision)
-    if data.startswith("review_commit:"):
-        _, _, sha = data.partition(":")
-        if not sha:
-            return None
-        return ReviewCommitCallback(sha=sha)
-    if data.startswith("cancel:"):
-        _, _, kind = data.partition(":")
-        if not kind:
-            return None
-        return CancelCallback(kind=kind)
-    if data.startswith("compact:"):
-        _, _, action = data.partition(":")
-        if not action:
-            return None
-        return CompactCallback(action=action)
-    if data.startswith("page:"):
-        _, _, rest = data.partition(":")
-        kind, sep, page = rest.partition(":")
-        if not kind or not sep or not page:
-            return None
-        if not page.isdigit():
-            return None
-        return PageCallback(kind=kind, page=int(page))
-    if data.startswith("flow:"):
-        _, _, rest = data.partition(":")
-        action, sep, rest = rest.partition(":")
-        if not action:
-            return None
-        run_id = None
-        repo_id = None
-        if sep and not rest:
-            return None
-        if sep:
-            run_id, sep2, repo_id_raw = rest.partition(":")
-            if not run_id:
-                return None
-            if sep2 and not repo_id_raw:
-                return None
-            run_id = run_id or None
-            repo_id = repo_id_raw or None
-        return FlowCallback(action=action, run_id=run_id, repo_id=repo_id)
-    if data.startswith("flow_run:"):
-        _, _, run_id = data.partition(":")
-        if not run_id:
-            return None
-        return FlowRunCallback(run_id=run_id)
+    kind, fields = parsed
+    constructors = {
+        "approval": ApprovalCallback,
+        "question_option": QuestionOptionCallback,
+        "question_done": QuestionDoneCallback,
+        "question_custom": QuestionCustomCallback,
+        "question_cancel": QuestionCancelCallback,
+        "resume": ResumeCallback,
+        "bind": BindCallback,
+        "agent": AgentCallback,
+        "model": ModelCallback,
+        "effort": EffortCallback,
+        "update": UpdateCallback,
+        "update_confirm": UpdateConfirmCallback,
+        "review_commit": ReviewCommitCallback,
+        "cancel": CancelCallback,
+        "compact": CompactCallback,
+        "page": PageCallback,
+        "flow": FlowCallback,
+        "flow_run": FlowRunCallback,
+    }
+    constructor = constructors.get(kind)
+    if constructor is None:
+        return None
+    return constructor(**fields)
     return None
 
 
@@ -1606,105 +1469,127 @@ class TelegramBotClient:
         async with self._resilience_guard(method):
             await self._wait_for_rate_limit(method)
             try:
-                response = await send()
-                response.raise_for_status()
-                payload = response.json()
+                payload = await self._send_request_payload(send)
             except httpx.HTTPStatusError as exc:
-                retry_after = _extract_retry_after_seconds(exc)
-                status_code = exc.response.status_code
-                if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.request.failed",
-                    method=method,
-                    status_code=status_code,
-                    retry_after=retry_after,
-                    exc=exc,
-                )
-                if status_code == 429 or retry_after is not None or status_code >= 500:
-                    raise TelegramTransientError(
-                        "Telegram request failed",
-                        retry_after=retry_after,
-                    ) from exc
-                raise TelegramPermanentError(
-                    "Telegram request failed",
-                    user_message="Telegram API error.",
-                ) from exc
+                raise await self._handle_http_status_error(method, exc) from exc
             except httpx.RequestError as exc:
-                retry_after = _extract_retry_after_seconds(exc)
-                if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.request.failed",
-                    method=method,
-                    retry_after=retry_after,
-                    exc=exc,
-                )
-                raise TelegramTransientError(
-                    "Telegram request failed",
-                    retry_after=retry_after,
-                ) from exc
+                raise await self._handle_transport_error(method, exc) from exc
             except Exception as exc:
-                retry_after = _extract_retry_after_seconds(exc)
-                if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.request.failed",
-                    method=method,
-                    retry_after=retry_after,
-                    exc=exc,
-                )
-                raise TelegramTransientError(
-                    "Telegram request failed",
-                    retry_after=retry_after,
-                ) from exc
+                raise await self._handle_unexpected_error(method, exc) from exc
+
             if not isinstance(payload, dict) or not payload.get("ok"):
-                description = (
-                    payload.get("description") if isinstance(payload, dict) else None
-                )
-                retry_after = self._retry_after_from_payload(payload)
-                if isinstance(payload, dict):
-                    error_code = payload.get("error_code")
-                else:
-                    error_code = None
-                if not isinstance(error_code, int) or isinstance(error_code, bool):
-                    error_code = None
-                if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.request.failed",
-                    method=method,
-                    error_code=error_code,
-                    retry_after=retry_after,
-                    description=description,
-                )
-                if (
-                    error_code == 429
-                    or retry_after is not None
-                    or (error_code is not None and error_code >= 500)
-                ):
-                    raise TelegramTransientError(
-                        description or "Telegram API returned error",
-                        retry_after=retry_after,
-                    )
-                if error_code is not None and 400 <= error_code < 500:
-                    raise TelegramPermanentError(
-                        description or "Telegram API returned error",
-                        user_message="Telegram API error.",
-                    )
-                raise TelegramTransientError(
-                    description or "Telegram API returned error",
-                    retry_after=retry_after,
-                )
+                raise await self._handle_unsuccessful_payload(method, payload)
             return payload.get("result")
+
+    async def _send_request_payload(
+        self, send: Callable[[], Awaitable[httpx.Response]]
+    ) -> Any:
+        response = await send()
+        response.raise_for_status()
+        return response.json()
+
+    async def _handle_http_status_error(
+        self, method: str, exc: httpx.HTTPStatusError
+    ) -> Exception:
+        retry_after = _extract_retry_after_seconds(exc)
+        status_code = exc.response.status_code
+        if retry_after is not None:
+            await self._apply_rate_limit(method, retry_after)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.request.failed",
+            method=method,
+            status_code=status_code,
+            retry_after=retry_after,
+            exc=exc,
+        )
+        if status_code == 429 or retry_after is not None or status_code >= 500:
+            return TelegramTransientError(
+                "Telegram request failed",
+                retry_after=retry_after,
+            )
+        return TelegramPermanentError(
+            "Telegram request failed",
+            user_message="Telegram API error.",
+        )
+
+    async def _handle_transport_error(
+        self, method: str, exc: httpx.RequestError
+    ) -> Exception:
+        retry_after = _extract_retry_after_seconds(exc)
+        if retry_after is not None:
+            await self._apply_rate_limit(method, retry_after)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.request.failed",
+            method=method,
+            retry_after=retry_after,
+            exc=exc,
+        )
+        return TelegramTransientError(
+            "Telegram request failed",
+            retry_after=retry_after,
+        )
+
+    async def _handle_unexpected_error(self, method: str, exc: Exception) -> Exception:
+        retry_after = _extract_retry_after_seconds(exc)
+        if retry_after is not None:
+            await self._apply_rate_limit(method, retry_after)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.request.failed",
+            method=method,
+            retry_after=retry_after,
+            exc=exc,
+        )
+        return TelegramTransientError(
+            "Telegram request failed",
+            retry_after=retry_after,
+        )
+
+    async def _handle_unsuccessful_payload(
+        self, method: str, payload: Any
+    ) -> Exception:
+        description = payload.get("description") if isinstance(payload, dict) else None
+        retry_after = self._retry_after_from_payload(payload)
+        if isinstance(payload, dict):
+            error_code = payload.get("error_code")
+        else:
+            error_code = None
+        if not isinstance(error_code, int) or isinstance(error_code, bool):
+            error_code = None
+        if retry_after is not None:
+            await self._apply_rate_limit(method, retry_after)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.request.failed",
+            method=method,
+            error_code=error_code,
+            retry_after=retry_after,
+            description=description,
+        )
+        if (
+            error_code == 429
+            or retry_after is not None
+            or (error_code is not None and error_code >= 500)
+        ):
+            return TelegramTransientError(
+                description or "Telegram API returned error",
+                retry_after=retry_after,
+            )
+        if error_code is not None and 400 <= error_code < 500:
+            return TelegramPermanentError(
+                description or "Telegram API returned error",
+                user_message="Telegram API error.",
+            )
+        return TelegramTransientError(
+            description or "Telegram API returned error",
+            retry_after=retry_after,
+        )
 
     def _retry_after_from_payload(self, payload: Any) -> Optional[int]:
         if not isinstance(payload, dict):

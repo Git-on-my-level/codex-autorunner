@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import json
 import logging
 import math
 import re
@@ -15,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
-from .....agents.opencode.client import OpenCodeProtocolError
 from .....agents.opencode.constants import (
     OPENCODE_CONTEXT_WINDOW_KEYS,
     OPENCODE_USAGE_CACHED_KEYS,
@@ -35,7 +33,6 @@ from .....agents.opencode.runtime import (
     opencode_missing_env,
     split_model_id,
 )
-from .....agents.opencode.supervisor import OpenCodeSupervisorError
 from .....core.coercion import coerce_int
 from .....core.config import load_repo_config
 from .....core.context_awareness import CAR_AWARENESS_BLOCK
@@ -94,14 +91,23 @@ from ...helpers import (
     is_interrupt_status,
     parse_github_url,
 )
-from ...payload_utils import (
-    extract_opencode_error_detail,
-)
 from ...state import topic_key as build_topic_key
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
+from .command_utils import (
+    _format_httpx_exception as _shared_format_httpx_exception,
+)
+from .command_utils import (
+    _format_opencode_exception as _shared_format_opencode_exception,
+)
+from .command_utils import (
+    _issue_only_link as _shared_issue_only_link,
+)
+from .command_utils import (
+    _issue_only_workflow_hint as _shared_issue_only_workflow_hint,
+)
 from .shared import SharedHelpers
 
 PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
@@ -174,26 +180,11 @@ class _RuntimeStub:
 
 
 def _issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
-    if not prompt_text or not links or len(links) != 1:
-        return None
-    stripped = prompt_text.strip()
-    if not stripped:
-        return None
-    link = links[0]
-    for wrapper in _ISSUE_ONLY_LINK_WRAPPERS:
-        if stripped == wrapper.format(link=link):
-            return link
-    return None
+    return _shared_issue_only_link(prompt_text, links)
 
 
 def _issue_only_workflow_hint(issue_number: int) -> str:
-    return wrap_injected_context(
-        "Issue-only GitHub message detected (no extra context).\n"
-        f"Treat this as a request to implement issue #{issue_number}.\n"
-        "Create a new branch from the latest head branch (sync with the current origin default branch first), "
-        "implement the fix, and open a PR.\n"
-        f"Ensure the PR description includes `Closes #{issue_number}` so GitHub auto-closes the issue when merged."
-    )
+    return _shared_issue_only_workflow_hint(issue_number)
 
 
 def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -317,60 +308,11 @@ def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, A
 
 
 def _format_opencode_exception(exc: Exception) -> Optional[str]:
-    if isinstance(exc, OpenCodeSupervisorError):
-        detail = str(exc).strip()
-        if detail:
-            return f"OpenCode backend unavailable ({format_public_error(detail)})."
-        return "OpenCode backend unavailable."
-    if isinstance(exc, OpenCodeProtocolError):
-        detail = str(exc).strip()
-        if detail:
-            return f"OpenCode protocol error: {format_public_error(detail)}"
-        return "OpenCode protocol error."
-    if isinstance(exc, json.JSONDecodeError):
-        return "OpenCode returned invalid JSON."
-    if isinstance(exc, httpx.HTTPStatusError):
-        detail = None
-        try:
-            detail = extract_opencode_error_detail(exc.response.json())
-        except Exception:
-            detail = None
-        if detail:
-            return f"OpenCode error: {format_public_error(detail)}"
-        response_text = exc.response.text.strip()
-        if response_text:
-            return f"OpenCode error: {format_public_error(response_text)}"
-        return f"OpenCode request failed (HTTP {exc.response.status_code})."
-    if isinstance(exc, httpx.RequestError):
-        detail = str(exc).strip()
-        if detail:
-            return f"OpenCode request failed: {format_public_error(detail)}"
-        return "OpenCode request failed."
-    return None
+    return _shared_format_opencode_exception(exc)
 
 
 def _format_httpx_exception(exc: Exception) -> Optional[str]:
-    if isinstance(exc, httpx.HTTPStatusError):
-        try:
-            payload = exc.response.json()
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            detail = (
-                payload.get("detail") or payload.get("message") or payload.get("error")
-            )
-            if isinstance(detail, str) and detail:
-                return format_public_error(detail)
-        response_text = exc.response.text.strip()
-        if response_text:
-            return format_public_error(response_text)
-        return f"Request failed (HTTP {exc.response.status_code})."
-    if isinstance(exc, httpx.RequestError):
-        detail = str(exc).strip()
-        if detail:
-            return format_public_error(detail)
-        return "Request failed."
-    return None
+    return _shared_format_httpx_exception(exc)
 
 
 def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
