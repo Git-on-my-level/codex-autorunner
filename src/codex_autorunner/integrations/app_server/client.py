@@ -149,6 +149,23 @@ class _TurnState:
     agent_message_deltas: Dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class _ReadLoopState:
+    dropping_oversize: bool = False
+    drain_limit_reached: bool = False
+    oversize_preview: bytearray = field(default_factory=bytearray)
+    oversize_bytes_dropped: int = 0
+
+
+@dataclass
+class _ResumeTurnSnapshot:
+    target_turn_id: str
+    status: Optional[str] = None
+    agent_messages: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    found: bool = False
+
+
 class CodexAppServerClient:
     def __init__(
         self,
@@ -465,46 +482,80 @@ class CodexAppServerClient:
                 f"Unknown turn id {turn_id} (thread {thread_id})"
             )
         if state.future.done():
-            result = state.future.result()
+            immediate_result = state.future.result()
             if key is not None:
                 self._turns.pop(key, None)
-            return result
+            return immediate_result
         timeout = timeout if timeout is not None else self._request_timeout
-        deadline = time.monotonic() + timeout if timeout is not None else None
+        deadline = self._turn_wait_deadline(timeout)
         while True:
-            slice_timeout = self._turn_stall_poll_interval_seconds
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise asyncio.TimeoutError()
-                if slice_timeout is None or slice_timeout > remaining:
-                    slice_timeout = remaining
-            try:
-                if slice_timeout is None:
-                    result = await asyncio.shield(state.future)
-                else:
-                    result = await asyncio.wait_for(
-                        asyncio.shield(state.future), timeout=slice_timeout
-                    )
+            slice_timeout = self._turn_wait_slice(timeout_deadline=deadline)
+            loop_result = await self._wait_for_turn_slice(
+                state, slice_timeout=slice_timeout
+            )
+            if loop_result is not None:
                 if key is not None:
                     self._turns.pop(key, None)
-                return result
-            except asyncio.TimeoutError:
-                pass
+                return loop_result
+            await self._maybe_recover_stalled_turn(
+                state,
+                turn_id=turn_id,
+                thread_id=thread_id or state.thread_id,
+                deadline=deadline,
+            )
 
-            stall_timeout = self._turn_stall_timeout_seconds
-            idle_seconds = time.monotonic() - state.last_event_at
-            if (
-                stall_timeout is not None
-                and idle_seconds >= stall_timeout
-                and not state.future.done()
-            ):
-                await self._recover_stalled_turn(
-                    state,
-                    turn_id,
-                    thread_id=thread_id or state.thread_id,
-                    idle_seconds=idle_seconds,
-                )
+    def _turn_wait_deadline(self, timeout: Optional[float]) -> Optional[float]:
+        return time.monotonic() + timeout if timeout is not None else None
+
+    def _turn_wait_slice(self, timeout_deadline: Optional[float]) -> Optional[float]:
+        slice_timeout = self._turn_stall_poll_interval_seconds
+        if timeout_deadline is None:
+            return slice_timeout
+        remaining = timeout_deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError()
+        if slice_timeout is None or slice_timeout > remaining:
+            return remaining
+        return slice_timeout
+
+    async def _wait_for_turn_slice(
+        self,
+        state: _TurnState,
+        *,
+        slice_timeout: Optional[float],
+    ) -> Optional[TurnResult]:
+        try:
+            if slice_timeout is None:
+                return await asyncio.shield(state.future)
+            return await asyncio.wait_for(
+                asyncio.shield(state.future), timeout=slice_timeout
+            )
+        except asyncio.TimeoutError:
+            return None
+
+    async def _maybe_recover_stalled_turn(
+        self,
+        state: _TurnState,
+        *,
+        turn_id: str,
+        thread_id: Optional[str],
+        deadline: Optional[float],
+    ) -> None:
+        if state.future.done():
+            return
+        stall_timeout = self._turn_stall_timeout_seconds
+        if deadline is None and stall_timeout is None:
+            return
+        if deadline is not None and deadline <= time.monotonic():
+            raise asyncio.TimeoutError()
+        idle_seconds = time.monotonic() - state.last_event_at
+        if stall_timeout is not None and idle_seconds >= stall_timeout:
+            await self._recover_stalled_turn(
+                state,
+                turn_id,
+                thread_id=thread_id,
+                idle_seconds=idle_seconds,
+            )
 
     async def _recover_stalled_turn(
         self,
@@ -764,88 +815,128 @@ class CodexAppServerClient:
         assert self._process is not None
         assert self._process.stdout is not None
         buffer = bytearray()
-        dropping_oversize = False
-        drain_limit_reached = False
-        oversize_preview = bytearray()
-        oversize_bytes_dropped = 0
+        loop_state = _ReadLoopState()
         try:
             while True:
                 chunk = await self._process.stdout.read(_READ_CHUNK_SIZE)
                 if not chunk:
                     break
-                if dropping_oversize:
-                    newline_index = chunk.find(b"\n")
-                    if newline_index == -1:
-                        if not drain_limit_reached:
-                            if len(oversize_preview) < self._oversize_preview_bytes:
-                                remaining = self._oversize_preview_bytes - len(
-                                    oversize_preview
-                                )
-                                oversize_preview.extend(chunk[:remaining])
-                            oversize_bytes_dropped += len(chunk)
-                            if oversize_bytes_dropped >= self._max_oversize_drain_bytes:
-                                await self._emit_oversize_warning(
-                                    bytes_dropped=oversize_bytes_dropped,
-                                    preview=oversize_preview,
-                                    aborted=True,
-                                    drain_limit=self._max_oversize_drain_bytes,
-                                )
-                                drain_limit_reached = True
-                        continue
-                    before = chunk[: newline_index + 1]
-                    after = chunk[newline_index + 1 :]
-                    if not drain_limit_reached:
-                        if len(oversize_preview) < self._oversize_preview_bytes:
-                            remaining = self._oversize_preview_bytes - len(
-                                oversize_preview
-                            )
-                            oversize_preview.extend(before[:remaining])
-                        oversize_bytes_dropped += len(before)
-                        await self._emit_oversize_warning(
-                            bytes_dropped=oversize_bytes_dropped,
-                            preview=oversize_preview,
-                        )
-                    dropping_oversize = False
-                    drain_limit_reached = False
-                    oversize_preview = bytearray()
-                    oversize_bytes_dropped = 0
-                    if not after:
-                        continue
-                    buffer.extend(after)
-                else:
-                    buffer.extend(chunk)
-                while True:
-                    newline_index = buffer.find(b"\n")
-                    if newline_index == -1:
-                        break
-                    line = buffer[:newline_index]
-                    del buffer[: newline_index + 1]
-                    await self._handle_payload_line(line)
-                if not dropping_oversize and len(buffer) > self._max_message_bytes:
-                    oversize_preview = bytearray(buffer[: self._oversize_preview_bytes])
-                    oversize_bytes_dropped = len(buffer)
-                    buffer.clear()
-                    dropping_oversize = True
-            if dropping_oversize:
-                if oversize_bytes_dropped:
-                    await self._emit_oversize_warning(
-                        bytes_dropped=oversize_bytes_dropped,
-                        preview=oversize_preview,
-                        truncated=True,
-                    )
-            elif buffer:
-                if len(buffer) > self._max_message_bytes:
-                    await self._emit_oversize_warning(
-                        bytes_dropped=len(buffer),
-                        preview=buffer[: self._oversize_preview_bytes],
-                        truncated=True,
+                if loop_state.dropping_oversize:
+                    await self._read_loop_drain_oversize_chunk(
+                        chunk, buffer=buffer, state=loop_state
                     )
                 else:
-                    await self._handle_payload_line(buffer)
+                    await self._read_loop_collect_chunk(
+                        chunk, buffer=buffer, state=loop_state
+                    )
+                if loop_state.dropping_oversize:
+                    continue
+                await self._handle_partial_payload_lines(buffer)
+            await self._finalize_read_loop(buffer, loop_state)
         except Exception as exc:
             log_event(self._logger, logging.WARNING, "app_server.read.failed", exc=exc)
         finally:
             await self._handle_disconnect()
+
+    async def _read_loop_collect_chunk(
+        self, chunk: bytes, *, buffer: bytearray, state: _ReadLoopState
+    ) -> None:
+        buffer.extend(chunk)
+        if self._initializing or len(buffer) <= self._max_message_bytes:
+            return
+        oversized = bytes(buffer)
+        buffer.clear()
+        state.dropping_oversize = True
+        await self._read_loop_drain_oversize_chunk(
+            oversized, buffer=buffer, state=state
+        )
+
+    async def _read_loop_drain_oversize_chunk(
+        self, chunk: bytes, *, buffer: bytearray, state: _ReadLoopState
+    ) -> None:
+        newline_index = chunk.find(b"\n")
+        if newline_index == -1:
+            await self._track_oversize_fragment(chunk=chunk, state=state)
+            return
+        before = chunk[: newline_index + 1]
+        after = chunk[newline_index + 1 :]
+        if not state.drain_limit_reached:
+            self._append_oversize_preview(chunk=before, state=state)
+            state.oversize_bytes_dropped += len(before)
+            await self._emit_oversize_warning(
+                bytes_dropped=state.oversize_bytes_dropped,
+                preview=state.oversize_preview,
+            )
+        state.dropping_oversize = False
+        state.drain_limit_reached = False
+        state.oversize_preview = bytearray()
+        state.oversize_bytes_dropped = 0
+        if after:
+            buffer.extend(after)
+            await self._handle_partial_payload_lines(buffer)
+            if len(buffer) > self._max_message_bytes:
+                state.oversize_preview = bytearray(
+                    buffer[: self._oversize_preview_bytes]
+                )
+                state.oversize_bytes_dropped = len(buffer)
+                buffer.clear()
+                state.dropping_oversize = True
+
+    async def _handle_partial_payload_lines(self, buffer: bytearray) -> None:
+        await self._drain_buffer_lines(buffer=buffer)
+
+    async def _track_oversize_fragment(
+        self, *, chunk: bytes, state: _ReadLoopState
+    ) -> None:
+        if state.drain_limit_reached:
+            return
+        self._append_oversize_preview(chunk=chunk, state=state)
+        state.oversize_bytes_dropped += len(chunk)
+        if state.oversize_bytes_dropped >= self._max_oversize_drain_bytes:
+            await self._emit_oversize_warning(
+                bytes_dropped=state.oversize_bytes_dropped,
+                preview=state.oversize_preview,
+                aborted=True,
+                drain_limit=self._max_oversize_drain_bytes,
+            )
+            state.drain_limit_reached = True
+
+    def _append_oversize_preview(self, *, chunk: bytes, state: _ReadLoopState) -> None:
+        if len(state.oversize_preview) >= self._oversize_preview_bytes:
+            return
+        remaining = self._oversize_preview_bytes - len(state.oversize_preview)
+        state.oversize_preview.extend(chunk[:remaining])
+
+    async def _finalize_read_loop(
+        self, buffer: bytearray, state: _ReadLoopState
+    ) -> None:
+        if state.dropping_oversize:
+            if state.oversize_bytes_dropped:
+                await self._emit_oversize_warning(
+                    bytes_dropped=state.oversize_bytes_dropped,
+                    preview=state.oversize_preview,
+                    truncated=True,
+                )
+            return
+        if not buffer:
+            return
+        if len(buffer) > self._max_message_bytes:
+            await self._emit_oversize_warning(
+                bytes_dropped=len(buffer),
+                preview=buffer[: self._oversize_preview_bytes],
+                truncated=True,
+            )
+        else:
+            await self._handle_payload_line(buffer)
+
+    async def _drain_buffer_lines(self, *, buffer: bytearray) -> None:
+        while True:
+            newline_index = buffer.find(b"\n")
+            if newline_index == -1:
+                break
+            line = buffer[:newline_index]
+            del buffer[: newline_index + 1]
+            await self._handle_payload_line(line)
 
     async def _handle_payload_line(self, line: bytes) -> None:
         if not line:
@@ -1100,87 +1191,10 @@ class CodexAppServerClient:
         params = message.get("params") or {}
         handled = False
         if isinstance(method, str):
-            turn_id_hint = extract_turn_id(params) or extract_turn_id(
-                params.get("turn") if isinstance(params, dict) else None
-            )
-            if turn_id_hint:
-                thread_id_hint = extract_thread_id_for_turn(params)
-                _key, state = await self._find_turn_state(
-                    turn_id_hint, thread_id=thread_id_hint
-                )
-                if state is not None:
-                    state.last_event_at = time.monotonic()
-                    state.last_method = method
-        if method == "item/agentMessage/delta":
-            turn_id = extract_turn_id(params)
-            if turn_id:
-                thread_id = extract_thread_id_for_turn(params)
-                _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
-                if state is None:
-                    if thread_id:
-                        state = self._ensure_turn_state(turn_id, thread_id)
-                    else:
-                        state = self._ensure_pending_turn_state(turn_id)
-                item_id = params.get("itemId")
-                delta = params.get("delta") or params.get("text")
-                if isinstance(item_id, str) and isinstance(delta, str):
-                    state.agent_message_deltas[item_id] = (
-                        state.agent_message_deltas.get(item_id, "") + delta
-                    )
-                state.last_event_at = time.monotonic()
-                state.last_method = method
-                _record_raw_event(state, message)
-            handled = True
-        elif method == "item/completed":
-            turn_id = extract_turn_id(params) or extract_turn_id(
-                params.get("item") if isinstance(params, dict) else None
-            )
-            if not turn_id:
-                handled = True
-                return
-            thread_id = extract_thread_id_for_turn(params)
-            _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
-            if state is None:
-                if thread_id:
-                    state = self._ensure_turn_state(turn_id, thread_id)
-                else:
-                    state = self._ensure_pending_turn_state(turn_id)
-            state.last_event_at = time.monotonic()
-            state.last_method = method
-            self._apply_item_completed(state, message, params)
-            handled = True
-        elif method == "turn/completed":
-            turn_id = extract_turn_id(params)
-            if not turn_id:
-                handled = True
-                return
-            thread_id = extract_thread_id_for_turn(params)
-            _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
-            if state is None:
-                if thread_id:
-                    state = self._ensure_turn_state(turn_id, thread_id)
-                else:
-                    state = self._ensure_pending_turn_state(turn_id)
-            state.last_event_at = time.monotonic()
-            state.last_method = method
-            self._apply_turn_completed(state, message, params)
-            handled = True
-        elif method == "error":
-            turn_id = extract_turn_id(params)
-            if not turn_id:
-                handled = True
-                return
-            thread_id = extract_thread_id_for_turn(params)
-            _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
-            if state is None:
-                if thread_id:
-                    state = self._ensure_turn_state(turn_id, thread_id)
-                else:
-                    state = self._ensure_pending_turn_state(turn_id)
-            state.last_event_at = time.monotonic()
-            state.last_method = method
-            self._apply_error(state, message, params)
-            handled = True
+            await self._mark_notification_turn_hint(method=method, params=params)
+        handler = self._resolve_notification_handler(method)
+        if handler is not None:
+            handled = await handler(message, params)
         if self._notification_handler is not None:
             try:
                 await _maybe_await(self._notification_handler(message))
@@ -1193,6 +1207,128 @@ class CodexAppServerClient:
                     handled=handled,
                     exc=exc,
                 )
+
+    async def _mark_notification_turn_hint(self, *, method: str, params: Any) -> None:
+        if not isinstance(params, dict):
+            return
+        turn_id_hint = extract_turn_id(params) or extract_turn_id(params.get("turn"))
+        if not turn_id_hint:
+            return
+        thread_id_hint = extract_thread_id_for_turn(params)
+        _key, state = await self._find_turn_state(
+            turn_id_hint, thread_id=thread_id_hint
+        )
+        if state is not None:
+            state.last_event_at = time.monotonic()
+            state.last_method = method
+
+    async def _resolve_notification_turn_state(
+        self,
+        turn_id: Optional[str],
+        thread_id: Optional[str],
+        *,
+        create_pending: bool = True,
+    ) -> Optional[_TurnState]:
+        if not turn_id:
+            return None
+        _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
+        if state is not None:
+            return state
+        if thread_id:
+            return self._ensure_turn_state(turn_id, thread_id)
+        if create_pending:
+            return self._ensure_pending_turn_state(turn_id)
+        return None
+
+    def _mark_notification_event(self, *, state: _TurnState, method: str) -> None:
+        state.last_event_at = time.monotonic()
+        state.last_method = method
+
+    async def _handle_notification_agent_message_delta(
+        self, message: Dict[str, Any], params: dict[str, Any]
+    ) -> bool:
+        turn_id = extract_turn_id(params)
+        if not turn_id:
+            return True
+        thread_id = extract_thread_id_for_turn(params)
+        state = await self._resolve_notification_turn_state(
+            turn_id, thread_id, create_pending=True
+        )
+        if state is None:
+            return True
+        item_id = params.get("itemId")
+        delta = params.get("delta") or params.get("text")
+        if isinstance(item_id, str) and isinstance(delta, str):
+            state.agent_message_deltas[item_id] = (
+                state.agent_message_deltas.get(item_id, "") + delta
+            )
+        self._mark_notification_event(state=state, method="item/agentMessage/delta")
+        _record_raw_event(state, message)
+        return True
+
+    async def _handle_notification_item_completed(
+        self, message: Dict[str, Any], params: dict[str, Any]
+    ) -> bool:
+        turn_id = extract_turn_id(params) or extract_turn_id(params.get("item"))
+        if not turn_id:
+            return True
+        thread_id = extract_thread_id_for_turn(params)
+        state = await self._resolve_notification_turn_state(
+            turn_id, thread_id, create_pending=True
+        )
+        if state is None:
+            return True
+        self._mark_notification_event(state=state, method="item/completed")
+        self._apply_item_completed(state, message, params)
+        return True
+
+    async def _handle_notification_turn_completed(
+        self, message: Dict[str, Any], params: dict[str, Any]
+    ) -> bool:
+        turn_id = extract_turn_id(params)
+        if not turn_id:
+            return True
+        thread_id = extract_thread_id_for_turn(params)
+        state = await self._resolve_notification_turn_state(
+            turn_id, thread_id, create_pending=True
+        )
+        if state is None:
+            return True
+        self._mark_notification_event(state=state, method="turn/completed")
+        self._apply_turn_completed(state, message, params)
+        return True
+
+    async def _handle_notification_error(
+        self, message: Dict[str, Any], params: dict[str, Any]
+    ) -> bool:
+        turn_id = extract_turn_id(params)
+        if not turn_id:
+            return True
+        thread_id = extract_thread_id_for_turn(params)
+        state = await self._resolve_notification_turn_state(
+            turn_id, thread_id, create_pending=True
+        )
+        if state is None:
+            return True
+        self._mark_notification_event(state=state, method="error")
+        self._apply_error(state, message, params)
+        return True
+
+    def _resolve_notification_handler(
+        self, method: object
+    ) -> Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[bool]]]:
+        handlers: dict[
+            str,
+            Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[bool]],
+        ] = {
+            "item/agentMessage/delta": self._handle_notification_agent_message_delta,
+            "item/completed": self._handle_notification_item_completed,
+            "turn/completed": self._handle_notification_turn_completed,
+            "error": self._handle_notification_error,
+        }
+        if not isinstance(method, str):
+            return None
+        return handlers.get(method)
 
     async def _find_turn_state(
         self, turn_id: str, *, thread_id: Optional[str]
@@ -1498,44 +1634,63 @@ class CodexAppServerClient:
             self._restart_task = None
 
     async def _terminate_process(self) -> None:
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
-            try:
-                await self._stderr_task
-            except asyncio.CancelledError:
-                pass
-        if self._process is None:
+        await self._await_cancelled_task(self._reader_task)
+        await self._await_cancelled_task(self._stderr_task)
+        process = self._process
+        if process is None:
             return
-        self._unregister_process_record(self._process)
-        if self._process.returncode is None:
+        self._unregister_process_record(process)
+        if process.returncode is None:
+            await self._terminate_running_process(process)
+        self._process = None
+
+    async def _await_cancelled_task(self, task: Optional[asyncio.Task[None]]) -> None:
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _terminate_running_process(
+        self, process: asyncio.subprocess.Process
+    ) -> None:
+        try:
             if os.name != "nt" and hasattr(os, "killpg"):
                 try:
                     # Process is spawned as a session/group leader on POSIX.
-                    os.killpg(self._process.pid, signal.SIGTERM)
+                    os.killpg(process.pid, signal.SIGTERM)
                 except Exception:
                     pass
             try:
-                os.kill(self._process.pid, signal.SIGTERM)
+                os.kill(process.pid, signal.SIGTERM)
             except Exception:
                 try:
-                    self._process.terminate()
+                    process.terminate()
                 except ProcessLookupError:
-                    pass
+                    return
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=1)
+                await asyncio.wait_for(process.wait(), timeout=1)
+                return
             except asyncio.TimeoutError:
-                try:
-                    os.kill(self._process.pid, signal.SIGKILL)
-                except Exception:
-                    self._process.kill()
-                await self._process.wait()
-        self._process = None
+                pass
+            await self._force_kill_process(process)
+        except Exception:
+            self._logger.debug(
+                "Failed to gracefully terminate app-server process",
+                exc_info=True,
+            )
+
+    async def _force_kill_process(self, process: asyncio.subprocess.Process) -> None:
+        try:
+            os.kill(process.pid, signal.SIGKILL)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                return
+        await process.wait()
 
     def _register_process_record(self) -> None:
         process = self._process
@@ -1603,34 +1758,58 @@ class CodexAppServerClient:
 def _summarize_params(method: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(params, dict):
         return {}
-    if method == "turn/start":
-        input_items = params.get("input")
-        input_chars = 0
-        if isinstance(input_items, list):
-            for item in input_items:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text = item.get("text")
-                    if isinstance(text, str):
-                        input_chars += len(text)
-        summary: Dict[str, Any] = {
-            "thread_id": params.get("threadId"),
-            "input_chars": input_chars,
-        }
-        if "approvalPolicy" in params:
-            summary["approval_policy"] = params.get("approvalPolicy")
-        if "sandboxPolicy" in params:
-            summary["sandbox_policy"] = params.get("sandboxPolicy")
-        return summary
-    if method == "turn/interrupt":
-        return {"turn_id": params.get("turnId"), "thread_id": params.get("threadId")}
-    if method == "thread/start":
-        return {"cwd": params.get("cwd")}
-    if method == "thread/resume":
-        return {"thread_id": params.get("threadId")}
-    if method == "thread/list":
-        return {}
-    if method == "review/start":
-        return {"thread_id": params.get("threadId")}
+    summarizer: dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
+        "turn/start": _summarize_turn_start_params,
+        "turn/interrupt": _summarize_turn_interrupt_params,
+        "thread/start": _summarize_thread_start_params,
+        "thread/resume": _summarize_thread_resume_params,
+        "thread/list": _summarize_thread_list_params,
+        "review/start": _summarize_review_start_params,
+    }
+    return summarizer.get(method, _summarize_generic_params)(params)
+
+
+def _summarize_turn_start_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    input_items = params.get("input")
+    input_chars = 0
+    if isinstance(input_items, list):
+        for item in input_items:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text")
+                if isinstance(text, str):
+                    input_chars += len(text)
+    summary: Dict[str, Any] = {
+        "thread_id": params.get("threadId"),
+        "input_chars": input_chars,
+    }
+    if "approvalPolicy" in params:
+        summary["approval_policy"] = params.get("approvalPolicy")
+    if "sandboxPolicy" in params:
+        summary["sandbox_policy"] = params.get("sandboxPolicy")
+    return summary
+
+
+def _summarize_turn_interrupt_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    return {"turn_id": params.get("turnId"), "thread_id": params.get("threadId")}
+
+
+def _summarize_thread_start_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    return {"cwd": params.get("cwd")}
+
+
+def _summarize_thread_resume_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    return {"thread_id": params.get("threadId")}
+
+
+def _summarize_thread_list_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    return {}
+
+
+def _summarize_review_start_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    return {"thread_id": params.get("threadId")}
+
+
+def _summarize_generic_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"param_keys": list(params.keys())[:10]}
 
 
@@ -1926,69 +2105,109 @@ def _extract_turn_snapshot_from_resume(
 ) -> Optional[tuple[Optional[str], list[str], list[str]]]:
     if not isinstance(payload, dict):
         return None
-    status: Optional[str] = None
-    agent_messages: list[str] = []
-    errors: list[str] = []
-
-    def _collect_from_turn(turn: Any) -> bool:
-        nonlocal status
-        if not isinstance(turn, dict):
-            return False
-        if extract_turn_id(turn) != target_turn_id:
-            return False
-        if status is None:
-            status = _extract_status_value(turn.get("status"))
-        agent_messages.extend(
-            _extract_agent_messages_from_container(turn, target_turn_id)
-        )
-        errors.extend(_extract_errors_from_container(turn))
-        return True
-
-    found = _collect_from_turn(payload)
-
-    for key in ("turns", "data", "results"):
-        turns = payload.get(key)
-        if not isinstance(turns, list):
-            continue
-        for turn in turns:
-            if _collect_from_turn(turn):
-                found = True
-
-    thread = payload.get("thread")
-    if isinstance(thread, dict):
-        thread_items = thread.get("items")
-        if isinstance(thread_items, list):
-            for item in thread_items:
-                if extract_turn_id(item) != target_turn_id:
-                    continue
-                text = _extract_agent_message_text(item)
-                if text:
-                    agent_messages.append(text)
-        thread_turns = thread.get("turns")
-        if isinstance(thread_turns, list):
-            for turn in thread_turns:
-                if _collect_from_turn(turn):
-                    found = True
-
-    single_turn = payload.get("turn")
-    if isinstance(single_turn, dict) and _collect_from_turn(single_turn):
-        found = True
-
-    items = payload.get("items")
-    if isinstance(items, list):
-        for item in items:
-            if extract_turn_id(item) != target_turn_id:
-                continue
-            text = _extract_agent_message_text(item)
-            if text:
-                agent_messages.append(text)
-
-    if status is None:
-        status = _extract_status_value(payload.get("status"))
-
-    if not found and not agent_messages and not errors and status is None:
+    snapshot = _collect_turn_snapshot_data(payload, target_turn_id)
+    if (
+        not snapshot.found
+        and not snapshot.agent_messages
+        and not snapshot.errors
+        and snapshot.status is None
+    ):
         return None
-    return status, agent_messages, errors
+    return snapshot.status, snapshot.agent_messages, snapshot.errors
+
+
+def _collect_turn_snapshot_data(
+    payload: Dict[str, Any], target_turn_id: str
+) -> _ResumeTurnSnapshot:
+    snapshot = _ResumeTurnSnapshot(target_turn_id=target_turn_id)
+    if _collect_turn_snapshot_from_entry(payload, snapshot):
+        snapshot.found = True
+    _collect_turn_snapshot_from_payload(payload, snapshot)
+    if snapshot.status is None:
+        snapshot.status = _extract_status_value(payload.get("status"))
+    return snapshot
+
+
+def _collect_turn_snapshot_from_payload(
+    payload: Dict[str, Any], snapshot: _ResumeTurnSnapshot
+) -> None:
+    _collect_turn_snapshot_from_turn_collections(
+        payload, snapshot, ("turns", "data", "results")
+    )
+    _collect_thread_snapshot_payload(payload.get("thread"), snapshot)
+    if _collect_turn_snapshot_from_entry(payload.get("turn"), snapshot):
+        snapshot.found = True
+    _collect_turn_items(payload.get("items"), snapshot)
+
+
+def _collect_turn_snapshot_from_turn_collections(
+    payload: Dict[str, Any], snapshot: _ResumeTurnSnapshot, keys: tuple[str, ...]
+) -> None:
+    for key in keys:
+        values = payload.get(key)
+        if isinstance(values, list):
+            _collect_turn_snapshot_from_list(values, snapshot)
+
+
+def _collect_thread_snapshot_payload(
+    thread: Any, snapshot: _ResumeTurnSnapshot
+) -> None:
+    if not isinstance(thread, dict):
+        return
+    _collect_thread_turn_items(thread, snapshot)
+    _collect_turn_snapshot_from_list(thread.get("turns"), snapshot)
+
+
+def _collect_turn_items(items: Any, snapshot: _ResumeTurnSnapshot) -> None:
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        _collect_turn_snapshot_from_item(item, snapshot)
+
+
+def _collect_turn_snapshot_from_list(turns: Any, snapshot: _ResumeTurnSnapshot) -> None:
+    if not isinstance(turns, list):
+        return
+    for turn in turns:
+        if _collect_turn_snapshot_from_entry(turn, snapshot):
+            snapshot.found = True
+
+
+def _collect_turn_snapshot_from_entry(turn: Any, snapshot: _ResumeTurnSnapshot) -> bool:
+    if not isinstance(turn, dict):
+        return False
+    if extract_turn_id(turn) != snapshot.target_turn_id:
+        return False
+    if snapshot.status is None:
+        snapshot.status = _extract_status_value(turn.get("status"))
+    snapshot.agent_messages.extend(
+        _extract_agent_messages_from_container(turn, snapshot.target_turn_id)
+    )
+    snapshot.errors.extend(_extract_errors_from_container(turn))
+    return True
+
+
+def _collect_turn_snapshot_from_item(item: Any, snapshot: _ResumeTurnSnapshot) -> None:
+    if not isinstance(item, dict):
+        return
+    item_turn_id = extract_turn_id(item)
+    if item_turn_id != snapshot.target_turn_id:
+        return
+    text = _extract_agent_message_text(item)
+    if text:
+        snapshot.agent_messages.append(text)
+
+
+def _collect_thread_turn_items(
+    thread: Dict[str, Any], snapshot: _ResumeTurnSnapshot
+) -> None:
+    thread_items = thread.get("items")
+    if not isinstance(thread_items, list):
+        return
+    for item in thread_items:
+        _collect_turn_snapshot_from_item(item, snapshot)
 
 
 @no_type_check
