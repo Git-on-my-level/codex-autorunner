@@ -8,10 +8,12 @@ from typing import Any, Awaitable, Callable, Optional
 import typer
 
 from ....core.config import ConfigError, load_hub_config
+from ....core.logging_utils import setup_rotating_logger
 from ....integrations.discord.command_registry import sync_commands
 from ....integrations.discord.commands import build_application_commands
 from ....integrations.discord.config import DiscordBotConfig, DiscordBotConfigError
 from ....integrations.discord.rest import DiscordRestClient
+from ....integrations.discord.service import create_discord_bot_service
 
 
 def _require_discord_feature(require_optional_feature: Callable) -> None:
@@ -59,7 +61,27 @@ def register_discord_commands(
         ),
     ) -> None:
         _require_discord_feature(require_optional_feature)
-        raise NotImplementedError("Discord bot start is not implemented yet.")
+        try:
+            config = load_hub_config(path or Path.cwd())
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+        try:
+            discord_raw = (
+                config.raw.get("discord_bot") if isinstance(config.raw, dict) else {}
+            )
+            discord_cfg = DiscordBotConfig.from_raw(
+                root=config.root,
+                raw=discord_raw if isinstance(discord_raw, dict) else {},
+            )
+            if not discord_cfg.enabled:
+                raise_exit("discord_bot is disabled; set discord_bot.enabled: true")
+            logger = setup_rotating_logger("codex-autorunner-discord", config.log)
+            service = create_discord_bot_service(discord_cfg, logger=logger)
+            asyncio.run(service.run_forever())
+        except DiscordBotConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+        except KeyboardInterrupt:
+            typer.echo("Discord bot stopped.")
 
     @app.command("health")
     def discord_health(

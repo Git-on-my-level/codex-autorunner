@@ -1,5 +1,6 @@
 """Discord integration scaffold."""
 
+from .allowlist import DiscordAllowlist, allowlist_allows
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .config import (
@@ -23,8 +24,17 @@ from .gateway import (
     calculate_reconnect_backoff,
     parse_gateway_frame,
 )
+from .interactions import (
+    extract_channel_id,
+    extract_command_path_and_options,
+    extract_guild_id,
+    extract_interaction_id,
+    extract_interaction_token,
+    extract_user_id,
+)
 from .outbox import DiscordOutboxManager
 from .rest import DiscordRestClient
+from .service import DiscordBotService, create_discord_bot_service
 from .state import DiscordStateStore, OutboxRecord
 
 __all__ = [
@@ -37,6 +47,14 @@ __all__ = [
     "DiscordBotConfigError",
     "DiscordCommandRegistration",
     "DiscordBotConfig",
+    "DiscordAllowlist",
+    "allowlist_allows",
+    "extract_command_path_and_options",
+    "extract_interaction_id",
+    "extract_interaction_token",
+    "extract_channel_id",
+    "extract_guild_id",
+    "extract_user_id",
     "build_application_commands",
     "sync_commands",
     "DiscordError",
@@ -50,5 +68,7 @@ __all__ = [
     "OutboxRecord",
     "DiscordStateStore",
     "DiscordOutboxManager",
+    "DiscordBotService",
+    "create_discord_bot_service",
     "DiscordRestClient",
 ]
