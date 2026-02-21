@@ -9,6 +9,7 @@ from .constants import (
     DISCORD_MAX_MESSAGE_LENGTH,
 )
 from .errors import DiscordAPIError, DiscordConfigError, DiscordError
+from .rest import DiscordRestClient
 
 __all__ = [
     "DISCORD_API_BASE_URL",
@@ -20,4 +21,5 @@ __all__ = [
     "DiscordError",
     "DiscordConfigError",
     "DiscordAPIError",
+    "DiscordRestClient",
 ]
