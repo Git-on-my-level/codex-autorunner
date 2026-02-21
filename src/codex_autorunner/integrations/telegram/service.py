@@ -53,6 +53,7 @@ from .config import (
     TelegramBotLockError,
     TelegramMediaCandidate,
 )
+from .config import TelegramBotConfigError as TelegramBotConfigError  # re-export
 from .constants import (
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     QUEUED_PLACEHOLDER_TEXT,
