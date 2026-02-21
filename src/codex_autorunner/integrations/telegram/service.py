@@ -46,6 +46,7 @@ from .adapter import (
     TelegramUpdatePoller,
 )
 from .chat_adapter import TelegramChatAdapter
+from .chat_state_store import TelegramChatStateStore
 from .chat_transport import TelegramChatTransport
 from .commands_registry import build_command_payloads, diff_command_lists
 from .config import (
@@ -260,10 +261,11 @@ class TelegramBotService(
             poller=self._poller,
         )
         self._chat_transport = TelegramChatTransport(self)
+        self._chat_state_store = TelegramChatStateStore(self._store)
         self._chat_core = ChatBotServiceCore(
             owner=self,
             runtime_services=self._runtime_services,
-            state_store=self._store,
+            state_store=self._chat_state_store,
             adapter=self._chat_adapter,
             transport=self._chat_transport,
         )

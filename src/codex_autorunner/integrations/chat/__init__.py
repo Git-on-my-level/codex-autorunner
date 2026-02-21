@@ -65,7 +65,8 @@ from .models import (
 )
 from .renderer import RenderedText, TextRenderer
 from .runtime import iter_exception_chain
-from .service import ChatBotServiceCore, ChatStateStore
+from .service import ChatBotServiceCore
+from .state_store import ChatOutboxRecord, ChatPendingApprovalRecord, ChatStateStore
 from .transport import ChatTransport
 
 __all__ = [
@@ -88,6 +89,8 @@ __all__ = [
     "ChatInteractionRef",
     "ChatMessageEvent",
     "ChatMessageRef",
+    "ChatOutboxRecord",
+    "ChatPendingApprovalRecord",
     "ChatQuestionHandlers",
     "ChatSelectionHandlers",
     "ChatStateStore",

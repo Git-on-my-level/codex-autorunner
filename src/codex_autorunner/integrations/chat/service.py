@@ -9,20 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Optional, Protocol
+from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from .adapter import ChatAdapter
 from .dispatcher import ChatDispatcher
 from .models import ChatEvent
+from .state_store import ChatStateStore
 from .transport import ChatTransport
-
-
-class ChatStateStore(Protocol):
-    """Minimal state-store contract owned by the chat service core."""
-
-    async def close(self) -> None: ...
 
 
 class ChatBotServiceCore:
