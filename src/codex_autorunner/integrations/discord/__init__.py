@@ -1,5 +1,10 @@
 """Discord integration scaffold."""
 
+from .config import (
+    DiscordBotConfig,
+    DiscordBotConfigError,
+    DiscordCommandRegistration,
+)
 from .constants import (
     DISCORD_API_BASE_URL,
     DISCORD_GATEWAY_URL,
@@ -25,6 +30,9 @@ __all__ = [
     "DISCORD_INTENT_GUILD_MESSAGES",
     "DISCORD_INTENT_MESSAGE_CONTENT",
     "DISCORD_MAX_MESSAGE_LENGTH",
+    "DiscordBotConfigError",
+    "DiscordCommandRegistration",
+    "DiscordBotConfig",
     "DiscordError",
     "DiscordConfigError",
     "DiscordAPIError",
