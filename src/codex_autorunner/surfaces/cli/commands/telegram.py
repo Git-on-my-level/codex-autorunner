@@ -71,6 +71,8 @@ def register_telegram_commands(
         voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
         update_repo_url = config.update_repo_url
         update_repo_ref = config.update_repo_ref
+        update_backend = config.update_backend
+        update_linux_service_names = config.update_linux_service_names
 
         async def _run() -> None:
             service = TelegramBotService(
@@ -83,6 +85,8 @@ def register_telegram_commands(
                 update_repo_url=update_repo_url,
                 update_repo_ref=update_repo_ref,
                 update_skip_checks=config.update_skip_checks,
+                update_backend=update_backend,
+                update_linux_service_names=update_linux_service_names,
                 app_server_auto_restart=config.app_server.auto_restart,
             )
             await service.run_polling()

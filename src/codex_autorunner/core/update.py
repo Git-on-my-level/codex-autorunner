@@ -50,6 +50,51 @@ def _normalize_update_target(raw: Optional[str]) -> str:
     raise ValueError("Unsupported update target (use both, web, or telegram).")
 
 
+def _normalize_update_backend(raw: Optional[str]) -> str:
+    if raw is None:
+        return "auto"
+    value = str(raw).strip().lower()
+    if value in ("", "auto", "launchd", "systemd-user"):
+        return value or "auto"
+    raise ValueError("Unsupported update backend (use auto, launchd, or systemd-user).")
+
+
+def _resolve_update_backend(raw: Optional[str]) -> str:
+    backend = _normalize_update_backend(raw)
+    if backend != "auto":
+        return backend
+    if sys.platform == "darwin":
+        return "launchd"
+    if sys.platform.startswith("linux"):
+        return "systemd-user"
+    if shutil.which("systemctl") is not None:
+        return "systemd-user"
+    return "launchd"
+
+
+def _required_update_commands(backend: str) -> tuple[str, ...]:
+    base = ("git", "bash", "curl")
+    if backend == "launchd":
+        return (*base, "launchctl")
+    if backend == "systemd-user":
+        return (*base, "systemctl")
+    raise ValueError(f"Unsupported update backend: {backend}")
+
+
+def _refresh_script(backend: str, update_dir: Path) -> Optional[Path]:
+    if backend == "launchd":
+        return update_dir / "scripts" / "safe-refresh-local-mac-hub.sh"
+    if backend == "systemd-user":
+        return update_dir / "scripts" / "safe-refresh-local-linux-hub.sh"
+    return None
+
+
+def _backend_refresh_label(backend: str) -> str:
+    if backend == "systemd-user":
+        return "systemd user service"
+    return "launchd service"
+
+
 def _normalize_update_ref(raw: Optional[str]) -> str:
     value = str(raw or "").strip()
     return value or "main"
@@ -377,7 +422,10 @@ def _system_update_worker(
     update_dir: Path,
     logger: logging.Logger,
     update_target: str = "both",
+    update_backend: str = "auto",
     skip_checks: bool = False,
+    linux_hub_service_name: Optional[str] = None,
+    linux_telegram_service_name: Optional[str] = None,
 ) -> None:
     status_path = _update_status_path()
     lock_acquired = False
@@ -400,6 +448,13 @@ def _system_update_worker(
         except UpdateInProgressError:
             return
 
+        try:
+            resolved_backend = _resolve_update_backend(update_backend)
+        except ValueError as exc:
+            msg = str(exc)
+            logger.error(msg)
+            _write_update_status("error", msg)
+            return
         _write_update_status(
             "running",
             "Update started.",
@@ -407,10 +462,11 @@ def _system_update_worker(
             update_dir=str(update_dir),
             repo_ref=repo_ref,
             update_target=update_target,
+            update_backend=resolved_backend,
         )
 
         missing = []
-        for cmd in ("git", "bash", "launchctl", "curl"):
+        for cmd in _required_update_commands(resolved_backend):
             if shutil.which(cmd) is None:
                 missing.append(cmd)
         if missing:
@@ -472,8 +528,13 @@ def _system_update_worker(
             except Exception as exc:
                 logger.warning("Checks failed; continuing with refresh. %s", exc)
 
-        logger.info("Refreshing launchd service...")
-        refresh_script = update_dir / "scripts" / "safe-refresh-local-mac-hub.sh"
+        logger.info("Refreshing %s...", _backend_refresh_label(resolved_backend))
+        refresh_script = _refresh_script(resolved_backend, update_dir=update_dir)
+        if refresh_script is None:
+            msg = f"Unsupported update backend: {update_backend}"
+            logger.error(msg)
+            _write_update_status("error", msg)
+            return
         if not refresh_script.exists():
             msg = f"Missing safe refresh script at {refresh_script}."
             logger.error(msg)
@@ -484,6 +545,15 @@ def _system_update_worker(
         env["PACKAGE_SRC"] = str(update_dir)
         env["UPDATE_STATUS_PATH"] = str(status_path)
         env["UPDATE_TARGET"] = update_target
+        env["UPDATE_BACKEND"] = resolved_backend
+        # Keep install/status writes bound to the running service interpreter.
+        if sys.executable:
+            env["HELPER_PYTHON"] = sys.executable
+        if resolved_backend == "systemd-user":
+            if linux_hub_service_name:
+                env["UPDATE_HUB_SERVICE_NAME"] = linux_hub_service_name
+            if linux_telegram_service_name:
+                env["UPDATE_TELEGRAM_SERVICE_NAME"] = linux_telegram_service_name
 
         proc = subprocess.Popen(
             [str(refresh_script)],
@@ -530,10 +600,13 @@ def _spawn_update_process(
     update_dir: Path,
     logger: logging.Logger,
     update_target: str = "both",
+    update_backend: str = "auto",
     skip_checks: bool = False,
     notify_chat_id: Optional[int] = None,
     notify_thread_id: Optional[int] = None,
     notify_reply_to: Optional[int] = None,
+    linux_hub_service_name: Optional[str] = None,
+    linux_telegram_service_name: Optional[str] = None,
 ) -> None:
     active = _update_lock_active()
     if active:
@@ -549,6 +622,9 @@ def _spawn_update_process(
         update_dir=str(update_dir),
         repo_ref=repo_ref,
         update_target=update_target,
+        update_backend=update_backend,
+        linux_hub_service_name=linux_hub_service_name,
+        linux_telegram_service_name=linux_telegram_service_name,
         log_path=str(log_path),
         notify_chat_id=notify_chat_id,
         notify_thread_id=notify_thread_id,
@@ -570,6 +646,11 @@ def _spawn_update_process(
         "--log-path",
         str(log_path),
     ]
+    cmd.extend(["--backend", update_backend])
+    if linux_hub_service_name:
+        cmd.extend(["--hub-service-name", linux_hub_service_name])
+    if linux_telegram_service_name:
+        cmd.extend(["--telegram-service-name", linux_telegram_service_name])
     if skip_checks:
         cmd.append("--skip-checks")
     try:

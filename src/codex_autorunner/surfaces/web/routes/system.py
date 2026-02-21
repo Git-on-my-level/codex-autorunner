@@ -34,8 +34,12 @@ _system_update_worker = update_core._system_update_worker
 _update_lock_active = update_core._update_lock_active
 _update_lock_path = update_core._update_lock_path
 _update_status_path = update_core._update_status_path
+_normalize_update_backend = update_core._normalize_update_backend
+_resolve_update_backend = update_core._resolve_update_backend
+_required_update_commands = update_core._required_update_commands
 shutil = update_core.shutil
 subprocess = update_core.subprocess
+sys = update_core.sys
 
 
 def build_system_routes() -> APIRouter:
@@ -143,6 +147,9 @@ def build_system_routes() -> APIRouter:
         repo_url = "https://github.com/Git-on-my-level/codex-autorunner.git"
         repo_ref = "main"
         skip_checks = False
+        update_backend = "auto"
+        linux_hub_service_name = None
+        linux_telegram_service_name = None
         if config and isinstance(config, HubConfig):
             configured_url = getattr(config, "update_repo_url", None)
             if configured_url:
@@ -151,8 +158,18 @@ def build_system_routes() -> APIRouter:
             if configured_ref:
                 repo_ref = configured_ref
             skip_checks = bool(getattr(config, "update_skip_checks", False))
+            update_backend = getattr(config, "update_backend", update_backend)
+            update_services = getattr(config, "update_linux_service_names", None)
+            if isinstance(update_services, dict):
+                linux_hub_service_name = update_services.get("hub")
+                linux_telegram_service_name = update_services.get("telegram")
         elif config is not None:
             skip_checks = bool(getattr(config, "update_skip_checks", False))
+            update_backend = getattr(config, "update_backend", update_backend)
+            update_services = getattr(config, "update_linux_service_names", None)
+            if isinstance(update_services, dict):
+                linux_hub_service_name = update_services.get("hub")
+                linux_telegram_service_name = update_services.get("telegram")
 
         update_dir = resolve_update_paths(config=config).cache_dir
 
@@ -172,6 +189,17 @@ def build_system_routes() -> APIRouter:
                 logger=logger,
                 update_target=update_target,
                 skip_checks=skip_checks,
+                update_backend=update_backend,
+                linux_hub_service_name=(
+                    linux_hub_service_name
+                    if isinstance(linux_hub_service_name, str)
+                    else None
+                ),
+                linux_telegram_service_name=(
+                    linux_telegram_service_name
+                    if isinstance(linux_telegram_service_name, str)
+                    else None
+                ),
             )
             return {
                 "status": "ok",

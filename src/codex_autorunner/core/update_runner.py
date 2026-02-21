@@ -23,6 +23,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--update-dir", required=True)
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--target", default="both")
+    parser.add_argument("--backend", default="auto")
+    parser.add_argument("--hub-service-name")
+    parser.add_argument("--telegram-service-name")
     parser.add_argument("--skip-checks", action="store_true")
     args = parser.parse_args(argv)
 
@@ -37,7 +40,10 @@ def main(argv: list[str] | None = None) -> int:
         update_dir=update_dir,
         logger=logger,
         update_target=args.target,
+        update_backend=args.backend,
         skip_checks=bool(args.skip_checks),
+        linux_hub_service_name=args.hub_service_name,
+        linux_telegram_service_name=args.telegram_service_name,
     )
     return 0
 
