@@ -3,6 +3,7 @@
     "python:class:src/codex_autorunner/core/app_server_logging.py:72:AppServerEventFormatter",
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
     "python:class:src/codex_autorunner/integrations/chat/testing.py:93:FakeChatAdapter",
+    "python:class:src/codex_autorunner/integrations/telegram/chat_adapter.py:79:TelegramChatAdapter",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:212:GithubIssueRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:216:GithubContextRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:220:GithubPrSyncRequest",
