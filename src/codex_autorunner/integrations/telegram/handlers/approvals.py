@@ -24,6 +24,8 @@ from ..types import PendingApproval
 
 
 class TelegramApprovalHandlers(ChatApprovalHandlers):
+    _platform = "telegram"
+
     async def _restore_pending_approvals(self) -> None:
         state = await self._store.load()
         if not state.pending_approvals:
@@ -54,7 +56,7 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.approval.restore_failed",
+                    f"{self._platform}.approval.restore_failed",
                     chat_id=chat_id,
                     thread_id=thread_id,
                 )
@@ -90,7 +92,7 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
         log_event(
             self._logger,
             logging.INFO,
-            "telegram.approval.requested",
+            f"{self._platform}.approval.requested",
             request_id=request_id,
             turn_id=turn_id,
             chat_id=ctx.chat_id,
@@ -102,7 +104,7 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.approval.callback_too_long",
+                f"{self._platform}.approval.callback_too_long",
                 request_id=request_id,
             )
             await self._store.clear_pending_approval(request_id)
@@ -128,7 +130,7 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.approval.send_failed",
+                f"{self._platform}.approval.send_failed",
                 request_id=request_id,
                 turn_id=turn_id,
                 chat_id=ctx.chat_id,
@@ -179,7 +181,7 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.approval.timeout",
+                f"{self._platform}.approval.timeout",
                 request_id=request_id,
                 turn_id=turn_id,
                 chat_id=ctx.chat_id,

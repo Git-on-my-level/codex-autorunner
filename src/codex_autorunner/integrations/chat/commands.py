@@ -25,6 +25,17 @@ def parse_chat_command(
 
     This parser is platform-agnostic and intentionally limited to plain-text
     command detection; adapters can provide stricter entity-aware parsing.
+
+    TODO: For Discord/Slack readiness, this parser needs enhancement:
+    - Discord: Commands come as application interactions (not plain text),
+      but message content may contain /commands. Discord uses @botmention
+      syntax differently - consider supporting "!/command" prefix used by
+      some bots.
+    - Slack: Commands come as slash command payloads from the API, but may
+      also appear in messages. Slack doesn't use @bot suffix in the same way.
+      Consider supporting "!/command" or platform-specific detection.
+    - Consider adding a platform parameter to enable platform-specific parsing
+      modes while maintaining backward compatibility.
     """
 
     raw = str(text or "").strip()

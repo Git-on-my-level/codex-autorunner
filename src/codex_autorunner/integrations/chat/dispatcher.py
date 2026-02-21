@@ -288,7 +288,14 @@ def conversation_id_for(platform: str, chat_id: str, thread_id: Optional[str]) -
 
 
 def is_bypass_event(event: ChatEvent) -> bool:
-    """Return True for events that should bypass per-conversation queues."""
+    """Return True for events that should bypass per-conversation queues.
+
+    TODO: The legacy Telegram prefixes below are hardcoded for backward
+    compatibility with existing callback data. For Discord/Slack readiness,
+    these should be made configurable via dispatcher initialization or
+    replaced entirely with logical callback ID checks (which are already
+    performed below).
+    """
 
     if isinstance(event, ChatInteractionEvent):
         payload = (event.payload or "").strip().lower()

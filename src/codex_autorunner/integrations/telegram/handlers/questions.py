@@ -77,6 +77,8 @@ async def handle_custom_text_input(handlers: Any, message: TelegramMessage) -> b
 
 
 class TelegramQuestionHandlers(ChatQuestionHandlers):
+    _platform = "telegram"
+
     async def _handle_question_request(
         self,
         *,
@@ -113,7 +115,7 @@ class TelegramQuestionHandlers(ChatQuestionHandlers):
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.question.callback_too_long",
+                    f"{self._platform}.question.callback_too_long",
                     request_id=request_id,
                     question_index=index,
                 )
@@ -146,7 +148,7 @@ class TelegramQuestionHandlers(ChatQuestionHandlers):
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.question.send_failed",
+                    f"{self._platform}.question.send_failed",
                     request_id=request_id,
                     question_index=index,
                     chat_id=ctx.chat_id,
@@ -195,7 +197,7 @@ class TelegramQuestionHandlers(ChatQuestionHandlers):
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.question.timeout",
+                    f"{self._platform}.question.timeout",
                     request_id=request_id,
                     question_index=index,
                     chat_id=ctx.chat_id,

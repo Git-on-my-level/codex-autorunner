@@ -37,6 +37,7 @@ class ChatBotServiceCore:
         adapter: Optional[ChatAdapter] = None,
         transport: Optional[ChatTransport] = None,
         dispatcher: Optional[ChatDispatcher] = None,
+        platform: str = "telegram",
     ) -> None:
         self._owner = owner
         self._runtime_services = runtime_services
@@ -44,6 +45,7 @@ class ChatBotServiceCore:
         self._adapter = adapter
         self._transport = transport
         self._dispatcher = dispatcher or ChatDispatcher(logger=owner._logger)
+        self._platform = platform
 
     async def run(self) -> None:
         """Run transitional orchestration for Telegram polling mode."""
@@ -58,7 +60,7 @@ class ChatBotServiceCore:
                 log_event(
                     owner._logger,
                     logging.INFO,
-                    "telegram.process_reaper.cleaned",
+                    f"{self._platform}.process_reaper.cleaned",
                     killed=cleanup.killed,
                     signaled=cleanup.signaled,
                     removed=cleanup.removed,
@@ -68,7 +70,7 @@ class ChatBotServiceCore:
             log_event(
                 owner._logger,
                 logging.WARNING,
-                "telegram.process_reaper.failed",
+                f"{self._platform}.process_reaper.failed",
                 exc=exc,
             )
         owner._acquire_instance_lock()
@@ -97,7 +99,7 @@ class ChatBotServiceCore:
             log_event(
                 owner._logger,
                 logging.INFO,
-                "telegram.bot.started",
+                f"{self._platform}.bot.started",
                 mode=owner._config.mode,
                 poll_timeout=owner._config.poll_timeout_seconds,
                 allowed_updates=list(owner._config.poll_allowed_updates),
@@ -121,7 +123,7 @@ class ChatBotServiceCore:
                 log_event(
                     owner._logger,
                     logging.WARNING,
-                    "telegram.update.notify_failed",
+                    f"{self._platform}.update.notify_failed",
                     exc=exc,
                 )
             try:
@@ -130,7 +132,7 @@ class ChatBotServiceCore:
                 log_event(
                     owner._logger,
                     logging.WARNING,
-                    "telegram.compact.notify_failed",
+                    f"{self._platform}.compact.notify_failed",
                     exc=exc,
                 )
             while True:
@@ -145,7 +147,7 @@ class ChatBotServiceCore:
                     log_event(
                         owner._logger,
                         logging.WARNING,
-                        "telegram.poll.failed",
+                        f"{self._platform}.poll.failed",
                         exc=exc,
                     )
                     await asyncio.sleep(1.0)
@@ -195,7 +197,7 @@ class ChatBotServiceCore:
                     log_event(
                         owner._logger,
                         logging.WARNING,
-                        "telegram.bot.close_failed",
+                        f"{self._platform}.bot.close_failed",
                         exc=exc,
                     )
                 try:
@@ -204,7 +206,7 @@ class ChatBotServiceCore:
                     log_event(
                         owner._logger,
                         logging.WARNING,
-                        "telegram.runtime_services.close_failed",
+                        f"{self._platform}.runtime_services.close_failed",
                         exc=exc,
                     )
                 try:
@@ -213,7 +215,7 @@ class ChatBotServiceCore:
                     log_event(
                         owner._logger,
                         logging.WARNING,
-                        "telegram.state.close_failed",
+                        f"{self._platform}.state.close_failed",
                         exc=exc,
                     )
                 owner._release_instance_lock()
