@@ -290,10 +290,14 @@ class TelegramQuestionHandlers(ChatQuestionHandlers):
     async def _chat_delete_message(
         self, *, chat_id: str, thread_id: str | None, message_id: str
     ) -> None:
-        if not chat_id.isdigit() or not message_id.isdigit():
+        if not message_id.isdigit():
+            return
+        try:
+            parsed_chat = int(chat_id)
+        except ValueError:
             return
         parsed_thread = int(thread_id) if thread_id and thread_id.isdigit() else None
-        await self._delete_message(int(chat_id), int(message_id), parsed_thread)
+        await self._delete_message(parsed_chat, int(message_id), parsed_thread)
 
     @staticmethod
     def _build_question_keyboard(

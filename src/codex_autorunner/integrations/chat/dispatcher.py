@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Deque, Dict, Optional, Protocol, Union
 
 from ...core.logging_utils import log_event
+from .callbacks import decode_logical_callback
 from .models import ChatEvent, ChatInteractionEvent, ChatMessageEvent
 
 
@@ -237,7 +238,6 @@ class ChatDispatcher:
                 update_id=context.update_id,
                 exc=exc,
             )
-            raise
         log_event(
             self._logger,
             logging.INFO,
@@ -292,7 +292,7 @@ def is_bypass_event(event: ChatEvent) -> bool:
 
     if isinstance(event, ChatInteractionEvent):
         payload = (event.payload or "").strip().lower()
-        return payload.startswith(
+        if payload.startswith(
             (
                 "appr:",
                 "qopt:",
@@ -301,7 +301,18 @@ def is_bypass_event(event: ChatEvent) -> bool:
                 "qcancel:",
                 "cancel:interrupt",
             )
-        )
+        ):
+            return True
+        logical = decode_logical_callback(payload)
+        if logical and logical.callback_id in {
+            "approval",
+            "question_option",
+            "question_done",
+            "question_custom",
+            "question_cancel",
+            "interrupt",
+        }:
+            return True
     text = (event.text or "").strip().lower()
     return text in {"^c", "ctrl-c", "ctrl+c", "esc", "escape", "/stop", "/interrupt"}
 
