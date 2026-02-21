@@ -21,7 +21,9 @@ from .gateway import (
     calculate_reconnect_backoff,
     parse_gateway_frame,
 )
+from .outbox import DiscordOutboxManager
 from .rest import DiscordRestClient
+from .state import DiscordStateStore, OutboxRecord
 
 __all__ = [
     "DISCORD_API_BASE_URL",
@@ -41,5 +43,8 @@ __all__ = [
     "parse_gateway_frame",
     "calculate_reconnect_backoff",
     "DiscordGatewayClient",
+    "OutboxRecord",
+    "DiscordStateStore",
+    "DiscordOutboxManager",
     "DiscordRestClient",
 ]
