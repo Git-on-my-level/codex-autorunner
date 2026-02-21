@@ -1,5 +1,7 @@
 """Discord integration scaffold."""
 
+from .command_registry import sync_commands
+from .commands import build_application_commands
 from .config import (
     DiscordBotConfig,
     DiscordBotConfigError,
@@ -35,6 +37,8 @@ __all__ = [
     "DiscordBotConfigError",
     "DiscordCommandRegistration",
     "DiscordBotConfig",
+    "build_application_commands",
+    "sync_commands",
     "DiscordError",
     "DiscordConfigError",
     "DiscordAPIError",

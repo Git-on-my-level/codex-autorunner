@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import typer
+
+from ....core.config import ConfigError, load_hub_config
+from ....integrations.discord.command_registry import sync_commands
+from ....integrations.discord.commands import build_application_commands
+from ....integrations.discord.config import DiscordBotConfig, DiscordBotConfigError
+from ....integrations.discord.rest import DiscordRestClient
 
 
 def _require_discord_feature(require_optional_feature: Callable) -> None:
@@ -12,6 +20,30 @@ def _require_discord_feature(require_optional_feature: Callable) -> None:
         deps=[("websockets", "websockets")],
         extra="discord",
     )
+
+
+async def _sync_discord_application_commands(
+    config: DiscordBotConfig,
+    *,
+    logger: logging.Logger,
+    rest_client_factory: Callable[..., Any] = DiscordRestClient,
+    sync_func: Callable[..., Awaitable[None]] = sync_commands,
+) -> None:
+    if not config.bot_token:
+        raise DiscordBotConfigError(f"missing bot token env '{config.bot_token_env}'")
+    if not config.application_id:
+        raise DiscordBotConfigError(f"missing application id env '{config.app_id_env}'")
+
+    commands = build_application_commands()
+    async with rest_client_factory(bot_token=config.bot_token) as rest:
+        await sync_func(
+            rest,
+            application_id=config.application_id,
+            commands=commands,
+            scope=config.command_registration.scope,
+            guild_ids=config.command_registration.guild_ids,
+            logger=logger,
+        )
 
 
 def register_discord_commands(
@@ -45,6 +77,28 @@ def register_discord_commands(
         ),
     ) -> None:
         _require_discord_feature(require_optional_feature)
-        raise NotImplementedError(
-            "Discord slash command registration is not implemented yet."
-        )
+        try:
+            config = load_hub_config(path or Path.cwd())
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+
+        try:
+            discord_raw = (
+                config.raw.get("discord_bot") if isinstance(config.raw, dict) else {}
+            )
+            discord_cfg = DiscordBotConfig.from_raw(
+                root=config.root,
+                raw=discord_raw if isinstance(discord_raw, dict) else {},
+            )
+            if not discord_cfg.enabled:
+                raise_exit("discord_bot is disabled; set discord_bot.enabled: true")
+            asyncio.run(
+                _sync_discord_application_commands(
+                    discord_cfg,
+                    logger=logging.getLogger("codex_autorunner.discord.commands"),
+                )
+            )
+        except (DiscordBotConfigError, ValueError) as exc:
+            raise_exit(str(exc), cause=exc)
+
+        typer.echo("Discord application commands synchronized.")
