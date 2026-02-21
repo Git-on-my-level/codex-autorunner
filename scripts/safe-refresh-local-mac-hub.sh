@@ -1049,6 +1049,9 @@ echo "Switching ${CURRENT_VENV_LINK} -> ${next_venv}"
 ln -sfn "${next_venv}" "${CURRENT_VENV_LINK}"
 swap_completed=true
 
+echo "Updating global car CLI..."
+pipx install --force "${PACKAGE_SRC}"
+
 if [[ "${should_reload_hub}" == "true" ]]; then
   echo "Restarting launchd service ${LABEL}..."
   _ensure_plist_uses_current_venv
