@@ -1222,6 +1222,37 @@ main {
   font-size: 10px;
 }
 
+.hub-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hub-repo-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hub-repo-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.hub-repo-select {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
 .hub-panel-actions {
   display: flex;
   gap: 4px;
@@ -1479,6 +1510,12 @@ a.hub-pr-pill:hover {
   gap: 4px;
   flex-wrap: nowrap;
   flex-shrink: 0;
+}
+
+.hub-pin-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(108, 245, 216, 0.08);
 }
 
 .hub-empty {
@@ -7177,6 +7214,29 @@ button.loading::after {
   .hub-panel-header {
     padding-bottom: 6px;
     margin-bottom: 6px;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .hub-panel-title {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .hub-repo-controls {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .hub-repo-control {
+    flex: 1 1 160px;
+  }
+
+  .hub-repo-select {
+    width: 100%;
   }
 
   .hub-repo-list {

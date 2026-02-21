@@ -150,11 +150,13 @@ class RepoSnapshot:
 class HubState:
     last_scan_at: Optional[str]
     repos: List[RepoSnapshot]
+    pinned_parent_repo_ids: List[str] = dataclasses.field(default_factory=list)
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         return {
             "last_scan_at": self.last_scan_at,
             "repos": [repo.to_dict(hub_root) for repo in self.repos],
+            "pinned_parent_repo_ids": list(self.pinned_parent_repo_ids or []),
         }
 
 
@@ -172,7 +174,7 @@ def read_lock_status(lock_path: Path) -> LockStatus:
 
 def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
     if not state_path.exists():
-        return HubState(last_scan_at=None, repos=[])
+        return HubState(last_scan_at=None, repos=[], pinned_parent_repo_ids=[])
     data = state_path.read_text(encoding="utf-8")
     try:
         import json
@@ -180,8 +182,11 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         payload = json.loads(data)
     except Exception as exc:
         logger.warning("Failed to parse hub state from %s: %s", state_path, exc)
-        return HubState(last_scan_at=None, repos=[])
+        return HubState(last_scan_at=None, repos=[], pinned_parent_repo_ids=[])
     last_scan_at = payload.get("last_scan_at")
+    pinned_parent_repo_ids = _normalize_pinned_parent_repo_ids(
+        payload.get("pinned_parent_repo_ids")
+    )
     repos_payload = payload.get("repos") or []
     repos: List[RepoSnapshot] = []
     for entry in repos_payload:
@@ -226,7 +231,11 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 exc,
             )
             continue
-    return HubState(last_scan_at=last_scan_at, repos=repos)
+    return HubState(
+        last_scan_at=last_scan_at,
+        repos=repos,
+        pinned_parent_repo_ids=pinned_parent_repo_ids,
+    )
 
 
 def save_hub_state(state_path: Path, state: HubState, hub_root: Path) -> None:
@@ -234,6 +243,22 @@ def save_hub_state(state_path: Path, state: HubState, hub_root: Path) -> None:
     import json
 
     atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
+
+
+def _normalize_pinned_parent_repo_ids(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        repo_id = item.strip()
+        if not repo_id or repo_id in seen:
+            continue
+        seen.add(repo_id)
+        out.append(repo_id)
+    return out
 
 
 class RepoRunner:
@@ -345,7 +370,12 @@ class HubSupervisor:
         self._invalidate_list_cache()
         manifest, records = discover_and_init(self.hub_config)
         snapshots = self._build_snapshots(records)
-        self.state = HubState(last_scan_at=now_iso(), repos=snapshots)
+        pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
+        self.state = HubState(
+            last_scan_at=now_iso(),
+            repos=snapshots,
+            pinned_parent_repo_ids=pinned_parent_repo_ids,
+        )
         save_hub_state(self.state_path, self.state, self.hub_config.root)
         return snapshots
 
@@ -356,11 +386,39 @@ class HubSupervisor:
                     return self._list_cache
             manifest, records = self._manifest_records(manifest_only=True)
             snapshots = self._build_snapshots(records)
-            self.state = HubState(last_scan_at=self.state.last_scan_at, repos=snapshots)
+            pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
+            self.state = HubState(
+                last_scan_at=self.state.last_scan_at,
+                repos=snapshots,
+                pinned_parent_repo_ids=pinned_parent_repo_ids,
+            )
             save_hub_state(self.state_path, self.state, self.hub_config.root)
             self._list_cache = snapshots
             self._list_cache_at = time.monotonic()
             return snapshots
+
+    def set_parent_repo_pinned(self, repo_id: str, pinned: bool) -> List[str]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        repo = manifest.get(repo_id)
+        if not repo:
+            raise ValueError(f"Repo {repo_id} not found in manifest")
+        if repo.kind != "base":
+            raise ValueError("Only base repos can be pinned")
+
+        with self._list_lock:
+            current = list(self.state.pinned_parent_repo_ids or [])
+            if pinned:
+                if repo_id not in current:
+                    current.append(repo_id)
+            else:
+                current = [item for item in current if item != repo_id]
+            self.state = HubState(
+                last_scan_at=self.state.last_scan_at,
+                repos=self.state.repos,
+                pinned_parent_repo_ids=_normalize_pinned_parent_repo_ids(current),
+            )
+            save_hub_state(self.state_path, self.state, self.hub_config.root)
+            return list(self.state.pinned_parent_repo_ids)
 
     def _reconcile_startup(self) -> None:
         try:
@@ -1148,6 +1206,11 @@ class HubSupervisor:
         for record in records:
             snapshots.append(self._snapshot_from_record(record))
         return snapshots
+
+    def _prune_pinned_parent_repo_ids(self, snapshots: List[RepoSnapshot]) -> List[str]:
+        base_repo_ids = {snap.id for snap in snapshots if snap.kind == "base"}
+        pinned = _normalize_pinned_parent_repo_ids(self.state.pinned_parent_repo_ids)
+        return [repo_id for repo_id in pinned if repo_id in base_repo_ids]
 
     def _snapshot_for_repo(self, repo_id: str) -> RepoSnapshot:
         _, records = self._manifest_records(manifest_only=True)

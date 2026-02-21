@@ -157,6 +157,61 @@ def test_hub_api_lists_repos(tmp_path: Path):
     assert data["repos"][0]["id"] == "demo"
 
 
+def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    pin_resp = client.post("/hub/repos/demo/pin", json={"pinned": True})
+    assert pin_resp.status_code == 200
+    assert "demo" in pin_resp.json()["pinned_parent_repo_ids"]
+
+    list_resp = client.get("/hub/repos")
+    assert list_resp.status_code == 200
+    assert "demo" in list_resp.json()["pinned_parent_repo_ids"]
+
+    state_path = hub_root / ".codex-autorunner" / "hub_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "demo" in state["pinned_parent_repo_ids"]
+
+    unpin_resp = client.post("/hub/repos/demo/pin", json={"pinned": False})
+    assert unpin_resp.status_code == 200
+    assert "demo" not in unpin_resp.json()["pinned_parent_repo_ids"]
+
+
+def test_hub_pin_parent_repo_rejects_worktree(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/pin-reject",
+        start_point="HEAD",
+    )
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.post(f"/hub/repos/{worktree.id}/pin", json={"pinned": True})
+    assert resp.status_code == 400
+    assert "Only base repos can be pinned" in resp.json()["detail"]
+
+
 def test_list_repos_thread_safety(tmp_path: Path):
     """Test that list_repos is thread-safe and doesn't return None or inconsistent state."""
     hub_root = tmp_path / "hub"
