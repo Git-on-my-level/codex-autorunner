@@ -354,7 +354,7 @@ if [[ ! -d "${PIPX_VENV}" ]]; then
   fi
 fi
 
-for cmd in git launchctl curl; do
+for cmd in git launchctl curl pipx; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     fail "Missing required command: ${cmd}."
   fi
@@ -1075,6 +1075,8 @@ if [[ "${health_ok}" == "true" ]]; then
   if [[ -n "${telegram_health_reason}" ]]; then
     status_msg+=" ${telegram_health_reason}"
   fi
+  echo "Updating global car CLI..."
+  pipx install --force "${PACKAGE_SRC}"
   write_status "ok" "${status_msg}"
 else
   _rollback "Health check failed; rolling back to ${current_target}..."
