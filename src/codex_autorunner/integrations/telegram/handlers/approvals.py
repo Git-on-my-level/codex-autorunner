@@ -270,7 +270,8 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
             ),
             chat_id=(
                 int(interaction.thread.chat_id)
-                if interaction.thread.chat_id.isdigit()
+                if interaction.thread.chat_id
+                and interaction.thread.chat_id.lstrip("-").isdigit()
                 else None
             ),
             thread_id=(
