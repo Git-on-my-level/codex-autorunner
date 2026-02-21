@@ -15,8 +15,8 @@ from .adapter import (
     QuestionOptionCallback,
     TelegramUpdate,
     allowlist_allows,
-    parse_callback_data,
 )
+from .chat_callbacks import parse_callback_data
 from .state import topic_key
 
 

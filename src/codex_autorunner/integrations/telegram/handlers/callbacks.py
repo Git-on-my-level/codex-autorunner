@@ -22,8 +22,8 @@ from ..adapter import (
     TelegramCallbackQuery,
     UpdateCallback,
     UpdateConfirmCallback,
-    parse_callback_data,
 )
+from ..chat_callbacks import parse_callback_data
 
 
 def _selection_contains(items: Sequence[tuple[str, str]], value: str) -> bool:

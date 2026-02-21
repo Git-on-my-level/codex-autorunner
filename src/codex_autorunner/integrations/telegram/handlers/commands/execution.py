@@ -97,16 +97,10 @@ if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
 from .command_utils import (
-    _format_httpx_exception as _shared_format_httpx_exception,
-)
-from .command_utils import (
-    _format_opencode_exception as _shared_format_opencode_exception,
-)
-from .command_utils import (
-    _issue_only_link as _shared_issue_only_link,
-)
-from .command_utils import (
-    _issue_only_workflow_hint as _shared_issue_only_workflow_hint,
+    _format_httpx_exception,
+    _format_opencode_exception,
+    _issue_only_link,
+    _issue_only_workflow_hint,
 )
 from .shared import SharedHelpers
 
@@ -177,14 +171,6 @@ class _RuntimeStub:
     interrupt_requested: bool = False
     interrupt_message_id: Optional[int] = None
     interrupt_turn_id: Optional[str] = None
-
-
-def _issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
-    return _shared_issue_only_link(prompt_text, links)
-
-
-def _issue_only_workflow_hint(issue_number: int) -> str:
-    return _shared_issue_only_workflow_hint(issue_number)
 
 
 def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -305,14 +291,6 @@ def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, A
     if context_window is not None and context_window > 0:
         token_usage["modelContextWindow"] = context_window
     return token_usage
-
-
-def _format_opencode_exception(exc: Exception) -> Optional[str]:
-    return _shared_format_opencode_exception(exc)
-
-
-def _format_httpx_exception(exc: Exception) -> Optional[str]:
-    return _shared_format_httpx_exception(exc)
 
 
 def _iter_exception_chain(exc: BaseException) -> list[BaseException]:

@@ -6,6 +6,20 @@ from typing import Any, Sequence, Union
 
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
+from ...chat.handlers.models import ChatContext
+from ...chat.handlers.questions import (
+    ChatQuestionHandlers,
+)
+from ...chat.handlers.questions import (
+    handle_custom_text_input as handle_custom_text_input_chat,
+)
+from ...chat.models import (
+    ChatInteractionEvent,
+    ChatInteractionRef,
+    ChatMessageEvent,
+    ChatMessageRef,
+    ChatThreadRef,
+)
 from ..adapter import (
     QuestionCancelCallback,
     QuestionCustomCallback,
@@ -58,40 +72,13 @@ def _format_question_prompt(question: dict[str, Any], *, index: int, total: int)
 
 
 async def handle_custom_text_input(handlers: Any, message: TelegramMessage) -> bool:
-    text = message.text or ""
-    if not text:
-        return False
-    for request_id, pending in list(handlers._pending_questions.items()):
-        if (
-            pending.awaiting_custom_input
-            and pending.chat_id == message.chat_id
-            and (pending.thread_id is None or pending.thread_id == message.thread_id)
-        ):
-            handlers._pending_questions.pop(request_id, None)
-            if not pending.future.done():
-                pending.future.set_result(text)
-            log_event(
-                handlers._logger,
-                logging.INFO,
-                "telegram.question.custom_input",
-                request_id=request_id,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                text_length=len(text),
-            )
-            if pending.message_id is not None:
-                await handlers._edit_message_text(
-                    pending.chat_id,
-                    pending.message_id,
-                    f"Selected: {text}",
-                    reply_markup={"inline_keyboard": []},
-                )
-            await handlers._delete_message(message.chat_id, message.message_id)
-            return True
-    return False
+    event = _chat_message_event_from_telegram(message)
+    return await handle_custom_text_input_chat(handlers, event)
 
 
-class TelegramQuestionHandlers:
+class TelegramQuestionHandlers(ChatQuestionHandlers):
+    _platform = "telegram"
+
     async def _handle_question_request(
         self,
         *,
@@ -128,7 +115,7 @@ class TelegramQuestionHandlers:
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.question.callback_too_long",
+                    f"{self._platform}.question.callback_too_long",
                     request_id=request_id,
                     question_index=index,
                 )
@@ -161,7 +148,7 @@ class TelegramQuestionHandlers:
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.question.send_failed",
+                    f"{self._platform}.question.send_failed",
                     request_id=request_id,
                     question_index=index,
                     chat_id=ctx.chat_id,
@@ -210,7 +197,7 @@ class TelegramQuestionHandlers:
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.question.timeout",
+                    f"{self._platform}.question.timeout",
                     request_id=request_id,
                     question_index=index,
                     chat_id=ctx.chat_id,
@@ -247,143 +234,164 @@ class TelegramQuestionHandlers:
             | QuestionCancelCallback
         ),
     ) -> None:
-        pending = self._pending_questions.get(parsed.request_id)
-        if pending is None:
-            await self._answer_callback(callback, "Selection expired")
+        context = await self._chat_context_from_callback(callback)
+        interaction = _chat_interaction_event_from_telegram(callback)
+        await self.handle_question_interaction(context, interaction, parsed)
+
+    async def _chat_context_from_callback(
+        self, callback: TelegramCallbackQuery
+    ) -> ChatContext:
+        chat_id = callback.chat_id if callback.chat_id is not None else 0
+        topic_key = await self._resolve_topic_key(chat_id, callback.thread_id)
+        return ChatContext(
+            thread=ChatThreadRef(
+                platform="telegram",
+                chat_id=str(chat_id),
+                thread_id=(
+                    str(callback.thread_id) if callback.thread_id is not None else None
+                ),
+            ),
+            topic_key=topic_key,
+            user_id=(
+                str(callback.from_user_id)
+                if callback.from_user_id is not None
+                else None
+            ),
+        )
+
+    async def _chat_answer_interaction(
+        self, interaction: ChatInteractionEvent, text: str
+    ) -> None:
+        callback = _telegram_callback_from_chat(interaction)
+        await self._answer_callback(callback, text)
+
+    async def _chat_edit_message(
+        self,
+        *,
+        chat_id: int,
+        thread_id: int | None,
+        message_id: int,
+        text: str,
+        clear_actions: bool,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> None:
+        if clear_actions:
+            reply_markup = {"inline_keyboard": []}
+        await self._edit_message_text(
+            chat_id,
+            message_id,
+            text,
+            reply_markup=reply_markup,
+        )
+
+    async def _chat_send_message(
+        self, *, chat_id: int, thread_id: int | None, text: str
+    ) -> None:
+        await self._send_message(chat_id, text, thread_id=thread_id)
+
+    async def _chat_delete_message(
+        self, *, chat_id: str, thread_id: str | None, message_id: str
+    ) -> None:
+        if not message_id.isdigit():
             return
-        if pending.message_id is not None and callback.message_id != pending.message_id:
-            await self._answer_callback(callback, "Selection expired")
+        try:
+            parsed_chat = int(chat_id)
+        except ValueError:
             return
-        if isinstance(parsed, QuestionCancelCallback):
-            self._pending_questions.pop(parsed.request_id, None)
-            if not pending.future.done():
-                pending.future.set_result(None)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.question.cancelled",
-                request_id=parsed.request_id,
-                chat_id=callback.chat_id,
-                thread_id=callback.thread_id,
-            )
-            await self._answer_callback(callback, "Canceled")
-            if pending.message_id is not None:
-                await self._edit_message_text(
-                    pending.chat_id,
-                    pending.message_id,
-                    "Question canceled.",
-                    reply_markup={"inline_keyboard": []},
-                )
-            return
-        if isinstance(parsed, QuestionCustomCallback):
-            if not pending.custom:
-                await self._answer_callback(callback, "Custom input disabled")
-                return
-            pending.awaiting_custom_input = True
-            await self._answer_callback(callback, "Enter your answer below")
-            await self._send_message(
-                pending.chat_id,
-                "Please type your custom answer:",
-                thread_id=pending.thread_id,
-            )
-            return
-        if isinstance(parsed, QuestionDoneCallback):
-            if not pending.multiple:
-                await self._answer_callback(callback, "Invalid for single-select")
-                return
-            if not pending.selected_indices:
-                await self._answer_callback(callback, "No selections")
-                return
-            self._pending_questions.pop(parsed.request_id, None)
-            if not pending.future.done():
-                pending.future.set_result(list(pending.selected_indices))
-            selections = ", ".join(pending.options[i] for i in pending.selected_indices)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.question.done",
-                request_id=parsed.request_id,
-                question_index=pending.question_index,
-                selections=selections,
-                chat_id=callback.chat_id,
-                thread_id=callback.thread_id,
-            )
-            await self._answer_callback(callback, "Done")
-            if pending.message_id is not None:
-                await self._edit_message_text(
-                    pending.chat_id,
-                    pending.message_id,
-                    f"Selected: {selections}",
-                    reply_markup={"inline_keyboard": []},
-                )
-            return
-        if isinstance(parsed, QuestionOptionCallback):
-            if parsed.question_index != pending.question_index:
-                await self._answer_callback(callback, "Selection expired")
-                return
-            if parsed.option_index < 0 or parsed.option_index >= len(pending.options):
-                await self._answer_callback(callback, "Invalid selection")
-                return
-            if not pending.multiple:
-                self._pending_questions.pop(parsed.request_id, None)
-                if not pending.future.done():
-                    pending.future.set_result([parsed.option_index])
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "telegram.question.selected",
-                    request_id=parsed.request_id,
-                    question_index=parsed.question_index,
-                    option_index=parsed.option_index,
-                    chat_id=callback.chat_id,
-                    thread_id=callback.thread_id,
-                )
-                await self._answer_callback(callback, "Selected")
-                if pending.message_id is not None:
-                    selection = pending.options[parsed.option_index]
-                    await self._edit_message_text(
-                        pending.chat_id,
-                        pending.message_id,
-                        f"Selected: {selection}",
-                        reply_markup={"inline_keyboard": []},
-                    )
-                return
-            if parsed.option_index in pending.selected_indices:
-                pending.selected_indices.remove(parsed.option_index)
-                display_msg = "Deselected"
-            else:
-                pending.selected_indices.add(parsed.option_index)
-                display_msg = "Selected"
-            updated_keyboard = build_question_keyboard(
-                parsed.request_id,
-                question_index=pending.question_index,
-                options=pending.options,
-                multiple=pending.multiple,
-                custom=pending.custom,
-                selected_indices=pending.selected_indices,
-                include_cancel=True,
-            )
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.question.toggle",
-                request_id=parsed.request_id,
-                question_index=parsed.question_index,
-                option_index=parsed.option_index,
-                selected=parsed.option_index in pending.selected_indices,
-                chat_id=callback.chat_id,
-                thread_id=callback.thread_id,
-            )
-            await self._answer_callback(callback, display_msg)
-            if pending.message_id is not None:
-                selections = ", ".join(
-                    pending.options[i] for i in pending.selected_indices
-                )
-                new_prompt = f"{pending.prompt}\n\nSelected: {selections or 'None'}"
-                await self._edit_message_text(
-                    pending.chat_id,
-                    pending.message_id,
-                    new_prompt,
-                    reply_markup=updated_keyboard,
-                )
-            return
+        parsed_thread = int(thread_id) if thread_id and thread_id.isdigit() else None
+        await self._delete_message(parsed_chat, int(message_id), parsed_thread)
+
+    @staticmethod
+    def _build_question_keyboard(
+        request_id: str,
+        *,
+        question_index: int,
+        options: list[str],
+        multiple: bool = False,
+        custom: bool = True,
+        selected_indices: set[int] | None = None,
+    ) -> dict[str, Any]:
+        return build_question_keyboard(
+            request_id,
+            question_index=question_index,
+            options=options,
+            multiple=multiple,
+            custom=custom,
+            selected_indices=selected_indices,
+            include_cancel=True,
+        )
+
+
+def _chat_interaction_event_from_telegram(
+    callback: TelegramCallbackQuery,
+) -> ChatInteractionEvent:
+    thread = ChatThreadRef(
+        platform="telegram",
+        chat_id=str(callback.chat_id) if callback.chat_id is not None else "0",
+        thread_id=str(callback.thread_id) if callback.thread_id is not None else None,
+    )
+    message_ref = None
+    if callback.message_id is not None:
+        message_ref = ChatMessageRef(thread=thread, message_id=str(callback.message_id))
+    return ChatInteractionEvent(
+        update_id=str(callback.update_id),
+        thread=thread,
+        interaction=ChatInteractionRef(
+            thread=thread,
+            interaction_id=callback.callback_id,
+        ),
+        from_user_id=(
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        ),
+        payload=callback.data,
+        message=message_ref,
+    )
+
+
+def _telegram_callback_from_chat(
+    interaction: ChatInteractionEvent,
+) -> TelegramCallbackQuery:
+    return TelegramCallbackQuery(
+        update_id=int(interaction.update_id) if interaction.update_id.isdigit() else 0,
+        callback_id=interaction.interaction.interaction_id,
+        from_user_id=(
+            int(interaction.from_user_id)
+            if interaction.from_user_id and interaction.from_user_id.isdigit()
+            else None
+        ),
+        data=interaction.payload,
+        message_id=(
+            int(interaction.message.message_id)
+            if interaction.message and interaction.message.message_id.isdigit()
+            else None
+        ),
+        chat_id=(
+            int(interaction.thread.chat_id)
+            if interaction.thread.chat_id
+            and interaction.thread.chat_id.lstrip("-").isdigit()
+            else None
+        ),
+        thread_id=(
+            int(interaction.thread.thread_id)
+            if interaction.thread.thread_id and interaction.thread.thread_id.isdigit()
+            else None
+        ),
+    )
+
+
+def _chat_message_event_from_telegram(message: TelegramMessage) -> ChatMessageEvent:
+    thread = ChatThreadRef(
+        platform="telegram",
+        chat_id=str(message.chat_id),
+        thread_id=str(message.thread_id) if message.thread_id is not None else None,
+    )
+    return ChatMessageEvent(
+        update_id=str(message.update_id),
+        thread=thread,
+        message=ChatMessageRef(thread=thread, message_id=str(message.message_id)),
+        from_user_id=(
+            str(message.from_user_id) if message.from_user_id is not None else None
+        ),
+        text=message.text,
+        is_edited=message.is_edited,
+    )

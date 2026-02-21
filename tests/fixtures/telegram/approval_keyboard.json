@@ -1,0 +1,11 @@
+{
+  "inline_keyboard": [
+    [
+      {"text": "Accept", "callback_data": "appr:accept:req-approval-1"},
+      {"text": "Decline", "callback_data": "appr:decline:req-approval-1"}
+    ],
+    [
+      {"text": "Cancel", "callback_data": "appr:cancel:req-approval-1"}
+    ]
+  ]
+}

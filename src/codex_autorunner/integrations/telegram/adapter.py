@@ -31,7 +31,6 @@ from .api_schemas import (
     parse_message_payload,
     parse_update_payload,
 )
-from .callback_codec import parse_callback_payload
 from .command_parsing import parse_command_payload
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .retry import _extract_retry_after_seconds
@@ -767,35 +766,10 @@ def parse_callback_data(
         PageCallback,
     ]
 ]:
-    parsed = parse_callback_payload(data)
-    if parsed is None:
-        return None
-    kind, fields = parsed
-    constructors = {
-        "approval": ApprovalCallback,
-        "question_option": QuestionOptionCallback,
-        "question_done": QuestionDoneCallback,
-        "question_custom": QuestionCustomCallback,
-        "question_cancel": QuestionCancelCallback,
-        "resume": ResumeCallback,
-        "bind": BindCallback,
-        "agent": AgentCallback,
-        "model": ModelCallback,
-        "effort": EffortCallback,
-        "update": UpdateCallback,
-        "update_confirm": UpdateConfirmCallback,
-        "review_commit": ReviewCommitCallback,
-        "cancel": CancelCallback,
-        "compact": CompactCallback,
-        "page": PageCallback,
-        "flow": FlowCallback,
-        "flow_run": FlowRunCallback,
-    }
-    constructor = constructors.get(kind)
-    if constructor is None:
-        return None
-    return constructor(**fields)
-    return None
+    # Keep adapter API stable while delegating parsing through the chat codec.
+    from .chat_callbacks import parse_callback_data as parse_callback_data_v2
+
+    return parse_callback_data_v2(data)
 
 
 def build_approval_keyboard(

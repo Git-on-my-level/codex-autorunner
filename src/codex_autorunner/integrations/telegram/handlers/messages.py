@@ -10,6 +10,8 @@ from typing import Any, Optional, Sequence
 
 from ....core.logging_utils import log_event
 from ....core.utils import canonicalize_path
+from ...chat.handlers.messages import is_ticket_reply, message_text_candidate
+from ...chat.media import is_image_mime_or_path
 from ..adapter import (
     TelegramDocument,
     TelegramMessage,
@@ -25,25 +27,16 @@ from .questions import handle_custom_text_input
 COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
 COALESCE_LONG_MESSAGE_THRESHOLD = TELEGRAM_MAX_MESSAGE_LENGTH - 256
 MEDIA_BATCH_WINDOW_SECONDS = 1.0
-IMAGE_CONTENT_TYPES = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/jpg": ".jpg",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
-    "image/heic": ".heic",
-    "image/heif": ".heif",
-}
-IMAGE_EXTS = set(IMAGE_CONTENT_TYPES.values())
 MAX_BATCH_ITEMS = 10
 
 
 def _is_ticket_reply(message: TelegramMessage, bot_username: Optional[str]) -> bool:
-    if message.reply_to_is_bot and message.reply_to_message_id is not None:
-        if bot_username and message.reply_to_username:
-            return message.reply_to_username.lower() == bot_username.lower()
-        return True
-    return False
+    return is_ticket_reply(
+        reply_to_is_bot=message.reply_to_is_bot,
+        reply_to_message_id=message.reply_to_message_id,
+        reply_to_username=message.reply_to_username,
+        bot_username=bot_username,
+    )
 
 
 @dataclass
@@ -68,11 +61,12 @@ class _MediaBatchBuffer:
 
 
 def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
-    raw_text = message.text or ""
-    raw_caption = message.caption or ""
-    text_candidate = raw_text if raw_text.strip() else raw_caption
-    entities = message.entities if raw_text.strip() else message.caption_entities
-    return raw_text, text_candidate, entities
+    return message_text_candidate(
+        text=message.text,
+        caption=message.caption,
+        entities=message.entities,
+        caption_entities=message.caption_entities,
+    )
 
 
 def _record_with_media_workspace(
@@ -598,15 +592,7 @@ def select_photo(
 
 
 def document_is_image(document: TelegramDocument) -> bool:
-    if document.mime_type:
-        base = document.mime_type.lower().split(";", 1)[0].strip()
-        if base.startswith("image/"):
-            return True
-    if document.file_name:
-        suffix = Path(document.file_name).suffix.lower()
-        if suffix in IMAGE_EXTS:
-            return True
-    return False
+    return is_image_mime_or_path(document.mime_type, document.file_name)
 
 
 def select_image_candidate(
