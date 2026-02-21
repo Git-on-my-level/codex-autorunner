@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.flows.models import FlowRunRecord
+from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
 from ...core.hub import HubSupervisor
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
@@ -1104,10 +1105,10 @@ class TelegramBotService(
         return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
 
     def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
-        return self._ticket_flow_bridge._latest_dispatch_seq(history_dir)
+        return latest_dispatch_seq(history_dir)
 
     def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
-        return self._ticket_flow_bridge._format_ticket_flow_pause_reason(record)
+        return format_pause_reason(record)
 
     def _get_paused_ticket_flow(
         self, workspace_root: Path, preferred_run_id: Optional[str] = None

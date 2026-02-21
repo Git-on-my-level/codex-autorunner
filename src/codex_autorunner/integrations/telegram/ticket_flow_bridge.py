@@ -11,6 +11,7 @@ from ...core.config import load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
+from ...core.flows.pause_dispatch import load_latest_paused_ticket_flow_dispatch
 from ...core.flows.worker_process import spawn_flow_worker
 from ...core.logging_utils import log_event
 from ...core.runtime_services import RuntimeServices
@@ -20,7 +21,6 @@ from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...manifest import load_manifest
 from .adapter import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
-from .helpers import format_public_error
 from .state import parse_topic_key
 
 
@@ -246,72 +246,15 @@ class TelegramTicketFlowBridge:
     def _load_ticket_flow_pause(
         self, workspace_root: Path
     ) -> Optional[tuple[str, str, str, Optional[Path]]]:
-        db_path = workspace_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
+        snapshot = load_latest_paused_ticket_flow_dispatch(workspace_root)
+        if snapshot is None:
             return None
-        config = load_repo_config(workspace_root)
-        store = FlowStore(db_path, durable=config.durable_writes)
-        try:
-            store.initialize()
-            runs = store.list_flow_runs(
-                flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-            )
-            if not runs:
-                return None
-            latest = runs[0]
-            runs_dir_raw = latest.input_data.get("runs_dir")
-            runs_dir = (
-                Path(runs_dir_raw)
-                if isinstance(runs_dir_raw, str) and runs_dir_raw
-                else Path(".codex-autorunner/runs")
-            )
-            from ...tickets.outbox import resolve_outbox_paths
-
-            paths = resolve_outbox_paths(
-                workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
-            )
-            history_dir = paths.dispatch_history_dir
-            seq = self._latest_dispatch_seq(history_dir)
-            if not seq:
-                reason = self._format_ticket_flow_pause_reason(latest)
-                return latest.id, "paused", reason, None
-            message_path = history_dir / seq / "DISPATCH.md"
-            try:
-                content = message_path.read_text(encoding="utf-8")
-            except OSError:
-                return None
-            return latest.id, seq, content, history_dir / seq
-        finally:
-            store.close()
-
-    @staticmethod
-    def _latest_dispatch_seq(history_dir: Path) -> Optional[str]:
-        if not history_dir.exists() or not history_dir.is_dir():
-            return None
-        seqs = [
-            child.name
-            for child in history_dir.iterdir()
-            if child.is_dir()
-            and not child.name.startswith(".")
-            and child.name.isdigit()
-        ]
-        if not seqs:
-            return None
-        return max(seqs)
-
-    @staticmethod
-    def _format_ticket_flow_pause_reason(record: FlowRunRecord) -> str:
-        state = record.state or {}
-        engine = state.get("ticket_engine") or {}
-        reason_raw = (
-            engine.get("reason") or record.error_message or "Paused without details."
+        return (
+            snapshot.run_id,
+            snapshot.dispatch_seq,
+            snapshot.dispatch_markdown,
+            snapshot.dispatch_dir,
         )
-        reason = (
-            format_public_error(str(reason_raw))
-            if reason_raw
-            else "Paused without details."
-        )
-        return f"Reason: {reason}"
 
     def get_paused_ticket_flow(
         self, workspace_root: Path, preferred_run_id: Optional[str] = None
