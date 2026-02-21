@@ -27,6 +27,7 @@ from .models import (
     ChatThreadRef,
 )
 from .renderer import RenderedText, TextRenderer
+from .service import ChatBotServiceCore, ChatStateStore
 
 __all__ = [
     "ChatAction",
@@ -37,12 +38,14 @@ __all__ = [
     "ChatAdapterTransientError",
     "ChatAttachment",
     "ChatCapabilities",
+    "ChatBotServiceCore",
     "ChatDispatcher",
     "ChatEvent",
     "ChatInteractionEvent",
     "ChatInteractionRef",
     "ChatMessageEvent",
     "ChatMessageRef",
+    "ChatStateStore",
     "ChatThreadRef",
     "DispatchContext",
     "DispatchResult",

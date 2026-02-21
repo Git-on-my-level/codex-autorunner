@@ -20,7 +20,6 @@ from ...core.flows.models import FlowRunRecord
 from ...core.hub import HubSupervisor
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
-from ...core.managed_processes import reap_managed_processes
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
@@ -36,6 +35,7 @@ from ...manifest import load_manifest
 from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
+from ..chat.service import ChatBotServiceCore
 from .adapter import (
     TelegramBotClient,
     TelegramCallbackQuery,
@@ -45,11 +45,11 @@ from .adapter import (
     TelegramUpdate,
     TelegramUpdatePoller,
 )
+from .chat_adapter import TelegramChatAdapter
 from .commands_registry import build_command_payloads, diff_command_lists
 from .config import (
     AppServerUnavailableError,
     TelegramBotConfig,
-    TelegramBotConfigError,
     TelegramBotLockError,
     TelegramMediaCandidate,
 )
@@ -164,6 +164,8 @@ class TelegramBotService(
     TelegramSelectionHandlers,
     TelegramCommandHandlers,
 ):
+    TICKET_FLOW_WATCH_INTERVAL_SECONDS = TICKET_FLOW_WATCH_INTERVAL_SECONDS
+
     def __init__(
         self,
         config: TelegramBotConfig,
@@ -250,6 +252,16 @@ class TelegramBotService(
         )
         self._poller = TelegramUpdatePoller(
             self._bot, allowed_updates=config.poll_allowed_updates
+        )
+        self._chat_adapter = TelegramChatAdapter(
+            self._bot,
+            poller=self._poller,
+        )
+        self._chat_core = ChatBotServiceCore(
+            owner=self,
+            runtime_services=self._runtime_services,
+            state_store=self._store,
+            adapter=self._chat_adapter,
         )
         self._model_options: dict[str, ModelPickerState] = {}
         self._model_pending: dict[str, ModelOption] = {}
@@ -591,177 +603,10 @@ class TelegramBotService(
         return self._turn_semaphore
 
     async def run_polling(self) -> None:
-        if self._config.mode != "polling":
-            raise TelegramBotConfigError(
-                f"Unsupported telegram_bot.mode '{self._config.mode}'"
-            )
-        self._config.validate()
-        try:
-            cleanup = reap_managed_processes(self._config.root)
-            if cleanup.killed or cleanup.signaled or cleanup.removed:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "telegram.process_reaper.cleaned",
-                    killed=cleanup.killed,
-                    signaled=cleanup.signaled,
-                    removed=cleanup.removed,
-                    skipped=cleanup.skipped,
-                )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.process_reaper.failed",
-                exc=exc,
-            )
-        self._acquire_instance_lock()
-        # Bind the semaphore to the running loop to avoid cross-loop await failures.
-        self._turn_semaphore = asyncio.Semaphore(
-            self._config.concurrency.max_parallel_turns
-        )
-        self._outbox_manager.start()
-        self._voice_manager.start()
-        try:
-            await self._prime_bot_identity()
-            await self._register_bot_commands()
-            await self._restore_pending_approvals()
-            await self._outbox_manager.restore()
-            await self._voice_manager.restore()
-            await self._prime_poller_offset()
-            self._outbox_task = asyncio.create_task(self._outbox_manager.run_loop())
-            self._voice_task = asyncio.create_task(self._voice_manager.run_loop())
-            self._housekeeping_task = asyncio.create_task(self._housekeeping_loop())
-            self._cache_cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
-            self._ticket_flow_watch_task = asyncio.create_task(
-                self._ticket_flow_bridge.watch_ticket_flow_pauses(
-                    TICKET_FLOW_WATCH_INTERVAL_SECONDS
-                )
-            )
-            self._spawn_task(self._prewarm_workspace_clients())
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.bot.started",
-                mode=self._config.mode,
-                poll_timeout=self._config.poll_timeout_seconds,
-                allowed_updates=list(self._config.poll_allowed_updates),
-                allowed_chats=len(self._config.allowed_chat_ids),
-                allowed_users=len(self._config.allowed_user_ids),
-                require_topics=self._config.require_topics,
-                max_parallel_turns=self._config.concurrency.max_parallel_turns,
-                per_topic_queue=self._config.concurrency.per_topic_queue,
-                media_enabled=self._config.media.enabled,
-                media_images=self._config.media.images,
-                media_voice=self._config.media.voice,
-                app_server_turn_timeout_seconds=self._config.app_server_turn_timeout_seconds,
-                agent_turn_timeout_seconds=dict(
-                    self._config.agent_turn_timeout_seconds
-                ),
-                poller_offset=self._poller.offset,
-            )
-            try:
-                await self._maybe_send_update_status_notice()
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.update.notify_failed",
-                    exc=exc,
-                )
-            try:
-                await self._maybe_send_compact_status_notice()
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.compact.notify_failed",
-                    exc=exc,
-                )
-            while True:
-                updates = []
-                try:
-                    updates = await self._poller.poll(
-                        timeout=self._config.poll_timeout_seconds
-                    )
-                    if self._poller.offset is not None:
-                        await self._record_poll_offset(updates)
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.poll.failed",
-                        exc=exc,
-                    )
-                    await asyncio.sleep(1.0)
-                    continue
-                for update in updates:
-                    self._spawn_task(dispatch_update(self, update))
-        finally:
-            try:
-                if self._outbox_task is not None:
-                    self._outbox_task.cancel()
-                    try:
-                        await self._outbox_task
-                    except asyncio.CancelledError:
-                        pass
-                if self._voice_task is not None:
-                    self._voice_task.cancel()
-                    try:
-                        await self._voice_task
-                    except asyncio.CancelledError:
-                        pass
-                if self._housekeeping_task is not None:
-                    self._housekeeping_task.cancel()
-                    try:
-                        await self._housekeeping_task
-                    except asyncio.CancelledError:
-                        pass
-                if self._cache_cleanup_task is not None:
-                    self._cache_cleanup_task.cancel()
-                    try:
-                        await self._cache_cleanup_task
-                    except asyncio.CancelledError:
-                        pass
-                if self._ticket_flow_watch_task is not None:
-                    self._ticket_flow_watch_task.cancel()
-                    try:
-                        await self._ticket_flow_watch_task
-                    except asyncio.CancelledError:
-                        pass
-                if self._spawned_tasks:
-                    for task in list(self._spawned_tasks):
-                        task.cancel()
-                    await asyncio.gather(*self._spawned_tasks, return_exceptions=True)
-            finally:
-                try:
-                    await self._bot.close()
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.bot.close_failed",
-                        exc=exc,
-                    )
-                try:
-                    await self._runtime_services.close()
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.runtime_services.close_failed",
-                        exc=exc,
-                    )
-                try:
-                    await self._store.close()
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.state.close_failed",
-                        exc=exc,
-                    )
-                self._release_instance_lock()
+        await self._chat_core.run()
+
+    async def _dispatch_update(self, update: TelegramUpdate) -> None:
+        await dispatch_update(self, update)
 
     async def _prime_bot_identity(self) -> None:
         try:
