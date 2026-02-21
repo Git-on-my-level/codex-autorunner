@@ -21,8 +21,9 @@ from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.update_paths import resolve_update_paths
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
-from ...chat.media import format_media_batch_failure
-from ...chat.runtime import iter_exception_chain
+from ...chat.media import (
+    format_media_batch_failure as _format_media_batch_failure,  # noqa: F401
+)
 from ..adapter import (
     CompactCallback,
     InlineButton,
@@ -108,15 +109,6 @@ from .commands import (
     VoiceCommands,
     WorkspaceCommands,
 )
-from .commands.command_utils import (
-    _format_httpx_exception as _shared_format_httpx_exception,
-)
-from .commands.command_utils import (
-    _format_opencode_exception as _shared_format_opencode_exception,
-)
-from .commands.command_utils import (
-    _opencode_review_arguments as _shared_opencode_review_arguments,
-)
 from .commands.execution import _TurnRunFailure
 
 PROMPT_CONTEXT_RE = re.compile("\\bprompt\\b", re.IGNORECASE)
@@ -150,18 +142,6 @@ class _RuntimeStub:
     interrupt_turn_id: Optional[str] = None
 
 
-def _format_opencode_exception(exc: Exception) -> Optional[str]:
-    return _shared_format_opencode_exception(exc)
-
-
-def _opencode_review_arguments(target: dict[str, Any]) -> str:
-    return _shared_opencode_review_arguments(target)
-
-
-def _format_httpx_exception(exc: Exception) -> Optional[str]:
-    return _shared_format_httpx_exception(exc)
-
-
 _GENERIC_TELEGRAM_ERRORS = {
     "Telegram request failed",
     "Telegram file download failed",
@@ -182,43 +162,6 @@ _OPENCODE_CONTEXT_WINDOW_KEYS = (
 )
 
 _OPENCODE_MODEL_CONTEXT_KEYS = ("context",) + _OPENCODE_CONTEXT_WINDOW_KEYS
-
-
-def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
-    return iter_exception_chain(exc)
-
-
-def _format_media_batch_failure(
-    *,
-    image_disabled: int,
-    file_disabled: int,
-    image_too_large: int,
-    file_too_large: int,
-    image_download_failed: int,
-    file_download_failed: int,
-    image_download_detail: Optional[str] = None,
-    file_download_detail: Optional[str] = None,
-    image_save_failed: int,
-    file_save_failed: int,
-    unsupported: int,
-    max_image_bytes: int,
-    max_file_bytes: int,
-) -> str:
-    return format_media_batch_failure(
-        image_disabled=image_disabled,
-        file_disabled=file_disabled,
-        image_too_large=image_too_large,
-        file_too_large=file_too_large,
-        image_download_failed=image_download_failed,
-        file_download_failed=file_download_failed,
-        image_download_detail=image_download_detail,
-        file_download_detail=file_download_detail,
-        image_save_failed=image_save_failed,
-        file_save_failed=file_save_failed,
-        unsupported=unsupported,
-        max_image_bytes=max_image_bytes,
-        max_file_bytes=max_file_bytes,
-    )
 
 
 class TelegramCommandHandlers(

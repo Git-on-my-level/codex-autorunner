@@ -16,7 +16,6 @@ from ..helpers import (
     _approval_age_seconds,
     _coerce_id,
     _extract_turn_thread_id,
-    _format_approval_decision,
     _format_approval_prompt,
 )
 from ..state import PendingApprovalRecord
@@ -299,10 +298,6 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
             text,
             reply_markup=reply_markup,
         )
-
-    @staticmethod
-    def _format_approval_decision(decision: str) -> str:
-        return _format_approval_decision(decision)
 
     @staticmethod
     def _chat_thread_ref(chat_id: int, thread_id: int | None):
