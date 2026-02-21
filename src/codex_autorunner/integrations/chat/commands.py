@@ -1,0 +1,40 @@
+"""Platform-agnostic command models and lightweight parsing helpers."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Optional
+
+_SLASH_COMMAND_RE = re.compile(r"^/([a-z0-9_]{1,32})(?:@([A-Za-z0-9_]{3,64}))?$")
+
+
+@dataclass(frozen=True)
+class ChatCommand:
+    """Normalized command token parsed from chat text."""
+
+    name: str
+    args: str
+    raw: str
+
+
+def parse_chat_command(
+    text: str, *, bot_username: Optional[str] = None
+) -> Optional[ChatCommand]:
+    """Parse a leading slash command from plain text.
+
+    This parser is platform-agnostic and intentionally limited to plain-text
+    command detection; adapters can provide stricter entity-aware parsing.
+    """
+
+    raw = str(text or "").strip()
+    if not raw or not raw.startswith("/"):
+        return None
+    token, _, remainder = raw.partition(" ")
+    match = _SLASH_COMMAND_RE.match(token)
+    if match is None:
+        return None
+    name, mention = match.group(1), match.group(2)
+    if mention and bot_username and mention.lower() != bot_username.lower():
+        return None
+    return ChatCommand(name=name, args=remainder.strip(), raw=raw)

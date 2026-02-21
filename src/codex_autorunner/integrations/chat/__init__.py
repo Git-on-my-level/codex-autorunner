@@ -26,6 +26,7 @@ from .callbacks import (
     encode_logical_callback,
 )
 from .capabilities import ChatCapabilities
+from .commands import ChatCommand, parse_chat_command
 from .dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -47,6 +48,11 @@ from .handlers import (
     ChatSelectionHandlers,
     handle_custom_text_input,
 )
+from .media import (
+    ChatVoiceInput,
+    format_media_batch_failure,
+    is_image_mime_or_path,
+)
 from .models import (
     ChatAction,
     ChatAttachment,
@@ -58,6 +64,7 @@ from .models import (
     ChatThreadRef,
 )
 from .renderer import RenderedText, TextRenderer
+from .runtime import iter_exception_chain
 from .service import ChatBotServiceCore, ChatStateStore
 from .transport import ChatTransport
 
@@ -70,6 +77,7 @@ __all__ = [
     "ChatAdapterTransientError",
     "ChatAttachment",
     "ChatCapabilities",
+    "ChatCommand",
     "ChatContext",
     "ChatBotServiceCore",
     "ChatApprovalHandlers",
@@ -85,6 +93,7 @@ __all__ = [
     "ChatStateStore",
     "ChatThreadRef",
     "ChatTransport",
+    "ChatVoiceInput",
     "DispatchContext",
     "DispatchResult",
     "LogicalCallback",
@@ -114,6 +123,10 @@ __all__ = [
     "conversation_id_for",
     "decode_logical_callback",
     "encode_logical_callback",
+    "format_media_batch_failure",
     "handle_custom_text_input",
+    "is_image_mime_or_path",
     "is_bypass_event",
+    "iter_exception_chain",
+    "parse_chat_command",
 ]
