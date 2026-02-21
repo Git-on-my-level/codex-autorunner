@@ -4,8 +4,19 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";
 import { preserveScroll } from "./preserve.js";
 import { initNotificationBell } from "./notificationBell.js";
-let hubData = { repos: [], last_scan_at: null };
+const HUB_VIEW_PREFS_KEY = `car:hub-view-prefs:${HUB_BASE || "/"}`;
+const HUB_DEFAULT_VIEW_PREFS = {
+    flowFilter: "all",
+    sortOrder: "repo_id",
+};
+let hubData = {
+    repos: [],
+    last_scan_at: null,
+    pinned_parent_repo_ids: [],
+};
 const prefetchedUrls = new Set();
+const hubViewPrefs = { ...HUB_DEFAULT_VIEW_PREFS };
+let pinnedParentRepoIds = new Set();
 const HUB_CACHE_TTL_MS = 30000;
 const HUB_CACHE_KEY = `car:hub:${HUB_BASE || "/"}`;
 const HUB_USAGE_CACHE_KEY = `car:hub-usage:${HUB_BASE || "/"}`;
@@ -25,6 +36,8 @@ const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const pmaVersionEl = document.getElementById("pma-version");
+const hubFlowFilterEl = document.getElementById("hub-flow-filter");
+const hubSortOrderEl = document.getElementById("hub-sort-order");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
 const HUB_JOB_TIMEOUT_MS = 180000;
@@ -61,6 +74,58 @@ function loadSessionCache(key, maxAgeMs) {
     catch (_err) {
         return null;
     }
+}
+function saveHubViewPrefs() {
+    try {
+        localStorage.setItem(HUB_VIEW_PREFS_KEY, JSON.stringify(hubViewPrefs));
+    }
+    catch (_err) {
+        // Ignore local storage failures; prefs are best-effort.
+    }
+}
+function loadHubViewPrefs() {
+    try {
+        const raw = localStorage.getItem(HUB_VIEW_PREFS_KEY);
+        if (!raw)
+            return;
+        const parsed = JSON.parse(raw);
+        const flowFilter = parsed.flowFilter;
+        const sortOrder = parsed.sortOrder;
+        if (flowFilter === "all" ||
+            flowFilter === "active" ||
+            flowFilter === "running" ||
+            flowFilter === "paused" ||
+            flowFilter === "completed" ||
+            flowFilter === "failed" ||
+            flowFilter === "idle") {
+            hubViewPrefs.flowFilter = flowFilter;
+        }
+        if (sortOrder === "repo_id" ||
+            sortOrder === "last_activity_desc" ||
+            sortOrder === "last_activity_asc" ||
+            sortOrder === "flow_progress_desc") {
+            hubViewPrefs.sortOrder = sortOrder;
+        }
+    }
+    catch (_err) {
+        // Ignore parse/storage errors; defaults apply.
+    }
+}
+function normalizePinnedParentRepoIds(value) {
+    if (!Array.isArray(value))
+        return [];
+    const out = [];
+    const seen = new Set();
+    value.forEach((entry) => {
+        if (typeof entry !== "string")
+            return;
+        const repoId = entry.trim();
+        if (!repoId || seen.has(repoId))
+            return;
+        seen.add(repoId);
+        out.push(repoId);
+    });
+    return out;
 }
 function formatRunSummary(repo) {
     if (!repo.initialized)
@@ -807,15 +872,64 @@ function inferBaseId(repo) {
     }
     return null;
 }
-function renderRepos(repos) {
-    if (!repoListEl)
-        return;
-    repoListEl.innerHTML = "";
-    if (!repos.length) {
-        repoListEl.innerHTML =
-            '<div class="hub-empty muted">No repos discovered yet. Run a scan or create a new repo.</div>';
-        return;
+function repoLastActivityMs(repo) {
+    const raw = repo.last_run_finished_at || repo.last_run_started_at;
+    if (!raw)
+        return 0;
+    const parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? 0 : parsed;
+}
+function repoFlowStatus(repo) {
+    const status = repo.ticket_flow_display?.status || repo.ticket_flow?.status || "idle";
+    return String(status || "idle").toLowerCase();
+}
+function repoFlowProgress(repo) {
+    const done = Number(repo.ticket_flow_display?.done_count || repo.ticket_flow?.done_count || 0);
+    const total = Number(repo.ticket_flow_display?.total_count || repo.ticket_flow?.total_count || 0);
+    if (total <= 0)
+        return 0;
+    return done / total;
+}
+function repoMatchesFlowFilter(repo, filter) {
+    if (filter === "all")
+        return true;
+    const flowStatus = repoFlowStatus(repo);
+    if (filter === "active") {
+        return (flowStatus === "running" ||
+            flowStatus === "pending" ||
+            flowStatus === "paused" ||
+            flowStatus === "stopping");
     }
+    if (filter === "running")
+        return flowStatus === "running";
+    if (filter === "paused")
+        return flowStatus === "paused";
+    if (filter === "completed")
+        return flowStatus === "completed" || flowStatus === "done";
+    if (filter === "failed") {
+        return (flowStatus === "failed" ||
+            flowStatus === "stopped" ||
+            flowStatus === "superseded");
+    }
+    return flowStatus === "idle";
+}
+function compareReposForSort(a, b, sortOrder) {
+    if (sortOrder === "last_activity_desc") {
+        return (repoLastActivityMs(b) - repoLastActivityMs(a) ||
+            String(a.id).localeCompare(String(b.id)));
+    }
+    if (sortOrder === "last_activity_asc") {
+        return (repoLastActivityMs(a) - repoLastActivityMs(b) ||
+            String(a.id).localeCompare(String(b.id)));
+    }
+    if (sortOrder === "flow_progress_desc") {
+        return (repoFlowProgress(b) - repoFlowProgress(a) ||
+            repoLastActivityMs(b) - repoLastActivityMs(a) ||
+            String(a.id).localeCompare(String(b.id)));
+    }
+    return String(a.id).localeCompare(String(b.id));
+}
+function buildRepoGroups(repos) {
     const bases = repos.filter((r) => (r.kind || "base") === "base");
     const worktrees = repos.filter((r) => (r.kind || "base") === "worktree");
     const byBase = new Map();
@@ -830,7 +944,70 @@ function renderRepos(repos) {
             orphanWorktrees.push(w);
         }
     });
-    const orderedGroups = [...byBase.values()].sort((a, b) => String(a.base?.id || "").localeCompare(String(b.base?.id || "")));
+    const groups = [...byBase.values()].map((group) => {
+        const filteredWorktrees = hubViewPrefs.flowFilter === "all"
+            ? [...group.worktrees]
+            : group.worktrees.filter((repo) => repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter));
+        const baseMatches = repoMatchesFlowFilter(group.base, hubViewPrefs.flowFilter);
+        const matchesFilter = hubViewPrefs.flowFilter === "all" || baseMatches || filteredWorktrees.length > 0;
+        const combined = [group.base, ...group.worktrees];
+        const lastActivityMs = combined.reduce((latest, repo) => {
+            return Math.max(latest, repoLastActivityMs(repo));
+        }, 0);
+        const flowProgress = combined.reduce((best, repo) => {
+            return Math.max(best, repoFlowProgress(repo));
+        }, 0);
+        return {
+            base: group.base,
+            worktrees: [...group.worktrees],
+            filteredWorktrees,
+            matchesFilter,
+            pinned: pinnedParentRepoIds.has(group.base.id),
+            lastActivityMs,
+            flowProgress,
+        };
+    });
+    return { groups, orphanWorktrees };
+}
+function renderRepos(repos) {
+    if (!repoListEl)
+        return;
+    repoListEl.innerHTML = "";
+    if (!repos.length) {
+        repoListEl.innerHTML =
+            '<div class="hub-empty muted">No repos discovered yet. Run a scan or create a new repo.</div>';
+        return;
+    }
+    const { groups, orphanWorktrees } = buildRepoGroups(repos);
+    const orderedGroups = groups
+        .filter((group) => group.matchesFilter)
+        .sort((a, b) => {
+        if (a.pinned !== b.pinned)
+            return a.pinned ? -1 : 1;
+        if (hubViewPrefs.sortOrder === "last_activity_desc") {
+            return (b.lastActivityMs - a.lastActivityMs ||
+                String(a.base.id).localeCompare(String(b.base.id)));
+        }
+        if (hubViewPrefs.sortOrder === "last_activity_asc") {
+            return (a.lastActivityMs - b.lastActivityMs ||
+                String(a.base.id).localeCompare(String(b.base.id)));
+        }
+        if (hubViewPrefs.sortOrder === "flow_progress_desc") {
+            return (b.flowProgress - a.flowProgress ||
+                b.lastActivityMs - a.lastActivityMs ||
+                String(a.base.id).localeCompare(String(b.base.id)));
+        }
+        return String(a.base.id).localeCompare(String(b.base.id));
+    });
+    const filteredOrphans = hubViewPrefs.flowFilter === "all"
+        ? [...orphanWorktrees]
+        : orphanWorktrees.filter((repo) => repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter));
+    filteredOrphans.sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
+    if (!orderedGroups.length && !filteredOrphans.length) {
+        repoListEl.innerHTML =
+            '<div class="hub-empty muted">No repos match the selected flow filter.</div>';
+        return;
+    }
     const renderRepoCard = (repo, { isWorktreeRow = false } = {}) => {
         const card = document.createElement("div");
         card.className = isWorktreeRow
@@ -847,6 +1024,10 @@ function renderRepos(repos) {
         const actions = buildActions(repo)
             .map((action) => `<button class="${action.kind} sm" data-action="${escapeHtml(action.key)}" data-repo="${escapeHtml(repo.id)}"${action.title ? ` title="${escapeHtml(action.title)}"` : ""}${action.disabled ? " disabled" : ""}>${escapeHtml(action.label)}</button>`)
             .join("");
+        const isPinnedParent = !isWorktreeRow && repo.kind === "base" && pinnedParentRepoIds.has(repo.id);
+        const pinAction = !isWorktreeRow && repo.kind === "base"
+            ? `<button class="ghost sm hub-pin-btn${isPinnedParent ? " active" : ""}" data-action="${isPinnedParent ? "unpin_parent" : "pin_parent"}" data-repo="${escapeHtml(repo.id)}" title="${isPinnedParent ? "Unpin parent repo" : "Pin parent repo"}">${isPinnedParent ? "Unpin" : "Pin"}</button>`
+            : "";
         const mountBadge = buildMountBadge(repo);
         const lockBadge = repo.lock_status && repo.lock_status !== "unlocked"
             ? `<span class="pill pill-small pill-warn">${escapeHtml(repo.lock_status.replace("_", " "))}</span>`
@@ -933,6 +1114,7 @@ function renderRepos(repos) {
           ${ticketFlowLine}
         </div>
         <div class="hub-repo-right">
+          ${pinAction}
           ${actions || ""}
           ${openIndicator}
         </div>
@@ -948,12 +1130,11 @@ function renderRepos(repos) {
     orderedGroups.forEach((group) => {
         const repo = group.base;
         renderRepoCard(repo, { isWorktreeRow: false });
-        if (group.worktrees && group.worktrees.length) {
+        const worktrees = [...group.filteredWorktrees].sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
+        if (worktrees.length) {
             const list = document.createElement("div");
             list.className = "hub-worktree-list";
-            group.worktrees
-                .sort((a, b) => String(a.id).localeCompare(String(b.id)))
-                .forEach((wt) => {
+            worktrees.forEach((wt) => {
                 const row = document.createElement("div");
                 row.className = "hub-worktree-row";
                 const tmp = document.createElement("div");
@@ -970,14 +1151,12 @@ function renderRepos(repos) {
             repoListEl.appendChild(list);
         }
     });
-    if (orphanWorktrees.length) {
+    if (filteredOrphans.length) {
         const header = document.createElement("div");
         header.className = "hub-worktree-orphans muted small";
         header.textContent = "Orphan worktrees";
         repoListEl.appendChild(header);
-        orphanWorktrees
-            .sort((a, b) => String(a.id).localeCompare(String(b.id)))
-            .forEach((wt) => renderRepoCard(wt, { isWorktreeRow: true }));
+        filteredOrphans.forEach((wt) => renderRepoCard(wt, { isWorktreeRow: true }));
     }
     if (hubUsageUnmatched && hubUsageUnmatched.events) {
         const note = document.createElement("div");
@@ -992,15 +1171,23 @@ function renderReposWithScroll(repos) {
         renderRepos(repos);
     }, { restoreOnNextFrame: true });
 }
+function applyHubData(data) {
+    hubData = {
+        repos: Array.isArray(data?.repos) ? data.repos : [],
+        last_scan_at: data?.last_scan_at || null,
+        pinned_parent_repo_ids: normalizePinnedParentRepoIds(data?.pinned_parent_repo_ids),
+    };
+    pinnedParentRepoIds = new Set(normalizePinnedParentRepoIds(hubData.pinned_parent_repo_ids));
+}
 async function refreshHub() {
     setButtonLoading(true);
     try {
         const data = await api("/hub/repos", { method: "GET" });
-        hubData = data;
+        applyHubData(data);
         markHubRefreshed();
         saveSessionCache(HUB_CACHE_KEY, hubData);
-        renderSummary(data.repos || []);
-        renderReposWithScroll(data.repos || []);
+        renderSummary(hubData.repos || []);
+        renderReposWithScroll(hubData.repos || []);
         loadHubUsage({ silent: true }).catch(() => { });
     }
     catch (err) {
@@ -1102,10 +1289,44 @@ async function handleCreateRepoSubmit() {
         hideCreateRepoModal();
     }
 }
+function initHubRepoListControls() {
+    loadHubViewPrefs();
+    if (hubFlowFilterEl) {
+        hubFlowFilterEl.value = hubViewPrefs.flowFilter;
+        hubFlowFilterEl.addEventListener("change", () => {
+            hubViewPrefs.flowFilter = hubFlowFilterEl.value;
+            saveHubViewPrefs();
+            renderReposWithScroll(hubData.repos || []);
+        });
+    }
+    if (hubSortOrderEl) {
+        hubSortOrderEl.value = hubViewPrefs.sortOrder;
+        hubSortOrderEl.addEventListener("change", () => {
+            hubViewPrefs.sortOrder = hubSortOrderEl.value;
+            saveHubViewPrefs();
+            renderReposWithScroll(hubData.repos || []);
+        });
+    }
+}
+async function setParentRepoPinned(repoId, pinned) {
+    const response = await api(`/hub/repos/${encodeURIComponent(repoId)}/pin`, {
+        method: "POST",
+        body: JSON.stringify({ pinned }),
+    });
+    pinnedParentRepoIds = new Set(normalizePinnedParentRepoIds(response?.pinned_parent_repo_ids));
+    hubData.pinned_parent_repo_ids = Array.from(pinnedParentRepoIds);
+}
 async function handleRepoAction(repoId, action) {
     const buttons = repoListEl?.querySelectorAll(`button[data-repo="${repoId}"][data-action="${action}"]`);
     buttons?.forEach((btn) => btn.disabled = true);
     try {
+        if (action === "pin_parent" || action === "unpin_parent") {
+            const pinned = action === "pin_parent";
+            await setParentRepoPinned(repoId, pinned);
+            renderReposWithScroll(hubData.repos || []);
+            flash(`${pinned ? "Pinned" : "Unpinned"}: ${repoId}`, "success");
+            return;
+        }
         const pathMap = {
             init: `/hub/repos/${repoId}/init`,
             sync_main: `/hub/repos/${repoId}/sync-main`,
@@ -1332,11 +1553,11 @@ function attachHubHandlers() {
 async function silentRefreshHub() {
     try {
         const data = await api("/hub/repos", { method: "GET" });
-        hubData = data;
+        applyHubData(data);
         markHubRefreshed();
         saveSessionCache(HUB_CACHE_KEY, hubData);
-        renderSummary(data.repos || []);
-        renderReposWithScroll(data.repos || []);
+        renderSummary(hubData.repos || []);
+        renderReposWithScroll(hubData.repos || []);
         await loadHubUsage({ silent: true, allowRetry: false });
     }
     catch (err) {
@@ -1402,13 +1623,14 @@ export function initHub() {
     if (!repoListEl)
         return;
     attachHubHandlers();
+    initHubRepoListControls();
     initHubUsageChartControls();
     initNotificationBell();
     const cachedHub = loadSessionCache(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
     if (cachedHub) {
-        hubData = cachedHub;
-        renderSummary(cachedHub.repos || []);
-        renderReposWithScroll(cachedHub.repos || []);
+        applyHubData(cachedHub);
+        renderSummary(hubData.repos || []);
+        renderReposWithScroll(hubData.repos || []);
     }
     const cachedUsage = loadSessionCache(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
     if (cachedUsage) {

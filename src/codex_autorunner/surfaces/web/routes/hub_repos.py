@@ -27,6 +27,7 @@ from ..schemas import (
     HubCreateRepoRequest,
     HubCreateWorktreeRequest,
     HubJobResponse,
+    HubPinRepoRequest,
     HubRemoveRepoRequest,
     RunControlRequest,
 )
@@ -308,6 +309,7 @@ def build_hub_repo_routes(
         await mount_manager.refresh_mounts(snapshots)
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
+            "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
             "repos": [_enrich_repo(snap) for snap in snapshots],
         }
 
@@ -319,6 +321,7 @@ def build_hub_repo_routes(
 
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
+            "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
             "repos": [_enrich_repo(snap) for snap in snapshots],
         }
 
@@ -428,6 +431,30 @@ def build_hub_repo_routes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await mount_manager.refresh_mounts([snapshot], full_refresh=False)
         return _enrich_repo(snapshot)
+
+    @router.post("/hub/repos/{repo_id}/pin")
+    async def pin_parent_repo(
+        repo_id: str, payload: Optional[HubPinRepoRequest] = None
+    ):
+        requested = payload.pinned if payload else True
+        safe_log(
+            context.logger,
+            logging.INFO,
+            "Hub pin parent repo=%s pinned=%s" % (repo_id, requested),
+        )
+        try:
+            pinned_parent_repo_ids = await asyncio.to_thread(
+                context.supervisor.set_parent_repo_pinned,
+                repo_id,
+                requested,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "repo_id": repo_id,
+            "pinned": requested,
+            "pinned_parent_repo_ids": pinned_parent_repo_ids,
+        }
 
     @router.get("/hub/repos/{repo_id}/remove-check")
     async def remove_repo_check(repo_id: str):

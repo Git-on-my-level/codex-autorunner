@@ -90,8 +90,9 @@
   "HubState": {
     "properties": {
       "last_scan_at": {"type": ["null", "string"]},
-      "repos": {"type": "array", "items": {"$ref": "RepoSnapshot"}}
+      "repos": {"type": "array", "items": {"$ref": "RepoSnapshot"}},
+      "pinned_parent_repo_ids": {"type": "array", "items": {"type": "string"}}
     },
-    "required": ["last_scan_at", "repos"]
+    "required": ["last_scan_at", "repos", "pinned_parent_repo_ids"]
   }
 }

@@ -265,7 +265,7 @@ def seed_hub_files(hub_root: Path, force: bool = False) -> None:
     if not hub_state_path.exists() or force:
         atomic_write(
             hub_state_path,
-            '{\n  "last_scan_at": null,\n  "repos": []\n}\n',
+            '{\n  "last_scan_at": null,\n  "repos": [],\n  "pinned_parent_repo_ids": []\n}\n',
         )
 
 
