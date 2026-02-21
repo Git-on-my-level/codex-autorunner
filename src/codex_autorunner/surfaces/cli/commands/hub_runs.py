@@ -11,6 +11,9 @@ import typer
 
 from ....core.config import HubConfig, load_repo_config
 from ....core.flows import FlowStore
+from ....core.flows.archive_helpers import (
+    archive_flow_run_artifacts as _archive_flow_run_artifacts_core,
+)
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
 from ....manifest import load_manifest
 from ....tickets.outbox import resolve_outbox_paths
@@ -111,6 +114,14 @@ def _archive_flow_run_artifacts(
     delete_run: bool,
     dry_run: bool,
 ) -> dict[str, Any]:
+    if not dry_run:
+        return _archive_flow_run_artifacts_core(
+            repo_root,
+            run_id=record.id,
+            force=force,
+            delete_run=delete_run,
+        )
+
     status = record.status
     terminal = status.is_terminal()
     if not terminal and not (

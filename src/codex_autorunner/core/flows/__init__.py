@@ -1,3 +1,4 @@
+from .archive_helpers import archive_flow_run_artifacts
 from .controller import FlowController
 from .definition import FlowDefinition, StepFn, StepOutcome
 from .models import (
@@ -29,6 +30,7 @@ __all__ = [
     "PauseDispatchSnapshot",
     "FlowRuntime",
     "FlowStore",
+    "archive_flow_run_artifacts",
     "format_pause_reason",
     "latest_dispatch_seq",
     "load_latest_paused_ticket_flow_dispatch",

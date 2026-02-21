@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 
-DISCORD_STATE_SCHEMA_VERSION = 1
+DISCORD_STATE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,20 @@ class DiscordStateStore:
     async def list_bindings(self) -> list[dict[str, Any]]:
         return await self._run(self._list_bindings_sync)
 
+    async def mark_pause_dispatch_seen(
+        self,
+        *,
+        channel_id: str,
+        run_id: str,
+        dispatch_seq: str,
+    ) -> None:
+        await self._run(
+            self._mark_pause_dispatch_seen_sync,
+            channel_id,
+            run_id,
+            dispatch_seq,
+        )
+
     async def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
         return await self._run(self._upsert_outbox_sync, record)
 
@@ -119,13 +133,17 @@ class DiscordStateStore:
                 )
                 """
             )
-            row = conn.execute("SELECT COUNT(*) AS n FROM schema_info").fetchone()
-            count = int(row["n"]) if row else 0
-            if count == 0:
+            row = conn.execute(
+                "SELECT version FROM schema_info ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            if row is None:
                 conn.execute(
                     "INSERT INTO schema_info(version) VALUES (?)",
                     (DISCORD_STATE_SCHEMA_VERSION,),
                 )
+                current_version = DISCORD_STATE_SCHEMA_VERSION
+            else:
+                current_version = int(row["version"] or 1)
 
             conn.execute(
                 """
@@ -134,6 +152,8 @@ class DiscordStateStore:
                     guild_id TEXT,
                     workspace_path TEXT NOT NULL,
                     repo_id TEXT,
+                    last_pause_run_id TEXT,
+                    last_pause_dispatch_seq TEXT,
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -164,6 +184,24 @@ class DiscordStateStore:
                 CREATE INDEX IF NOT EXISTS idx_discord_outbox_created
                     ON outbox(created_at)
                 """
+            )
+            self._ensure_channel_binding_columns(conn)
+            if current_version < DISCORD_STATE_SCHEMA_VERSION:
+                conn.execute(
+                    "UPDATE schema_info SET version = ?",
+                    (DISCORD_STATE_SCHEMA_VERSION,),
+                )
+
+    def _ensure_channel_binding_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(channel_bindings)").fetchall()
+        names = {str(row["name"]) for row in rows}
+        if "last_pause_run_id" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN last_pause_run_id TEXT"
+            )
+        if "last_pause_dispatch_seq" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN last_pause_dispatch_seq TEXT"
             )
 
     def _upsert_binding_sync(
@@ -206,6 +244,16 @@ class DiscordStateStore:
             "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
             "workspace_path": str(row["workspace_path"]),
             "repo_id": row["repo_id"] if isinstance(row["repo_id"], str) else None,
+            "last_pause_run_id": (
+                row["last_pause_run_id"]
+                if isinstance(row["last_pause_run_id"], str)
+                else None
+            ),
+            "last_pause_dispatch_seq": (
+                row["last_pause_dispatch_seq"]
+                if isinstance(row["last_pause_dispatch_seq"], str)
+                else None
+            ),
             "updated_at": str(row["updated_at"]),
         }
 
@@ -225,6 +273,25 @@ class DiscordStateStore:
             "SELECT * FROM channel_bindings ORDER BY updated_at DESC"
         ).fetchall()
         return [self._binding_from_row(row) for row in rows]
+
+    def _mark_pause_dispatch_seen_sync(
+        self,
+        channel_id: str,
+        run_id: str,
+        dispatch_seq: str,
+    ) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET last_pause_run_id = ?,
+                    last_pause_dispatch_seq = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (run_id, dispatch_seq, now_iso(), channel_id),
+            )
 
     def _upsert_outbox_sync(self, record: OutboxRecord) -> OutboxRecord:
         conn = self._connection_sync()
