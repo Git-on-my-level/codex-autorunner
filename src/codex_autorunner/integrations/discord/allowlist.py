@@ -34,8 +34,8 @@ def _extract_user_id(payload: dict) -> str | None:
 def allowlist_allows(interaction_payload: dict, allowlist: DiscordAllowlist) -> bool:
     if (
         not allowlist.allowed_guild_ids
-        or not allowlist.allowed_channel_ids
-        or not allowlist.allowed_user_ids
+        and not allowlist.allowed_channel_ids
+        and not allowlist.allowed_user_ids
     ):
         return False
 
@@ -43,11 +43,14 @@ def allowlist_allows(interaction_payload: dict, allowlist: DiscordAllowlist) -> 
     channel_id = _as_id(interaction_payload.get("channel_id"))
     user_id = _extract_user_id(interaction_payload)
 
-    if guild_id is None or channel_id is None or user_id is None:
+    if allowlist.allowed_guild_ids and guild_id not in allowlist.allowed_guild_ids:
+        return False
+    if (
+        allowlist.allowed_channel_ids
+        and channel_id not in allowlist.allowed_channel_ids
+    ):
+        return False
+    if allowlist.allowed_user_ids and user_id not in allowlist.allowed_user_ids:
         return False
 
-    return (
-        guild_id in allowlist.allowed_guild_ids
-        and channel_id in allowlist.allowed_channel_ids
-        and user_id in allowlist.allowed_user_ids
-    )
+    return True

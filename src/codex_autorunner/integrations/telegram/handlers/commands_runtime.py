@@ -21,6 +21,9 @@ from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.update_paths import resolve_update_paths
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
+from ...chat.media import (
+    format_media_batch_failure as _format_media_batch_failure,  # noqa: F401
+)
 from ..adapter import (
     CompactCallback,
     InlineButton,
@@ -106,15 +109,6 @@ from .commands import (
     VoiceCommands,
     WorkspaceCommands,
 )
-from .commands.command_utils import (
-    _format_httpx_exception as _shared_format_httpx_exception,
-)
-from .commands.command_utils import (
-    _format_opencode_exception as _shared_format_opencode_exception,
-)
-from .commands.command_utils import (
-    _opencode_review_arguments as _shared_opencode_review_arguments,
-)
 from .commands.execution import _TurnRunFailure
 
 PROMPT_CONTEXT_RE = re.compile("\\bprompt\\b", re.IGNORECASE)
@@ -148,18 +142,6 @@ class _RuntimeStub:
     interrupt_turn_id: Optional[str] = None
 
 
-def _format_opencode_exception(exc: Exception) -> Optional[str]:
-    return _shared_format_opencode_exception(exc)
-
-
-def _opencode_review_arguments(target: dict[str, Any]) -> str:
-    return _shared_opencode_review_arguments(target)
-
-
-def _format_httpx_exception(exc: Exception) -> Optional[str]:
-    return _shared_format_httpx_exception(exc)
-
-
 _GENERIC_TELEGRAM_ERRORS = {
     "Telegram request failed",
     "Telegram file download failed",
@@ -180,70 +162,6 @@ _OPENCODE_CONTEXT_WINDOW_KEYS = (
 )
 
 _OPENCODE_MODEL_CONTEXT_KEYS = ("context",) + _OPENCODE_CONTEXT_WINDOW_KEYS
-
-
-def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
-    chain: list[BaseException] = []
-    current: Optional[BaseException] = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        chain.append(current)
-        seen.add(id(current))
-        current = current.__cause__ or current.__context__
-    return chain
-
-
-def _format_media_batch_failure(
-    *,
-    image_disabled: int,
-    file_disabled: int,
-    image_too_large: int,
-    file_too_large: int,
-    image_download_failed: int,
-    file_download_failed: int,
-    image_download_detail: Optional[str] = None,
-    file_download_detail: Optional[str] = None,
-    image_save_failed: int,
-    file_save_failed: int,
-    unsupported: int,
-    max_image_bytes: int,
-    max_file_bytes: int,
-) -> str:
-    base = "Failed to process any media in the batch."
-    details: list[str] = []
-    if image_disabled:
-        details.append(f"{image_disabled} image(s) skipped (image handling disabled).")
-    if file_disabled:
-        details.append(f"{file_disabled} file(s) skipped (file handling disabled).")
-    if image_too_large:
-        details.append(
-            f"{image_too_large} image(s) too large (max {max_image_bytes} bytes)."
-        )
-    if file_too_large:
-        details.append(
-            f"{file_too_large} file(s) too large (max {max_file_bytes} bytes)."
-        )
-    if image_download_failed:
-        line = f"{image_download_failed} image(s) failed to download."
-        if image_download_detail:
-            label = "error" if image_download_failed == 1 else "last error"
-            line = f"{line} ({label}: {image_download_detail})"
-        details.append(line)
-    if file_download_failed:
-        line = f"{file_download_failed} file(s) failed to download."
-        if file_download_detail:
-            label = "error" if file_download_failed == 1 else "last error"
-            line = f"{line} ({label}: {file_download_detail})"
-        details.append(line)
-    if image_save_failed:
-        details.append(f"{image_save_failed} image(s) failed to save.")
-    if file_save_failed:
-        details.append(f"{file_save_failed} file(s) failed to save.")
-    if unsupported:
-        details.append(f"{unsupported} item(s) had unsupported media types.")
-    if not details:
-        return base
-    return f"{base}\n" + "\n".join(f"- {line}" for line in details)
 
 
 class TelegramCommandHandlers(

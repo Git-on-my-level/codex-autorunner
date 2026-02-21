@@ -79,7 +79,32 @@
     </section>
     <section class="hub-repo-panel">
       <div class="hub-panel-header">
-        <span class="label">Repositories</span>
+        <div class="hub-panel-title">
+          <span class="label">Repositories</span>
+          <div class="hub-repo-controls">
+            <label class="hub-repo-control">
+              Flow
+              <select id="hub-flow-filter" class="hub-repo-select" aria-label="Filter by flow status">
+                <option value="all">All</option>
+                <option value="active">Active</option>
+                <option value="running">Running</option>
+                <option value="paused">Paused</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="idle">Idle</option>
+              </select>
+            </label>
+            <label class="hub-repo-control">
+              Sort
+              <select id="hub-sort-order" class="hub-repo-select" aria-label="Sort parent repos">
+                <option value="repo_id">Repo ID (A-Z)</option>
+                <option value="last_activity_desc">Last activity (newest)</option>
+                <option value="last_activity_asc">Last activity (oldest)</option>
+                <option value="flow_progress_desc">Flow progress</option>
+              </select>
+            </label>
+          </div>
+        </div>
         <div class="hub-panel-actions">
           <button class="ghost sm" id="hub-quick-scan">Rescan</button>
         </div>

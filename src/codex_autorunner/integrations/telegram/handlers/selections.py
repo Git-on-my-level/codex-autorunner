@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, cast
 
 from ....core.update import _normalize_update_target
+from ...chat.handlers.models import ChatContext
+from ...chat.handlers.selections import ChatSelectionHandlers
+from ...chat.models import ChatThreadRef
 from ..adapter import (
     AgentCallback,
     CancelCallback,
@@ -52,7 +55,7 @@ from ..helpers import (
 from ..types import ModelPickerState, ReviewCommitSelectionState, SelectionState
 
 
-class TelegramSelectionHandlers:
+class TelegramSelectionHandlers(ChatSelectionHandlers):
     async def _dismiss_review_custom_prompt(
         self,
         message: TelegramMessage,
@@ -71,44 +74,22 @@ class TelegramSelectionHandlers:
             )
 
     def _handle_pending_resume(self, key: str, text: str) -> bool:
-        if not text.isdigit():
-            return False
-        state = self._resume_options.get(key)
-        if not state:
-            return False
-        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
-        if not page_items:
-            return False
-        choice = int(text)
-        if choice <= 0 or choice > len(page_items):
-            return False
-        thread_id = page_items[choice - 1][0]
-        self._resume_options.pop(key, None)
-        self._enqueue_topic_work(
-            key,
-            lambda: self._resume_thread_by_id(key, thread_id),
+        context = ChatContext(
+            thread=ChatThreadRef(platform="telegram", chat_id="0", thread_id=None),
+            topic_key=key,
         )
-        return True
+        return self.handle_pending_resume(context, text)
 
     def _handle_pending_bind(self, key: str, text: str) -> bool:
-        if not text.isdigit():
-            return False
-        state = self._bind_options.get(key)
-        if not state:
-            return False
-        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
-        if not page_items:
-            return False
-        choice = int(text)
-        if choice <= 0 or choice > len(page_items):
-            return False
-        repo_id = page_items[choice - 1][0]
-        self._bind_options.pop(key, None)
-        self._enqueue_topic_work(
-            key,
-            lambda: self._bind_topic_by_repo_id(key, repo_id),
+        context = ChatContext(
+            thread=ChatThreadRef(platform="telegram", chat_id="0", thread_id=None),
+            topic_key=key,
         )
-        return True
+        return self.handle_pending_bind(context, text)
+
+    @staticmethod
+    def _selection_page_items(state: Any) -> list[tuple[str, str]]:
+        return _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
 
     async def _handle_agent_callback(
         self,

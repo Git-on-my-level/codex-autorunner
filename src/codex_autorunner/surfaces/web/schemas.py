@@ -224,6 +224,10 @@ class GithubPrSyncRequest(Payload):
     mode: Optional[str] = None
 
 
+class HubPinRepoRequest(Payload):
+    pinned: bool = True
+
+
 class SessionStopRequest(Payload):
     session_id: Optional[str] = None
     repo_path: Optional[str] = None
