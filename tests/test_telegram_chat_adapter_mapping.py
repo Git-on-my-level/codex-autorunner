@@ -4,6 +4,7 @@ from typing import Optional
 
 import pytest
 
+from codex_autorunner.integrations.chat.callbacks import decode_logical_callback
 from codex_autorunner.integrations.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
@@ -136,7 +137,10 @@ async def test_poll_events_maps_callback_query_to_interaction_event() -> None:
     assert event.interaction.interaction_id == "cb-1"
     assert event.thread.chat_id == "123"
     assert event.thread.thread_id == "77"
-    assert event.payload == "resume:thread-1"
+    logical = decode_logical_callback(event.payload)
+    assert logical is not None
+    assert logical.callback_id == "resume"
+    assert logical.payload == {"thread_id": "thread-1"}
     assert event.message is not None
     assert event.message.message_id == "22"
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ..chat.adapter import ChatAdapter, SendAttachmentRequest, SendTextRequest
+from ..chat.callbacks import CallbackCodec, encode_logical_callback
 from ..chat.capabilities import ChatCapabilities
 from ..chat.errors import ChatAdapterPermanentError
 from ..chat.models import (
@@ -30,6 +31,7 @@ from .adapter import (
     TelegramUpdate,
     TelegramUpdatePoller,
 )
+from .chat_callbacks import TelegramCallbackCodec
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .rendering import _format_telegram_html, _format_telegram_markdown
 
@@ -85,10 +87,12 @@ class TelegramChatAdapter(ChatAdapter):
         *,
         poller: Optional[TelegramUpdatePoller] = None,
         renderer: Optional[TextRenderer] = None,
+        callback_codec: Optional[CallbackCodec] = None,
     ) -> None:
         self._bot = bot
         self._poller = poller or TelegramUpdatePoller(bot)
         self._renderer = renderer or TelegramTextRenderer()
+        self._callback_codec = callback_codec or TelegramCallbackCodec()
         self._capabilities = ChatCapabilities(
             max_text_length=TELEGRAM_MAX_MESSAGE_LENGTH,
             max_caption_length=1024,
@@ -234,6 +238,10 @@ class TelegramChatAdapter(ChatAdapter):
         message = None
         if callback.message_id is not None:
             message = ChatMessageRef(thread=thread, message_id=str(callback.message_id))
+        decoded = self._callback_codec.decode(callback.data)
+        payload = (
+            encode_logical_callback(decoded) if decoded is not None else callback.data
+        )
         return ChatInteractionEvent(
             update_id=str(callback.update_id),
             thread=thread,
@@ -242,7 +250,7 @@ class TelegramChatAdapter(ChatAdapter):
                 interaction_id=callback.callback_id,
             ),
             from_user_id=_string_or_none(callback.from_user_id),
-            payload=callback.data,
+            payload=payload,
             message=message,
         )
 
