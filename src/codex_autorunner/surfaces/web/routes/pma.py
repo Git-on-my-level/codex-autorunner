@@ -57,8 +57,8 @@ from ....core.pma_transcripts import PmaTranscriptStore
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from ....integrations.chat.text_chunking import chunk_text
 from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
-from ....integrations.telegram.adapter import chunk_message
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ....integrations.telegram.state import OutboxRecord, TelegramStateStore
@@ -276,7 +276,7 @@ def build_pma_routes() -> APIRouter:
                 if details:
                     message = f"{header}\n\n{details}"
 
-                chunks = chunk_message(
+                chunks = chunk_text(
                     message, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
                 )
                 for idx, chunk in enumerate(chunks, 1):

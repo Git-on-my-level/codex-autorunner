@@ -134,7 +134,7 @@ def test_selfdescribe_smoke(hub_env, tmp_path: Path):
             [
                 "templates",
                 "apply",
-                "blessed:snippets/ticket_skeleton.md@main",
+                "blessed:bootstrap/bootstrap_from_user_goal.md@main",
                 "--ticket-dir",
                 str(temp_ticket_dir),
                 "--next",

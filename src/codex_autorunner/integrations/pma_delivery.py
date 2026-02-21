@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from ..core.pma_sink import PmaActiveSinkStore
 from ..core.time_utils import now_iso
-from ..integrations.telegram.adapter import chunk_message
+from ..integrations.chat.text_chunking import chunk_text
 from ..integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ..integrations.telegram.state import OutboxRecord, TelegramStateStore
 
@@ -46,7 +46,7 @@ async def deliver_pma_output_to_active_sink(
     if thread_id is not None and not isinstance(thread_id, int):
         thread_id = None
 
-    chunks = chunk_message(
+    chunks = chunk_text(
         assistant_text, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
     )
     if not chunks:
