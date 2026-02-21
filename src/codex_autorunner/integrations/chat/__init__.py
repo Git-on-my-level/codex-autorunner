@@ -2,6 +2,14 @@
 
 from .adapter import ChatAdapter, SendAttachmentRequest, SendTextRequest
 from .capabilities import ChatCapabilities
+from .dispatcher import (
+    ChatDispatcher,
+    DispatchContext,
+    DispatchResult,
+    build_dispatch_context,
+    conversation_id_for,
+    is_bypass_event,
+)
 from .errors import (
     ChatAdapterError,
     ChatAdapterPermanentError,
@@ -29,14 +37,20 @@ __all__ = [
     "ChatAdapterTransientError",
     "ChatAttachment",
     "ChatCapabilities",
+    "ChatDispatcher",
     "ChatEvent",
     "ChatInteractionEvent",
     "ChatInteractionRef",
     "ChatMessageEvent",
     "ChatMessageRef",
     "ChatThreadRef",
+    "DispatchContext",
+    "DispatchResult",
     "RenderedText",
     "SendAttachmentRequest",
     "SendTextRequest",
     "TextRenderer",
+    "build_dispatch_context",
+    "conversation_id_for",
+    "is_bypass_event",
 ]
