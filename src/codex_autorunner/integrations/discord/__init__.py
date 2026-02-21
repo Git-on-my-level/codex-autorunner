@@ -9,6 +9,13 @@ from .constants import (
     DISCORD_MAX_MESSAGE_LENGTH,
 )
 from .errors import DiscordAPIError, DiscordConfigError, DiscordError
+from .gateway import (
+    DiscordGatewayClient,
+    GatewayFrame,
+    build_identify_payload,
+    calculate_reconnect_backoff,
+    parse_gateway_frame,
+)
 from .rest import DiscordRestClient
 
 __all__ = [
@@ -21,5 +28,10 @@ __all__ = [
     "DiscordError",
     "DiscordConfigError",
     "DiscordAPIError",
+    "GatewayFrame",
+    "build_identify_payload",
+    "parse_gateway_frame",
+    "calculate_reconnect_backoff",
+    "DiscordGatewayClient",
     "DiscordRestClient",
 ]
