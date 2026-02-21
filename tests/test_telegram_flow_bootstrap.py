@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.flows import FlowStore
+from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.handlers.commands import (
     flows as flows_module,
@@ -171,3 +174,33 @@ async def test_flow_bootstrap_prompts_for_plan_when_github_unavailable(
     assert handler.prompts
     assert handler.seed_plan_texts == ["do the thing"]
     assert controller.start_calls
+
+
+@pytest.mark.anyio
+async def test_flow_bootstrap_reuses_active_run_without_spawning_new_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    store = FlowStore(db_path)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    store.create_flow_run(run_id, "ticket_flow", {})
+    store.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
+    store.close()
+
+    ensure_calls: list[tuple[Path, str]] = []
+
+    def _ensure(_repo_root: Path, _run_id: str, is_terminal: bool = False) -> dict:
+        _ = is_terminal
+        ensure_calls.append((_repo_root, _run_id))
+        return {"status": "reused"}
+
+    monkeypatch.setattr(flows_module, "ensure_worker", _ensure)
+
+    handler = _FlowBootstrapHandler()
+    await handler._handle_flow_bootstrap(_message(), repo_root, argv=[])
+
+    assert ensure_calls == [(repo_root, run_id)]
+    assert any("Reusing ticket flow run" in message for message in handler.sent)

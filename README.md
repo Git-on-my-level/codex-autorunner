@@ -43,6 +43,9 @@ pip install -e .[discord]
 Quickstart:
 
 ```bash
+# Set discord_bot.enabled: true and configure command registration first.
+# For development, use scope: guild with at least one guild_id.
+# For production, scope: global is usually preferred.
 car discord register-commands
 car discord start
 ```

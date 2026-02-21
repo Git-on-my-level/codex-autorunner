@@ -15,6 +15,7 @@ from .....core.flows.reconciler import reconcile_flow_run
 from .....core.flows.ux_helpers import (
     bootstrap_check,
     build_flow_status_snapshot,
+    ensure_worker,
     issue_md_has_content,
     issue_md_path,
     seed_issue_from_github,
@@ -32,7 +33,6 @@ from .....core.ticket_flow_summary import build_ticket_flow_display
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow.runtime_helpers import (
     build_ticket_flow_controller,
-    spawn_ticket_flow_worker,
 )
 from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
@@ -199,7 +199,7 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
 
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
-    spawn_ticket_flow_worker(repo_root, run_id, _logger)
+    ensure_worker(repo_root, run_id)
 
 
 def _select_latest_run(

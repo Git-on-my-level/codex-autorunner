@@ -102,10 +102,7 @@ class DiscordGatewayClient:
 
     async def stop(self) -> None:
         self._stop_event.set()
-        if self._heartbeat_task is not None and not self._heartbeat_task.done():
-            self._heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._heartbeat_task
+        await self._cancel_heartbeat()
         if self._websocket is not None:
             with contextlib.suppress(Exception):
                 await self._websocket.close()
@@ -225,5 +222,11 @@ class DiscordGatewayClient:
         self._heartbeat_task = None
         if not task.done():
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            # Heartbeat failures can happen after websocket disconnects; do not let
+            # them abort reconnect/shutdown paths.
+            self._logger.debug("Discord heartbeat task ended with error: %s", exc)
