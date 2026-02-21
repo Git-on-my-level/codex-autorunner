@@ -1,0 +1,16 @@
+{
+  "inline_keyboard": [
+    [
+      {"text": "GPT-5", "callback_data": "model:gpt-5"}
+    ],
+    [
+      {"text": "o3-mini", "callback_data": "model:o3-mini"}
+    ],
+    [
+      {"text": "More", "callback_data": "page:model:1"}
+    ],
+    [
+      {"text": "Cancel", "callback_data": "cancel:model"}
+    ]
+  ]
+}

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 
@@ -17,12 +19,16 @@ from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
 from codex_autorunner.integrations.telegram.adapter import (
     FlowCallback,
     TelegramMessage,
+    build_model_keyboard,
     parse_callback_data,
 )
 from codex_autorunner.integrations.telegram.handlers.commands import (
     flows as flows_module,
 )
 from codex_autorunner.integrations.telegram.handlers.commands.flows import FlowCommands
+from codex_autorunner.integrations.telegram.notifications import (
+    TelegramNotificationHandlers,
+)
 
 
 def _health(tmp_path: Path, status: str = "alive") -> FlowWorkerHealth:
@@ -151,6 +157,102 @@ def test_flow_status_keyboard_falls_back_when_repo_id_is_too_long(
         action="resume", run_id=record.id, repo_id=None
     )
     assert handler._flow_repo_context[record.id] == long_repo_id
+
+
+def test_model_picker_keyboard_matches_golden_fixture() -> None:
+    fixture_dir = Path(__file__).resolve().parent / "fixtures" / "telegram"
+    expected_keyboard = json.loads(
+        (fixture_dir / "model_picker_keyboard.json").read_text()
+    )
+
+    keyboard = build_model_keyboard(
+        [("gpt-5", "GPT-5"), ("o3-mini", "o3-mini")],
+        page_button=("More", "page:model:1"),
+        include_cancel=True,
+    )
+
+    assert keyboard == expected_keyboard
+
+
+class _ProgressCadenceHarness(TelegramNotificationHandlers):
+    def __init__(self, min_interval: float) -> None:
+        self._config = SimpleNamespace(
+            progress_stream=SimpleNamespace(
+                enabled=True,
+                min_edit_interval_seconds=min_interval,
+                max_actions=4,
+                max_output_chars=300,
+            )
+        )
+        self._turn_progress_locks: dict[tuple[str, str], Any] = {}
+        self._turn_progress_trackers: dict[tuple[str, str], Any] = {
+            ("turn-1", "thread-1"): SimpleNamespace(finalized=False)
+        }
+        self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_progress_tasks: dict[tuple[str, str], Any] = {}
+        self._turn_contexts: dict[tuple[str, str], Any] = {
+            ("turn-1", "thread-1"): SimpleNamespace(placeholder_message_id=100)
+        }
+        self.emitted: list[tuple[tuple[str, str], float]] = []
+        self.delayed: list[tuple[tuple[str, str], float]] = []
+
+    async def _emit_progress_edit(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: Optional[Any] = None,
+        now: Optional[float] = None,
+        force: bool = False,
+    ) -> None:
+        _ = (ctx, force)
+        self.emitted.append((turn_key, now if now is not None else -1.0))
+
+    async def _delayed_progress_edit(
+        self, turn_key: tuple[str, str], delay: float
+    ) -> None:
+        self.delayed.append((turn_key, delay))
+
+    def _spawn_task(self, coro: Any) -> Any:
+        return asyncio.create_task(coro)
+
+
+@pytest.mark.anyio
+async def test_progress_edit_cadence_emits_when_interval_elapsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _ProgressCadenceHarness(min_interval=2.0)
+    key = ("turn-1", "thread-1")
+    harness._turn_progress_updated_at[key] = 10.0
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        lambda: 12.2,
+    )
+
+    await harness._schedule_progress_edit(key)
+
+    assert harness.emitted == [(key, 12.2)]
+    assert key not in harness._turn_progress_tasks
+    assert not harness.delayed
+
+
+@pytest.mark.anyio
+async def test_progress_edit_cadence_schedules_when_interval_not_elapsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _ProgressCadenceHarness(min_interval=2.0)
+    key = ("turn-1", "thread-1")
+    harness._turn_progress_updated_at[key] = 10.0
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        lambda: 10.5,
+    )
+
+    await harness._schedule_progress_edit(key)
+    await asyncio.sleep(0)
+
+    assert not harness.emitted
+    assert key in harness._turn_progress_tasks
+    assert harness.delayed == [(key, 1.5)]
 
 
 class _FlowStatusHandler(FlowCommands):

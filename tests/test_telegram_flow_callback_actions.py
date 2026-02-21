@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,9 +11,11 @@ from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.integrations.chat.callbacks import LogicalCallback
 from codex_autorunner.integrations.telegram.adapter import (
+    ApprovalCallback,
     FlowCallback,
     FlowRunCallback,
     TelegramCallbackQuery,
+    build_approval_keyboard,
     encode_agent_callback,
     encode_approval_callback,
     encode_bind_callback,
@@ -31,6 +34,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_review_commit_callback,
     encode_update_callback,
     encode_update_confirm_callback,
+    parse_callback_data,
 )
 from codex_autorunner.integrations.telegram.chat_callbacks import TelegramCallbackCodec
 from codex_autorunner.integrations.telegram.handlers.commands import (
@@ -40,6 +44,7 @@ from codex_autorunner.integrations.telegram.handlers.commands.flows import FlowC
 from codex_autorunner.integrations.telegram.handlers.selections import (
     TelegramSelectionHandlers,
 )
+from codex_autorunner.integrations.telegram.helpers import _format_approval_prompt
 
 
 class _TopicStoreStub:
@@ -420,3 +425,33 @@ def test_telegram_callback_codec_decodes_existing_wire_payloads(
     decoded = codec.decode(legacy_payload)
 
     assert decoded is not None
+
+
+def test_approval_prompt_and_keyboard_match_golden_fixtures() -> None:
+    fixture_dir = Path(__file__).resolve().parent / "fixtures" / "telegram"
+    expected_prompt = (
+        fixture_dir / "approval_prompt_command_execution.txt"
+    ).read_text()
+    expected_keyboard = json.loads((fixture_dir / "approval_keyboard.json").read_text())
+    message = {
+        "method": "item/commandExecution/requestApproval",
+        "params": {
+            "reason": "Need to run diagnostics",
+            "command": "make test",
+        },
+    }
+
+    rendered_prompt = _format_approval_prompt(message)
+    keyboard = build_approval_keyboard("req-approval-1", include_session=False)
+
+    assert rendered_prompt == expected_prompt.strip()
+    assert keyboard == expected_keyboard
+    first_row = keyboard["inline_keyboard"][0]
+    assert parse_callback_data(first_row[0]["callback_data"]) == ApprovalCallback(
+        decision="accept",
+        request_id="req-approval-1",
+    )
+    assert parse_callback_data(first_row[1]["callback_data"]) == ApprovalCallback(
+        decision="decline",
+        request_id="req-approval-1",
+    )
