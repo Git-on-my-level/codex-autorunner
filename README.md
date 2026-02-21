@@ -31,6 +31,24 @@ I recommend serving the web UI over Tailscale. There is an auth token option but
 ### Telegram
 Telegram is the "on-the-go" and notification hub for CAR. From here you can kick off and monitor existing tickets, set up new tickets, and chat with agents. Your primary UX here is asking the agent to do things for you rather than you doing it yourself like you would on the web UI. This is great for on-the-go work, but it doesn't have full feature parity with the web UI.
 
+### Discord Bot
+CAR also supports a Discord bot surface for ticket-flow and agent interactions.
+
+Install optional Discord dependencies:
+
+```bash
+pip install -e .[discord]
+```
+
+Quickstart:
+
+```bash
+car discord register-commands
+car discord start
+```
+
+Access is deny-all by default. Configure at least one allowlist in `discord_bot` (`allowed_guild_ids`, `allowed_channel_ids`, or `allowed_user_ids`) before enabling the bot.
+
 ### Project Manager Agent
 The project manager agent (PMA) is a way to use an AI agent to run CAR. For example instead of making/editing tickets in the UI, you can ask the PMA to do it for you. Instead of starting a ticket flow, the PMA can babysit it for you. The PMA can be accessed in the web and in Telegram, and also uses the CAR CLI directly.
 

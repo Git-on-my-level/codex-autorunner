@@ -7,6 +7,7 @@ This package contains surface-specific code for codex-autorunner. Surfaces are r
 - `web/`: FastAPI web UI, API routes, and web-specific workflows
 - `cli/`: Command-line interface
 - `telegram/`: Telegram bot and adapters
+- `discord/`: Discord bot docs and surface notes
 
 ## Architecture
 

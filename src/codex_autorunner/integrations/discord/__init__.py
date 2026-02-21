@@ -16,6 +16,7 @@ from .constants import (
     DISCORD_INTENT_MESSAGE_CONTENT,
     DISCORD_MAX_MESSAGE_LENGTH,
 )
+from .doctor import discord_doctor_checks
 from .errors import DiscordAPIError, DiscordConfigError, DiscordError
 from .gateway import (
     DiscordGatewayClient,
@@ -47,6 +48,7 @@ __all__ = [
     "DiscordBotConfigError",
     "DiscordCommandRegistration",
     "DiscordBotConfig",
+    "discord_doctor_checks",
     "DiscordAllowlist",
     "allowlist_allows",
     "extract_command_path_and_options",
