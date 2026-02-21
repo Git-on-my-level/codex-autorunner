@@ -40,6 +40,13 @@ from .errors import (
     ChatAdapterTimeoutError,
     ChatAdapterTransientError,
 )
+from .handlers import (
+    ChatApprovalHandlers,
+    ChatContext,
+    ChatQuestionHandlers,
+    ChatSelectionHandlers,
+    handle_custom_text_input,
+)
 from .models import (
     ChatAction,
     ChatAttachment,
@@ -63,7 +70,9 @@ __all__ = [
     "ChatAdapterTransientError",
     "ChatAttachment",
     "ChatCapabilities",
+    "ChatContext",
     "ChatBotServiceCore",
+    "ChatApprovalHandlers",
     "CallbackCodec",
     "ChatDispatcher",
     "ChatEvent",
@@ -71,6 +80,8 @@ __all__ = [
     "ChatInteractionRef",
     "ChatMessageEvent",
     "ChatMessageRef",
+    "ChatQuestionHandlers",
+    "ChatSelectionHandlers",
     "ChatStateStore",
     "ChatThreadRef",
     "ChatTransport",
@@ -103,5 +114,6 @@ __all__ = [
     "conversation_id_for",
     "decode_logical_callback",
     "encode_logical_callback",
+    "handle_custom_text_input",
     "is_bypass_event",
 ]

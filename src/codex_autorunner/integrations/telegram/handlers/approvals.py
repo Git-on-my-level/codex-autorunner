@@ -7,6 +7,9 @@ from typing import Any
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ...app_server.client import ApprovalDecision
+from ...chat.handlers.approvals import ChatApprovalHandlers
+from ...chat.handlers.models import ChatContext
+from ...chat.models import ChatInteractionEvent, ChatInteractionRef, ChatMessageRef
 from ..adapter import ApprovalCallback, TelegramCallbackQuery, build_approval_keyboard
 from ..config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from ..helpers import (
@@ -20,7 +23,7 @@ from ..state import PendingApprovalRecord
 from ..types import PendingApproval
 
 
-class TelegramApprovalHandlers:
+class TelegramApprovalHandlers(ChatApprovalHandlers):
     async def _restore_pending_approvals(self) -> None:
         state = await self._store.load()
         if not state.pending_approvals:
@@ -200,44 +203,111 @@ class TelegramApprovalHandlers:
     async def _handle_approval_callback(
         self, callback: TelegramCallbackQuery, parsed: ApprovalCallback
     ) -> None:
-        await self._store.clear_pending_approval(parsed.request_id)
-        pending = self._pending_approvals.pop(parsed.request_id, None)
-        if pending is None:
-            await self._answer_callback(callback, "Approval already handled")
-            return
-        if not pending.future.done():
-            pending.future.set_result(parsed.decision)
-        ctx = self._resolve_turn_context(
-            pending.turn_id, thread_id=pending.codex_thread_id
+        context = await self._chat_context_from_callback(callback)
+        interaction = self._chat_interaction_event_from_callback(callback)
+        await self.handle_approval_interaction(context, interaction, parsed)
+
+    async def _chat_context_from_callback(
+        self, callback: TelegramCallbackQuery
+    ) -> ChatContext:
+        chat_id = callback.chat_id if callback.chat_id is not None else 0
+        topic_key = await self._resolve_topic_key(chat_id, callback.thread_id)
+        return ChatContext(
+            thread=self._chat_thread_ref(chat_id, callback.thread_id),
+            topic_key=topic_key,
+            user_id=(
+                str(callback.from_user_id)
+                if callback.from_user_id is not None
+                else None
+            ),
         )
-        if ctx:
-            runtime_key = ctx.topic_key
-        elif pending.topic_key:
-            runtime_key = pending.topic_key
-        else:
-            runtime_key = await self._resolve_topic_key(
-                pending.chat_id, pending.thread_id
-            )
-        runtime = self._router.runtime_for(runtime_key)
-        runtime.pending_request_id = None
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.approval.decision",
-            request_id=parsed.request_id,
-            decision=parsed.decision,
-            chat_id=callback.chat_id,
-            thread_id=callback.thread_id,
-            message_id=callback.message_id,
+
+    def _chat_interaction_event_from_callback(
+        self, callback: TelegramCallbackQuery
+    ) -> ChatInteractionEvent:
+        thread = self._chat_thread_ref(
+            callback.chat_id if callback.chat_id is not None else 0,
+            callback.thread_id,
         )
-        await self._answer_callback(callback, f"Decision: {parsed.decision}")
-        if pending.message_id is not None:
-            try:
-                await self._edit_message_text(
-                    pending.chat_id,
-                    pending.message_id,
-                    _format_approval_decision(parsed.decision),
-                    reply_markup={"inline_keyboard": []},
-                )
-            except Exception:
-                return
+        message = None
+        if callback.message_id is not None:
+            message = ChatMessageRef(thread=thread, message_id=str(callback.message_id))
+        return ChatInteractionEvent(
+            update_id=str(callback.update_id),
+            thread=thread,
+            interaction=ChatInteractionRef(
+                thread=thread,
+                interaction_id=callback.callback_id,
+            ),
+            from_user_id=(
+                str(callback.from_user_id)
+                if callback.from_user_id is not None
+                else None
+            ),
+            payload=callback.data,
+            message=message,
+        )
+
+    async def _chat_answer_interaction(
+        self, interaction: ChatInteractionEvent, text: str
+    ) -> None:
+        callback = TelegramCallbackQuery(
+            update_id=(
+                int(interaction.update_id) if interaction.update_id.isdigit() else 0
+            ),
+            callback_id=interaction.interaction.interaction_id,
+            from_user_id=(
+                int(interaction.from_user_id)
+                if interaction.from_user_id and interaction.from_user_id.isdigit()
+                else None
+            ),
+            data=interaction.payload,
+            message_id=(
+                int(interaction.message.message_id)
+                if interaction.message and interaction.message.message_id.isdigit()
+                else None
+            ),
+            chat_id=(
+                int(interaction.thread.chat_id)
+                if interaction.thread.chat_id.isdigit()
+                else None
+            ),
+            thread_id=(
+                int(interaction.thread.thread_id)
+                if interaction.thread.thread_id
+                and interaction.thread.thread_id.isdigit()
+                else None
+            ),
+        )
+        await self._answer_callback(callback, text)
+
+    async def _chat_edit_message(
+        self,
+        *,
+        chat_id: int,
+        thread_id: int | None,
+        message_id: int,
+        text: str,
+        clear_actions: bool,
+    ) -> None:
+        reply_markup = {"inline_keyboard": []} if clear_actions else None
+        await self._edit_message_text(
+            chat_id,
+            message_id,
+            text,
+            reply_markup=reply_markup,
+        )
+
+    @staticmethod
+    def _format_approval_decision(decision: str) -> str:
+        return _format_approval_decision(decision)
+
+    @staticmethod
+    def _chat_thread_ref(chat_id: int, thread_id: int | None):
+        from ...chat.models import ChatThreadRef
+
+        return ChatThreadRef(
+            platform="telegram",
+            chat_id=str(chat_id),
+            thread_id=str(thread_id) if thread_id is not None else None,
+        )
