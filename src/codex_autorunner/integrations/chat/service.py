@@ -16,6 +16,7 @@ from ...core.managed_processes import reap_managed_processes
 from .adapter import ChatAdapter
 from .dispatcher import ChatDispatcher
 from .models import ChatEvent
+from .transport import ChatTransport
 
 
 class ChatStateStore(Protocol):
@@ -39,12 +40,14 @@ class ChatBotServiceCore:
         runtime_services: Any,
         state_store: ChatStateStore,
         adapter: Optional[ChatAdapter] = None,
+        transport: Optional[ChatTransport] = None,
         dispatcher: Optional[ChatDispatcher] = None,
     ) -> None:
         self._owner = owner
         self._runtime_services = runtime_services
         self._state_store = state_store
         self._adapter = adapter
+        self._transport = transport
         self._dispatcher = dispatcher or ChatDispatcher(logger=owner._logger)
 
     async def run(self) -> None:

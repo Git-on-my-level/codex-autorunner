@@ -52,6 +52,7 @@ from .models import (
 )
 from .renderer import RenderedText, TextRenderer
 from .service import ChatBotServiceCore, ChatStateStore
+from .transport import ChatTransport
 
 __all__ = [
     "ChatAction",
@@ -72,6 +73,7 @@ __all__ = [
     "ChatMessageRef",
     "ChatStateStore",
     "ChatThreadRef",
+    "ChatTransport",
     "DispatchContext",
     "DispatchResult",
     "LogicalCallback",

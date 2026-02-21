@@ -46,6 +46,7 @@ from .adapter import (
     TelegramUpdatePoller,
 )
 from .chat_adapter import TelegramChatAdapter
+from .chat_transport import TelegramChatTransport
 from .commands_registry import build_command_payloads, diff_command_lists
 from .config import (
     AppServerUnavailableError,
@@ -258,11 +259,13 @@ class TelegramBotService(
             self._bot,
             poller=self._poller,
         )
+        self._chat_transport = TelegramChatTransport(self)
         self._chat_core = ChatBotServiceCore(
             owner=self,
             runtime_services=self._runtime_services,
             state_store=self._store,
             adapter=self._chat_adapter,
+            transport=self._chat_transport,
         )
         self._model_options: dict[str, ModelPickerState] = {}
         self._model_pending: dict[str, ModelOption] = {}
