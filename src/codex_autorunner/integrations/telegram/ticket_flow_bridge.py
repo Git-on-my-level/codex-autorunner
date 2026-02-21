@@ -4,20 +4,19 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Awaitable, Callable, Optional
 
 from ...core.config import load_repo_config
 from ...core.flows import FlowStore
-from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.pause_dispatch import load_latest_paused_ticket_flow_dispatch
-from ...core.flows.worker_process import spawn_flow_worker
 from ...core.logging_utils import log_event
 from ...core.runtime_services import RuntimeServices
 from ...core.utils import canonicalize_path
-from ...flows.ticket_flow import build_ticket_flow_definition
-from ...integrations.agents.build_agent_pool import build_agent_pool
+from ...flows.ticket_flow.runtime_helpers import (
+    build_ticket_flow_controller,
+    spawn_ticket_flow_worker,
+)
 from ...manifest import load_manifest
 from .adapter import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
@@ -288,10 +287,10 @@ class TelegramTicketFlowBridge:
                     workspace_root
                 )
             else:
-                controller = _ticket_controller_for(workspace_root)
+                controller = build_ticket_flow_controller(workspace_root)
             updated = await controller.resume_flow(run_id)
             if updated:
-                _spawn_ticket_worker(workspace_root, updated.id, self._logger)
+                spawn_ticket_flow_worker(workspace_root, updated.id, self._logger)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -571,58 +570,3 @@ class TelegramTicketFlowBridge:
                 thread_id=thread_id,
                 reply_to=None,
             )
-
-
-def _ticket_controller_for(repo_root: Path) -> FlowController:
-    resources = _build_ticket_flow_runtime_resources(repo_root)
-    return resources.controller
-
-
-def _build_ticket_flow_runtime_resources(repo_root: Path):
-    repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
-    from ...agents.registry import validate_agent_id
-    from ...core.config import load_repo_config
-    from ...core.runtime import RuntimeContext
-    from ...integrations.agents import build_backend_orchestrator
-    from ...integrations.agents.wiring import (
-        build_agent_backend_factory,
-        build_app_server_supervisor_factory,
-    )
-
-    config = load_repo_config(repo_root)
-    backend_orchestrator = build_backend_orchestrator(repo_root, config)
-    engine = RuntimeContext(
-        repo_root,
-        config=config,
-        backend_orchestrator=backend_orchestrator,
-        backend_factory=build_agent_backend_factory(repo_root, config),
-        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-        agent_id_validator=validate_agent_id,
-    )
-    agent_pool = build_agent_pool(engine.config)
-    definition = build_ticket_flow_definition(agent_pool=agent_pool)
-    definition.validate()
-    controller = FlowController(
-        definition=definition,
-        db_path=db_path,
-        artifacts_root=artifacts_root,
-        durable=config.durable_writes,
-    )
-    controller.initialize()
-    return SimpleNamespace(controller=controller, agent_pool=agent_pool)
-
-
-def _spawn_ticket_worker(repo_root: Path, run_id: str, logger: logging.Logger) -> None:
-    try:
-        proc, out, err = spawn_flow_worker(repo_root, run_id)
-        out.close()
-        err.close()
-        logger.info("Started ticket_flow worker for %s (pid=%s)", run_id, proc.pid)
-    except Exception as exc:
-        logger.warning(
-            "ticket_flow.worker.spawn_failed",
-            exc_info=exc,
-            extra={"run_id": run_id},
-        )
