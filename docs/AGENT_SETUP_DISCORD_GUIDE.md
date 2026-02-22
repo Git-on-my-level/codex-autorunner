@@ -100,6 +100,14 @@ car discord register-commands --path <hub_or_repo_root>
 car discord start --path <hub_or_repo_root>
 ```
 
+For macOS launchd-managed installs (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`):
+- Discord is auto-managed when `discord_bot.enabled: true` and both credential env vars are set.
+- Auto-detection uses `discord_bot.bot_token_env` and `discord_bot.app_id_env` (defaults: `CAR_DISCORD_BOT_TOKEN`, `CAR_DISCORD_APP_ID`).
+- Optional overrides:
+  - `ENABLE_DISCORD_BOT=auto|true|false`
+  - `DISCORD_LABEL` / `DISCORD_PLIST_PATH`
+  - `HEALTH_CHECK_DISCORD=auto|true|false` (safe refresh)
+
 In an allowed Discord channel:
 
 1. Run `/car status`.
@@ -128,6 +136,8 @@ You usually do not need broad admin permissions for baseline CAR Discord usage.
 1. Re-run `car discord register-commands --path <hub_or_repo_root>`.
 2. For development, prefer `guild` scope with explicit `guild_ids`.
 3. Verify `CAR_DISCORD_BOT_TOKEN` and `CAR_DISCORD_APP_ID` are set in the process environment.
+4. If using launchd on macOS, confirm the Discord agent is loaded:
+   - `launchctl print "gui/$(id -u)/com.codex.autorunner.discord"`
 
 ### "Not authorized" responses
 
