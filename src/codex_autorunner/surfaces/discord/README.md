@@ -16,6 +16,7 @@ Discord bot surface and adapters.
 6. Start the bot:
    - `car discord start`
    - Startup auto-syncs application commands when `command_registration.enabled: true`.
+   - Invalid registration config (for example `scope: guild` with empty `guild_ids`) fails startup fast.
 7. Optional manual sync:
    - `car discord register-commands`
 

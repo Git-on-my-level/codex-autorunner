@@ -83,6 +83,8 @@ def _config(
     *,
     allow_user_ids: frozenset[str],
     command_registration_enabled: bool = True,
+    command_scope: str = "guild",
+    command_guild_ids: tuple[str, ...] = ("guild-1",),
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -96,14 +98,25 @@ def _config(
         allowed_user_ids=allow_user_ids,
         command_registration=DiscordCommandRegistration(
             enabled=command_registration_enabled,
-            scope="guild",
-            guild_ids=("guild-1",),
+            scope=command_scope,
+            guild_ids=command_guild_ids,
         ),
         state_file=root / ".codex-autorunner" / "discord_state.sqlite3",
         intents=1,
         max_message_length=2000,
         pma_enabled=True,
     )
+
+
+class _FailingSyncRest(_FakeRest):
+    async def bulk_overwrite_application_commands(
+        self,
+        *,
+        application_id: str,
+        commands: list[dict[str, Any]],
+        guild_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        raise RuntimeError("simulated sync failure")
 
 
 def _interaction(
@@ -248,5 +261,59 @@ async def test_service_skips_command_sync_when_disabled(tmp_path: Path) -> None:
     try:
         await service.run_forever()
         assert rest.command_sync_calls == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_raises_on_invalid_command_sync_config(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([])
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allow_user_ids=frozenset({"user-1"}),
+            command_registration_enabled=True,
+            command_scope="guild",
+            command_guild_ids=(),
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        with pytest.raises(
+            ValueError, match="guild scope requires at least one guild_id"
+        ):
+            await service.run_forever()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FailingSyncRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert "not bound" in payload["data"]["content"].lower()
     finally:
         await store.close()

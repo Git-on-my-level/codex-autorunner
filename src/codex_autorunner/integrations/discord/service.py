@@ -107,7 +107,7 @@ class DiscordBotService:
                 ChatBootstrapStep(
                     name="sync_application_commands",
                     action=self._sync_application_commands_on_startup,
-                    required=False,
+                    required=True,
                 ),
             ),
         )
@@ -144,16 +144,30 @@ class DiscordBotService:
         application_id = (self._config.application_id or "").strip()
         if not application_id:
             raise ValueError("missing Discord application id for command sync")
+        if registration.scope == "guild" and not registration.guild_ids:
+            raise ValueError("guild scope requires at least one guild_id")
 
         commands = build_application_commands()
-        await sync_commands(
-            self._rest,
-            application_id=application_id,
-            commands=commands,
-            scope=registration.scope,
-            guild_ids=registration.guild_ids,
-            logger=self._logger,
-        )
+        try:
+            await sync_commands(
+                self._rest,
+                application_id=application_id,
+                commands=commands,
+                scope=registration.scope,
+                guild_ids=registration.guild_ids,
+                logger=self._logger,
+            )
+        except ValueError:
+            raise
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.commands.sync.startup_failed",
+                scope=registration.scope,
+                command_count=len(commands),
+                exc=exc,
+            )
 
     async def _shutdown(self) -> None:
         if self._owns_gateway:

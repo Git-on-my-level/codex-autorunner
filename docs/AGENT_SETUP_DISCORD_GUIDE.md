@@ -100,6 +100,7 @@ car discord start --path <hub_or_repo_root>
 ```
 
 `car discord start` now auto-syncs Discord application commands at startup (including `/car` and `/pma`) when `discord_bot.command_registration.enabled: true`.
+If command registration config is invalid (for example `scope: guild` without `guild_ids`), startup exits with an actionable error.
 Use manual sync only when needed:
 
 ```bash
