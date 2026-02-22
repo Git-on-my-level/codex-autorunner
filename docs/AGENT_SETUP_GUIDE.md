@@ -4,6 +4,17 @@ This document is for an AI agent to walk the user through setting up CAR (codex-
 
 ---
 
+## Optional Add-On Guides
+
+Use these only after base setup is complete:
+
+- Telegram interactive bot onboarding: `docs/AGENT_SETUP_TELEGRAM_GUIDE.md`
+- Discord interactive bot onboarding: `docs/AGENT_SETUP_DISCORD_GUIDE.md`
+
+These are optional integrations, not required for baseline CAR setup.
+
+---
+
 ## Instructions for the Agent
 
 You are helping a user set up CAR (codex-autorunner), an agent coordination tool. Follow these steps interactively, asking clarifying questions when needed.
@@ -193,7 +204,7 @@ Once basic setup is complete, suggest these next steps:
 
 1. **Add more repositories** — Clone or create additional projects to manage from your hub
 2. **Create a plan** — Chat with an AI to design a feature or fix, then convert it to tickets
-3. **Set up notifications** — Configure Telegram or Discord to stay updated on agent progress
+3. **Add chat integrations (optional)** — Use `docs/AGENT_SETUP_TELEGRAM_GUIDE.md` or `docs/AGENT_SETUP_DISCORD_GUIDE.md`
 4. **Explore the Web UI** — Browse the hub dashboard, try the built-in terminal, use voice input
 5. **Read the docs** — Point to relevant docs in the `docs/` directory for advanced configuration
 
