@@ -83,7 +83,7 @@ echo "Checking for legacy TODO/SUMMARY pipeline code..."
 "$PYTHON_BIN" scripts/check_legacy_pipeline.py
 
 echo "Type check (mypy)..."
-"$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
+"$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server src/codex_autorunner/integrations/telegram
 
 echo "Linting JS/TS (eslint)..."
 "$ESLINT_BIN" "src/codex_autorunner/static_src/**/*.ts"

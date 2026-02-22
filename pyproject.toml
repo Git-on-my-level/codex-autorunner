@@ -138,3 +138,10 @@ module = [
   "codex_autorunner.integrations.app_server.*",
 ]
 ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = [
+  "codex_autorunner.integrations.telegram",
+  "codex_autorunner.integrations.telegram.*",
+]
+ignore_errors = true
