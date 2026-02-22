@@ -1245,12 +1245,19 @@ main {
 }
 
 .hub-repo-select {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 3px 8px;
+  padding: 3px 20px 3px 8px;
   font-size: 10px;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%237a8ba8' d='M4 5L1 2h6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  cursor: pointer;
 }
 
 .hub-panel-actions {
