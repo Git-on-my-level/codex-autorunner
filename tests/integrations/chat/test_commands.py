@@ -146,3 +146,29 @@ def test_parse_chat_command_preserves_inner_whitespace_in_raw() -> None:
     assert parsed is not None
     assert parsed.raw == "/status   keep   spacing"
     assert parsed.args == "keep   spacing"
+
+
+@pytest.mark.parametrize(
+    ("bot_username", "expected_parse"),
+    [
+        (None, True),
+        ("", True),
+        ("   ", True),
+        ("@", True),
+        ("@@", True),
+        ("mybot", True),
+        ("MYBOT", True),
+        (" @MyBot ", True),
+        ("otherbot", False),
+    ],
+)
+def test_parse_chat_command_bot_username_normalization_edge_cases(
+    bot_username: str | None, expected_parse: bool
+) -> None:
+    parsed = parse_chat_command("/status@mybot now", bot_username=bot_username)
+    if expected_parse:
+        assert parsed is not None
+        assert parsed.name == "status"
+        assert parsed.args == "now"
+        return
+    assert parsed is None
