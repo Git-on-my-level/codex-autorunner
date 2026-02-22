@@ -19,9 +19,12 @@ from ...core.logging_utils import log_event
 from ...core.pma_sink import PmaActiveSinkStore
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
+from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.text_chunking import chunk_text
 from ...tickets.outbox import resolve_outbox_paths
 from .allowlist import DiscordAllowlist, allowlist_allows
+from .command_registry import sync_commands
+from .commands import build_application_commands
 from .config import DiscordBotConfig
 from .gateway import DiscordGatewayClient
 from .interactions import (
@@ -97,6 +100,17 @@ class DiscordBotService:
 
     async def run_forever(self) -> None:
         await self._store.initialize()
+        await run_chat_bootstrap_steps(
+            platform="discord",
+            logger=self._logger,
+            steps=(
+                ChatBootstrapStep(
+                    name="sync_application_commands",
+                    action=self._sync_application_commands_on_startup,
+                    required=False,
+                ),
+            ),
+        )
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
@@ -116,6 +130,30 @@ class DiscordBotService:
             with contextlib.suppress(asyncio.CancelledError):
                 await outbox_task
             await self._shutdown()
+
+    async def _sync_application_commands_on_startup(self) -> None:
+        registration = self._config.command_registration
+        if not registration.enabled:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.commands.sync.disabled",
+            )
+            return
+
+        application_id = (self._config.application_id or "").strip()
+        if not application_id:
+            raise ValueError("missing Discord application id for command sync")
+
+        commands = build_application_commands()
+        await sync_commands(
+            self._rest,
+            application_id=application_id,
+            commands=commands,
+            scope=registration.scope,
+            guild_ids=registration.guild_ids,
+            logger=self._logger,
+        )
 
     async def _shutdown(self) -> None:
         if self._owns_gateway:

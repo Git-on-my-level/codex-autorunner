@@ -13,10 +13,11 @@ Discord bot surface and adapters.
 5. Configure command registration:
    - development: `command_registration.scope: guild` with at least one `guild_id`
    - production: `command_registration.scope: global`
-6. Register commands:
-   - `car discord register-commands`
-7. Start the bot:
+6. Start the bot:
    - `car discord start`
+   - Startup auto-syncs application commands when `command_registration.enabled: true`.
+7. Optional manual sync:
+   - `car discord register-commands`
 
 Recommended during development: use guild-scoped command registration so command updates propagate quickly.
 

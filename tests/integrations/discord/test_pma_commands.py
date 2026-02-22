@@ -19,6 +19,7 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
         self,
@@ -39,6 +40,22 @@ class _FakeRest:
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+
+    async def bulk_overwrite_application_commands(
+        self,
+        *,
+        application_id: str,
+        commands: list[dict[str, Any]],
+        guild_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.command_sync_calls.append(
+            {
+                "application_id": application_id,
+                "guild_id": guild_id,
+                "commands": commands,
+            }
+        )
+        return commands
 
 
 class _FakeGateway:
