@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from codex_autorunner.integrations.chat.commands import parse_chat_command
+from codex_autorunner.integrations.chat.commands import (
+    MAX_COMMAND_MENTION_LENGTH,
+    MAX_COMMAND_NAME_LENGTH,
+    MIN_COMMAND_MENTION_LENGTH,
+    MIN_COMMAND_NAME_LENGTH,
+    parse_chat_command,
+)
 
 
 @pytest.mark.parametrize(
@@ -61,3 +67,42 @@ def test_parse_chat_command_mention_filtering(
 )
 def test_parse_chat_command_malformed_inputs_return_none(text: str) -> None:
     assert parse_chat_command(text) is None
+
+
+def test_parse_chat_command_accepts_name_length_boundaries() -> None:
+    min_name = "a" * MIN_COMMAND_NAME_LENGTH
+    max_name = "a" * MAX_COMMAND_NAME_LENGTH
+
+    parsed_min = parse_chat_command(f"/{min_name}")
+    parsed_max = parse_chat_command(f"/{max_name}")
+
+    assert parsed_min is not None
+    assert parsed_min.name == min_name
+    assert parsed_max is not None
+    assert parsed_max.name == max_name
+
+
+def test_parse_chat_command_rejects_name_above_max_length() -> None:
+    over_max_name = "a" * (MAX_COMMAND_NAME_LENGTH + 1)
+    assert parse_chat_command(f"/{over_max_name}") is None
+
+
+def test_parse_chat_command_accepts_mention_length_boundaries() -> None:
+    mention_min = "b" * MIN_COMMAND_MENTION_LENGTH
+    mention_max = "b" * MAX_COMMAND_MENTION_LENGTH
+
+    parsed_min = parse_chat_command(f"/status@{mention_min} now")
+    parsed_max = parse_chat_command(f"/status@{mention_max} now")
+
+    assert parsed_min is not None
+    assert parsed_min.args == "now"
+    assert parsed_max is not None
+    assert parsed_max.args == "now"
+
+
+def test_parse_chat_command_rejects_mention_outside_length_bounds() -> None:
+    mention_too_short = "b" * (MIN_COMMAND_MENTION_LENGTH - 1)
+    mention_too_long = "b" * (MAX_COMMAND_MENTION_LENGTH + 1)
+
+    assert parse_chat_command(f"/status@{mention_too_short} now") is None
+    assert parse_chat_command(f"/status@{mention_too_long} now") is None

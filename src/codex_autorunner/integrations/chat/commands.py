@@ -6,7 +6,19 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-_SLASH_COMMAND_RE = re.compile(r"^/([a-z0-9_]{1,32})(?:@([A-Za-z0-9_]{3,64}))?$")
+MIN_COMMAND_NAME_LENGTH = 1
+MAX_COMMAND_NAME_LENGTH = 32
+MIN_COMMAND_MENTION_LENGTH = 3
+MAX_COMMAND_MENTION_LENGTH = 64
+_COMMAND_NAME_CHARCLASS = "a-z0-9_"
+_COMMAND_MENTION_CHARCLASS = "A-Za-z0-9_"
+_SLASH_COMMAND_PATTERN = (
+    rf"^/([{_COMMAND_NAME_CHARCLASS}]"
+    rf"{{{MIN_COMMAND_NAME_LENGTH},{MAX_COMMAND_NAME_LENGTH}}})"
+    rf"(?:@([{_COMMAND_MENTION_CHARCLASS}]"
+    rf"{{{MIN_COMMAND_MENTION_LENGTH},{MAX_COMMAND_MENTION_LENGTH}}}))?$"
+)
+_SLASH_COMMAND_RE = re.compile(_SLASH_COMMAND_PATTERN)
 
 
 @dataclass(frozen=True)
