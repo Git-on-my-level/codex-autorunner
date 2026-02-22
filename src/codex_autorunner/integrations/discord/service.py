@@ -872,10 +872,18 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            sink_store = PmaActiveSinkStore(self._config.root)
+            sink = sink_store.load()
+            if (
+                sink is not None
+                and sink.get("platform") == "discord"
+                and sink.get("chat_id") == channel_id
+            ):
+                sink_store.clear()
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                "PMA mode disabled. Back to repo mode.",
             )
             return
 
@@ -925,10 +933,23 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            sink_store = PmaActiveSinkStore(self._config.root)
+            sink = sink_store.load()
+            active_here = (
+                sink is not None
+                and sink.get("platform") == "discord"
+                and sink.get("chat_id") == channel_id
+            )
+            status = "enabled" if active_here else "disabled"
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                "\n".join(
+                    [
+                        f"PMA mode: {status}",
+                        "Current workspace: unbound",
+                    ]
+                ),
             )
             return
 

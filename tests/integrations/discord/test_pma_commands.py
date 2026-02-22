@@ -308,6 +308,59 @@ async def test_pma_off_after_unbound_pma_on_returns_to_unbound(tmp_path: Path) -
 
 
 @pytest.mark.anyio
+async def test_pma_status_unbound_channel_reports_disabled(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="status")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        content = payload["data"]["content"]
+        assert "PMA mode: disabled" in content
+        assert "Current workspace: unbound" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_off_unbound_channel_is_idempotent(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="off")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert "PMA mode disabled" in payload["data"]["content"]
+        assert "Back to repo mode." in payload["data"]["content"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pma_disabled_in_config_returns_actionable_message(
     tmp_path: Path,
 ) -> None:
