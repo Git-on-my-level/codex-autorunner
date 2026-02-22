@@ -12,6 +12,9 @@ from tests.fixtures.telegram_command_helpers import (
     make_command_spec,
 )
 
+# Helper usage: this file owns cross-cutting Telegram command invariants, so use
+# shared helpers for setup and keep assertions focused on behavior contracts.
+
 
 def test_contract_runtime_entity_and_fallback_parity_for_mention_validation() -> None:
     token = "/resume@x"

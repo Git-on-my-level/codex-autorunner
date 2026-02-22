@@ -28,6 +28,9 @@ from tests.fixtures.telegram_command_helpers import (
     make_command_spec,
 )
 
+# Helper usage: keep message-handler behavior central; shared command helpers are
+# only for compact command setup within bypass/dispatch-focused tests.
+
 
 def _message(**kwargs: object) -> TelegramMessage:
     text = kwargs.pop("text", None)

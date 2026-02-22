@@ -72,6 +72,8 @@ from tests.fixtures.telegram_command_helpers import bot_command_entity
 
 # Cross-cutting command/registration invariants live in
 # tests/test_telegram_command_contract.py. This module keeps adapter-focused cases.
+# Helper usage: use shared command setup helpers only where they reduce local
+# noise; keep adapter transport/parse behavior explicit in each test.
 
 
 def test_parse_command_basic() -> None:

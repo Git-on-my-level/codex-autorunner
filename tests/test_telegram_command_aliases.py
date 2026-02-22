@@ -13,6 +13,9 @@ from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
 )
 from tests.fixtures.telegram_command_helpers import make_command_spec
 
+# Helper usage: use `make_command_spec(...)` for concise alias command setup while
+# keeping alias-routing assertions explicit in each test.
+
 
 class _AliasHarness(TelegramCommandHandlers):
     def __init__(self) -> None:

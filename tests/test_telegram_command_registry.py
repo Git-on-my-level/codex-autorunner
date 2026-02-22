@@ -8,6 +8,7 @@ from tests.fixtures.telegram_command_helpers import make_command_spec
 
 # Cross-cutting parse/registration contract cases live in
 # tests/test_telegram_command_contract.py. Keep this module registry-specific.
+# Helper usage: prefer `make_command_spec(...)` for concise registry test setup.
 
 
 def test_build_command_payloads_normalizes_names() -> None:
