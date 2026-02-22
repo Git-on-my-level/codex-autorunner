@@ -4,6 +4,7 @@ from .allowlist import DiscordAllowlist, allowlist_allows
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .config import (
+    DEFAULT_STATE_FILE,
     DiscordBotConfig,
     DiscordBotConfigError,
     DiscordCommandRegistration,
@@ -39,6 +40,7 @@ from .service import DiscordBotService, create_discord_bot_service
 from .state import DiscordStateStore, OutboxRecord
 
 __all__ = [
+    "DEFAULT_STATE_FILE",
     "DISCORD_API_BASE_URL",
     "DISCORD_GATEWAY_URL",
     "DISCORD_INTENT_GUILDS",

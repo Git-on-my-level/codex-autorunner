@@ -871,7 +871,13 @@ class DiscordBotService:
         )
 
         sink_store = PmaActiveSinkStore(self._config.root)
-        sink_store.clear()
+        sink = sink_store.load()
+        if (
+            sink is not None
+            and sink.get("platform") == "discord"
+            and sink.get("chat_id") == channel_id
+        ):
+            sink_store.clear()
 
         if prev_workspace:
             await self._store.upsert_binding(
