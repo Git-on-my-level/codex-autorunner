@@ -49,7 +49,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "flow": CommandSpec(
             "flow",
-            "ticket flow controls (status, runs, bootstrap, resume, stop, archive, reply)",
+            "ticket flow controls (status, runs, issue, plan, resume, stop, recover, archive, reply)",
             lambda message, args, _runtime: handlers._handle_flow(message, args),
             allow_during_turn=True,
         ),
