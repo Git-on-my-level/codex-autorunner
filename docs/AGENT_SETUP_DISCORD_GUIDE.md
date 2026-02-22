@@ -135,10 +135,10 @@ Discord supports PMA mode, enabling interactive agent conversations directly in 
 
 ### Enabling PMA Mode
 
-In an allowlisted Discord channel that has been bound to a workspace:
+In any allowlisted Discord channel:
 
 1. Run `/pma on` to enable PMA mode for the channel.
-2. The previous workspace binding is saved and restored when PMA is disabled.
+2. If the channel was previously bound to a workspace, that binding is saved and restored when PMA is disabled.
 3. PMA output from the agent will be delivered to the channel.
 
 ### PMA Commands
@@ -152,8 +152,7 @@ In an allowlisted Discord channel that has been bound to a workspace:
 ### PMA Prerequisites
 
 1. PMA must be enabled in hub config (`pma.enabled: true`).
-2. The channel must be bound to a workspace (`/car bind path:<...>`).
-3. The user must be authorized via allowlists.
+2. The user must be authorized via allowlists.
 
 ### Disabling PMA in Discord
 
