@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 
-DISCORD_STATE_SCHEMA_VERSION = 2
+DISCORD_STATE_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,22 @@ class DiscordStateStore:
             channel_id,
             run_id,
             dispatch_seq,
+        )
+
+    async def update_pma_state(
+        self,
+        *,
+        channel_id: str,
+        pma_enabled: bool,
+        pma_prev_workspace_path: Optional[str] = None,
+        pma_prev_repo_id: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._update_pma_state_sync,
+            channel_id,
+            pma_enabled,
+            pma_prev_workspace_path,
+            pma_prev_repo_id,
         )
 
     async def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
@@ -203,6 +219,18 @@ class DiscordStateStore:
             conn.execute(
                 "ALTER TABLE channel_bindings ADD COLUMN last_pause_dispatch_seq TEXT"
             )
+        if "pma_enabled" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN pma_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        if "pma_prev_workspace_path" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_workspace_path TEXT"
+            )
+        if "pma_prev_repo_id" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_repo_id TEXT"
+            )
 
     def _upsert_binding_sync(
         self,
@@ -239,6 +267,7 @@ class DiscordStateStore:
             )
 
     def _binding_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        pma_enabled_raw = row["pma_enabled"] if "pma_enabled" in row.keys() else 0
         return {
             "channel_id": str(row["channel_id"]),
             "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
@@ -252,6 +281,19 @@ class DiscordStateStore:
             "last_pause_dispatch_seq": (
                 row["last_pause_dispatch_seq"]
                 if isinstance(row["last_pause_dispatch_seq"], str)
+                else None
+            ),
+            "pma_enabled": bool(pma_enabled_raw),
+            "pma_prev_workspace_path": (
+                row["pma_prev_workspace_path"]
+                if "pma_prev_workspace_path" in row.keys()
+                and isinstance(row["pma_prev_workspace_path"], str)
+                else None
+            ),
+            "pma_prev_repo_id": (
+                row["pma_prev_repo_id"]
+                if "pma_prev_repo_id" in row.keys()
+                and isinstance(row["pma_prev_repo_id"], str)
                 else None
             ),
             "updated_at": str(row["updated_at"]),
@@ -291,6 +333,33 @@ class DiscordStateStore:
                 WHERE channel_id = ?
                 """,
                 (run_id, dispatch_seq, now_iso(), channel_id),
+            )
+
+    def _update_pma_state_sync(
+        self,
+        channel_id: str,
+        pma_enabled: bool,
+        pma_prev_workspace_path: Optional[str],
+        pma_prev_repo_id: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET pma_enabled = ?,
+                    pma_prev_workspace_path = ?,
+                    pma_prev_repo_id = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (
+                    1 if pma_enabled else 0,
+                    pma_prev_workspace_path,
+                    pma_prev_repo_id,
+                    now_iso(),
+                    channel_id,
+                ),
             )
 
     def _upsert_outbox_sync(self, record: OutboxRecord) -> OutboxRecord:

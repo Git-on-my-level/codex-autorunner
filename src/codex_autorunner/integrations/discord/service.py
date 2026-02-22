@@ -16,6 +16,7 @@ from ...core.flows import (
 )
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ...core.logging_utils import log_event
+from ...core.pma_sink import PmaActiveSinkStore
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.chat.text_chunking import chunk_text
@@ -317,6 +318,15 @@ class DiscordBotService:
                     options=options,
                 )
                 return
+
+        if command_path[:1] == ("pma",):
+            await self._handle_pma_command(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                command_path=command_path,
+            )
+            return
 
         await self._respond_ephemeral(
             interaction_id,
@@ -757,6 +767,178 @@ class DiscordBotService:
         reply_path = run_paths.run_dir / "USER_REPLY.md"
         reply_path.write_text(text.strip() + "\n", encoding="utf-8")
         return reply_path
+
+    async def _handle_pma_command(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        command_path: tuple[str, ...],
+    ) -> None:
+        if not self._config.pma_enabled:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+            )
+            return
+
+        subcommand = command_path[1] if len(command_path) > 1 else "status"
+
+        if subcommand == "on":
+            await self._handle_pma_on(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+        elif subcommand == "off":
+            await self._handle_pma_off(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+        elif subcommand == "status":
+            await self._handle_pma_status(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+        else:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Unknown PMA subcommand. Use on, off, or status.",
+            )
+
+    async def _handle_pma_on(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This channel is not bound. Run `/car bind path:<...>` first.",
+            )
+            return
+
+        prev_workspace = binding.get("workspace_path")
+        prev_repo_id = binding.get("repo_id")
+
+        await self._store.update_pma_state(
+            channel_id=channel_id,
+            pma_enabled=True,
+            pma_prev_workspace_path=prev_workspace,
+            pma_prev_repo_id=prev_repo_id,
+        )
+
+        sink_store = PmaActiveSinkStore(self._config.root)
+        sink_store.set_chat(
+            platform="discord",
+            chat_id=channel_id,
+        )
+
+        hint = "Use /pma off to exit. Previous binding saved."
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"PMA mode enabled. {hint}",
+        )
+
+    async def _handle_pma_off(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This channel is not bound. Run `/car bind path:<...>` first.",
+            )
+            return
+
+        prev_workspace = binding.get("pma_prev_workspace_path")
+        prev_repo_id = binding.get("pma_prev_repo_id")
+
+        await self._store.update_pma_state(
+            channel_id=channel_id,
+            pma_enabled=False,
+            pma_prev_workspace_path=None,
+            pma_prev_repo_id=None,
+        )
+
+        sink_store = PmaActiveSinkStore(self._config.root)
+        sink = sink_store.load()
+        if (
+            sink is not None
+            and sink.get("platform") == "discord"
+            and sink.get("chat_id") == channel_id
+        ):
+            sink_store.clear()
+
+        if prev_workspace:
+            await self._store.upsert_binding(
+                channel_id=channel_id,
+                guild_id=binding.get("guild_id"),
+                workspace_path=prev_workspace,
+                repo_id=prev_repo_id,
+            )
+            hint = f"Restored binding to {prev_workspace}."
+        else:
+            hint = "Back to repo mode."
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"PMA mode disabled. {hint}",
+        )
+
+    async def _handle_pma_status(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This channel is not bound. Run `/car bind path:<...>` first.",
+            )
+            return
+
+        pma_enabled = binding.get("pma_enabled", False)
+        status = "enabled" if pma_enabled else "disabled"
+
+        if pma_enabled:
+            sink_store = PmaActiveSinkStore(self._config.root)
+            sink = sink_store.load()
+            active_here = (
+                sink is not None
+                and sink.get("platform") == "discord"
+                and sink.get("chat_id") == channel_id
+            )
+            lines = [
+                f"PMA mode: {status}",
+                f"Active sink targeting this channel: {active_here}",
+            ]
+        else:
+            workspace = binding.get("workspace_path", "unknown")
+            lines = [
+                f"PMA mode: {status}",
+                f"Current workspace: {workspace}",
+            ]
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "\n".join(lines),
+        )
 
     async def _respond_ephemeral(
         self,

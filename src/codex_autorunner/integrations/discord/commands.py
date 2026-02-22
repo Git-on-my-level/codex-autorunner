@@ -126,5 +126,27 @@ def build_application_commands() -> list[dict[str, Any]]:
                     ],
                 },
             ],
-        }
+        },
+        {
+            "type": 1,
+            "name": "pma",
+            "description": "Proactive Mode Agent commands",
+            "options": [
+                {
+                    "type": SUB_COMMAND,
+                    "name": "on",
+                    "description": "Enable PMA mode for this channel",
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "off",
+                    "description": "Disable PMA mode and restore previous binding",
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "status",
+                    "description": "Show PMA mode status",
+                },
+            ],
+        },
     ]
