@@ -4,7 +4,6 @@ from codex_autorunner.integrations.discord.interactions import (
     extract_channel_id,
     extract_command_path_and_options,
     extract_component_custom_id,
-    extract_component_type,
     extract_component_values,
     extract_guild_id,
     extract_interaction_id,
@@ -78,13 +77,3 @@ def test_extract_component_values() -> None:
 def test_extract_component_values_returns_empty_for_no_values() -> None:
     payload = {"data": {}}
     assert extract_component_values(payload) == []
-
-
-def test_extract_component_type() -> None:
-    payload = {"data": {"component_type": 3}}
-    assert extract_component_type(payload) == 3
-
-
-def test_extract_component_type_returns_none_for_missing() -> None:
-    payload = {"data": {}}
-    assert extract_component_type(payload) is None

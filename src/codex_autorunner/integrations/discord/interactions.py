@@ -100,20 +100,3 @@ def extract_component_values(interaction_payload: dict[str, Any]) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(v) for v in values if isinstance(v, (str, int, float))]
-
-
-def extract_component_type(interaction_payload: dict[str, Any]) -> Optional[int]:
-    data = interaction_payload.get("data")
-    if not isinstance(data, dict):
-        return None
-    component_type = data.get("component_type")
-    if isinstance(component_type, int):
-        return component_type
-    return None
-
-
-def extract_message_id(interaction_payload: dict[str, Any]) -> Optional[str]:
-    message = interaction_payload.get("message")
-    if not isinstance(message, dict):
-        return None
-    return _as_id(message.get("id"))
