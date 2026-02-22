@@ -566,14 +566,16 @@ class OpenCodeSupervisor:
             ) from exc
         except OpenCodeProtocolError as exc:
             await self._safe_close_client(client)
-            status_code = exc.status_code
-            if status_code in (401, 403):
+            protocol_status_code: int = (
+                exc.status_code if exc.status_code is not None else 0
+            )
+            if protocol_status_code in (401, 403):
                 log_event(
                     self._logger,
                     logging.WARNING,
                     "opencode.attach.auth_failed",
                     base_url=base_url,
-                    status_code=status_code,
+                    status_code=protocol_status_code,
                     exc=exc,
                 )
                 raise OpenCodeSupervisorAttachAuthError(
@@ -581,24 +583,24 @@ class OpenCodeSupervisor:
                     "registry server. Set OPENCODE_SERVER_PASSWORD "
                     "for this process and ensure it matches the server "
                     "configuration.",
-                    status_code=status_code,
+                    status_code=protocol_status_code,
                 ) from exc
-            if status_code in (404, 405):
+            if protocol_status_code in (404, 405):
                 log_event(
                     self._logger,
                     logging.WARNING,
                     "opencode.attach.endpoint_mismatch",
                     base_url=base_url,
-                    status_code=status_code,
+                    status_code=protocol_status_code,
                     exc=exc,
                 )
                 raise OpenCodeSupervisorAttachEndpointMismatchError(
                     "OpenCode health endpoint mismatch while attaching.",
-                    status_code=status_code,
+                    status_code=protocol_status_code,
                 ) from exc
             raise OpenCodeSupervisorAttachError(
                 f"OpenCode health check failed: {exc}",
-                status_code=status_code,
+                status_code=protocol_status_code,
             ) from exc
         except Exception:
             await self._safe_close_client(client)

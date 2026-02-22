@@ -320,8 +320,18 @@ def is_bypass_event(event: ChatEvent) -> bool:
             "interrupt",
         }:
             return True
-    text = (event.text or "").strip().lower()
-    return text in {"^c", "ctrl-c", "ctrl+c", "esc", "escape", "/stop", "/interrupt"}
+    elif isinstance(event, ChatMessageEvent):
+        text = (event.text or "").strip().lower()
+        return text in {
+            "^c",
+            "ctrl-c",
+            "ctrl+c",
+            "esc",
+            "escape",
+            "/stop",
+            "/interrupt",
+        }
+    return False
 
 
 async def _resolve_predicate(

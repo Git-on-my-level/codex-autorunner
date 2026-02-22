@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.datastructures import UploadFile
 
 from ....core.filebox import (
     BOXES,
@@ -91,6 +92,8 @@ def build_filebox_routes() -> APIRouter:
         form = await request.form()
         saved = []
         for filename, file in form.items():
+            if not isinstance(file, UploadFile):
+                continue
             try:
                 data = await file.read()
             except Exception as exc:  # pragma: no cover - defensive
@@ -201,6 +204,8 @@ def build_hub_filebox_routes() -> APIRouter:
         form = await request.form()
         saved = []
         for filename, file in form.items():
+            if not isinstance(file, UploadFile):
+                continue
             data = await file.read()
             path = save_file(repo_root, box, filename, data)
             saved.append(path.name)

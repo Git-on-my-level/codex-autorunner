@@ -13,7 +13,7 @@ from ...integrations.agents.build_agent_pool import build_agent_pool
 from .definition import build_ticket_flow_definition
 
 
-def build_ticket_flow_runtime_resources(repo_root: Path):
+def build_ticket_flow_runtime_resources(repo_root: Path) -> SimpleNamespace:
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
@@ -28,7 +28,7 @@ def build_ticket_flow_runtime_resources(repo_root: Path):
     agent_pool = build_agent_pool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()
-    controller = FlowController(
+    controller: FlowController = FlowController(
         definition=definition,
         db_path=db_path,
         artifacts_root=artifacts_root,
@@ -40,7 +40,8 @@ def build_ticket_flow_runtime_resources(repo_root: Path):
 
 def build_ticket_flow_controller(repo_root: Path) -> FlowController:
     resources = build_ticket_flow_runtime_resources(repo_root)
-    return resources.controller
+    controller: FlowController = resources.controller
+    return controller
 
 
 def spawn_ticket_flow_worker(

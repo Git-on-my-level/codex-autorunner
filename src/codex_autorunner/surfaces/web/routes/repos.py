@@ -28,7 +28,7 @@ def _apply_run_overrides(request: Request, payload: RunControlRequest) -> None:
     agent = _normalize_override(payload.agent)
     model = _normalize_override(payload.model)
     reasoning = _normalize_override(payload.reasoning)
-    fields_set = getattr(payload, "model_fields_set", set())
+    fields_set: set[str] = getattr(payload, "model_fields_set", set())
     agent_set = "agent" in fields_set
     model_set = "model" in fields_set
     reasoning_set = "reasoning" in fields_set

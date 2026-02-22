@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ...core.flows.models import FlowEventType
 from ...core.ports.run_event import (
     Completed,
+    Failed,
     OutputDelta,
     RunEvent,
     Started,
@@ -182,7 +183,7 @@ class DefaultAgentPool:
                     if isinstance(event, Completed):
                         final_status = "completed"
                         final_message = event.final_message or ""
-                    else:
+                    elif isinstance(event, Failed):
                         final_status = "failed"
                         error = event.error_message
 

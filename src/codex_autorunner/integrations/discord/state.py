@@ -64,10 +64,22 @@ class DiscordStateStore:
         )
 
     async def get_binding(self, *, channel_id: str) -> Optional[dict[str, Any]]:
-        return await self._run(self._get_binding_sync, channel_id)
+        return await self._run(self._get_binding_sync, channel_id)  # type: ignore[no-any-return]
 
     async def list_bindings(self) -> list[dict[str, Any]]:
-        return await self._run(self._list_bindings_sync)
+        return await self._run(self._list_bindings_sync)  # type: ignore[no-any-return]
+
+    async def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
+        return await self._run(self._upsert_outbox_sync, record)  # type: ignore[no-any-return]
+
+    async def get_outbox(self, record_id: str) -> Optional[OutboxRecord]:
+        return await self._run(self._get_outbox_sync, record_id)  # type: ignore[no-any-return]
+
+    async def list_outbox(self) -> list[OutboxRecord]:
+        return await self._run(self._list_outbox_sync)  # type: ignore[no-any-return]
+
+    async def mark_outbox_delivered(self, record_id: str) -> None:
+        await self._run(self._delete_outbox_sync, record_id)
 
     async def mark_pause_dispatch_seen(
         self,
@@ -82,18 +94,6 @@ class DiscordStateStore:
             run_id,
             dispatch_seq,
         )
-
-    async def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
-        return await self._run(self._upsert_outbox_sync, record)
-
-    async def get_outbox(self, record_id: str) -> Optional[OutboxRecord]:
-        return await self._run(self._get_outbox_sync, record_id)
-
-    async def list_outbox(self) -> list[OutboxRecord]:
-        return await self._run(self._list_outbox_sync)
-
-    async def mark_outbox_delivered(self, record_id: str) -> None:
-        await self._run(self._delete_outbox_sync, record_id)
 
     async def record_outbox_failure(
         self,

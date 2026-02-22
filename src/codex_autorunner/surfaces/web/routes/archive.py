@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -16,6 +16,7 @@ from ..schemas import (
     ArchiveSnapshotDetailResponse,
     ArchiveSnapshotsResponse,
     ArchiveSnapshotSummary,
+    ArchiveTreeNode,
     ArchiveTreeResponse,
     LocalRunArchivesResponse,
     LocalRunArchiveSummary,
@@ -269,7 +270,7 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
         raise ValueError("path is not a directory")
 
     root_real = snapshot_root.resolve(strict=False)
-    nodes: list[dict[str, Any]] = []
+    nodes: list[ArchiveTreeNode] = []
     for child in sorted(
         target.iterdir(), key=lambda p: p.name
     ):  # codeql[py/path-injection] target validated by normalize helper
@@ -281,7 +282,7 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
 
         if child.is_dir():
             node_type = "folder"
-            size_bytes = None
+            size_bytes: Optional[int] = None
         else:
             node_type = "file"
             try:
@@ -294,14 +295,15 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
         except ValueError:
             continue
 
+        node_type_literal: Literal["file", "folder"] = node_type  # type: ignore[assignment]
         nodes.append(
-            {
-                "path": node_path,
-                "name": child.name,
-                "type": node_type,
-                "size_bytes": size_bytes,
-                "mtime": _safe_mtime(child),
-            }
+            ArchiveTreeNode(
+                path=node_path,
+                name=child.name,
+                type=node_type_literal,
+                size_bytes=size_bytes,
+                mtime=_safe_mtime(child),
+            )
         )
 
     return ArchiveTreeResponse(path=rel_posix, nodes=nodes)
@@ -310,19 +312,19 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
 def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
     target, rel_posix = _normalize_local_archive_rel_path(run_root, rel_path)
     if not rel_posix:
-        nodes: list[dict[str, Any]] = []
+        nodes: list[ArchiveTreeNode] = []
         for name in sorted(_LOCAL_ARCHIVE_DIRS):
             candidate = run_root / name
             if not candidate.exists() or not candidate.is_dir():
                 continue
             nodes.append(
-                {
-                    "path": name,
-                    "name": name,
-                    "type": "folder",
-                    "size_bytes": None,
-                    "mtime": _safe_mtime(candidate),
-                }
+                ArchiveTreeNode(
+                    path=name,
+                    name=name,
+                    type="folder",
+                    size_bytes=None,
+                    mtime=_safe_mtime(candidate),
+                )
             )
         return ArchiveTreeResponse(path="", nodes=nodes)
 
@@ -332,7 +334,7 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
         raise ValueError("path is not a directory")
 
     root_real = run_root.resolve(strict=False)
-    nodes: list[dict[str, Any]] = []
+    local_nodes: list[ArchiveTreeNode] = []
     for child in sorted(target.iterdir(), key=lambda p: p.name):
         try:
             resolved = child.resolve(strict=False)
@@ -341,8 +343,8 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
             continue
 
         if child.is_dir():
-            node_type = "folder"
-            size_bytes = None
+            node_type: Literal["file", "folder"] = "folder"
+            size_bytes: Optional[int] = None
         else:
             node_type = "file"
             try:
@@ -355,17 +357,17 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
         except ValueError:
             continue
 
-        nodes.append(
-            {
-                "path": node_path,
-                "name": child.name,
-                "type": node_type,
-                "size_bytes": size_bytes,
-                "mtime": _safe_mtime(child),
-            }
+        local_nodes.append(
+            ArchiveTreeNode(
+                path=node_path,
+                name=child.name,
+                type=node_type,
+                size_bytes=size_bytes,
+                mtime=_safe_mtime(child),
+            )
         )
 
-    return ArchiveTreeResponse(path=rel_posix, nodes=nodes)
+    return ArchiveTreeResponse(path=rel_posix, nodes=local_nodes)
 
 
 def build_archive_routes() -> APIRouter:

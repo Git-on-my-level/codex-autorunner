@@ -307,14 +307,15 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                         "run_state": run_state,
                     }
                     if has_pending_dispatch:
+                        latest_dict = latest if latest else {}
                         item_payload: dict[str, Any] = {
                             **base_item,
                             "item_type": "run_dispatch",
                             "next_action": "reply_and_resume",
-                            "seq": latest["seq"],
-                            "dispatch": latest["dispatch"],
-                            "message": latest["dispatch"],
-                            "files": latest.get("files") or [],
+                            "seq": latest_dict["seq"],
+                            "dispatch": latest_dict["dispatch"],
+                            "message": latest_dict["dispatch"],
+                            "files": latest_dict.get("files") or [],
                             "dispatch_actionable": True,
                         }
                     else:
@@ -394,6 +395,8 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             raise HTTPException(status_code=400, detail="Missing repo_id")
         if not run_id:
             raise HTTPException(status_code=400, detail="Missing run_id")
+        if seq_raw is None:
+            raise HTTPException(status_code=400, detail="Invalid seq")
         try:
             seq = int(seq_raw)
         except (TypeError, ValueError):

@@ -196,7 +196,7 @@ def _app_lifespan(context: AppContext):
 
         # Shutdown event for graceful SSE/WebSocket termination during reload
         app.state.shutdown_event = asyncio.Event()
-        app.state.active_websockets: set = set()
+        app.state.active_websockets = set()
 
         try:
             yield
@@ -324,7 +324,7 @@ def _add_shared_repo_middlewares(
     app.state.auth_token = auth_token
     if auth_token:
         app.add_middleware(
-            AuthTokenMiddleware, auth_token=auth_token, base_path=context.base_path
+            AuthTokenMiddleware, token=auth_token, base_path=context.base_path
         )
     if include_base_path_router:
         app.add_middleware(BasePathRouterMiddleware, base_path=context.base_path)

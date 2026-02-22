@@ -39,12 +39,13 @@ def _get_pty_session_cls() -> type:
     patch the old path. Look for that module at call time so the patch applies.
     """
     import sys
+    from typing import cast
 
     legacy_module = sys.modules.get("codex_autorunner.routes.base")
     if legacy_module is not None:
         patched = getattr(legacy_module, "PTYSession", None)
         if patched is not None:
-            return patched
+            return cast(type, patched)
     return PTYSession
 
 

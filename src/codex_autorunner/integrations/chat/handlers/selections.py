@@ -2,11 +2,35 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Dict, List
+
 from .models import ChatContext
+
+if TYPE_CHECKING:
+    pass
 
 
 class ChatSelectionHandlers:
     """Selection-state helpers shared by platform adapters."""
+
+    _resume_options: Dict[str, Any]
+    _bind_options: Dict[str, Any]
+
+    def _selection_page_items(self, state: Any) -> List[tuple[str, str]]:
+        """Convert selection state to list of (id, label) tuples."""
+        raise NotImplementedError
+
+    def _enqueue_topic_work(self, topic_key: str, work: Any) -> None:
+        """Enqueue work for a topic."""
+        raise NotImplementedError
+
+    def _resume_thread_by_id(self, topic_key: str, thread_id: str) -> None:
+        """Resume a thread by ID."""
+        raise NotImplementedError
+
+    def _bind_topic_by_repo_id(self, topic_key: str, repo_id: str) -> None:
+        """Bind a topic to a repository ID."""
+        raise NotImplementedError
 
     def handle_pending_resume(self, context: ChatContext, text: str) -> bool:
         if not text.isdigit():

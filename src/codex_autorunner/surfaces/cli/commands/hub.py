@@ -265,18 +265,26 @@ def register_hub_commands(
             "inbox_items": [_summarize_message(msg) for msg in messages_items],
         }
 
+        snapshot_repos = snapshot.get("repos", []) or []
+        snapshot_inbox = snapshot.get("inbox_items", []) or []
+        if not isinstance(snapshot_repos, list):
+            snapshot_repos = []
+        if not isinstance(snapshot_inbox, list):
+            snapshot_inbox = []
+
         if not output_json:
             typer.echo(
-                f"Hub Snapshot (repos={len(snapshot['repos'])}, inbox={len(snapshot['inbox_items'])})"
+                f"Hub Snapshot (repos={len(snapshot_repos)}, inbox={len(snapshot_inbox)})"
             )
-            for repo in snapshot["repos"]:
+            for repo in snapshot_repos:
+                if not isinstance(repo, dict):
+                    continue
                 pr_url = repo.get("pr_url")
                 final_review_status = repo.get("final_review_status")
-                run_state = (
-                    repo.get("run_state")
-                    if isinstance(repo.get("run_state"), dict)
-                    else {}
-                )
+                run_state: dict = {}
+                rs = repo.get("run_state")
+                if isinstance(rs, dict):
+                    run_state = rs
                 typer.echo(
                     f"- {repo.get('id')}: status={repo.get('status')}, "
                     f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}, "
@@ -289,21 +297,24 @@ def register_hub_commands(
                     typer.echo(
                         f"  recommended_action: {run_state.get('recommended_action')}"
                     )
-            for msg in snapshot["inbox_items"]:
-                run_state = (
-                    msg.get("run_state")
-                    if isinstance(msg.get("run_state"), dict)
-                    else {}
-                )
+            for msg in snapshot_inbox:
+                if not isinstance(msg, dict):
+                    continue
+                run_state_inbox: dict = {}
+                rs = msg.get("run_state")
+                if isinstance(rs, dict):
+                    run_state_inbox = rs
                 typer.echo(
                     f"- Inbox: repo={msg.get('repo_id')}, run_id={msg.get('run_id')}, "
-                    f"title={msg.get('dispatch', {}).get('title')}, state={run_state.get('state')}"
+                    f"title={msg.get('dispatch', {}).get('title')}, state={run_state_inbox.get('state')}"
                 )
-                if run_state.get("blocking_reason"):
-                    typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
-                if run_state.get("recommended_action"):
+                if run_state_inbox.get("blocking_reason"):
                     typer.echo(
-                        f"  recommended_action: {run_state.get('recommended_action')}"
+                        f"  blocking_reason: {run_state_inbox.get('blocking_reason')}"
+                    )
+                if run_state_inbox.get("recommended_action"):
+                    typer.echo(
+                        f"  recommended_action: {run_state_inbox.get('recommended_action')}"
                     )
             return
 

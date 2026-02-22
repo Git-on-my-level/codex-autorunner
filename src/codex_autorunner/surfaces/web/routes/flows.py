@@ -664,7 +664,7 @@ def _start_flow_worker(
     normalized_run_id = _normalize_run_id(run_id)
 
     _reap_dead_worker(normalized_run_id, state)
-    result = ensure_worker(repo_root, normalized_run_id)
+    result: dict = ensure_worker(repo_root, normalized_run_id)
     if result["status"] == "reused":
         health = result["health"]
         _logger.info(
@@ -673,7 +673,7 @@ def _start_flow_worker(
             health.pid,
         )
         return None
-    proc = result["proc"]
+    proc: subprocess.Popen = result["proc"]
     stdout_handle = result["stdout"]
     stderr_handle = result["stderr"]
     with state.lock:
@@ -724,9 +724,11 @@ def build_flow_routes() -> APIRouter:
     state = FlowRoutesState()
 
     def _ensure_state_in_app(request: Request) -> FlowRoutesState:
+        from typing import cast
+
         if not hasattr(request.app.state, "flow_routes_state"):
             request.app.state.flow_routes_state = state
-        return request.app.state.flow_routes_state
+        return cast(FlowRoutesState, request.app.state.flow_routes_state)
 
     def _definition_info(definition: FlowDefinition) -> Dict:
         return {
@@ -955,7 +957,9 @@ def build_flow_routes() -> APIRouter:
         if request.issue_ref:
             try:
                 seed = seed_issue_from_github(
-                    repo_root, request.issue_ref, github_service_factory=GitHubService
+                    repo_root,
+                    request.issue_ref,
+                    github_service_factory=GitHubService,  # type: ignore[arg-type]
                 )
                 atomic_write(issue_path, seed.content)
                 return {
@@ -1169,10 +1173,10 @@ You are the first ticket in a new ticket_flow run.
 
         return TicketResponse(
             path=safe_relpath(ticket_path, repo_root),
-            index=parse_ticket_index(ticket_path.name),
+            index=parse_ticket_index(ticket_path.name) or 0,
             chat_key=ticket_chat_scope(index, ticket_path),
             frontmatter=parsed_frontmatter or {},
-            body=parsed_body,
+            body=parsed_body or "",
         )
 
     @router.post("/ticket_flow/tickets", response_model=TicketResponse)
@@ -1411,7 +1415,7 @@ You are the first ticket in a new ticket_flow run.
         )
 
     @router.post("/{run_id}/stop", response_model=FlowStatusResponse)
-    async def stop_flow(http_request: Request, run_id: uuid.UUID):
+    async def stop_flow(http_request: Request, run_id: str):
         state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
@@ -1429,9 +1433,7 @@ You are the first ticket in a new ticket_flow run.
                 store.close()
 
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
-    async def resume_flow(
-        http_request: Request, run_id: uuid.UUID, force: bool = False
-    ):
+    async def resume_flow(http_request: Request, run_id: str, force: bool = False):
         state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
@@ -1466,7 +1468,7 @@ You are the first ticket in a new ticket_flow run.
                 store.close()
 
     @router.post("/{run_id}/reconcile", response_model=FlowStatusResponse)
-    async def reconcile_flow(http_request: Request, run_id: uuid.UUID):
+    async def reconcile_flow(http_request: Request, run_id: str):
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
@@ -1482,7 +1484,7 @@ You are the first ticket in a new ticket_flow run.
     @router.post("/{run_id}/archive")
     async def archive_flow(
         http_request: Request,
-        run_id: uuid.UUID,
+        run_id: str,
         delete_run: bool = True,
         force: bool = False,
     ):
@@ -1550,7 +1552,7 @@ You are the first ticket in a new ticket_flow run.
 
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)
     async def get_flow_status(
-        http_request: Request, run_id: uuid.UUID, reconcile: bool = False
+        http_request: Request, run_id: str, reconcile: bool = False
     ):
         state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
@@ -1570,7 +1572,7 @@ You are the first ticket in a new ticket_flow run.
 
     @router.get("/{run_id}/events")
     async def stream_flow_events(
-        http_request: Request, run_id: uuid.UUID, after: Optional[int] = None
+        http_request: Request, run_id: str, after: Optional[int] = None
     ):
         state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)

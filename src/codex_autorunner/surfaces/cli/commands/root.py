@@ -7,7 +7,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import httpx
 import typer
@@ -42,7 +42,7 @@ from .utils import request_json
 logger = logging.getLogger("codex_autorunner.cli")
 
 
-def _raise_exit(message: str, *, cause: Optional[BaseException] = None) -> None:
+def _raise_exit(message: str, *, cause: Optional[BaseException] = None) -> NoReturn:
     typer.echo(message, err=True)
     if cause is not None:
         raise typer.Exit(code=1) from cause
@@ -72,16 +72,18 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
 
 
 def _build_server_url(
-    config: HubConfig, path: str, *, base_path_override: Optional[str] = None
+    config: object, path: str, *, base_path_override: Optional[str] = None
 ) -> str:
     base_path = (
         _normalize_base_path(base_path_override)
         if base_path_override is not None
-        else (config.server_base_path or "")
+        else (getattr(config, "server_base_path", None) or "")
     )
     if base_path.endswith("/") and path.startswith("/"):
         base_path = base_path[:-1]
-    return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
+    server_host = getattr(config, "server_host", "localhost")
+    server_port = getattr(config, "server_port", 8000)
+    return f"http://{server_host}:{server_port}{base_path}{path}"
 
 
 def _resolve_hub_config_path_for_cli(
@@ -445,6 +447,7 @@ def register_root_commands(app: typer.Typer) -> None:
                     )
             if not target_id:
                 _raise_exit("Session not found (server unavailable)")
+            assert target_id is not None
             state.sessions.pop(target_id, None)
             state.repo_to_session = {
                 repo_key: sid

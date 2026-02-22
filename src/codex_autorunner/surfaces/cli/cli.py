@@ -261,7 +261,7 @@ def _ticket_flow_preflight(engine, ticket_dir):
     return FLOW_COMMANDS["_ticket_flow_preflight"](engine, ticket_dir)
 
 
-def _print_preflight_report(report: PreflightReport) -> None:
+def _print_preflight_report(report) -> None:
     return FLOW_COMMANDS["ticket_flow_print_preflight_report"](report)
 
 

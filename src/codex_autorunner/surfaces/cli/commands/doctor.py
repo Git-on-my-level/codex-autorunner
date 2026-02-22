@@ -1,7 +1,6 @@
 import json
 import site
 import sys
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -37,7 +36,7 @@ def _build_process_registry_payload(
     if repo_root is None:
         return {}, []
 
-    records = []
+    records: list[dict[str, Any]] = []
     try:
         process_records = list_process_records(repo_root)
     except Exception:
@@ -68,7 +67,11 @@ def _build_process_registry_payload(
             }
         )
 
-    counts = dict(Counter(record.get("kind") for record in records))
+    counts: dict[str, int] = {}
+    for record in records:  # type: ignore[assignment]
+        kind = record.get("kind")  # type: ignore[attr-defined]
+        if isinstance(kind, str):
+            counts[kind] = counts.get(kind, 0) + 1
     return counts, records
 
 

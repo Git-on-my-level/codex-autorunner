@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import typer
 
@@ -190,8 +190,8 @@ def register_hub_tickets_commands(
     require_templates_enabled_func: Callable,
     fetch_template_with_scan_func: Callable,
     build_hub_supervisor: Callable[[HubConfig], HubSupervisor],
-    ticket_flow_preflight: Callable[[RuntimeContext, Path], object],
-    print_preflight_report: Callable[[object], None],
+    ticket_flow_preflight: Callable[[RuntimeContext, Path], Any],
+    print_preflight_report: Callable[[Any], None],
     ticket_flow_start: Callable[..., None],
 ) -> None:
     @hub_tickets_app.command("import")

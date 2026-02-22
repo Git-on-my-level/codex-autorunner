@@ -278,6 +278,7 @@ async def run_template_scan(
         )
 
     config = ctx.config
+    hub_root: Any
     try:
         hub_root = load_hub_config(config.root).root
     except Exception:

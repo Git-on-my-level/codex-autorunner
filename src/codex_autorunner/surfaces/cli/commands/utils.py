@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn, Optional
+from typing import TYPE_CHECKING, Any, NoReturn, Optional
 
 import httpx
 import typer
@@ -138,7 +138,7 @@ def request_form_json(
         token = require_auth_token(token_env)
         headers = {"Authorization": f"Bearer {token}"}
     data = form
-    files = None
+    files: Optional[list[tuple[str, Any]]] = None
     if force_multipart:
         data = form or {}
         files = []
@@ -442,7 +442,7 @@ def parse_renumber(value: Optional[str]) -> Optional[dict[str, int]]:
 
 
 def ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
-    details = {
+    details: dict[str, list[str]] = {
         "invalid_filenames": [],
         "duplicate_indices": [],
         "frontmatter": [],

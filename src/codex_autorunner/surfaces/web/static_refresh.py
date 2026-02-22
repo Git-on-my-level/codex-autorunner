@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from ...core.logging_utils import safe_log
 from .static_assets import (
@@ -12,15 +12,18 @@ from .static_assets import (
     require_static_assets,
 )
 
+if TYPE_CHECKING:
+    from logging import Logger
+
 
 def _update_static_files(static_files: object, static_dir: Path) -> None:
     try:
-        static_files.directory = static_dir
+        static_files.directory = static_dir  # type: ignore[attr-defined]
         static_files.all_directories = static_files.get_directories(  # type: ignore[attr-defined]
             static_dir,
             static_files.packages,  # type: ignore[attr-defined]
         )
-        static_files.config_checked = False
+        static_files.config_checked = False  # type: ignore[attr-defined]
     except Exception:
         return
 
@@ -37,7 +40,9 @@ def refresh_static_assets(app: object) -> bool:
         if isinstance(current_dir, Path) and not missing_static_assets(current_dir):
             return True
         config = getattr(state, "config", None)
-        logger = getattr(state, "logger", None)
+        logger: Optional[Logger] = getattr(state, "logger", None)
+        if logger is None:
+            logger = logging.getLogger("static_refresh")
         static_candidates = []
         if config is not None:
             static_candidates.append(config.static_assets)
@@ -71,7 +76,7 @@ def refresh_static_assets(app: object) -> bool:
             )
             if old_context is not None:
                 try:
-                    old_context.close()
+                    old_context.close()  # type: ignore[attr-defined]
                 except Exception:
                     pass
             state.static_dir = static_dir

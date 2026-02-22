@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ....core.logging_utils import log_event
 from ..models import ChatInteractionEvent, ChatMessageEvent
 from .models import ChatContext
+
+if TYPE_CHECKING:
+    pass
 
 
 async def handle_custom_text_input(handlers: Any, event: ChatMessageEvent) -> bool:
@@ -56,6 +59,59 @@ async def handle_custom_text_input(handlers: Any, event: ChatMessageEvent) -> bo
 
 class ChatQuestionHandlers:
     """Question callback handling over normalized interaction events."""
+
+    _pending_questions: Dict[str, Any]
+    _logger: logging.Logger
+
+    async def _chat_answer_interaction(
+        self,
+        interaction: ChatInteractionEvent,
+        text: str,
+    ) -> None:
+        raise NotImplementedError
+
+    async def _chat_edit_message(
+        self,
+        *,
+        chat_id: str,
+        thread_id: Optional[str],
+        message_id: str,
+        text: str,
+        reply_markup: Any = None,
+        clear_actions: bool = False,
+    ) -> None:
+        raise NotImplementedError
+
+    async def _chat_send_message(
+        self,
+        *,
+        chat_id: str,
+        thread_id: Optional[str],
+        text: str,
+        reply_markup: Any = None,
+    ) -> None:
+        raise NotImplementedError
+
+    async def _chat_delete_message(
+        self,
+        *,
+        chat_id: str,
+        thread_id: Optional[str],
+        message_id: str,
+    ) -> None:
+        raise NotImplementedError
+
+    def _build_question_keyboard(
+        self,
+        request_id: str,
+        *,
+        question_index: int,
+        options: list[str],
+        multiple: bool,
+        custom: bool,
+        selected_indices: set[int],
+    ) -> Any:
+        raise NotImplementedError
 
     async def handle_question_interaction(
         self,
