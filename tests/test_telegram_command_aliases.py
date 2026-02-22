@@ -8,10 +8,10 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramCommand,
     TelegramMessage,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import CommandSpec
 from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
 )
+from tests.fixtures.telegram_command_helpers import make_command_spec
 
 
 class _AliasHarness(TelegramCommandHandlers):
@@ -31,9 +31,9 @@ class _AliasHarness(TelegramCommandHandlers):
             self.model_calls.append(args)
 
         self._command_specs = {
-            "model": CommandSpec(
-                name="model",
-                description="list or set the model",
+            "model": make_command_spec(
+                "model",
+                "list or set the model",
                 handler=_handle_model_alias,
             )
         }
