@@ -96,8 +96,15 @@ Run:
 
 ```bash
 car doctor
-car discord register-commands --path <hub_or_repo_root>
 car discord start --path <hub_or_repo_root>
+```
+
+`car discord start` now auto-syncs Discord application commands at startup (including `/car` and `/pma`) when `discord_bot.command_registration.enabled: true`.
+If command registration config is invalid (for example `scope: guild` without `guild_ids`), startup exits with an actionable error.
+Use manual sync only when needed:
+
+```bash
+car discord register-commands --path <hub_or_repo_root>
 ```
 
 For macOS launchd-managed installs (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`):
@@ -165,10 +172,11 @@ If PMA is disabled globally in hub config, `/pma` commands will return an action
 
 ### Slash commands do not appear
 
-1. Re-run `car discord register-commands --path <hub_or_repo_root>`.
-2. For development, prefer `guild` scope with explicit `guild_ids`.
-3. Verify `CAR_DISCORD_BOT_TOKEN` and `CAR_DISCORD_APP_ID` are set in the process environment.
-4. If using launchd on macOS, confirm the Discord agent is loaded:
+1. Restart the Discord bot so startup auto-sync runs.
+2. Re-run `car discord register-commands --path <hub_or_repo_root>` if you need to force an immediate sync.
+3. For development, prefer `guild` scope with explicit `guild_ids`.
+4. Verify `CAR_DISCORD_BOT_TOKEN` and `CAR_DISCORD_APP_ID` are set in the process environment.
+5. If using launchd on macOS, confirm the Discord agent is loaded:
    - `launchctl print "gui/$(id -u)/com.codex.autorunner.discord"`
 
 ### "Not authorized" responses

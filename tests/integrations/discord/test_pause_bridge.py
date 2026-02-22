@@ -34,6 +34,15 @@ class _FakeRest:
     ) -> dict[str, Any]:
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
 
+    async def bulk_overwrite_application_commands(
+        self,
+        *,
+        application_id: str,
+        commands: list[dict[str, Any]],
+        guild_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return commands
+
 
 class _FakeGateway:
     async def run(self, on_dispatch) -> None:

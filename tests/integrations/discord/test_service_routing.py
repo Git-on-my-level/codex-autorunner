@@ -18,6 +18,7 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
         self,
@@ -38,6 +39,22 @@ class _FakeRest:
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+
+    async def bulk_overwrite_application_commands(
+        self,
+        *,
+        application_id: str,
+        commands: list[dict[str, Any]],
+        guild_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.command_sync_calls.append(
+            {
+                "application_id": application_id,
+                "guild_id": guild_id,
+                "commands": commands,
+            }
+        )
+        return commands
 
 
 class _FakeGateway:
@@ -61,7 +78,14 @@ class _FakeOutboxManager:
         await asyncio.Event().wait()
 
 
-def _config(root: Path, *, allow_user_ids: frozenset[str]) -> DiscordBotConfig:
+def _config(
+    root: Path,
+    *,
+    allow_user_ids: frozenset[str],
+    command_registration_enabled: bool = True,
+    command_scope: str = "guild",
+    command_guild_ids: tuple[str, ...] = ("guild-1",),
+) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
         enabled=True,
@@ -73,15 +97,26 @@ def _config(root: Path, *, allow_user_ids: frozenset[str]) -> DiscordBotConfig:
         allowed_channel_ids=frozenset({"channel-1"}),
         allowed_user_ids=allow_user_ids,
         command_registration=DiscordCommandRegistration(
-            enabled=True,
-            scope="guild",
-            guild_ids=("guild-1",),
+            enabled=command_registration_enabled,
+            scope=command_scope,
+            guild_ids=command_guild_ids,
         ),
         state_file=root / ".codex-autorunner" / "discord_state.sqlite3",
         intents=1,
         max_message_length=2000,
         pma_enabled=True,
     )
+
+
+class _FailingSyncRest(_FakeRest):
+    async def bulk_overwrite_application_commands(
+        self,
+        *,
+        application_id: str,
+        commands: list[dict[str, Any]],
+        guild_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        raise RuntimeError("simulated sync failure")
 
 
 def _interaction(
@@ -173,5 +208,112 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         assert status_payload["data"]["flags"] == 64
         assert "bound this channel" in bind_payload["data"]["content"].lower()
         assert "channel is bound" in status_payload["data"]["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_syncs_commands_on_startup(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.command_sync_calls) == 1
+        sync_call = rest.command_sync_calls[0]
+        assert sync_call["application_id"] == "app-1"
+        assert sync_call["guild_id"] == "guild-1"
+        command_names = {cmd.get("name") for cmd in sync_call["commands"]}
+        assert command_names == {"car", "pma"}
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_skips_command_sync_when_disabled(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([])
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allow_user_ids=frozenset({"user-1"}),
+            command_registration_enabled=False,
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.command_sync_calls == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_raises_on_invalid_command_sync_config(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([])
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allow_user_ids=frozenset({"user-1"}),
+            command_registration_enabled=True,
+            command_scope="guild",
+            command_guild_ids=(),
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        with pytest.raises(
+            ValueError, match="guild scope requires at least one guild_id"
+        ):
+            await service.run_forever()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FailingSyncRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert "not bound" in payload["data"]["content"].lower()
     finally:
         await store.close()

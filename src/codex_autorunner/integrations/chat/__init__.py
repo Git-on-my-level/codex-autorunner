@@ -1,6 +1,7 @@
 """Platform-agnostic chat adapter contracts (adapter layer)."""
 
 from .adapter import ChatAdapter, SendAttachmentRequest, SendTextRequest
+from .bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from .callbacks import (
     CALLBACK_AGENT,
     CALLBACK_APPROVAL,
@@ -82,6 +83,7 @@ __all__ = [
     "ChatCommand",
     "ChatContext",
     "ChatBotServiceCore",
+    "ChatBootstrapStep",
     "ChatApprovalHandlers",
     "CallbackCodec",
     "ChatDispatcher",
@@ -134,4 +136,5 @@ __all__ = [
     "iter_exception_chain",
     "parse_chat_command",
     "chunk_text",
+    "run_chat_bootstrap_steps",
 ]

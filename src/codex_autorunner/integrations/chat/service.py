@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable, Optional
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from .adapter import ChatAdapter
+from .bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from .dispatcher import ChatDispatcher
 from .models import ChatEvent
 from .state_store import ChatStateStore
@@ -80,12 +81,38 @@ class ChatBotServiceCore:
         owner._outbox_manager.start()
         owner._voice_manager.start()
         try:
-            await owner._prime_bot_identity()
-            await owner._register_bot_commands()
-            await owner._restore_pending_approvals()
-            await owner._outbox_manager.restore()
-            await owner._voice_manager.restore()
-            await owner._prime_poller_offset()
+            await run_chat_bootstrap_steps(
+                platform=self._platform,
+                logger=owner._logger,
+                steps=(
+                    ChatBootstrapStep(
+                        name="prime_bot_identity",
+                        action=owner._prime_bot_identity,
+                        required=False,
+                    ),
+                    ChatBootstrapStep(
+                        name="register_bot_commands",
+                        action=owner._register_bot_commands,
+                        required=False,
+                    ),
+                    ChatBootstrapStep(
+                        name="restore_pending_approvals",
+                        action=owner._restore_pending_approvals,
+                    ),
+                    ChatBootstrapStep(
+                        name="restore_outbox",
+                        action=owner._outbox_manager.restore,
+                    ),
+                    ChatBootstrapStep(
+                        name="restore_voice",
+                        action=owner._voice_manager.restore,
+                    ),
+                    ChatBootstrapStep(
+                        name="prime_poller_offset",
+                        action=owner._prime_poller_offset,
+                    ),
+                ),
+            )
             owner._outbox_task = asyncio.create_task(owner._outbox_manager.run_loop())
             owner._voice_task = asyncio.create_task(owner._voice_manager.run_loop())
             owner._housekeeping_task = asyncio.create_task(owner._housekeeping_loop())
