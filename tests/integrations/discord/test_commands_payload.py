@@ -12,10 +12,11 @@ def _find_option(options: list[dict], name: str) -> dict:
 
 def test_build_application_commands_structure_is_stable() -> None:
     commands = build_application_commands()
-    assert len(commands) == 1
+    assert len(commands) == 2
+    command_names = {cmd["name"] for cmd in commands}
+    assert command_names == {"car", "pma"}
 
-    car = commands[0]
-    assert car["name"] == "car"
+    car = next(cmd for cmd in commands if cmd["name"] == "car")
     assert car["type"] == 1
 
     options = car["options"]
@@ -31,6 +32,11 @@ def test_build_application_commands_structure_is_stable() -> None:
         "archive",
         "reply",
     ]
+
+    pma = next(cmd for cmd in commands if cmd["name"] == "pma")
+    assert pma["type"] == 1
+    pma_options = pma["options"]
+    assert [opt["name"] for opt in pma_options] == ["on", "off", "status"]
 
 
 def test_required_options_are_marked_required() -> None:

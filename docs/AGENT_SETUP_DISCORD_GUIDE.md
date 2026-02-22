@@ -100,6 +100,14 @@ car discord register-commands --path <hub_or_repo_root>
 car discord start --path <hub_or_repo_root>
 ```
 
+For macOS launchd-managed installs (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`):
+- Discord is auto-managed when `discord_bot.enabled: true` and both credential env vars are set.
+- Auto-detection uses `discord_bot.bot_token_env` and `discord_bot.app_id_env` (defaults: `CAR_DISCORD_BOT_TOKEN`, `CAR_DISCORD_APP_ID`).
+- Optional overrides:
+  - `ENABLE_DISCORD_BOT=auto|true|false`
+  - `DISCORD_LABEL` / `DISCORD_PLIST_PATH`
+  - `HEALTH_CHECK_DISCORD=auto|true|false` (safe refresh)
+
 In an allowed Discord channel:
 
 1. Run `/car status`.
@@ -121,6 +129,38 @@ You usually do not need broad admin permissions for baseline CAR Discord usage.
 
 ---
 
+## PMA (Proactive Mode Agent) Support
+
+Discord supports PMA mode, enabling interactive agent conversations directly in Discord channels.
+
+### Enabling PMA Mode
+
+In an allowlisted Discord channel that has been bound to a workspace:
+
+1. Run `/pma on` to enable PMA mode for the channel.
+2. The previous workspace binding is saved and restored when PMA is disabled.
+3. PMA output from the agent will be delivered to the channel.
+
+### PMA Commands
+
+| Command | Description |
+|---------|-------------|
+| `/pma on` | Enable PMA mode for this channel |
+| `/pma off` | Disable PMA mode and restore previous binding |
+| `/pma status` | Show current PMA mode status |
+
+### PMA Prerequisites
+
+1. PMA must be enabled in hub config (`pma.enabled: true`).
+2. The channel must be bound to a workspace (`/car bind path:<...>`).
+3. The user must be authorized via allowlists.
+
+### Disabling PMA in Discord
+
+If PMA is disabled globally in hub config, `/pma` commands will return an actionable error message indicating how to enable it.
+
+---
+
 ## Troubleshooting
 
 ### Slash commands do not appear
@@ -128,6 +168,8 @@ You usually do not need broad admin permissions for baseline CAR Discord usage.
 1. Re-run `car discord register-commands --path <hub_or_repo_root>`.
 2. For development, prefer `guild` scope with explicit `guild_ids`.
 3. Verify `CAR_DISCORD_BOT_TOKEN` and `CAR_DISCORD_APP_ID` are set in the process environment.
+4. If using launchd on macOS, confirm the Discord agent is loaded:
+   - `launchctl print "gui/$(id -u)/com.codex.autorunner.discord"`
 
 ### "Not authorized" responses
 

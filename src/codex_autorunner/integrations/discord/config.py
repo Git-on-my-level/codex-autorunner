@@ -49,9 +49,12 @@ class DiscordBotConfig:
     state_file: Path
     intents: int
     max_message_length: int
+    pma_enabled: bool
 
     @classmethod
-    def from_raw(cls, *, root: Path, raw: dict[str, Any]) -> "DiscordBotConfig":
+    def from_raw(
+        cls, *, root: Path, raw: dict[str, Any], pma_enabled: bool = True
+    ) -> "DiscordBotConfig":
         cfg: dict[str, Any] = raw if isinstance(raw, dict) else {}
         enabled = bool(cfg.get("enabled", False))
         bot_token_env = str(cfg.get("bot_token_env", DEFAULT_BOT_TOKEN_ENV)).strip()
@@ -130,6 +133,7 @@ class DiscordBotConfig:
             state_file=(root / state_file_value).resolve(),
             intents=intents_value,
             max_message_length=max_message_length,
+            pma_enabled=pma_enabled,
         )
 
 

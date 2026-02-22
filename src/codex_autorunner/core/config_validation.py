@@ -234,9 +234,34 @@ def _validate_update_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(update_cfg, dict):
         raise ConfigError("update section must be a mapping if provided")
+    backend = update_cfg.get("backend")
+    if backend is not None:
+        if not isinstance(backend, str):
+            raise ConfigError("update.backend must be a string")
+        if backend.strip().lower() not in {"auto", "launchd", "systemd-user"}:
+            raise ConfigError(
+                "update.backend must be one of: auto, launchd, systemd-user"
+            )
     if "skip_checks" in update_cfg and update_cfg.get("skip_checks") is not None:
         if not isinstance(update_cfg.get("skip_checks"), bool):
             raise ConfigError("update.skip_checks must be boolean or null")
+    linux_services = update_cfg.get("linux_service_names")
+    if linux_services is None:
+        return
+    if not isinstance(linux_services, dict):
+        raise ConfigError("update.linux_service_names must be a mapping if provided")
+    hub_service = linux_services.get("hub")
+    telegram_service = linux_services.get("telegram")
+    if hub_service is not None:
+        if not isinstance(hub_service, str) or not hub_service.strip():
+            raise ConfigError(
+                "update.linux_service_names.hub must be a non-empty string"
+            )
+    if telegram_service is not None:
+        if not isinstance(telegram_service, str) or not telegram_service.strip():
+            raise ConfigError(
+                "update.linux_service_names.telegram must be a non-empty string"
+            )
 
 
 def _validate_usage_config(cfg: Dict[str, Any], *, root: Path) -> None:

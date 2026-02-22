@@ -58,6 +58,9 @@ from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....integrations.chat.text_chunking import chunk_text
+from ....integrations.discord.config import (
+    DEFAULT_STATE_FILE as DISCORD_DEFAULT_STATE_FILE,
+)
 from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
@@ -204,6 +207,20 @@ def build_pma_routes() -> APIRouter:
             state_path = (hub_root / state_path).resolve()
         return state_path
 
+    def _resolve_discord_state_path(request: Request) -> Path:
+        hub_root = request.app.state.config.root
+        raw = getattr(request.app.state.config, "raw", {})
+        discord_cfg = raw.get("discord_bot") if isinstance(raw, dict) else {}
+        if not isinstance(discord_cfg, dict):
+            discord_cfg = {}
+        state_file = discord_cfg.get("state_file")
+        if not isinstance(state_file, str) or not state_file.strip():
+            state_file = DISCORD_DEFAULT_STATE_FILE
+        state_path = Path(state_file)
+        if not state_path.is_absolute():
+            state_path = (hub_root / state_path).resolve()
+        return state_path
+
     async def _deliver_to_active_sink(
         *,
         request: Request,
@@ -225,12 +242,14 @@ def build_pma_routes() -> APIRouter:
         if not isinstance(turn_id, str) or not turn_id:
             turn_id = _resolve_transcript_turn_id(result, current)
         state_path = _resolve_telegram_state_path(request)
+        discord_state_path = _resolve_discord_state_path(request)
         await deliver_pma_output_to_active_sink(
             hub_root=hub_root,
             assistant_text=assistant_text,
             turn_id=turn_id,
             lifecycle_event=lifecycle_event,
             telegram_state_path=state_path,
+            discord_state_path=discord_state_path,
         )
 
     async def _deliver_dispatches_to_active_sink(

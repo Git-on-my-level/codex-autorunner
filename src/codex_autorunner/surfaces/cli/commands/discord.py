@@ -24,6 +24,13 @@ def _require_discord_feature(require_optional_feature: Callable) -> None:
     )
 
 
+def _resolve_pma_enabled(hub_config: Any) -> bool:
+    pma_raw = getattr(hub_config, "raw", {}).get("pma", {})
+    if isinstance(pma_raw, dict):
+        return bool(pma_raw.get("enabled", True))
+    return True
+
+
 async def _sync_discord_application_commands(
     config: DiscordBotConfig,
     *,
@@ -69,9 +76,11 @@ def register_discord_commands(
             discord_raw = (
                 config.raw.get("discord_bot") if isinstance(config.raw, dict) else {}
             )
+            pma_enabled = _resolve_pma_enabled(config)
             discord_cfg = DiscordBotConfig.from_raw(
                 root=config.root,
                 raw=discord_raw if isinstance(discord_raw, dict) else {},
+                pma_enabled=pma_enabled,
             )
             if not discord_cfg.enabled:
                 raise_exit("discord_bot is disabled; set discord_bot.enabled: true")
@@ -108,9 +117,11 @@ def register_discord_commands(
             discord_raw = (
                 config.raw.get("discord_bot") if isinstance(config.raw, dict) else {}
             )
+            pma_enabled = _resolve_pma_enabled(config)
             discord_cfg = DiscordBotConfig.from_raw(
                 root=config.root,
                 raw=discord_raw if isinstance(discord_raw, dict) else {},
+                pma_enabled=pma_enabled,
             )
             if not discord_cfg.enabled:
                 raise_exit("discord_bot is disabled; set discord_bot.enabled: true")
