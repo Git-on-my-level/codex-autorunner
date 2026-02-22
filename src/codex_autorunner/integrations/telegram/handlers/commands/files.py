@@ -15,6 +15,7 @@ from .....core.filebox import outbox_dir as filebox_outbox_dir
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
+from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
 from ...adapter import TelegramMessage
 from ...config import TelegramMediaCandidate
 from ...helpers import _path_within, format_public_error
@@ -1087,11 +1088,11 @@ class FilesCommands(SharedHelpers):
         for candidate in (file_path, file_name):
             if candidate:
                 suffix = Path(candidate).suffix.lower()
-                if suffix in message_handlers.IMAGE_EXTS:
+                if suffix in IMAGE_EXTS:
                     return suffix
         if mime_type:
             base = mime_type.lower().split(";", 1)[0].strip()
-            mapped = message_handlers.IMAGE_CONTENT_TYPES.get(base)
+            mapped = IMAGE_CONTENT_TYPES.get(base)
             if mapped:
                 return mapped
         return ".img"
