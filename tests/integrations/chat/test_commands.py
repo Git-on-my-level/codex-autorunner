@@ -106,3 +106,17 @@ def test_parse_chat_command_rejects_mention_outside_length_bounds() -> None:
 
     assert parse_chat_command(f"/status@{mention_too_short} now") is None
     assert parse_chat_command(f"/status@{mention_too_long} now") is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/Status now",
+        "/STATUS now",
+        "!/status now",
+        "./status now",
+        "please /status now",
+    ],
+)
+def test_parse_chat_command_rejects_current_non_goal_forms(text: str) -> None:
+    assert parse_chat_command(text) is None

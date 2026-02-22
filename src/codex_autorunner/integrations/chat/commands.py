@@ -37,6 +37,9 @@ def parse_chat_command(
 
     This parser is platform-agnostic and intentionally limited to plain-text
     command detection; adapters can provide stricter entity-aware parsing.
+    Current non-goals (intentional rejections) include:
+    - uppercase command names (for example `/Status`)
+    - non-slash-prefixed forms (for example `!/status`)
 
     TODO: For Discord/Slack readiness, this parser needs enhancement:
     - Discord: Commands come as application interactions (not plain text),
