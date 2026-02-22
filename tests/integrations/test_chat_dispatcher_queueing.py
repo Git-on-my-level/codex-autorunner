@@ -5,6 +5,10 @@ from typing import Optional
 
 import pytest
 
+from codex_autorunner.integrations.chat.callbacks import (
+    LogicalCallback,
+    encode_logical_callback,
+)
 from codex_autorunner.integrations.chat.dispatcher import ChatDispatcher
 from codex_autorunner.integrations.chat.models import (
     ChatInteractionEvent,
@@ -117,3 +121,60 @@ async def test_dispatcher_dedupe_hook_short_circuits_processing() -> None:
     assert duplicate_result.status == "duplicate"
     assert accepted_result.status == "queued"
     assert seen == ["ok"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_treats_logical_callback_ids_case_insensitively() -> None:
+    payload = encode_logical_callback(
+        LogicalCallback(callback_id="QUESTION_DONE", payload={"request_id": "req-1"})
+    )
+    event = _interaction_event("u-1", payload=payload)
+
+    dispatcher = ChatDispatcher()
+
+    async def _noop_handler(_event, _context) -> None:
+        return
+
+    result = await dispatcher.dispatch(event, _noop_handler)
+    assert result.bypassed is True
+    assert result.status == "dispatched"
+
+
+@pytest.mark.anyio
+async def test_dispatcher_supports_custom_bypass_rules() -> None:
+    dispatcher = ChatDispatcher(
+        bypass_interaction_prefixes=(),
+        bypass_callback_ids=(),
+        bypass_message_texts=("!stop",),
+    )
+    release_first = asyncio.Event()
+    entered_first = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        if event.update_id == "normal-1":
+            observed.append("normal-1-start")
+            entered_first.set()
+            await release_first.wait()
+            observed.append("normal-1-end")
+            return
+        observed.append(event.update_id)
+
+    await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m1", text="normal"), handler
+    )
+    await entered_first.wait()
+    queued = await dispatcher.dispatch(
+        _interaction_event("queued", payload="qopt:0:0:req-1"), handler
+    )
+    bypassed = await dispatcher.dispatch(
+        _message_event("bypass", message_id="m2", text="!stop"), handler
+    )
+    release_first.set()
+    await dispatcher.wait_idle()
+
+    assert queued.status == "queued"
+    assert queued.bypassed is False
+    assert bypassed.status == "dispatched"
+    assert bypassed.bypassed is True
+    assert observed[:4] == ["normal-1-start", "bypass", "normal-1-end", "queued"]

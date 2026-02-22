@@ -11,11 +11,57 @@ import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Deque, Dict, Optional, Protocol, Union
+from typing import (
+    Awaitable,
+    Callable,
+    Deque,
+    Dict,
+    Iterable,
+    Optional,
+    Protocol,
+    Union,
+)
 
 from ...core.logging_utils import log_event
-from .callbacks import decode_logical_callback
+from .callbacks import (
+    CALLBACK_APPROVAL,
+    CALLBACK_QUESTION_CANCEL,
+    CALLBACK_QUESTION_CUSTOM,
+    CALLBACK_QUESTION_DONE,
+    CALLBACK_QUESTION_OPTION,
+    decode_logical_callback,
+)
 from .models import ChatEvent, ChatInteractionEvent, ChatMessageEvent
+
+DEFAULT_BYPASS_INTERACTION_PREFIXES = (
+    "appr:",
+    "qopt:",
+    "qdone:",
+    "qcustom:",
+    "qcancel:",
+    "cancel:interrupt",
+)
+DEFAULT_BYPASS_CALLBACK_IDS = frozenset(
+    {
+        CALLBACK_APPROVAL,
+        CALLBACK_QUESTION_OPTION,
+        CALLBACK_QUESTION_DONE,
+        CALLBACK_QUESTION_CUSTOM,
+        CALLBACK_QUESTION_CANCEL,
+        "interrupt",
+    }
+)
+DEFAULT_BYPASS_MESSAGE_TEXTS = frozenset(
+    {
+        "^c",
+        "ctrl-c",
+        "ctrl+c",
+        "esc",
+        "escape",
+        "/stop",
+        "/interrupt",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -64,11 +110,38 @@ class ChatDispatcher:
         allowlist_predicate: Optional[DispatchPredicate] = None,
         dedupe_predicate: Optional[DispatchPredicate] = None,
         bypass_predicate: Optional[DispatchPredicate] = None,
+        bypass_interaction_prefixes: Optional[Iterable[str]] = None,
+        bypass_callback_ids: Optional[Iterable[str]] = None,
+        bypass_message_texts: Optional[Iterable[str]] = None,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
         self._allowlist_predicate = allowlist_predicate
         self._dedupe_predicate = dedupe_predicate
         self._bypass_predicate = bypass_predicate
+        self._bypass_interaction_prefixes = tuple(
+            prefix.lower()
+            for prefix in (
+                bypass_interaction_prefixes
+                if bypass_interaction_prefixes is not None
+                else DEFAULT_BYPASS_INTERACTION_PREFIXES
+            )
+        )
+        self._bypass_callback_ids = frozenset(
+            callback_id.lower()
+            for callback_id in (
+                bypass_callback_ids
+                if bypass_callback_ids is not None
+                else DEFAULT_BYPASS_CALLBACK_IDS
+            )
+        )
+        self._bypass_message_texts = frozenset(
+            text.lower()
+            for text in (
+                bypass_message_texts
+                if bypass_message_texts is not None
+                else DEFAULT_BYPASS_MESSAGE_TEXTS
+            )
+        )
         self._lock = asyncio.Lock()
         self._queues: Dict[
             str, Deque[tuple[ChatEvent, DispatchContext, DispatchHandler]]
@@ -127,7 +200,12 @@ class ChatDispatcher:
                 )
                 return DispatchResult(status="denied", context=context)
 
-        bypass = is_bypass_event(event)
+        bypass = is_bypass_event(
+            event,
+            interaction_prefixes=self._bypass_interaction_prefixes,
+            callback_ids=self._bypass_callback_ids,
+            message_texts=self._bypass_message_texts,
+        )
         if self._bypass_predicate is not None:
             bypass = bypass or await _resolve_predicate(
                 self._bypass_predicate, event, context
@@ -287,50 +365,47 @@ def conversation_id_for(platform: str, chat_id: str, thread_id: Optional[str]) -
     return f"{platform}:{chat_id}:{thread_id or '-'}"
 
 
-def is_bypass_event(event: ChatEvent) -> bool:
-    """Return True for events that should bypass per-conversation queues.
+def is_bypass_event(
+    event: ChatEvent,
+    *,
+    interaction_prefixes: Optional[Iterable[str]] = None,
+    callback_ids: Optional[Iterable[str]] = None,
+    message_texts: Optional[Iterable[str]] = None,
+) -> bool:
+    """Return True for events that should bypass per-conversation queues."""
 
-    TODO: The legacy Telegram prefixes below are hardcoded for backward
-    compatibility with existing callback data. For Discord/Slack readiness,
-    these should be made configurable via dispatcher initialization or
-    replaced entirely with logical callback ID checks (which are already
-    performed below).
-    """
+    interaction_prefixes = tuple(
+        prefix.lower()
+        for prefix in (
+            interaction_prefixes
+            if interaction_prefixes is not None
+            else DEFAULT_BYPASS_INTERACTION_PREFIXES
+        )
+    )
+    callback_ids = frozenset(
+        callback_id.lower()
+        for callback_id in (
+            callback_ids if callback_ids is not None else DEFAULT_BYPASS_CALLBACK_IDS
+        )
+    )
+    message_texts = frozenset(
+        text.lower()
+        for text in (
+            message_texts if message_texts is not None else DEFAULT_BYPASS_MESSAGE_TEXTS
+        )
+    )
 
     if isinstance(event, ChatInteractionEvent):
-        payload = (event.payload or "").strip().lower()
-        if payload.startswith(
-            (
-                "appr:",
-                "qopt:",
-                "qdone:",
-                "qcustom:",
-                "qcancel:",
-                "cancel:interrupt",
-            )
-        ):
+        payload = (event.payload or "").strip()
+        payload_lower = payload.lower()
+        if payload_lower.startswith(interaction_prefixes):
             return True
         logical = decode_logical_callback(payload)
-        if logical and logical.callback_id in {
-            "approval",
-            "question_option",
-            "question_done",
-            "question_custom",
-            "question_cancel",
-            "interrupt",
-        }:
+        if logical and logical.callback_id.lower() in callback_ids:
             return True
     elif isinstance(event, ChatMessageEvent):
         text = (event.text or "").strip().lower()
-        return text in {
-            "^c",
-            "ctrl-c",
-            "ctrl+c",
-            "esc",
-            "escape",
-            "/stop",
-            "/interrupt",
-        }
+        return text in message_texts
     return False
 
 
