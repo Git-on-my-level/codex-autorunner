@@ -740,12 +740,76 @@ _telegram_state() {
 }
 
 _env_var_is_set() {
-  local name
-  name="$1"
+  local root name
+  root="$1"
+  name="$2"
   if [[ ! "${name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
     return 1
   fi
-  [[ -n "${!name:-}" ]]
+  if [[ -n "${!name:-}" ]]; then
+    return 0
+  fi
+  if [[ -z "${root}" ]]; then
+    return 1
+  fi
+  "${HELPER_PYTHON}" - "$root" "$name" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).expanduser()
+key = sys.argv[2]
+
+if not key:
+    raise SystemExit(1)
+
+try:
+    from dotenv import dotenv_values  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    dotenv_values = None
+
+
+def parse_fallback(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("export "):
+                stripped = stripped[len("export ") :].strip()
+            if "=" not in stripped:
+                continue
+            k, value = stripped.split("=", 1)
+            k = k.strip()
+            if not k:
+                continue
+            value = value.strip()
+            if value and value[0] in {"'", '"'} and value[-1] == value[0]:
+                value = value[1:-1]
+            env[k] = value
+    except OSError:
+        return {}
+    return env
+
+
+found: str | None = None
+for candidate in (root / ".env", root / ".codex-autorunner" / ".env"):
+    if not candidate.exists():
+        continue
+    if dotenv_values is not None:
+        values = dotenv_values(candidate)
+        value = values.get(key) if isinstance(values, dict) else None
+        if value is not None:
+            found = str(value)
+        continue
+    fallback = parse_fallback(candidate)
+    if key in fallback:
+        found = fallback[key]
+
+if found:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 _discord_config() {
@@ -802,10 +866,10 @@ _discord_missing_env_names() {
   root="$1"
   read -r cfg_state bot_env app_env <<<"$(_discord_config "${root}")"
   missing=()
-  if ! _env_var_is_set "${bot_env}"; then
+  if ! _env_var_is_set "${root}" "${bot_env}"; then
     missing+=( "${bot_env}" )
   fi
-  if ! _env_var_is_set "${app_env}"; then
+  if ! _env_var_is_set "${root}" "${app_env}"; then
     missing+=( "${app_env}" )
   fi
   printf '%s\n' "${missing[*]:-}"
@@ -835,7 +899,7 @@ _discord_state() {
     return 0
   fi
 
-  if ! _env_var_is_set "${bot_env}" || ! _env_var_is_set "${app_env}"; then
+  if ! _env_var_is_set "${root}" "${bot_env}" || ! _env_var_is_set "${root}" "${app_env}"; then
     echo "missing_env"
     return 0
   fi
