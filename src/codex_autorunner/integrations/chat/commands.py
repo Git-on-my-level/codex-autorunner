@@ -37,6 +37,8 @@ def parse_chat_command(
 
     This parser is platform-agnostic and intentionally limited to plain-text
     command detection; adapters can provide stricter entity-aware parsing.
+    Call-site contract:
+    - Callers should pass a string value (or explicit string fallback) for `text`.
     Normalization contract:
     - `raw` stores the outer-trimmed input text exactly as parsed.
     - `args` stores the post-command remainder with surrounding whitespace trimmed.
