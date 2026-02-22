@@ -7,8 +7,10 @@ from codex_autorunner.integrations.telegram.adapter import (
 from codex_autorunner.integrations.telegram.commands_registry import (
     build_command_payloads,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import CommandSpec
-from tests.fixtures.telegram_command_helpers import bot_command_entity, noop_handler
+from tests.fixtures.telegram_command_helpers import (
+    bot_command_entity,
+    make_command_spec,
+)
 
 
 def test_contract_runtime_entity_and_fallback_parity_for_mention_validation() -> None:
@@ -26,7 +28,7 @@ def test_contract_runtime_parsing_normalizes_bot_username() -> None:
 
 
 def test_contract_registration_normalizes_name_and_runtime_rejects_uppercase() -> None:
-    specs = {"Review": CommandSpec("Review", "Review command", noop_handler)}
+    specs = {"Review": make_command_spec("Review", "Review command")}
     commands, invalid = build_command_payloads(specs)
 
     assert invalid == []
@@ -36,8 +38,8 @@ def test_contract_registration_normalizes_name_and_runtime_rejects_uppercase() -
 
 def test_contract_registration_rejects_invalid_names() -> None:
     specs = {
-        "invalid-hyphen": CommandSpec("foo-bar", "bad", noop_handler),
-        "invalid-too-long": CommandSpec("a" * 33, "bad", noop_handler),
+        "invalid-hyphen": make_command_spec("foo-bar", "bad"),
+        "invalid-too-long": make_command_spec("a" * 33, "bad"),
     }
     commands, invalid = build_command_payloads(specs)
     assert commands == []

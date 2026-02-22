@@ -9,7 +9,6 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramPhotoSize,
     TelegramVoice,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import CommandSpec
 from codex_autorunner.integrations.telegram.handlers.messages import (
     _CoalescedBuffer,
     _MediaBatchBuffer,
@@ -24,7 +23,10 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     select_voice_candidate,
     should_bypass_topic_queue,
 )
-from tests.fixtures.telegram_command_helpers import bot_command_entity, noop_handler
+from tests.fixtures.telegram_command_helpers import (
+    bot_command_entity,
+    make_command_spec,
+)
 
 
 def _message(**kwargs: object) -> TelegramMessage:
@@ -141,12 +143,7 @@ def test_should_bypass_topic_queue_for_interrupt() -> None:
 
 
 def test_should_bypass_topic_queue_for_allow_during_turn() -> None:
-    spec = CommandSpec(
-        name="status",
-        description="status",
-        handler=noop_handler,
-        allow_during_turn=True,
-    )
+    spec = make_command_spec("status", "status", allow_during_turn=True)
     handlers = types.SimpleNamespace(
         _bot_username="CodexBot",
         _command_specs={"status": spec},
@@ -160,12 +157,7 @@ def test_should_bypass_topic_queue_for_allow_during_turn() -> None:
 
 
 def test_should_not_bypass_topic_queue_without_allow_during_turn() -> None:
-    spec = CommandSpec(
-        name="new",
-        description="new",
-        handler=noop_handler,
-        allow_during_turn=False,
-    )
+    spec = make_command_spec("new", "new", allow_during_turn=False)
     handlers = types.SimpleNamespace(
         _bot_username="CodexBot",
         _command_specs={"new": spec},
