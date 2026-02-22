@@ -18,5 +18,5 @@ def test_normalize_flow_action_defaults_to_help() -> None:
     assert _normalize_flow_action("") == "help"
 
 
-def test_normalize_flow_action_maps_start_to_bootstrap() -> None:
-    assert _normalize_flow_action("start") == "bootstrap"
+def test_normalize_flow_action_returns_action_as_is() -> None:
+    assert _normalize_flow_action("start") == "start"

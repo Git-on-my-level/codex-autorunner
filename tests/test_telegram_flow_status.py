@@ -113,7 +113,7 @@ def test_flow_status_keyboard_paused(tmp_path: Path) -> None:
     assert keyboard is not None
     rows = keyboard["inline_keyboard"]
     texts = [button["text"] for row in rows for button in row]
-    assert texts == ["Resume", "Restart", "Archive"]
+    assert texts == ["Resume", "Archive"]
 
 
 def test_flow_status_keyboard_dead_worker(tmp_path: Path) -> None:
@@ -137,7 +137,7 @@ def test_flow_status_keyboard_terminal(tmp_path: Path) -> None:
     assert keyboard is not None
     rows = keyboard["inline_keyboard"]
     texts = [button["text"] for row in rows for button in row]
-    assert texts == ["Restart", "Archive", "Refresh"]
+    assert texts == ["Archive", "Refresh"]
 
 
 def test_flow_status_keyboard_falls_back_when_repo_id_is_too_long(

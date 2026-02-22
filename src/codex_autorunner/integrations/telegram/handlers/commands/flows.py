@@ -58,16 +58,13 @@ _FLOW_ACTION_TOKENS = {
     "help",
     "status",
     "runs",
-    "bootstrap",
     "issue",
     "plan",
     "resume",
     "stop",
     "recover",
-    "restart",
     "archive",
     "reply",
-    "start",
 }
 
 
@@ -108,8 +105,6 @@ def _normalize_flow_action(action: str) -> str:
     normalized = (action or "").strip().lower()
     if not normalized:
         return "help"
-    if normalized == "start":
-        return "bootstrap"
     return normalized
 
 
@@ -118,16 +113,14 @@ def _flow_help_lines() -> list[str]:
         "Flow commands:",
         "/flow status [run_id]",
         "/flow runs [N]",
-        "/flow bootstrap [--force-new]",
         "/flow issue <issue#|url>",
         "/flow plan <text>",
         "/flow resume [run_id]",
         "/flow stop [run_id]",
         "/flow recover [run_id]",
-        "/flow restart",
         "/flow archive [run_id] [--force]",
         "/flow reply <message>",
-        "Alias: /flow start",
+        "Use /pma to access full flow controls via web app.",
     ]
 
 
@@ -560,9 +553,6 @@ class FlowCommands(SharedHelpers):
                     message, repo_root, rest_argv, repo_id=target_repo_id
                 )
                 return
-            if action == "bootstrap":
-                await self._handle_flow_bootstrap(message, repo_root, rest_argv)
-                return
             if action == "issue":
                 await self._handle_flow_issue(message, repo_root, remainder)
                 return
@@ -577,9 +567,6 @@ class FlowCommands(SharedHelpers):
                 return
             if action == "recover":
                 await self._handle_flow_recover(message, repo_root, rest_argv)
-                return
-            if action == "restart":
-                await self._handle_flow_restart(message, repo_root, rest_argv)
                 return
             if action == "archive":
                 await self._handle_flow_archive(message, repo_root, rest_argv)
@@ -815,20 +802,6 @@ class FlowCommands(SharedHelpers):
                 finally:
                     store.close()
                 notice = "Archived."
-        elif action == "restart":
-            message = TelegramMessage(
-                update_id=callback.update_id,
-                message_id=callback.message_id or 0,
-                chat_id=callback.chat_id,
-                thread_id=callback.thread_id,
-                from_user_id=callback.from_user_id,
-                text=None,
-                date=None,
-                is_topic_message=callback.thread_id is not None,
-            )
-            argv = [run_id_raw] if run_id_raw else []
-            await self._handle_flow_restart(message, repo_root, argv)
-            notice = "Restarted."
         else:
             await self._answer_callback(callback, "Unknown action")
             return
@@ -881,7 +854,10 @@ class FlowCommands(SharedHelpers):
             runs = store.list_flow_runs(flow_type="ticket_flow")
             record = runs[0] if runs else None
         if record is None:
-            return None, "No ticket flow run found. Use /flow bootstrap to start."
+            return (
+                None,
+                "No ticket flow run found. Use /pma to start a new flow via web app.",
+            )
         return record, None
 
     def _format_flow_status_lines(
@@ -999,10 +975,6 @@ class FlowCommands(SharedHelpers):
                         "Resume",
                         _flow_callback_data("resume"),
                     ),
-                    InlineButton(
-                        "Restart",
-                        _flow_callback_data("restart"),
-                    ),
                 ]
             )
             rows.append(
@@ -1016,10 +988,6 @@ class FlowCommands(SharedHelpers):
         elif status.is_terminal():
             rows.append(
                 [
-                    InlineButton(
-                        "Restart",
-                        _flow_callback_data("restart"),
-                    ),
                     InlineButton(
                         "Archive",
                         _flow_callback_data("archive"),
@@ -1333,7 +1301,7 @@ class FlowCommands(SharedHelpers):
         if not runs:
             await self._send_message(
                 message.chat_id,
-                "No ticket flow runs found. Use /flow bootstrap to start.",
+                "No ticket flow runs found. Use /pma to start a new flow via web app.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
