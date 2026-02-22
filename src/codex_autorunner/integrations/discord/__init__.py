@@ -1,6 +1,12 @@
 """Discord integration scaffold."""
 
+from .adapter import DiscordChatAdapter, DiscordTextRenderer
 from .allowlist import DiscordAllowlist, allowlist_allows
+from .chat_state_store import (
+    DiscordChatStateStore,
+    discord_conversation_key,
+    parse_discord_conversation_key,
+)
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .config import (
@@ -71,8 +77,13 @@ __all__ = [
     "DiscordGatewayClient",
     "OutboxRecord",
     "DiscordStateStore",
+    "DiscordChatStateStore",
+    "discord_conversation_key",
+    "parse_discord_conversation_key",
     "DiscordOutboxManager",
     "DiscordBotService",
     "create_discord_bot_service",
     "DiscordRestClient",
+    "DiscordChatAdapter",
+    "DiscordTextRenderer",
 ]

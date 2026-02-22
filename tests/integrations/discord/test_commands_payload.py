@@ -20,7 +20,23 @@ def test_build_application_commands_structure_is_stable() -> None:
     assert car["type"] == 1
 
     options = car["options"]
-    assert [opt["name"] for opt in options] == ["bind", "status", "flow"]
+    expected_subcommands = [
+        "bind",
+        "status",
+        "debug",
+        "agent",
+        "model",
+        "help",
+        "ids",
+        "diff",
+        "skills",
+        "mcp",
+        "init",
+        "repos",
+        "files",
+        "flow",
+    ]
+    assert [opt["name"] for opt in options] == expected_subcommands
 
     flow = _find_option(options, "flow")
     flow_options = flow["options"]
