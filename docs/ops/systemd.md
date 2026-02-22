@@ -39,6 +39,17 @@ server:
 If you set `server.base_path`, also set `CAR_BASE_PATH=/car` in the env file
 and update your health check URLs to include the prefix.
 
+Set Linux updater defaults in `codex-autorunner.yml` (or `.codex-autorunner/config.yml`)
+so `/system/update` and Telegram `/update` use systemd:
+
+```yaml
+update:
+  backend: systemd-user
+  linux_service_names:
+    hub: car-hub
+    telegram: car-telegram
+```
+
 ## User service (recommended)
 
 1) Copy `docs/ops/systemd-hub.service` to `~/.config/systemd/user/car-hub.service`.

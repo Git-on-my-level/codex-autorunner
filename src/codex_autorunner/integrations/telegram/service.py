@@ -183,6 +183,8 @@ class TelegramBotService(
         update_repo_url: Optional[str] = None,
         update_repo_ref: Optional[str] = None,
         update_skip_checks: bool = False,
+        update_backend: str = "auto",
+        update_linux_service_names: Optional[dict[str, str]] = None,
         app_server_auto_restart: Optional[bool] = None,
     ) -> None:
         self._config = config
@@ -217,6 +219,8 @@ class TelegramBotService(
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
         self._update_skip_checks = update_skip_checks
+        self._update_backend = update_backend
+        self._update_linux_service_names = update_linux_service_names or {}
         self._app_server_auto_restart = app_server_auto_restart
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(

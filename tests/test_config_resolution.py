@@ -71,6 +71,18 @@ def test_load_repo_config_inherits_hub_shared_settings(tmp_path: Path) -> None:
     assert config.agent_binary("opencode") == "/opt/opencode"
 
 
+def test_update_backend_null_defaults_to_auto(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {"mode": "hub", "update": {"backend": None}},
+    )
+
+    config = load_hub_config(hub_root)
+    assert config.update_backend == "auto"
+
+
 def test_repo_override_file_overrides_repo_defaults(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

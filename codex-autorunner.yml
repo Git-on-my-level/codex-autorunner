@@ -331,6 +331,13 @@ hub:
 update:
   # Skip running ./scripts/check.sh during system updates.
   skip_checks: false
+  # Update refresh backend: auto|launchd|systemd-user.
+  # auto resolves launchd on macOS and systemd-user on Linux.
+  backend: auto
+  # Linux systemd user service names used by systemd-user refresh.
+  linux_service_names:
+    hub: car-hub
+    telegram: car-telegram
 
 usage:
   # Cache scope for aggregated usage series: global|repo
