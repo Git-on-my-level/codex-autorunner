@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
+from ..chat.commands import parse_chat_command
 from .handlers.commands import CommandSpec
-
-_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 
 @dataclass(frozen=True)
@@ -27,8 +25,8 @@ def build_command_payloads(
     commands: list[dict[str, str]] = []
     invalid: list[str] = []
     for spec in command_specs.values():
-        name = _normalize_name(spec.name)
-        if not name or not _COMMAND_NAME_RE.fullmatch(name):
+        name = _validate_command_name(spec.name)
+        if not name:
             invalid.append(spec.name)
             continue
         description = _normalize_description(spec.description)
@@ -74,6 +72,17 @@ def diff_command_lists(
 
 def _normalize_name(name: str) -> str:
     return name.strip().lower()
+
+
+def _validate_command_name(name: str) -> Optional[str]:
+    normalized = _normalize_name(name)
+    if not normalized:
+        return None
+    # Reuse shared slash-command grammar for name validation.
+    parsed = parse_chat_command(f"/{normalized}")
+    if parsed is None:
+        return None
+    return parsed.name
 
 
 def _normalize_description(description: str) -> str:

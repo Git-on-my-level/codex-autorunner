@@ -24,6 +24,17 @@ def test_build_command_payloads_normalizes_names() -> None:
     ]
 
 
+def test_build_command_payloads_rejects_invalid_names() -> None:
+    specs = {
+        "Invalid-Hyphen": CommandSpec("foo-bar", "bad", _noop_handler),
+        "Normalized-Upper": CommandSpec("Review", "bad", _noop_handler),
+        "Invalid-Long": CommandSpec("a" * 33, "bad", _noop_handler),
+    }
+    commands, invalid = build_command_payloads(specs)
+    assert commands == [{"command": "review", "description": "bad"}]
+    assert invalid == ["foo-bar", "a" * 33]
+
+
 def test_diff_command_lists_detects_changes() -> None:
     desired = [
         {"command": "run", "description": "Start a task"},
