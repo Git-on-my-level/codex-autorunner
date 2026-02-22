@@ -18,12 +18,22 @@ from ..helpers import (
     _extract_turn_thread_id,
     _format_approval_prompt,
 )
-from ..state import PendingApprovalRecord
+from ..state import PendingApprovalRecord, TopicRouter
 from ..types import PendingApproval
 
 
 class TelegramApprovalHandlers(ChatApprovalHandlers):
     _platform = "telegram"
+    _router: TopicRouter
+
+    @property
+    def _router(self) -> TopicRouter:
+        """Get the router."""
+        return self.__dict__.get("_router")  # type: ignore[return-value]
+
+    @_router.setter
+    def _router(self, value: TopicRouter) -> None:
+        self.__dict__["_router"] = value
 
     async def _restore_pending_approvals(self) -> None:
         state = await self._store.load()
