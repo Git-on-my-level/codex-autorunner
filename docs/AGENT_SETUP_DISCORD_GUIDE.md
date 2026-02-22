@@ -121,6 +121,38 @@ You usually do not need broad admin permissions for baseline CAR Discord usage.
 
 ---
 
+## PMA (Proactive Mode Agent) Support
+
+Discord supports PMA mode, enabling interactive agent conversations directly in Discord channels.
+
+### Enabling PMA Mode
+
+In an allowlisted Discord channel that has been bound to a workspace:
+
+1. Run `/pma on` to enable PMA mode for the channel.
+2. The previous workspace binding is saved and restored when PMA is disabled.
+3. PMA output from the agent will be delivered to the channel.
+
+### PMA Commands
+
+| Command | Description |
+|---------|-------------|
+| `/pma on` | Enable PMA mode for this channel |
+| `/pma off` | Disable PMA mode and restore previous binding |
+| `/pma status` | Show current PMA mode status |
+
+### PMA Prerequisites
+
+1. PMA must be enabled in hub config (`pma.enabled: true`).
+2. The channel must be bound to a workspace (`/car bind path:<...>`).
+3. The user must be authorized via allowlists.
+
+### Disabling PMA in Discord
+
+If PMA is disabled globally in hub config, `/pma` commands will return an actionable error message indicating how to enable it.
+
+---
+
 ## Troubleshooting
 
 ### Slash commands do not appear

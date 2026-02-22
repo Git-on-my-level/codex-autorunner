@@ -190,6 +190,65 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
+    telegram_pma_command = "/pma" in runtime_text or "_handle_pma" in runtime_text
+    checks.append(
+        ParityCheck(
+            entrypoint="telegram",
+            primitive="pma_command",
+            passed=telegram_pma_command,
+            details="/pma command available",
+        )
+    )
+
+    discord_commands_path = Path(
+        "src/codex_autorunner/integrations/discord/commands.py"
+    )
+    discord_service_path = Path("src/codex_autorunner/integrations/discord/service.py")
+    discord_commands_text = (
+        discord_commands_path.read_text(encoding="utf-8")
+        if discord_commands_path.exists()
+        else ""
+    )
+    discord_service_text = (
+        discord_service_path.read_text(encoding="utf-8")
+        if discord_service_path.exists()
+        else ""
+    )
+
+    discord_pma_registered = (
+        '"pma"' in discord_commands_text or "'pma'" in discord_commands_text
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="discord",
+            primitive="pma_command_registration",
+            passed=discord_pma_registered,
+            details="/pma slash command registered in command tree",
+        )
+    )
+
+    discord_pma_handler = "_handle_pma_command" in discord_service_text
+    checks.append(
+        ParityCheck(
+            entrypoint="discord",
+            primitive="pma_command_handler",
+            passed=discord_pma_handler,
+            details="PMA command handler implemented in service",
+        )
+    )
+
+    discord_pma_delivery = "_resolve_discord_target" in Path(
+        "src/codex_autorunner/integrations/pma_delivery.py"
+    ).read_text(encoding="utf-8")
+    checks.append(
+        ParityCheck(
+            entrypoint="discord",
+            primitive="pma_delivery",
+            passed=discord_pma_delivery,
+            details="PMA output can be delivered to Discord channels",
+        )
+    )
+
     report_path = _write_parity_report(repo_root=repo_root, checks=checks)
 
     assert report_path == (
