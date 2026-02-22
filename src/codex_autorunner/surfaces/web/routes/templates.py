@@ -43,12 +43,15 @@ from ..schemas import (
     TemplateFetchResponse,
     TemplateRepoCreateRequest,
     TemplateReposResponse,
+    TemplateRepoSummary,
     TemplateRepoUpdateRequest,
 )
 
 
-def _error_detail(code: str, message: str, meta: Optional[dict] = None) -> dict:
-    payload = {"code": code, "message": message}
+def _error_detail(
+    code: str, message: str, meta: Optional[dict] = None
+) -> dict[str, object]:
+    payload: dict[str, object] = {"code": code, "message": message}
     if meta:
         payload["meta"] = meta
     return payload
@@ -153,14 +156,14 @@ def _validate_repo_url(url: str) -> None:
         )
 
 
-def _repos_to_dicts(repos) -> list[dict]:
+def _repos_to_summaries(repos) -> list[TemplateRepoSummary]:
     return [
-        {
-            "id": repo.id,
-            "url": repo.url,
-            "trusted": bool(repo.trusted),
-            "default_ref": repo.default_ref,
-        }
+        TemplateRepoSummary(
+            id=repo.id,
+            url=repo.url,
+            trusted=bool(repo.trusted),
+            default_ref=repo.default_ref,
+        )
         for repo in repos
     ]
 
@@ -363,15 +366,7 @@ def build_templates_routes() -> APIRouter:
         config: RepoConfig = request.app.state.config
         return TemplateReposResponse(
             enabled=config.templates.enabled,
-            repos=[
-                {
-                    "id": repo.id,
-                    "url": repo.url,
-                    "trusted": repo.trusted,
-                    "default_ref": repo.default_ref,
-                }
-                for repo in config.templates.repos
-            ],
+            repos=_repos_to_summaries(config.templates.repos),
         )
 
     @router.post("/repos", response_model=TemplateReposResponse)
@@ -391,21 +386,21 @@ def build_templates_routes() -> APIRouter:
                 ),
             )
 
-        updated = _repos_to_dicts(config.templates.repos)
+        updated = _repos_to_summaries(config.templates.repos)
         updated.append(
-            {
-                "id": repo_id,
-                "url": url,
-                "trusted": trusted,
-                "default_ref": default_ref,
-            }
+            TemplateRepoSummary(
+                id=repo_id,
+                url=url,
+                trusted=trusted,
+                default_ref=default_ref,
+            )
         )
         hub_root = _resolve_hub_root(request.app.state.engine.repo_root)
-        update_override_templates(hub_root, updated)
+        update_override_templates(hub_root, [vars(r) for r in updated])
         new_config = _reload_repo_config(request)
         return TemplateReposResponse(
             enabled=new_config.templates.enabled,
-            repos=_repos_to_dicts(new_config.templates.repos),
+            repos=_repos_to_summaries(new_config.templates.repos),
         )
 
     @router.put("/repos/{repo_id}", response_model=TemplateReposResponse)
@@ -470,7 +465,7 @@ def build_templates_routes() -> APIRouter:
         new_config = _reload_repo_config(request)
         return TemplateReposResponse(
             enabled=new_config.templates.enabled,
-            repos=_repos_to_dicts(new_config.templates.repos),
+            repos=_repos_to_summaries(new_config.templates.repos),
         )
 
     @router.delete("/repos/{repo_id}", response_model=TemplateReposResponse)
@@ -498,7 +493,7 @@ def build_templates_routes() -> APIRouter:
         new_config = _reload_repo_config(request)
         return TemplateReposResponse(
             enabled=new_config.templates.enabled,
-            repos=_repos_to_dicts(new_config.templates.repos),
+            repos=_repos_to_summaries(new_config.templates.repos),
         )
 
     @router.post("/fetch", response_model=TemplateFetchResponse)

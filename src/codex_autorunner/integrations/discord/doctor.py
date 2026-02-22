@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 from ...core.config import HubConfig
 from ...core.optional_dependencies import missing_optional_dependencies
@@ -15,8 +16,9 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
     """Run Discord-specific doctor checks for hub configuration."""
     checks: list[DoctorCheck] = []
     raw = config.raw if isinstance(config.raw, dict) else {}
-    discord_cfg = (
-        raw.get("discord_bot") if isinstance(raw.get("discord_bot"), dict) else {}
+    discord_bot_raw = raw.get("discord_bot")
+    discord_cfg: dict[str, Any] = (
+        discord_bot_raw if isinstance(discord_bot_raw, dict) else {}
     )
     enabled = bool(discord_cfg.get("enabled", False))
 

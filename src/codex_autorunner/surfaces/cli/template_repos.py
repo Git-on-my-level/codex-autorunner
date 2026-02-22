@@ -84,7 +84,9 @@ class TemplateReposManager:
                 f"Repo ID '{repo_id}' already exists. Use a unique ID."
             )
 
-        new_repo = {
+        from typing import Union
+
+        new_repo: dict[str, Union[str, bool]] = {
             "id": repo_id,
             "url": url,
             "default_ref": default_ref,

@@ -15,11 +15,12 @@ from .rest import DiscordRestClient
 
 try:
     import websockets
-    from websockets.exceptions import ConnectionClosed
+    from websockets.exceptions import ConnectionClosed as WebSocketConnectionClosed
 except (
     ImportError
 ):  # pragma: no cover - optional dependency gate handles this at runtime.
     websockets = None  # type: ignore[assignment]
+    WebSocketConnectionClosed = None  # type: ignore[assignment,misc]
 
     class ConnectionClosed(Exception):
         pass
@@ -78,7 +79,8 @@ def calculate_reconnect_backoff(
 ) -> float:
     scaled = base_seconds * (2 ** max(attempt, 0))
     jitter_factor = 0.8 + (0.4 * min(max(rand_float(), 0.0), 1.0))
-    return min(max_seconds, max(0.0, scaled * jitter_factor))
+    result: float = min(max_seconds, max(0.0, scaled * jitter_factor))
+    return result
 
 
 class DiscordGatewayClient:
@@ -125,7 +127,7 @@ class DiscordGatewayClient:
                     await self._run_connection(websocket, on_dispatch)
             except asyncio.CancelledError:
                 raise
-            except ConnectionClosed:
+            except (WebSocketConnectionClosed, ConnectionClosed):
                 self._logger.info("Discord gateway socket closed; reconnecting")
             except Exception as exc:
                 self._logger.warning("Discord gateway error; reconnecting: %s", exc)

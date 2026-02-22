@@ -211,7 +211,9 @@ class AuthTokenMiddleware:
     def _extract_ws_protocol_token(self, scope) -> str | None:
         if scope.get("type") != "websocket":
             return None
-        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        headers: dict[bytes, bytes] = {
+            k.lower(): v for k, v in (scope.get("headers") or [])
+        }
         raw = headers.get(b"sec-websocket-protocol")
         if not raw:
             return None
@@ -294,7 +296,9 @@ class HostOriginMiddleware:
         return getattr(self.app, name)
 
     def _header(self, scope, key: bytes) -> str | None:
-        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        headers: dict[bytes, bytes] = {
+            k.lower(): v for k, v in (scope.get("headers") or [])
+        }
         raw = headers.get(key)
         if not raw:
             return None
@@ -473,7 +477,8 @@ class RequestIdMiddleware:
         return getattr(self.app, name)
 
     def _extract_request_id(self, scope) -> str:
-        for name, value in scope.get("headers") or []:
+        headers: list[tuple[bytes, bytes]] = scope.get("headers") or []
+        for name, value in headers:
             if name.lower() == self.header_bytes:
                 try:
                     candidate = value.decode("utf-8").strip()

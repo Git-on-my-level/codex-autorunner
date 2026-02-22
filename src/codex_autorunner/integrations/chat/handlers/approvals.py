@@ -6,7 +6,7 @@ This module is platform-agnostic and depends only on normalized chat models.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from ....core.logging_utils import log_event
 from ..models import ChatInteractionEvent
@@ -15,6 +15,40 @@ from .models import ChatContext
 
 class ChatApprovalHandlers:
     """Approval callback behavior over normalized chat interaction events."""
+
+    _chat_answer_interaction: Any
+    _store: Any
+    _pending_approvals: dict[str, Any]
+
+    def _resolve_turn_context(
+        self, turn_id: str, thread_id: Optional[str] = None
+    ) -> Optional[Any]:
+        """Resolve turn context by ID."""
+        raise NotImplementedError
+
+    @property
+    def _router(self) -> Any:
+        """Get the router."""
+        raise NotImplementedError
+
+    _logger: logging.Logger
+
+    async def _chat_edit_message(
+        self,
+        *,
+        chat_id: str,
+        thread_id: Optional[str],
+        message_id: str,
+        text: str,
+        reply_markup: Any = None,
+        clear_actions: bool = False,
+    ) -> None:
+        """Edit a chat message."""
+        raise NotImplementedError
+
+    def _format_approval_decision(self, decision: str) -> str:
+        """Format an approval decision for display."""
+        raise NotImplementedError
 
     async def handle_approval_interaction(
         self,

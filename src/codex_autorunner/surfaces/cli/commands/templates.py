@@ -198,6 +198,8 @@ def _fetch_template_with_scan(
     if repo_cfg is None:
         raise_exit(f"Template repo not configured: {parsed.repo_id}")
 
+    assert repo_cfg is not None
+
     hub_config_path = resolve_hub_config_path_for_cli(ctx.repo_root, hub)
     if hub_config_path is None:
         try:
@@ -302,6 +304,7 @@ def _apply_agent_override(
     fm_yaml, body = split_markdown_frontmatter(content)
     if fm_yaml is None:
         raise_exit("Template is missing YAML frontmatter; cannot set agent.")
+    assert fm_yaml is not None
     try:
         data = yaml.safe_load(fm_yaml)
     except yaml.YAMLError as exc:
@@ -326,6 +329,7 @@ def _get_hub_root(
             return hub_config.root
         except ConfigError as exc:
             raise_exit(str(exc), cause=exc)
+    assert hub_config_path is not None
     return hub_config_path.parent.parent.resolve()
 
 
@@ -408,6 +412,8 @@ def register_template_index_commands(
 
         if template is None:
             raise_exit(f"Template not found: {template_ref}")
+
+        assert template is not None
 
         if output_json:
             payload = {

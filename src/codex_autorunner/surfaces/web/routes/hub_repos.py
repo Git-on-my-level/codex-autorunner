@@ -101,7 +101,7 @@ class HubMountManager:
         if ctx is None:
             return
         try:
-            await ctx.__aexit__(None, None, None)
+            await ctx.__aexit__(None, None, None)  # type: ignore[attr-defined]
             safe_log(
                 self.app.state.logger,
                 logging.INFO,

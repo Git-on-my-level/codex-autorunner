@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -35,7 +35,7 @@ class DiscordRestClient:
         method: str,
         path: str,
         *,
-        payload: Optional[dict[str, Any]] = None,
+        payload: dict[str, Any] | list[dict[str, Any]] | None = None,
         expect_json: bool = True,
     ) -> Any:
         retries = 0

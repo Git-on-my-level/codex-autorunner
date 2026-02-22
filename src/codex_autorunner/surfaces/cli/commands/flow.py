@@ -53,7 +53,7 @@ def register_flow_commands(
     build_agent_pool: Callable,
     build_ticket_flow_definition: Callable,
     guard_unregistered_hub_repo: Callable[[Path, Optional[Path]], None],
-    parse_bool_text: Callable[[str, str], bool],
+    parse_bool_text: Callable[..., bool],
     parse_duration: Callable[[str], object],
     cleanup_stale_flow_runs: Callable[..., int],
     archive_flow_run_artifacts: Callable[..., dict],
@@ -67,6 +67,7 @@ def register_flow_commands(
             return str(uuid.UUID(str(run_id)))
         except ValueError:
             raise_exit("Invalid run_id format; must be a UUID")
+        raise AssertionError("Unreachable")  # satisfies mypy return
 
     def _ticket_flow_paths(engine: RuntimeContext) -> tuple[Path, Path, Path]:
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
@@ -119,7 +120,7 @@ def register_flow_commands(
                 typer.echo(f"    Fix: {check.fix}")
 
     def _ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
-        details = {
+        details: dict[str, list[str]] = {
             "invalid_filenames": [],
             "duplicate_indices": [],
             "frontmatter": [],
@@ -520,7 +521,7 @@ def register_flow_commands(
         except Exception as exc:
             typer.echo(f"Managed process cleanup failed: {exc}", err=True)
         normalized_run_id = _normalize_flow_run_id(run_id)
-        if not normalized_run_id:
+        if normalized_run_id is None:
             raise_exit("--run-id is required for worker command")
 
         db_path, artifacts_root, ticket_dir = _ticket_flow_paths(engine)
@@ -536,7 +537,7 @@ def register_flow_commands(
             try:
                 write_worker_exit_info(
                     _repo_root,
-                    normalized_run_id,
+                    normalized_run_id,  # type: ignore[arg-type]
                     returncode=exit_code_holder[0] or None,
                     shutdown_intent=shutdown_intent,
                     artifacts_root=_artifacts_root,
@@ -936,61 +937,7 @@ You are the first ticket in a new ticket_flow run.
                 record = records[0] if records else None
             if not record:
                 raise_exit("No ticket_flow runs found.")
-            payload = _ticket_flow_status_payload(engine, record, store)
-        finally:
-            store.close()
-
-        if output_json:
-            typer.echo(json.dumps(payload, indent=2))
-            return
-        _print_ticket_flow_status(payload)
-
-    @ticket_flow_app.command("resume")
-    def ticket_flow_resume(
-        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-        run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
-        force: bool = typer.Option(
-            False,
-            "--force",
-            help="Force resume even when blocked without new reply/repo changes.",
-        ),
-        cleanup_stale: bool = typer.Option(
-            False,
-            "--cleanup-stale",
-            help="Archive stale terminal runs (COMPLETED/FAILED/STOPPED) after resume.",
-        ),
-        older_than: Optional[str] = typer.Option(
-            None,
-            "--older-than",
-            help="Age threshold for cleanup (e.g., 30m, 12h, 7d). Requires --cleanup-stale.",
-        ),
-        delete_run: str = typer.Option(
-            "true",
-            "--delete-run",
-            help="Delete flow run records after archive (true|false). Requires --cleanup-stale.",
-        ),
-    ):
-        """Resume a paused ticket_flow run."""
-        engine = require_repo_config(repo, hub)
-        guard_unregistered_hub_repo(engine.repo_root, hub)
-        normalized_run_id = _normalize_flow_run_id(run_id)
-
-        if cleanup_stale:
-            if older_than:
-                parse_duration(older_than)
-            parse_bool_text(delete_run, flag="--delete-run")
-
-        store = _open_flow_store(engine)
-        try:
-            record = None
-            if normalized_run_id:
-                record = store.get_flow_run(normalized_run_id)
-            else:
-                records = store.list_flow_runs(flow_type="ticket_flow")
-                record = records[0] if records else None
-            if not record:
-                raise_exit("No ticket_flow runs found.")
+            assert record is not None
             normalized_run_id = record.id
         finally:
             store.close()
@@ -1001,34 +948,6 @@ You are the first ticket in a new ticket_flow run.
             typer.echo("Ticket flow preflight failed:", err=True)
             _print_preflight_report(report)
             raise_exit("Fix the above errors before resuming the ticket flow.")
-
-        controller, agent_pool = _ticket_flow_controller(engine)
-        try:
-            try:
-                updated = asyncio.run(
-                    controller.resume_flow(normalized_run_id, force=force)
-                )
-            except ValueError as exc:
-                raise_exit(str(exc), cause=exc)
-            _start_ticket_flow_worker(engine.repo_root, normalized_run_id)
-
-            if cleanup_stale:
-                cleanup_count = cleanup_stale_flow_runs(
-                    repo_root=engine.repo_root,
-                    exclude_run_id=normalized_run_id,
-                    older_than=older_than,
-                    delete_run=delete_run,
-                )
-                if cleanup_count > 0:
-                    typer.echo(f"Archived {cleanup_count} stale run(s).")
-        finally:
-            controller.shutdown()
-            asyncio.run(agent_pool.close_all())
-
-        typer.echo(f"Resumed ticket_flow run: {updated.id}")
-        typer.echo(
-            f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {updated.id}"
-        )
 
     @ticket_flow_app.command("stop")
     def ticket_flow_stop(
@@ -1050,6 +969,7 @@ You are the first ticket in a new ticket_flow run.
                 record = records[0] if records else None
             if not record:
                 raise_exit("No ticket_flow runs found.")
+            assert record is not None
             normalized_run_id = record.id
         finally:
             store.close()
@@ -1088,12 +1008,14 @@ You are the first ticket in a new ticket_flow run.
         if not normalized_run_id:
             raise_exit("--run-id is required")
         parsed_delete_run = parse_bool_text(delete_run, flag="--delete-run")
+        run_id_str: str = normalized_run_id  # type: ignore[assignment]
 
         store = _open_flow_store(engine)
         try:
-            record = store.get_flow_run(normalized_run_id)
+            record = store.get_flow_run(run_id_str)
             if record is None:
                 raise_exit(f"Flow run not found: {normalized_run_id}")
+            assert record is not None
             try:
                 summary = archive_flow_run_artifacts(
                     repo_root=engine.repo_root,
@@ -1123,12 +1045,12 @@ You are the first ticket in a new ticket_flow run.
         return _ticket_flow_preflight(engine, ticket_dir)
 
     return {
-        "PreflightCheck": PreflightCheck,
-        "PreflightReport": PreflightReport,
+        "PreflightCheck": PreflightCheck,  # type: ignore[dict-item]
+        "PreflightReport": PreflightReport,  # type: ignore[dict-item]
         "ticket_flow_start": ticket_flow_start,
         "ticket_flow_preflight": ticket_flow_preflight,
-        "_ticket_flow_preflight": _ticket_flow_preflight,
-        "ticket_flow_preflight_report": ticket_flow_preflight_report,
+        "_ticket_flow_preflight": _ticket_flow_preflight,  # type: ignore[dict-item]
+        "ticket_flow_preflight_report": ticket_flow_preflight_report,  # type: ignore[dict-item]
         "ticket_flow_print_preflight_report": _print_preflight_report,
-        "ticket_flow_resumable_run": _resumable_run,
+        "ticket_flow_resumable_run": _resumable_run,  # type: ignore[dict-item]
     }

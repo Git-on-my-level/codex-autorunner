@@ -155,7 +155,9 @@ def build_pma_routes() -> APIRouter:
         supervisor = getattr(request.app.state, "hub_supervisor", None)
         if supervisor is not None:
             try:
-                return supervisor.get_pma_safety_checker()
+                checker = supervisor.get_pma_safety_checker()
+                if isinstance(checker, PmaSafetyChecker):
+                    return checker
             except Exception:
                 pass
         if pma_safety_checker is None or pma_safety_root != hub_root:
@@ -288,12 +290,12 @@ def build_pma_routes() -> APIRouter:
             raw_thread_id = sink.get("thread_id")
             if isinstance(raw_thread_id, str):
                 raw_thread_id = raw_thread_id.strip()
-            try:
-                thread_id = (
-                    int(raw_thread_id) if raw_thread_id not in (None, "") else None
-                )
-            except (TypeError, ValueError):
-                thread_id = None
+            thread_id: Optional[int] = None  # type: ignore[no-redef]
+            if raw_thread_id:
+                try:
+                    thread_id = int(raw_thread_id)
+                except (TypeError, ValueError):
+                    thread_id = None
         else:
             return
 
@@ -358,10 +360,12 @@ def build_pma_routes() -> APIRouter:
 
     def _truncate_text(value: Any, limit: int) -> str:
         if not isinstance(value, str):
-            value = "" if value is None else str(value)
-        if len(value) <= limit:
-            return value
-        return value[: max(0, limit - 3)] + "..."
+            text_value: str = "" if value is None else str(value)
+        else:
+            text_value = value
+        if len(text_value) <= limit:
+            return text_value
+        return text_value[: max(0, limit - 3)] + "..."
 
     def _format_last_result(
         result: dict[str, Any], current: dict[str, Any]
@@ -677,15 +681,15 @@ def build_pma_routes() -> APIRouter:
         if agent_id == "opencode":
             supervisor = getattr(request.app.state, "opencode_supervisor", None)
             if supervisor is not None and thread_id:
-                harness = OpenCodeHarness(supervisor)
-                await harness.interrupt(hub_root, thread_id, turn_id)
+                opencode_harness = OpenCodeHarness(supervisor)
+                await opencode_harness.interrupt(hub_root, thread_id, turn_id)
         else:
             supervisor = getattr(request.app.state, "app_server_supervisor", None)
             events = getattr(request.app.state, "app_server_events", None)
             if supervisor is not None and events is not None and thread_id and turn_id:
-                harness = CodexHarness(supervisor, events)
+                codex_harness = CodexHarness(supervisor, events)
                 try:
-                    await harness.interrupt(hub_root, thread_id, turn_id)
+                    await codex_harness.interrupt(hub_root, thread_id, turn_id)
                 except Exception:
                     logger.exception("Failed to interrupt Codex turn")
         return {
@@ -697,7 +701,7 @@ def build_pma_routes() -> APIRouter:
             "turn_id": turn_id,
         }
 
-    async def _ensure_lane_worker(lane_id: str, request: Request) -> None:
+    async def _ensure_lane_worker(lane_id: str, request: Any) -> None:
         nonlocal lane_workers
         existing = lane_workers.get(lane_id)
         if existing is not None and existing.is_running:
@@ -2118,8 +2122,8 @@ def build_pma_routes() -> APIRouter:
             }
         }
 
-    router._pma_start_lane_worker = _ensure_lane_worker_for_app
-    router._pma_stop_lane_worker = _stop_lane_worker_for_app
+    router._pma_start_lane_worker = _ensure_lane_worker_for_app  # type: ignore[attr-defined]
+    router._pma_stop_lane_worker = _stop_lane_worker_for_app  # type: ignore[attr-defined]
     return router
 
 

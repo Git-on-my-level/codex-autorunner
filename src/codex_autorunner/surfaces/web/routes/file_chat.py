@@ -14,7 +14,7 @@ import difflib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -234,7 +234,7 @@ def build_file_chat_routes() -> APIRouter:
     def _get_state(request: Request) -> FileChatRoutesState:
         if not hasattr(request.app.state, "file_chat_routes_state"):
             request.app.state.file_chat_routes_state = state
-        return request.app.state.file_chat_routes_state
+        return cast(FileChatRoutesState, request.app.state.file_chat_routes_state)
 
     async def _get_or_create_interrupt_event(
         request: Request, key: str

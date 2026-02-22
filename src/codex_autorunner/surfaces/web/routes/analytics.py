@@ -176,7 +176,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
     }
 
     run_data: Dict[str, Any] = default_run
-    turns: Dict[str, Optional[int]] = {
+    turns: Dict[str, Any] = {
         "total": None,
         "current_ticket": None,
         "dispatches": 0,
@@ -205,10 +205,10 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
         state = run_record.state if isinstance(run_record.state, dict) else {}
         ticket_state = state.get("ticket_engine") if isinstance(state, dict) else {}
         if isinstance(ticket_state, dict):
-            turns["total"] = ticket_state.get("total_turns")  # type: ignore[index]
-            turns["current_ticket"] = ticket_state.get("ticket_turns")  # type: ignore[index]
-            current_ticket = ticket_state.get("current_ticket")  # type: ignore[assignment]
-            agent_id = ticket_state.get("last_agent_id")  # type: ignore[assignment]
+            turns["total"] = ticket_state.get("total_turns")
+            turns["current_ticket"] = ticket_state.get("ticket_turns")
+            current_ticket = ticket_state.get("current_ticket")
+            agent_id = ticket_state.get("last_agent_id")
 
         workspace_value = run_record.input_data.get("workspace_root")
         workspace_root = Path(workspace_value) if workspace_value else repo_root

@@ -123,6 +123,7 @@ def register_telegram_commands(
         bot_token = telegram_cfg.bot_token
         if not bot_token:
             raise_exit(f"missing bot token env '{telegram_cfg.bot_token_env}'")
+        assert bot_token is not None
         timeout_seconds = max(float(timeout), 0.1)
 
         async def _run() -> None:

@@ -130,7 +130,7 @@ def _collect_dispatch_history(
     for seq, entry_dir in reversed(_iter_seq_dirs(outbox_paths.dispatch_history_dir)):
         dispatch_path = entry_dir / "DISPATCH.md"
         dispatch, errors = parse_dispatch(dispatch_path)
-        files: list[dict[str, str]] = []
+        files: list[dict[str, Any]] = []
         try:
             for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
                 try:
@@ -142,7 +142,7 @@ def _collect_dispatch_history(
                         continue
                     rel = child.name
                     url = f"api/flows/{run_id}/dispatch_history/{seq:04d}/{quote(rel)}"
-                    size = None
+                    size: Optional[int] = None
                     try:
                         size = child.stat().st_size
                     except OSError:
@@ -191,7 +191,7 @@ def _collect_reply_history(
             if reply_path.exists()
             else (None, ["USER_REPLY.md missing"])
         )
-        files: list[dict[str, str]] = []
+        files: list[dict[str, Any]] = []
         try:
             for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
                 try:
@@ -203,7 +203,7 @@ def _collect_reply_history(
                         continue
                     rel = child.name
                     url = f"api/flows/{run_id}/reply_history/{seq:04d}/{quote(rel)}"
-                    size = None
+                    size: Optional[int] = None
                     try:
                         size = child.stat().st_size
                     except OSError:

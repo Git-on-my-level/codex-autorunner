@@ -302,4 +302,8 @@ def _string_or_none(value: object) -> Optional[str]:
 def _int_or_none(value: object) -> Optional[int]:
     if value is None:
         return None
-    return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    return None

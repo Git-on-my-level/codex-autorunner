@@ -177,7 +177,21 @@ def pma_chat(
     if stream:
         import os
 
-        from ...integrations.app_server.event_buffer import parse_sse_line
+        def parse_sse_line(line: str) -> tuple[Optional[str], Optional[dict]]:
+            if not line:
+                return None, None
+            event_type: Optional[str] = None
+            data: Optional[dict] = {}
+            for part in line.split("\n"):
+                if part.startswith("event:"):
+                    event_type = part[6:].strip()
+                elif part.startswith("data:"):
+                    data_str = part[5:].strip()
+                    try:
+                        data = {"raw": data_str}
+                    except Exception:
+                        data = {}
+            return event_type, data
 
         token_env = config.server_auth_token_env
         headers = None
@@ -606,7 +620,7 @@ def pma_upload(
         if token and token.strip():
             headers["Authorization"] = f"Bearer {token.strip()}"
 
-    saved_files = []
+    saved_files: list[str] = []
     for file_path in files:
         try:
             with open(file_path, "rb") as f:

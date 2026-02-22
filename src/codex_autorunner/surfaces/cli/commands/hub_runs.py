@@ -47,7 +47,7 @@ def _cleanup_stale_flow_runs(
     exclude_run_id: str,
     older_than: Optional[str] = None,
     delete_run: str = "true",
-    parse_bool_text_func: Callable[[str, str], bool] = parse_bool_text,
+    parse_bool_text_func: Callable[..., bool] = parse_bool_text,
     parse_duration_func: Callable[[str], Any] = parse_duration,
     load_repo_config_func: Callable[[Path], object] = load_repo_config,
 ) -> int:
@@ -62,7 +62,7 @@ def _cleanup_stale_flow_runs(
     parsed_delete_run = parse_bool_text_func(delete_run, flag="--delete-run")
 
     config = load_repo_config_func(repo_root)
-    store = FlowStore(db_path, durable=config.durable_writes)
+    store = FlowStore(db_path, durable=getattr(config, "durable_writes", False))
     try:
         store.initialize()
         records = store.list_flow_runs(flow_type="ticket_flow")
@@ -174,7 +174,7 @@ def register_hub_runs_commands(
     *,
     require_hub_config: Callable[[Optional[Path]], HubConfig],
     load_repo_config: Callable[[Path], object],
-    parse_bool_text_func: Callable[[str, str], bool] = parse_bool_text,
+    parse_bool_text_func: Callable[..., bool] = parse_bool_text,
     parse_duration_func: Callable[[str], Any] = parse_duration,
 ) -> None:
     @hub_runs_app.command("cleanup")
@@ -229,7 +229,9 @@ def register_hub_runs_commands(
                 continue
             try:
                 repo_config = load_repo_config(repo_root)
-                store = FlowStore(db_path, durable=repo_config.durable_writes)
+                store = FlowStore(
+                    db_path, durable=getattr(repo_config, "durable_writes", False)
+                )
                 store.initialize()
                 records = store.list_flow_runs(flow_type="ticket_flow")
             except Exception as exc:

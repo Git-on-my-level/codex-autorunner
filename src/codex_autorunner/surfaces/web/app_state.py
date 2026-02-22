@@ -7,7 +7,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, cast
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import validate_agent_id
@@ -395,13 +395,14 @@ def _build_app_server_supervisor(
         workspace_root: Path, _workspace_id: str, state_dir: Path
     ) -> dict[str, str]:
         state_dir.mkdir(parents=True, exist_ok=True)
+        base_env_dict: Optional[dict[str, str]] = dict(base_env) if base_env else None
         return build_app_server_env(
             config.command,
             workspace_root,
             state_dir,
             logger=logger,
             event_prefix=event_prefix,
-            base_env=base_env,
+            base_env=base_env_dict,
         )
 
     try:
@@ -832,7 +833,7 @@ def build_hub_context(
         default_app_server_threads_path(config.root)
     )
     opencode_supervisor = build_opencode_supervisor_from_repo_config(
-        config,
+        cast(Any, config),
         workspace_root=config.root,
         logger=logger,
         base_env=resolve_env_for_root(config.root),

@@ -47,6 +47,7 @@ EXCLUDE_PATTERNS = [
     ".codex-autorunner/tickets",  # Ticket files describe what was done and may reference legacy code
     ".codex-autorunner/config.yml",  # Generated runtime config may reference legacy paths
     ".codex-autorunner/github_context",  # Downloaded GH context may reference legacy docs
+    ".codex-autorunner/ABOUT_CAR.md",  # Auto-generated CAR reference file
     "scripts/check_legacy_pipeline.py",  # Script itself contains legacy strings
     "src/codex_autorunner/flows/review/service.py",  # Review prompts mention legacy docs for context
 ]

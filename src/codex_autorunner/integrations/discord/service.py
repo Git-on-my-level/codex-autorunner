@@ -123,7 +123,7 @@ class DiscordBotService:
                 await self._gateway.stop()
         if self._owns_rest and hasattr(self._rest, "close"):
             with contextlib.suppress(Exception):
-                await self._rest.close()  # type: ignore[func-returns-value]
+                await self._rest.close()
         if self._owns_store:
             with contextlib.suppress(Exception):
                 await self._store.close()
