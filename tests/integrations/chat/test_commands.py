@@ -174,29 +174,14 @@ def test_parse_chat_command_bot_username_normalization_edge_cases(
     assert parsed is None
 
 
-@pytest.mark.parametrize("text", [None, 0, 1, 12345])
-def test_parse_chat_command_non_string_scalar_inputs(text: object) -> None:
+@pytest.mark.parametrize("text", [None, 0, 1, 12345, [], {}, object()])
+def test_parse_chat_command_rejects_non_string_inputs(text: object) -> None:
     assert parse_chat_command(text) is None
 
 
-def test_parse_chat_command_non_string_object_with_str_command() -> None:
+def test_parse_chat_command_rejects_object_even_with_command_like_str() -> None:
     class CommandLike:
         def __str__(self) -> str:
-            return " /status from-object "
+            return "/status from-object"
 
-    parsed = parse_chat_command(CommandLike())
-    assert parsed is not None
-    assert parsed.name == "status"
-    assert parsed.args == "from-object"
-    assert parsed.raw == "/status from-object"
-
-
-def test_parse_chat_command_falsey_object_is_treated_as_empty_input() -> None:
-    class FalseyCommandLike:
-        def __bool__(self) -> bool:
-            return False
-
-        def __str__(self) -> str:
-            return "/status should-not-parse"
-
-    assert parse_chat_command(FalseyCommandLike()) is None
+    assert parse_chat_command(CommandLike()) is None

@@ -40,6 +40,7 @@ def parse_chat_command(
     Normalization contract:
     - `raw` stores the outer-trimmed input text exactly as parsed.
     - `args` stores the post-command remainder with surrounding whitespace trimmed.
+    - Non-string input values are rejected.
     Current non-goals (intentional rejections) include:
     - uppercase command names (for example `/Status`)
     - non-slash-prefixed forms (for example `!/status`)
@@ -56,7 +57,9 @@ def parse_chat_command(
       modes while maintaining backward compatibility.
     """
 
-    raw = str(text or "").strip()
+    if not isinstance(text, str):
+        return None
+    raw = text.strip()
     if not raw or not raw.startswith("/"):
         return None
     parts = raw.split(None, 1)
