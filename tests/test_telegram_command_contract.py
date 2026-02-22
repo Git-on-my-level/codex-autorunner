@@ -8,6 +8,7 @@ from codex_autorunner.integrations.telegram.commands_registry import (
     build_command_payloads,
 )
 from tests.fixtures.telegram_command_helpers import (
+    README_REVISIT_GUIDANCE_MODULE_THRESHOLD,
     bot_command_entity,
     make_command_spec,
 )
@@ -47,3 +48,7 @@ def test_contract_registration_rejects_invalid_names() -> None:
     commands, invalid = build_command_payloads(specs)
     assert commands == []
     assert invalid == ["foo-bar", "a" * 33]
+
+
+def test_contract_readme_revisit_threshold_policy_constant() -> None:
+    assert README_REVISIT_GUIDANCE_MODULE_THRESHOLD == 6
