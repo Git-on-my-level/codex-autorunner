@@ -35,6 +35,10 @@ const state = {
 const AUTOSAVE_DELAY_MS = 1000;
 let ticketDocEditor = null;
 let ticketNavCache = [];
+let scheduledAutosaveTimer = null;
+let scheduledAutosaveForce = false;
+let autosaveInFlight = null;
+let autosaveNeedsRerun = false;
 function isTypingTarget(target) {
     if (!(target instanceof HTMLElement))
         return false;
@@ -250,7 +254,7 @@ function undoChange() {
     content.value = prev.body;
     setFrontmatterForm(prev.frontmatter);
     // Trigger autosave for the restored state
-    scheduleAutosave();
+    scheduleAutosave(true);
     // Update undo button
     if (undoBtn)
         undoBtn.disabled = state.undoStack.length <= 1;
@@ -440,14 +444,49 @@ function hasUnsavedChanges() {
 /**
  * Schedule autosave with debounce
  */
-function scheduleAutosave() {
-    // DocEditor handles debounced autosave; leave for compatibility
-    void ticketDocEditor?.save();
+function scheduleAutosave(force = false) {
+    scheduledAutosaveForce = scheduledAutosaveForce || force;
+    if (scheduledAutosaveTimer) {
+        clearTimeout(scheduledAutosaveTimer);
+    }
+    scheduledAutosaveTimer = setTimeout(() => {
+        scheduledAutosaveTimer = null;
+        const runForce = scheduledAutosaveForce;
+        scheduledAutosaveForce = false;
+        void ticketDocEditor?.save(runForce);
+    }, AUTOSAVE_DELAY_MS);
+}
+function clearScheduledAutosave() {
+    if (scheduledAutosaveTimer) {
+        clearTimeout(scheduledAutosaveTimer);
+        scheduledAutosaveTimer = null;
+    }
+    scheduledAutosaveForce = false;
 }
 /**
  * Perform autosave (silent save without closing modal)
  */
 async function performAutosave() {
+    if (autosaveInFlight) {
+        autosaveNeedsRerun = true;
+        await autosaveInFlight;
+        return;
+    }
+    autosaveInFlight = (async () => {
+        try {
+            do {
+                autosaveNeedsRerun = false;
+                await performAutosaveOnce();
+            } while (autosaveNeedsRerun);
+        }
+        finally {
+            autosaveInFlight = null;
+            autosaveNeedsRerun = false;
+        }
+    })();
+    await autosaveInFlight;
+}
+async function performAutosaveOnce() {
     const { content } = els();
     if (!content || !state.isOpen)
         return;
@@ -528,11 +567,10 @@ async function performAutosave() {
  */
 function onContentChange() {
     pushUndoState();
-    scheduleAutosave();
 }
 function onFrontmatterChange() {
     pushUndoState();
-    void ticketDocEditor?.save(true);
+    scheduleAutosave(true);
 }
 /**
  * Open the ticket editor modal
@@ -542,6 +580,7 @@ export function openTicketEditor(ticket) {
     const { modal, content, deleteBtn, chatInput, fmTitle } = els();
     if (!modal || !content)
         return;
+    clearScheduledAutosave();
     hideError();
     setAutosaveStatus("");
     if (ticket && ticket.index != null) {
@@ -656,6 +695,7 @@ export function closeTicketEditor() {
     const { modal } = els();
     if (!modal)
         return;
+    clearScheduledAutosave();
     // Autosave on close if there are changes
     if (hasUnsavedChanges()) {
         // Fire-and-forget: swallow rejection because the error is already flashed
