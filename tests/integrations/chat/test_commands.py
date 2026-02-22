@@ -120,3 +120,29 @@ def test_parse_chat_command_rejects_mention_outside_length_bounds() -> None:
 )
 def test_parse_chat_command_rejects_current_non_goal_forms(text: str) -> None:
     assert parse_chat_command(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_raw", "expected_args"),
+    [
+        ("/status", "/status", ""),
+        ("   /status   ", "/status", ""),
+        ("   /status   now   ", "/status   now", "now"),
+        ("/status\t\tmulti\targ\t", "/status\t\tmulti\targ", "multi\targ"),
+        ("/status\nline", "/status\nline", "line"),
+    ],
+)
+def test_parse_chat_command_normalization_contract_for_raw_and_args(
+    text: str, expected_raw: str, expected_args: str
+) -> None:
+    parsed = parse_chat_command(text)
+    assert parsed is not None
+    assert parsed.raw == expected_raw
+    assert parsed.args == expected_args
+
+
+def test_parse_chat_command_preserves_inner_whitespace_in_raw() -> None:
+    parsed = parse_chat_command(" /status   keep   spacing ")
+    assert parsed is not None
+    assert parsed.raw == "/status   keep   spacing"
+    assert parsed.args == "keep   spacing"

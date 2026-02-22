@@ -37,6 +37,9 @@ def parse_chat_command(
 
     This parser is platform-agnostic and intentionally limited to plain-text
     command detection; adapters can provide stricter entity-aware parsing.
+    Normalization contract:
+    - `raw` stores the outer-trimmed input text exactly as parsed.
+    - `args` stores the post-command remainder with surrounding whitespace trimmed.
     Current non-goals (intentional rejections) include:
     - uppercase command names (for example `/Status`)
     - non-slash-prefixed forms (for example `!/status`)
