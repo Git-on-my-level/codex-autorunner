@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, Optional, Sequence, Tuple
 
 from ..chat.commands import parse_chat_command
 from .api_schemas import TelegramMessageEntitySchema
-
-_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 
 def parse_command_payload(
@@ -73,7 +70,5 @@ def _parse_command_from_text(
 ) -> Optional[Tuple[str, str, str]]:
     parsed = parse_chat_command(text, bot_username=bot_username)
     if parsed is None:
-        return None
-    if not _COMMAND_NAME_RE.fullmatch(parsed.name):
         return None
     return parsed.name.lower(), parsed.args, parsed.raw
