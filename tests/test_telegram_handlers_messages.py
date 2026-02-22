@@ -6,7 +6,6 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramAudio,
     TelegramDocument,
     TelegramMessage,
-    TelegramMessageEntity,
     TelegramPhotoSize,
     TelegramVoice,
 )
@@ -25,6 +24,7 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     select_voice_candidate,
     should_bypass_topic_queue,
 )
+from tests.fixtures.telegram_command_helpers import bot_command_entity, noop_handler
 
 
 def _message(**kwargs: object) -> TelegramMessage:
@@ -144,7 +144,7 @@ def test_should_bypass_topic_queue_for_allow_during_turn() -> None:
     spec = CommandSpec(
         name="status",
         description="status",
-        handler=lambda _message, _args, _runtime: None,
+        handler=noop_handler,
         allow_during_turn=True,
     )
     handlers = types.SimpleNamespace(
@@ -154,7 +154,7 @@ def test_should_bypass_topic_queue_for_allow_during_turn() -> None:
     )
     message = _message(
         text="/status",
-        entities=(TelegramMessageEntity("bot_command", 0, len("/status")),),
+        entities=(bot_command_entity("/status"),),
     )
     assert should_bypass_topic_queue(handlers, message) is True
 
@@ -163,7 +163,7 @@ def test_should_not_bypass_topic_queue_without_allow_during_turn() -> None:
     spec = CommandSpec(
         name="new",
         description="new",
-        handler=lambda _message, _args, _runtime: None,
+        handler=noop_handler,
         allow_during_turn=False,
     )
     handlers = types.SimpleNamespace(
@@ -173,7 +173,7 @@ def test_should_not_bypass_topic_queue_without_allow_during_turn() -> None:
     )
     message = _message(
         text="/new",
-        entities=(TelegramMessageEntity("bot_command", 0, len("/new")),),
+        entities=(bot_command_entity("/new"),),
     )
     assert should_bypass_topic_queue(handlers, message) is False
 
