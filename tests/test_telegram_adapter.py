@@ -137,6 +137,11 @@ def test_parse_command_fallback_username_mismatch() -> None:
     assert command is None
 
 
+def test_parse_command_fallback_rejects_short_mention_target() -> None:
+    command = parse_command("/review@x")
+    assert command is None
+
+
 def test_parse_command_fallback_whitespace() -> None:
     command = parse_command("  /review  pr  ")
     assert command == TelegramCommand(name="review", args="pr", raw="/review  pr")
