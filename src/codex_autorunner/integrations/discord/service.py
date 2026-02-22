@@ -21,18 +21,27 @@ from ...core.utils import canonicalize_path
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.text_chunking import chunk_text
+from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
 from .allowlist import DiscordAllowlist, allowlist_allows
 from .command_registry import sync_commands
 from .commands import build_application_commands
+from .components import (
+    build_bind_picker,
+    build_flow_runs_picker,
+    build_flow_status_buttons,
+)
 from .config import DiscordBotConfig
 from .gateway import DiscordGatewayClient
 from .interactions import (
     extract_channel_id,
     extract_command_path_and_options,
+    extract_component_custom_id,
+    extract_component_values,
     extract_guild_id,
     extract_interaction_id,
     extract_interaction_token,
+    is_component_interaction,
 )
 from .outbox import DiscordOutboxManager
 from .rest import DiscordRestClient
@@ -54,9 +63,11 @@ class DiscordBotService:
         gateway_client: Optional[DiscordGatewayClient] = None,
         state_store: Optional[DiscordStateStore] = None,
         outbox_manager: Optional[DiscordOutboxManager] = None,
+        manifest_path: Optional[Path] = None,
     ) -> None:
         self._config = config
         self._logger = logger
+        self._manifest_path = manifest_path
 
         self._rest = (
             rest_client
@@ -275,7 +286,10 @@ class DiscordBotService:
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type != "INTERACTION_CREATE":
             return
-        await self._handle_interaction(payload)
+        if is_component_interaction(payload):
+            await self._handle_component_interaction(payload)
+        else:
+            await self._handle_interaction(payload)
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
         interaction_id = extract_interaction_id(interaction_payload)
@@ -396,14 +410,51 @@ class DiscordBotService:
         options: dict[str, Any],
     ) -> None:
         raw_path = options.get("path")
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            await self._respond_ephemeral(
+        if isinstance(raw_path, str) and raw_path.strip():
+            await self._bind_with_path(
                 interaction_id,
                 interaction_token,
-                "Missing required option: path",
+                channel_id=channel_id,
+                guild_id=guild_id,
+                raw_path=raw_path.strip(),
             )
             return
 
+        repos = self._list_manifest_repos()
+        if not repos:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No repos found in manifest. Use /car bind path:<workspace> to bind manually.",
+            )
+            return
+
+        components = [build_bind_picker(repos)]
+        await self._respond_with_components(
+            interaction_id,
+            interaction_token,
+            "Select a workspace to bind:",
+            components,
+        )
+
+    def _list_manifest_repos(self) -> list[tuple[str, str]]:
+        if not self._manifest_path or not self._manifest_path.exists():
+            return []
+        try:
+            manifest = load_manifest(self._manifest_path, self._config.root)
+            return [(repo.id, str(repo.path)) for repo in manifest.repos if repo.id]
+        except Exception:
+            return []
+
+    async def _bind_with_path(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        guild_id: Optional[str],
+        raw_path: str,
+    ) -> None:
         candidate = Path(raw_path)
         if not candidate.is_absolute():
             candidate = self._config.root / candidate
@@ -550,9 +601,23 @@ class DiscordBotService:
             f"Worker: {worker_text}",
             f"Current ticket: {current_ticket or '-'}",
         ]
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
+
+        status_buttons = build_flow_status_buttons(
+            record.id,
+            record.status.value,
+            include_refresh=True,
         )
+        if status_buttons:
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                "\n".join(lines),
+                status_buttons,
+            )
+        else:
+            await self._respond_ephemeral(
+                interaction_id, interaction_token, "\n".join(lines)
+            )
 
     async def _handle_flow_runs(
         self,
@@ -580,11 +645,13 @@ class DiscordBotService:
             )
             return
 
+        run_tuples = [(record.id, record.status.value) for record in runs]
+        components = [build_flow_runs_picker(run_tuples)]
         lines = [f"Recent ticket_flow runs (limit={limit}):"]
         for record in runs:
             lines.append(f"- {record.id} [{record.status.value}]")
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
+        await self._respond_with_components(
+            interaction_id, interaction_token, "\n".join(lines), components
         )
 
     @staticmethod
@@ -1012,10 +1079,237 @@ class DiscordBotService:
             },
         )
 
+    async def _respond_with_components(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        max_len = max(int(self._config.max_message_length), 32)
+        content = text if len(text) <= max_len else f"{text[: max_len - 3]}..."
+        await self._rest.create_interaction_response(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            payload={
+                "type": 4,
+                "data": {
+                    "content": content,
+                    "flags": DISCORD_EPHEMERAL_FLAG,
+                    "components": components,
+                },
+            },
+        )
+
+    async def _handle_component_interaction(
+        self, interaction_payload: dict[str, Any]
+    ) -> None:
+        interaction_id = extract_interaction_id(interaction_payload)
+        interaction_token = extract_interaction_token(interaction_payload)
+        channel_id = extract_channel_id(interaction_payload)
+
+        if not interaction_id or not interaction_token or not channel_id:
+            return
+
+        if not allowlist_allows(interaction_payload, self._allowlist):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This Discord interaction is not authorized.",
+            )
+            return
+
+        custom_id = extract_component_custom_id(interaction_payload)
+        if not custom_id:
+            return
+
+        if custom_id == "bind_select":
+            values = extract_component_values(interaction_payload)
+            if values:
+                await self._handle_bind_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    guild_id=extract_guild_id(interaction_payload),
+                    selected_repo_id=values[0],
+                )
+            return
+
+        if custom_id == "flow_runs_select":
+            values = extract_component_values(interaction_payload)
+            if values:
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id, interaction_token, channel_id=channel_id
+                )
+                if workspace_root:
+                    await self._handle_flow_status(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": values[0]},
+                    )
+            return
+
+        if custom_id.startswith("flow:"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root:
+                await self._handle_flow_button(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    custom_id=custom_id,
+                )
+            return
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Unknown component: {custom_id}",
+        )
+
+    async def _handle_bind_selection(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        guild_id: Optional[str],
+        selected_repo_id: str,
+    ) -> None:
+        if selected_repo_id == "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No workspace selected.",
+            )
+            return
+
+        repos = self._list_manifest_repos()
+        matching = [(rid, path) for rid, path in repos if rid == selected_repo_id]
+        if not matching:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Repo not found: {selected_repo_id}",
+            )
+            return
+
+        _, workspace_path = matching[0]
+        workspace = canonicalize_path(Path(workspace_path))
+        if not workspace.exists() or not workspace.is_dir():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Workspace path does not exist: {workspace}",
+            )
+            return
+
+        await self._store.upsert_binding(
+            channel_id=channel_id,
+            guild_id=guild_id,
+            workspace_path=str(workspace),
+            repo_id=selected_repo_id,
+        )
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Bound this channel to: {selected_repo_id} ({workspace})",
+        )
+
+    async def _handle_flow_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        custom_id: str,
+    ) -> None:
+        parts = custom_id.split(":")
+        if len(parts) < 3:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Invalid button action: {custom_id}",
+            )
+            return
+
+        run_id = parts[1]
+        action = parts[2]
+
+        if action == "resume":
+            controller = build_ticket_flow_controller(workspace_root)
+            try:
+                updated = await controller.resume_flow(run_id)
+            except ValueError as exc:
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, str(exc)
+                )
+                return
+
+            ensure_result = ensure_worker(
+                workspace_root, updated.id, is_terminal=updated.status.is_terminal()
+            )
+            self._close_worker_handles(ensure_result)
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Resumed run {updated.id}.",
+            )
+        elif action == "stop":
+            controller = build_ticket_flow_controller(workspace_root)
+            try:
+                updated = await controller.stop_flow(run_id)
+            except ValueError as exc:
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, str(exc)
+                )
+                return
+
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Stop requested for run {updated.id} ({updated.status.value}).",
+            )
+        elif action == "archive":
+            try:
+                summary = archive_flow_run_artifacts(
+                    workspace_root,
+                    run_id=run_id,
+                    force=False,
+                    delete_run=False,
+                )
+            except ValueError as exc:
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, str(exc)
+                )
+                return
+
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']}).",
+            )
+        elif action == "refresh":
+            await self._handle_flow_status(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options={"run_id": run_id},
+            )
+        else:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Unknown action: {action}",
+            )
+
 
 def create_discord_bot_service(
     config: DiscordBotConfig,
     *,
     logger: logging.Logger,
+    manifest_path: Optional[Path] = None,
 ) -> DiscordBotService:
-    return DiscordBotService(config, logger=logger)
+    return DiscordBotService(config, logger=logger, manifest_path=manifest_path)

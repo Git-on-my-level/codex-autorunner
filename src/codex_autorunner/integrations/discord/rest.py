@@ -152,3 +152,17 @@ class DiscordRestClient:
             payload=payload,
         )
         return response if isinstance(response, dict) else {}
+
+    async def edit_original_interaction_response(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "PATCH",
+            f"/webhooks/{application_id}/{interaction_token}/messages/@original",
+            payload=payload,
+        )
+        return response if isinstance(response, dict) else {}

@@ -78,3 +78,42 @@ def extract_user_id(interaction_payload: dict[str, Any]) -> Optional[str]:
     if isinstance(user, dict):
         return _as_id(user.get("id"))
     return None
+
+
+def is_component_interaction(interaction_payload: dict[str, Any]) -> bool:
+    interaction_type = interaction_payload.get("type")
+    return interaction_type == 3
+
+
+def extract_component_custom_id(interaction_payload: dict[str, Any]) -> Optional[str]:
+    data = interaction_payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    return _as_id(data.get("custom_id"))
+
+
+def extract_component_values(interaction_payload: dict[str, Any]) -> list[str]:
+    data = interaction_payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    values = data.get("values")
+    if not isinstance(values, list):
+        return []
+    return [str(v) for v in values if isinstance(v, (str, int, float))]
+
+
+def extract_component_type(interaction_payload: dict[str, Any]) -> Optional[int]:
+    data = interaction_payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    component_type = data.get("component_type")
+    if isinstance(component_type, int):
+        return component_type
+    return None
+
+
+def extract_message_id(interaction_payload: dict[str, Any]) -> Optional[str]:
+    message = interaction_payload.get("message")
+    if not isinstance(message, dict):
+        return None
+    return _as_id(message.get("id"))

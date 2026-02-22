@@ -24,8 +24,8 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "path",
-                            "description": "Workspace path",
-                            "required": True,
+                            "description": "Workspace path (optional - shows picker if omitted)",
+                            "required": False,
                         }
                     ],
                 },
