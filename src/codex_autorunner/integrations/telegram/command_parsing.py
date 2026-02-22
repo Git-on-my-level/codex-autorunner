@@ -61,18 +61,11 @@ def _parse_command_from_entities(
         return None
 
     command_text = text[:command_length]
-    if not command_text.startswith("/"):
-        return None
-    command = command_text.lstrip("/")
-    if not command:
+    parsed_command = parse_chat_command(command_text, bot_username=bot_username)
+    if parsed_command is None:
         return None
     tail = text[command_entity.length :].strip()
-    if "@" in command:
-        name, _, target = command.partition("@")
-        if bot_username and target.lower() != bot_username.lower():
-            return None
-        command = name
-    return command.lower(), tail.strip(), text.strip()
+    return parsed_command.name.lower(), tail.strip(), text.strip()
 
 
 def _parse_command_from_text(
