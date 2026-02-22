@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from codex_autorunner.integrations.telegram.adapter import parse_command
 from codex_autorunner.integrations.telegram.commands_registry import (
     build_command_payloads,
     diff_command_lists,
@@ -33,6 +34,17 @@ def test_build_command_payloads_rejects_invalid_names() -> None:
     commands, invalid = build_command_payloads(specs)
     assert commands == [{"command": "review", "description": "bad"}]
     assert invalid == ["foo-bar", "a" * 33]
+
+
+def test_registration_normalizes_uppercase_but_runtime_rejects_uppercase_input() -> (
+    None
+):
+    specs = {"Review": CommandSpec("Review", "Review command", _noop_handler)}
+    commands, invalid = build_command_payloads(specs)
+
+    assert invalid == []
+    assert commands == [{"command": "review", "description": "Review command"}]
+    assert parse_command("/Review") is None
 
 
 def test_diff_command_lists_detects_changes() -> None:

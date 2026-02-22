@@ -22,6 +22,12 @@ class TelegramCommandDiff:
 def build_command_payloads(
     command_specs: Mapping[str, CommandSpec],
 ) -> tuple[list[dict[str, str]], list[str]]:
+    """Build Telegram API command payloads from command specs.
+
+    Intentional casing contract:
+    - Registration names are normalized to lowercase before validation.
+    - Runtime command parsing remains strict and rejects uppercase user input.
+    """
     commands: list[dict[str, str]] = []
     invalid: list[str] = []
     for spec in command_specs.values():
