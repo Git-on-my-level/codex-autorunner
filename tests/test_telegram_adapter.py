@@ -70,6 +70,9 @@ from codex_autorunner.integrations.telegram.api_schemas import (
     parse_update_payload,
 )
 
+# Cross-cutting command/registration invariants live in
+# tests/test_telegram_command_contract.py. This module keeps adapter-focused cases.
+
 
 def test_parse_command_basic() -> None:
     entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len("/new"))]
@@ -107,27 +110,6 @@ def test_parse_command_username_mismatch() -> None:
     assert command is None
 
 
-def test_parse_command_entity_rejects_short_mention_target() -> None:
-    token = "/resume@x"
-    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len(token))]
-    command = parse_command(
-        f"{token} 3",
-        entities=entities,
-    )
-    assert command is None
-
-
-def test_parse_command_entity_normalizes_bot_username_prefix_and_case() -> None:
-    token = "/resume@CodexBot"
-    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len(token))]
-    command = parse_command(
-        f"{token} 3",
-        entities=entities,
-        bot_username=" @codexbot ",
-    )
-    assert command == TelegramCommand(name="resume", args="3", raw="/resume@CodexBot 3")
-
-
 def test_parse_command_requires_entity() -> None:
     command = parse_command("/mnt/data/file.txt")
     assert command is None
@@ -155,11 +137,6 @@ def test_parse_command_fallback_username_match() -> None:
 
 def test_parse_command_fallback_username_mismatch() -> None:
     command = parse_command("/review@OtherBot", bot_username="CodexBot")
-    assert command is None
-
-
-def test_parse_command_fallback_rejects_short_mention_target() -> None:
-    command = parse_command("/review@x")
     assert command is None
 
 
