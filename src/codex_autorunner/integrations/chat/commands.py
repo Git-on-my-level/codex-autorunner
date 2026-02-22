@@ -41,11 +41,14 @@ def parse_chat_command(
     raw = str(text or "").strip()
     if not raw or not raw.startswith("/"):
         return None
-    token, _, remainder = raw.partition(" ")
+    parts = raw.split(None, 1)
+    token = parts[0]
+    remainder = parts[1] if len(parts) > 1 else ""
     match = _SLASH_COMMAND_RE.match(token)
     if match is None:
         return None
     name, mention = match.group(1), match.group(2)
-    if mention and bot_username and mention.lower() != bot_username.lower():
+    normalized_bot = (bot_username or "").strip().lstrip("@").lower()
+    if mention and normalized_bot and mention.lower() != normalized_bot:
         return None
     return ChatCommand(name=name, args=remainder.strip(), raw=raw)
