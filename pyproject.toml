@@ -50,6 +50,9 @@ voice = [
   "python-multipart>=0.0.9",
 ]
 github = []
+discord = [
+  "websockets>=12",
+]
 
 [project.scripts]
 codex-autorunner = "codex_autorunner.cli:app"

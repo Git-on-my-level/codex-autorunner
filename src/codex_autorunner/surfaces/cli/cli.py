@@ -8,6 +8,7 @@ from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from .commands.cleanup import register_cleanup_commands
 from .commands.describe import register_describe_commands
+from .commands.discord import register_discord_commands
 from .commands.dispatch import register_dispatch_commands
 from .commands.doctor import (
     _find_hub_server_process,  # noqa: F401
@@ -94,6 +95,7 @@ dispatch_app = typer.Typer(add_completion=False)
 inbox_app = typer.Typer(add_completion=False)
 hub_runs_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
+discord_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
 repos_app = typer.Typer(add_completion=False)
 cleanup_app = typer.Typer(add_completion=False)
@@ -171,6 +173,12 @@ hub_app.add_typer(hub_tickets_app, name="tickets")
 app.add_typer(telegram_app, name="telegram")
 register_telegram_commands(
     telegram_app,
+    raise_exit=_raise_exit,
+    require_optional_feature=_require_optional_feature,
+)
+app.add_typer(discord_app, name="discord")
+register_discord_commands(
+    discord_app,
     raise_exit=_raise_exit,
     require_optional_feature=_require_optional_feature,
 )

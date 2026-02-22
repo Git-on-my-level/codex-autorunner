@@ -57,8 +57,8 @@ from ....core.pma_transcripts import PmaTranscriptStore
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from ....integrations.chat.text_chunking import chunk_text
 from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
-from ....integrations.telegram.adapter import chunk_message
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ....integrations.telegram.state import OutboxRecord, TelegramStateStore
@@ -245,15 +245,38 @@ def build_pma_routes() -> APIRouter:
 
         sink_store = PmaActiveSinkStore(hub_root)
         sink = sink_store.load()
-        if not isinstance(sink, dict) or sink.get("kind") != "telegram":
+        if not isinstance(sink, dict):
             return
-
-        chat_id = sink.get("chat_id")
-        thread_id = sink.get("thread_id")
-        if not isinstance(chat_id, int):
+        kind = sink.get("kind")
+        platform = sink.get("platform")
+        if kind == "telegram":
+            chat_id = sink.get("chat_id")
+            thread_id = sink.get("thread_id")
+            if not isinstance(chat_id, int):
+                return
+            if thread_id is not None and not isinstance(thread_id, int):
+                thread_id = None
+        elif kind == "chat" and platform == "telegram":
+            raw_chat_id = sink.get("chat_id")
+            if isinstance(raw_chat_id, str):
+                raw_chat_id = raw_chat_id.strip()
+            if not isinstance(raw_chat_id, (str, int)):
+                return
+            try:
+                chat_id = int(raw_chat_id)
+            except (TypeError, ValueError):
+                return
+            raw_thread_id = sink.get("thread_id")
+            if isinstance(raw_thread_id, str):
+                raw_thread_id = raw_thread_id.strip()
+            try:
+                thread_id = (
+                    int(raw_thread_id) if raw_thread_id not in (None, "") else None
+                )
+            except (TypeError, ValueError):
+                thread_id = None
+        else:
             return
-        if thread_id is not None and not isinstance(thread_id, int):
-            thread_id = None
 
         state_path = _resolve_telegram_state_path(request)
         store = TelegramStateStore(state_path)
@@ -276,7 +299,7 @@ def build_pma_routes() -> APIRouter:
                 if details:
                     message = f"{header}\n\n{details}"
 
-                chunks = chunk_message(
+                chunks = chunk_text(
                     message, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
                 )
                 for idx, chunk in enumerate(chunks, 1):

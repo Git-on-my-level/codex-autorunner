@@ -57,6 +57,50 @@ class PmaActiveSinkStore:
             self._save_unlocked(payload)
         return payload
 
+    def set_chat(
+        self,
+        platform: str,
+        *,
+        chat_id: str,
+        thread_id: Optional[str] = None,
+        conversation_key: Optional[str] = None,
+    ) -> dict[str, Any]:
+        platform_norm = str(platform or "").strip().lower()
+        chat_id_norm = str(chat_id or "").strip()
+        if not platform_norm:
+            raise ValueError("platform must be non-empty")
+        if not chat_id_norm:
+            raise ValueError("chat_id must be non-empty")
+        thread_id_norm = (
+            str(thread_id).strip() if isinstance(thread_id, str) and thread_id else None
+        )
+        conversation_key_norm = (
+            str(conversation_key).strip()
+            if isinstance(conversation_key, str) and conversation_key
+            else None
+        )
+        with file_lock(self._lock_path()):
+            existing = self._load_unlocked()
+            last_delivery_turn_id = (
+                existing.get("last_delivery_turn_id")
+                if isinstance(existing, dict)
+                and isinstance(existing.get("last_delivery_turn_id"), str)
+                else None
+            )
+            payload: dict[str, Any] = {
+                "version": 2,
+                "kind": "chat",
+                "platform": platform_norm,
+                "chat_id": chat_id_norm,
+                "thread_id": thread_id_norm,
+                "updated_at": now_iso(),
+                "last_delivery_turn_id": last_delivery_turn_id,
+            }
+            if conversation_key_norm:
+                payload["conversation_key"] = conversation_key_norm
+            self._save_unlocked(payload)
+        return payload
+
     def clear(self) -> None:
         with file_lock(self._lock_path()):
             try:

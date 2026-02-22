@@ -8,7 +8,6 @@ import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
-from .....agents.registry import validate_agent_id
 from .....core.config import load_hub_config, load_repo_config
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
@@ -29,16 +28,11 @@ from .....core.flows.worker_process import (
     clear_worker_metadata,
 )
 from .....core.logging_utils import log_event
-from .....core.runtime import RuntimeContext
 from .....core.state import now_iso
 from .....core.ticket_flow_summary import build_ticket_flow_display
 from .....core.utils import atomic_write, canonicalize_path
-from .....flows.ticket_flow import build_ticket_flow_definition
-from .....integrations.agents import build_backend_orchestrator
-from .....integrations.agents.build_agent_pool import build_agent_pool
-from .....integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
+from .....flows.ticket_flow.runtime_helpers import (
+    build_ticket_flow_controller,
 )
 from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
@@ -201,43 +195,11 @@ def _discover_unregistered_worktrees(
 
 
 def _get_ticket_controller(repo_root: Path) -> FlowController:
-    db_path, artifacts_root = _flow_paths(repo_root)
-    config = load_repo_config(repo_root)
-    backend_orchestrator = build_backend_orchestrator(repo_root, config)
-    engine = RuntimeContext(
-        repo_root,
-        config=config,
-        backend_orchestrator=backend_orchestrator,
-        backend_factory=build_agent_backend_factory(repo_root, config),
-        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-        agent_id_validator=validate_agent_id,
-    )
-    agent_pool = build_agent_pool(engine.config)
-    definition = build_ticket_flow_definition(agent_pool=agent_pool)
-    definition.validate()
-    controller = FlowController(
-        definition=definition, db_path=db_path, artifacts_root=artifacts_root
-    )
-    controller.initialize()
-    return controller
+    return build_ticket_flow_controller(repo_root)
 
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
-    result = ensure_worker(repo_root, run_id)
-    if result["status"] == "reused":
-        health = result["health"]
-        _logger.info("Worker already active for run %s (pid=%s)", run_id, health.pid)
-        return
-    proc = result["proc"]
-    out = result["stdout"]
-    err = result["stderr"]
-    try:
-        # We don't track handles in Telegram commands, close in parent after spawn.
-        out.close()
-        err.close()
-    finally:
-        if proc.poll() is not None:
-            _logger.warning("Flow worker for %s exited immediately", run_id)
+    ensure_worker(repo_root, run_id)
 
 
 def _select_latest_run(

@@ -67,6 +67,7 @@ from .renderer import RenderedText, TextRenderer
 from .runtime import iter_exception_chain
 from .service import ChatBotServiceCore
 from .state_store import ChatOutboxRecord, ChatPendingApprovalRecord, ChatStateStore
+from .text_chunking import chunk_text
 from .transport import ChatTransport
 
 __all__ = [
@@ -132,4 +133,5 @@ __all__ = [
     "is_bypass_event",
     "iter_exception_chain",
     "parse_chat_command",
+    "chunk_text",
 ]

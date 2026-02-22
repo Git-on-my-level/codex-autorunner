@@ -606,6 +606,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             raise ConfigError("static_assets.max_cache_age_days must be >= 0")
     _validate_housekeeping_config(cfg)
     _validate_telegram_bot_config(cfg)
+    _validate_discord_bot_config(cfg)
 
 
 def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
@@ -691,6 +692,7 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_static_assets_config(cfg, scope="hub")
     _validate_housekeeping_config(cfg)
     _validate_telegram_bot_config(cfg)
+    _validate_discord_bot_config(cfg)
 
 
 def _validate_optional_type(
@@ -1070,3 +1072,68 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             polling_cfg.get("allowed_updates"), list
         ):
             raise ConfigError("telegram_bot.polling.allowed_updates must be a list")
+
+
+def _validate_discord_bot_config(cfg: Dict[str, Any]) -> None:
+    discord_cfg = cfg.get("discord_bot")
+    if discord_cfg is None:
+        return
+    if not isinstance(discord_cfg, dict):
+        raise ConfigError("discord_bot section must be a mapping if provided")
+    if "enabled" in discord_cfg and not isinstance(discord_cfg.get("enabled"), bool):
+        raise ConfigError("discord_bot.enabled must be boolean")
+    for key in ("bot_token_env", "app_id_env"):
+        if key in discord_cfg and not isinstance(discord_cfg.get(key), str):
+            raise ConfigError(f"discord_bot.{key} must be a string")
+    for key in ("allowed_guild_ids", "allowed_channel_ids", "allowed_user_ids"):
+        value = discord_cfg.get(key)
+        if value is not None and not isinstance(value, list):
+            raise ConfigError(f"discord_bot.{key} must be a list")
+        if isinstance(value, list):
+            for entry in value:
+                if not isinstance(entry, (str, int)):
+                    raise ConfigError(
+                        f"discord_bot.{key} must contain only string/int IDs"
+                    )
+    if "state_file" in discord_cfg and not isinstance(
+        discord_cfg.get("state_file"), str
+    ):
+        raise ConfigError("discord_bot.state_file must be a string path")
+    if "intents" in discord_cfg and not isinstance(discord_cfg.get("intents"), int):
+        raise ConfigError("discord_bot.intents must be an integer")
+    if "max_message_length" in discord_cfg and not isinstance(
+        discord_cfg.get("max_message_length"), int
+    ):
+        raise ConfigError("discord_bot.max_message_length must be an integer")
+
+    command_registration = discord_cfg.get("command_registration")
+    if command_registration is not None and not isinstance(command_registration, dict):
+        raise ConfigError("discord_bot.command_registration must be a mapping")
+    if isinstance(command_registration, dict):
+        if "enabled" in command_registration and not isinstance(
+            command_registration.get("enabled"), bool
+        ):
+            raise ConfigError(
+                "discord_bot.command_registration.enabled must be boolean"
+            )
+        scope = command_registration.get("scope")
+        if scope is not None:
+            if not isinstance(scope, str):
+                raise ConfigError(
+                    "discord_bot.command_registration.scope must be a string"
+                )
+            if scope not in {"global", "guild"}:
+                raise ConfigError(
+                    "discord_bot.command_registration.scope must be 'global' or 'guild'"
+                )
+        guild_ids = command_registration.get("guild_ids")
+        if guild_ids is not None and not isinstance(guild_ids, list):
+            raise ConfigError(
+                "discord_bot.command_registration.guild_ids must be a list"
+            )
+        if isinstance(guild_ids, list):
+            for entry in guild_ids:
+                if not isinstance(entry, (str, int)):
+                    raise ConfigError(
+                        "discord_bot.command_registration.guild_ids must contain only string/int IDs"
+                    )

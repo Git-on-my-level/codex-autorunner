@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.flows.models import FlowRunRecord
+from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
 from ...core.hub import HubSupervisor
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
@@ -26,6 +27,7 @@ from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
 from ...core.text_delta_coalescer import TextDeltaCoalescer
 from ...core.utils import build_opencode_supervisor
+from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_runtime_resources
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...integrations.app_server.threads import (
     AppServerThreadRegistry,
@@ -89,7 +91,6 @@ from .state import (
 )
 from .ticket_flow_bridge import (
     TelegramTicketFlowBridge,
-    _build_ticket_flow_runtime_resources,
 )
 from .transport import TelegramMessageTransport
 from .types import (
@@ -241,7 +242,7 @@ class TelegramBotService(
         self._runtime_services = RuntimeServices(
             app_server_supervisor=self._app_server_supervisor,
             opencode_supervisor=self._opencode_supervisor,
-            flow_runtime_builder=_build_ticket_flow_runtime_resources,
+            flow_runtime_builder=build_ticket_flow_runtime_resources,
         )
         poll_timeout = float(config.poll_timeout_seconds)
         request_timeout = config.poll_request_timeout_seconds
@@ -955,10 +956,10 @@ class TelegramBotService(
         return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
 
     def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
-        return self._ticket_flow_bridge._latest_dispatch_seq(history_dir)
+        return latest_dispatch_seq(history_dir)
 
     def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
-        return self._ticket_flow_bridge._format_ticket_flow_pause_reason(record)
+        return format_pause_reason(record)
 
     def _get_paused_ticket_flow(
         self, workspace_root: Path, preferred_run_id: Optional[str] = None

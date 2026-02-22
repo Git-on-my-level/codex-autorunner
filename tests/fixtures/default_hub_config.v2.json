@@ -55,6 +55,22 @@
     "turn_stall_timeout_seconds": 60,
     "turn_timeout_seconds": 28800
   },
+  "discord_bot": {
+    "allowed_channel_ids": [],
+    "allowed_guild_ids": [],
+    "allowed_user_ids": [],
+    "app_id_env": "CAR_DISCORD_APP_ID",
+    "bot_token_env": "CAR_DISCORD_BOT_TOKEN",
+    "command_registration": {
+      "enabled": true,
+      "guild_ids": [],
+      "scope": "guild"
+    },
+    "enabled": false,
+    "intents": 33281,
+    "max_message_length": 2000,
+    "state_file": ".codex-autorunner/discord_state.sqlite3"
+  },
   "housekeeping": {
     "dry_run": false,
     "enabled": true,

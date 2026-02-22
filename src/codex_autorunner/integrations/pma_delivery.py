@@ -4,13 +4,48 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ..core.logging_utils import log_event
 from ..core.pma_sink import PmaActiveSinkStore
 from ..core.time_utils import now_iso
-from ..integrations.telegram.adapter import chunk_message
+from ..integrations.chat.text_chunking import chunk_text
 from ..integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ..integrations.telegram.state import OutboxRecord, TelegramStateStore
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_int(value: Any) -> Optional[int]:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw and raw.lstrip("-").isdigit():
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+    return None
+
+
+def _resolve_telegram_target(
+    sink: dict[str, Any],
+) -> Optional[tuple[int, Optional[int]]]:
+    kind = sink.get("kind")
+    if kind == "telegram":
+        chat_id = sink.get("chat_id")
+        thread_id = sink.get("thread_id")
+        if not isinstance(chat_id, int):
+            return None
+        if thread_id is not None and not isinstance(thread_id, int):
+            thread_id = None
+        return chat_id, thread_id
+    if kind == "chat" and sink.get("platform") == "telegram":
+        chat_id = _parse_int(sink.get("chat_id"))
+        if chat_id is None:
+            return None
+        thread_id = _parse_int(sink.get("thread_id"))
+        return chat_id, thread_id
+    return None
 
 
 async def deliver_pma_output_to_active_sink(
@@ -32,21 +67,32 @@ async def deliver_pma_output_to_active_sink(
     sink = sink_store.load()
     if not isinstance(sink, dict):
         return False
-    if sink.get("kind") != "telegram":
+    kind = sink.get("kind")
+    platform = sink.get("platform")
+    if kind == "chat" and platform == "discord":
+        log_event(
+            logger,
+            logging.INFO,
+            "pma.delivery.discord_unavailable",
+            turn_id=turn_id,
+            sink_kind=kind,
+            platform=platform,
+            chat_id=sink.get("chat_id"),
+            thread_id=sink.get("thread_id"),
+        )
+        return False
+
+    target = _resolve_telegram_target(sink)
+    if target is None:
         return False
 
     last_delivery = sink.get("last_delivery_turn_id")
     if isinstance(last_delivery, str) and last_delivery == turn_id:
         return False
 
-    chat_id = sink.get("chat_id")
-    thread_id = sink.get("thread_id")
-    if not isinstance(chat_id, int):
-        return False
-    if thread_id is not None and not isinstance(thread_id, int):
-        thread_id = None
+    chat_id, thread_id = target
 
-    chunks = chunk_message(
+    chunks = chunk_text(
         assistant_text, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
     )
     if not chunks:

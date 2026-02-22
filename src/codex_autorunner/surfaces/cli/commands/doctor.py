@@ -26,6 +26,7 @@ from ....core.utils import (
     is_within,
     resolve_executable,
 )
+from ....integrations.discord.doctor import discord_doctor_checks
 from ....integrations.telegram.doctor import telegram_doctor_checks
 from .utils import get_car_version, raise_exit
 
@@ -283,12 +284,14 @@ def register_doctor_commands(
             telegram_checks = telegram_doctor_checks(
                 repo_config or hub_config, repo_root=repo_root
             )
+            discord_checks = discord_doctor_checks(hub_config)
             pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
             hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
 
             report = DoctorReport(
                 checks=report.checks
                 + telegram_checks
+                + discord_checks
                 + pma_checks
                 + hub_worktree_checks
             )

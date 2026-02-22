@@ -4,23 +4,22 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Awaitable, Callable, Optional
 
 from ...core.config import load_repo_config
 from ...core.flows import FlowStore
-from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
-from ...core.flows.worker_process import spawn_flow_worker
+from ...core.flows.pause_dispatch import load_latest_paused_ticket_flow_dispatch
 from ...core.logging_utils import log_event
 from ...core.runtime_services import RuntimeServices
 from ...core.utils import canonicalize_path
-from ...flows.ticket_flow import build_ticket_flow_definition
-from ...integrations.agents.build_agent_pool import build_agent_pool
+from ...flows.ticket_flow.runtime_helpers import (
+    build_ticket_flow_controller,
+    spawn_ticket_flow_worker,
+)
 from ...manifest import load_manifest
 from .adapter import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
-from .helpers import format_public_error
 from .state import parse_topic_key
 
 
@@ -246,72 +245,15 @@ class TelegramTicketFlowBridge:
     def _load_ticket_flow_pause(
         self, workspace_root: Path
     ) -> Optional[tuple[str, str, str, Optional[Path]]]:
-        db_path = workspace_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
+        snapshot = load_latest_paused_ticket_flow_dispatch(workspace_root)
+        if snapshot is None:
             return None
-        config = load_repo_config(workspace_root)
-        store = FlowStore(db_path, durable=config.durable_writes)
-        try:
-            store.initialize()
-            runs = store.list_flow_runs(
-                flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-            )
-            if not runs:
-                return None
-            latest = runs[0]
-            runs_dir_raw = latest.input_data.get("runs_dir")
-            runs_dir = (
-                Path(runs_dir_raw)
-                if isinstance(runs_dir_raw, str) and runs_dir_raw
-                else Path(".codex-autorunner/runs")
-            )
-            from ...tickets.outbox import resolve_outbox_paths
-
-            paths = resolve_outbox_paths(
-                workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
-            )
-            history_dir = paths.dispatch_history_dir
-            seq = self._latest_dispatch_seq(history_dir)
-            if not seq:
-                reason = self._format_ticket_flow_pause_reason(latest)
-                return latest.id, "paused", reason, None
-            message_path = history_dir / seq / "DISPATCH.md"
-            try:
-                content = message_path.read_text(encoding="utf-8")
-            except OSError:
-                return None
-            return latest.id, seq, content, history_dir / seq
-        finally:
-            store.close()
-
-    @staticmethod
-    def _latest_dispatch_seq(history_dir: Path) -> Optional[str]:
-        if not history_dir.exists() or not history_dir.is_dir():
-            return None
-        seqs = [
-            child.name
-            for child in history_dir.iterdir()
-            if child.is_dir()
-            and not child.name.startswith(".")
-            and child.name.isdigit()
-        ]
-        if not seqs:
-            return None
-        return max(seqs)
-
-    @staticmethod
-    def _format_ticket_flow_pause_reason(record: FlowRunRecord) -> str:
-        state = record.state or {}
-        engine = state.get("ticket_engine") or {}
-        reason_raw = (
-            engine.get("reason") or record.error_message or "Paused without details."
+        return (
+            snapshot.run_id,
+            snapshot.dispatch_seq,
+            snapshot.dispatch_markdown,
+            snapshot.dispatch_dir,
         )
-        reason = (
-            format_public_error(str(reason_raw))
-            if reason_raw
-            else "Paused without details."
-        )
-        return f"Reason: {reason}"
 
     def get_paused_ticket_flow(
         self, workspace_root: Path, preferred_run_id: Optional[str] = None
@@ -345,10 +287,10 @@ class TelegramTicketFlowBridge:
                     workspace_root
                 )
             else:
-                controller = _ticket_controller_for(workspace_root)
+                controller = build_ticket_flow_controller(workspace_root)
             updated = await controller.resume_flow(run_id)
             if updated:
-                _spawn_ticket_worker(workspace_root, updated.id, self._logger)
+                spawn_ticket_flow_worker(workspace_root, updated.id, self._logger)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -628,58 +570,3 @@ class TelegramTicketFlowBridge:
                 thread_id=thread_id,
                 reply_to=None,
             )
-
-
-def _ticket_controller_for(repo_root: Path) -> FlowController:
-    resources = _build_ticket_flow_runtime_resources(repo_root)
-    return resources.controller
-
-
-def _build_ticket_flow_runtime_resources(repo_root: Path):
-    repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
-    from ...agents.registry import validate_agent_id
-    from ...core.config import load_repo_config
-    from ...core.runtime import RuntimeContext
-    from ...integrations.agents import build_backend_orchestrator
-    from ...integrations.agents.wiring import (
-        build_agent_backend_factory,
-        build_app_server_supervisor_factory,
-    )
-
-    config = load_repo_config(repo_root)
-    backend_orchestrator = build_backend_orchestrator(repo_root, config)
-    engine = RuntimeContext(
-        repo_root,
-        config=config,
-        backend_orchestrator=backend_orchestrator,
-        backend_factory=build_agent_backend_factory(repo_root, config),
-        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-        agent_id_validator=validate_agent_id,
-    )
-    agent_pool = build_agent_pool(engine.config)
-    definition = build_ticket_flow_definition(agent_pool=agent_pool)
-    definition.validate()
-    controller = FlowController(
-        definition=definition,
-        db_path=db_path,
-        artifacts_root=artifacts_root,
-        durable=config.durable_writes,
-    )
-    controller.initialize()
-    return SimpleNamespace(controller=controller, agent_pool=agent_pool)
-
-
-def _spawn_ticket_worker(repo_root: Path, run_id: str, logger: logging.Logger) -> None:
-    try:
-        proc, out, err = spawn_flow_worker(repo_root, run_id)
-        out.close()
-        err.close()
-        logger.info("Started ticket_flow worker for %s (pid=%s)", run_id, proc.pid)
-    except Exception as exc:
-        logger.warning(
-            "ticket_flow.worker.spawn_failed",
-            exc_info=exc,
-            extra={"run_id": run_id},
-        )

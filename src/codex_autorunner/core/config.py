@@ -206,6 +206,26 @@ def _default_telegram_bot_section(
     return config
 
 
+def _default_discord_bot_section() -> Dict[str, Any]:
+    """Build the default discord_bot section."""
+    return {
+        "enabled": False,
+        "bot_token_env": "CAR_DISCORD_BOT_TOKEN",
+        "app_id_env": "CAR_DISCORD_APP_ID",
+        "allowed_guild_ids": [],
+        "allowed_channel_ids": [],
+        "allowed_user_ids": [],
+        "command_registration": {
+            "enabled": True,
+            "scope": "guild",
+            "guild_ids": [],
+        },
+        "state_file": ".codex-autorunner/discord_state.sqlite3",
+        "intents": 33281,
+        "max_message_length": 2000,
+    }
+
+
 def _default_terminal_section() -> Dict[str, Any]:
     """Build the default terminal section."""
     return {
@@ -497,6 +517,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "telegram_bot": _default_telegram_bot_section(
         shell_enabled=True, include_agent_timeouts=True
     ),
+    "discord_bot": _default_discord_bot_section(),
     "terminal": _default_terminal_section(),
     "voice": {
         "enabled": True,
@@ -570,6 +591,7 @@ REPO_SHARED_KEYS = {
     "app_server",
     "opencode",
     "telegram_bot",
+    "discord_bot",
     "terminal",
     "static_assets",
     "housekeeping",
@@ -621,6 +643,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "telegram_bot": _default_telegram_bot_section(
         shell_enabled=False, include_agent_timeouts=False
     ),
+    "discord_bot": _default_discord_bot_section(),
     "hub": {
         "repos_root": ".",
         # Hub-managed git worktrees live here (depth=1 scan). Each worktree is treated as a repo.
@@ -1700,11 +1723,17 @@ TELEGRAM_ENV_OVERRIDES = (
     "CAR_TELEGRAM_APP_SERVER_COMMAND",
 )
 
+DISCORD_ENV_OVERRIDES = (
+    "CAR_DISCORD_BOT_TOKEN",
+    "CAR_DISCORD_APP_ID",
+)
+
 
 def collect_env_overrides(
     *,
     env: Optional[Mapping[str, str]] = None,
     include_telegram: bool = False,
+    include_discord: bool = False,
 ) -> list[str]:
     source = env if env is not None else os.environ
     overrides: list[str] = []
@@ -1726,6 +1755,10 @@ def collect_env_overrides(
             overrides.append(key)
     if include_telegram:
         for key in TELEGRAM_ENV_OVERRIDES:
+            if _has_value(key):
+                overrides.append(key)
+    if include_discord:
+        for key in DISCORD_ENV_OVERRIDES:
             if _has_value(key):
                 overrides.append(key)
     return overrides
