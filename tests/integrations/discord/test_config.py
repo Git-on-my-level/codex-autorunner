@@ -9,7 +9,11 @@ from codex_autorunner.integrations.discord.config import (
 )
 
 
-def test_discord_bot_config_disabled_allows_missing_env(tmp_path) -> None:
+def test_discord_bot_config_disabled_allows_missing_env(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CAR_DISCORD_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("CAR_DISCORD_APP_ID", raising=False)
     cfg = DiscordBotConfig.from_raw(root=tmp_path, raw={"enabled": False})
     assert cfg.enabled is False
     assert cfg.bot_token is None

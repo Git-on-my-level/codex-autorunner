@@ -14,7 +14,11 @@ set -euo pipefail
 #   TELEGRAM_LABEL         launchd label for telegram bot (default: ${LABEL}.telegram)
 #   TELEGRAM_PLIST_PATH    telegram plist path (default: ~/Library/LaunchAgents/${TELEGRAM_LABEL}.plist)
 #   TELEGRAM_LOG           telegram stdout/stderr log path (default: <hub_root>/.codex-autorunner/codex-autorunner-telegram.log)
-#   UPDATE_TARGET          Which services to restart (both|web|telegram; default: both)
+#   ENABLE_DISCORD_BOT     Enable discord bot LaunchAgent (auto|true|false; default: auto)
+#   DISCORD_LABEL          launchd label for discord bot (default: ${LABEL}.discord)
+#   DISCORD_PLIST_PATH     discord plist path (default: ~/Library/LaunchAgents/${DISCORD_LABEL}.plist)
+#   DISCORD_LOG            discord stdout/stderr log path (default: <hub_root>/.codex-autorunner/codex-autorunner-discord.log)
+#   UPDATE_TARGET          Which services to restart (both|web|telegram|discord; default: both)
 #   PIPX_ROOT              pipx root (default: ~/.local/pipx)
 #   PIPX_VENV              existing pipx venv path (default: ${PIPX_ROOT}/venvs/codex-autorunner)
 #   PIPX_PYTHON            python used for new venvs (default: pyenv python3, then Homebrew)
@@ -28,6 +32,7 @@ set -euo pipefail
 #   HEALTH_STATIC_PATH     static asset path (default: derived from base_path)
 #   HEALTH_CHECK_STATIC    static asset check (auto|true|false; default: auto)
 #   HEALTH_CHECK_TELEGRAM  telegram launchd check (auto|true|false; default: auto)
+#   HEALTH_CHECK_DISCORD   discord launchd check (auto|true|false; default: auto)
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
 #   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
@@ -42,6 +47,9 @@ UPDATE_STATUS_PATH="${UPDATE_STATUS_PATH:-}"
 TELEGRAM_LABEL="${TELEGRAM_LABEL:-${LABEL}.telegram}"
 TELEGRAM_PLIST_PATH="${TELEGRAM_PLIST_PATH:-$HOME/Library/LaunchAgents/${TELEGRAM_LABEL}.plist}"
 ENABLE_TELEGRAM_BOT="${ENABLE_TELEGRAM_BOT:-auto}"
+DISCORD_LABEL="${DISCORD_LABEL:-${LABEL}.discord}"
+DISCORD_PLIST_PATH="${DISCORD_PLIST_PATH:-$HOME/Library/LaunchAgents/${DISCORD_LABEL}.plist}"
+ENABLE_DISCORD_BOT="${ENABLE_DISCORD_BOT:-auto}"
 UPDATE_TARGET="${UPDATE_TARGET:-both}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,6 +71,7 @@ HEALTH_PATH="${HEALTH_PATH:-}"
 HEALTH_STATIC_PATH="${HEALTH_STATIC_PATH:-}"
 HEALTH_CHECK_STATIC="${HEALTH_CHECK_STATIC:-auto}"
 HEALTH_CHECK_TELEGRAM="${HEALTH_CHECK_TELEGRAM:-auto}"
+HEALTH_CHECK_DISCORD="${HEALTH_CHECK_DISCORD:-auto}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
@@ -117,8 +126,11 @@ normalize_update_target() {
     telegram|tg|bot)
       echo "telegram"
       ;;
+    discord|dc)
+      echo "discord"
+      ;;
     *)
-      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, or telegram."
+      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, telegram, or discord."
       ;;
   esac
 }
@@ -307,20 +319,28 @@ fi
 UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
 HEALTH_CHECK_STATIC="$(normalize_bool "${HEALTH_CHECK_STATIC}")"
 HEALTH_CHECK_TELEGRAM="$(normalize_bool "${HEALTH_CHECK_TELEGRAM}")"
+HEALTH_CHECK_DISCORD="$(normalize_bool "${HEALTH_CHECK_DISCORD}")"
 should_reload_hub=false
 should_reload_telegram=false
+should_reload_discord=false
 telegram_health_reason=""
 telegram_health_checked=false
+discord_health_reason=""
+discord_health_checked=false
 case "${UPDATE_TARGET}" in
   both)
     should_reload_hub=true
     should_reload_telegram=true
+    should_reload_discord=true
     ;;
   web)
     should_reload_hub=true
     ;;
   telegram)
     should_reload_telegram=true
+    ;;
+  discord)
+    should_reload_discord=true
     ;;
 esac
 
@@ -558,6 +578,12 @@ _telegram_service_pid() {
   launchctl print "${telegram_domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
 }
 
+_discord_service_pid() {
+  local discord_domain
+  discord_domain="gui/$(id -u)/${DISCORD_LABEL}"
+  launchctl print "${discord_domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
+}
+
 _wait_pid_exit() {
   local pid start
   pid="$1"
@@ -629,6 +655,57 @@ _reload_telegram() {
   launchctl kickstart -k "${telegram_domain}" >/dev/null
 }
 
+_reload_discord() {
+  local hub_root discord_state discord_domain missing_envs
+  _require_gui_domain
+  hub_root="$(_plist_arg_value path)"
+  discord_state="$(_discord_state "${hub_root}")"
+
+  if [[ "${discord_state}" == "enabled" ]]; then
+    if [[ -z "${hub_root}" ]]; then
+      echo "Discord enabled but unable to derive hub root; skipping discord LaunchAgent." >&2
+      return 0
+    fi
+    if [[ ! -f "${DISCORD_PLIST_PATH}" ]]; then
+      _write_discord_plist "${hub_root}"
+    fi
+    _ensure_discord_plist_uses_current_venv
+    PLIST_PATH="${DISCORD_PLIST_PATH}" _ensure_plist_has_opencode_path
+    _normalize_plist_process_limits "${DISCORD_PLIST_PATH}"
+    discord_domain="gui/$(id -u)/${DISCORD_LABEL}"
+    launchctl unload -w "${DISCORD_PLIST_PATH}" >/dev/null 2>&1 || true
+    launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
+    launchctl kickstart -k "${discord_domain}" >/dev/null
+    return 0
+  fi
+
+  if [[ "${discord_state}" == "disabled" || "${discord_state}" == "missing_env" ]]; then
+    if [[ -f "${DISCORD_PLIST_PATH}" ]]; then
+      if [[ "${discord_state}" == "missing_env" ]]; then
+        missing_envs="$(_discord_missing_env_names "${hub_root}")"
+        if [[ -n "${missing_envs}" ]]; then
+          echo "Discord enabled but missing env vars (${missing_envs}); unloading launchd service ${DISCORD_LABEL}..." >&2
+        else
+          echo "Discord enabled but missing required env vars; unloading launchd service ${DISCORD_LABEL}..." >&2
+        fi
+      else
+        echo "Discord disabled; unloading launchd service ${DISCORD_LABEL}..."
+      fi
+      launchctl unload -w "${DISCORD_PLIST_PATH}" >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+
+  if [[ ! -f "${DISCORD_PLIST_PATH}" ]]; then
+    return 0
+  fi
+  _normalize_plist_process_limits "${DISCORD_PLIST_PATH}"
+  discord_domain="gui/$(id -u)/${DISCORD_LABEL}"
+  launchctl unload -w "${DISCORD_PLIST_PATH}" >/dev/null 2>&1 || true
+  launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
+  launchctl kickstart -k "${discord_domain}" >/dev/null
+}
+
 _telegram_state() {
   local root cfg
   if [[ "${ENABLE_TELEGRAM_BOT}" == "1" || "${ENABLE_TELEGRAM_BOT}" == "true" ]]; then
@@ -660,6 +737,110 @@ _telegram_state() {
   else
     echo "disabled"
   fi
+}
+
+_env_var_is_set() {
+  local name
+  name="$1"
+  if [[ ! "${name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    return 1
+  fi
+  [[ -n "${!name:-}" ]]
+}
+
+_discord_config() {
+  local root cfg
+  root="$1"
+  if [[ -z "${root}" ]]; then
+    echo "unknown CAR_DISCORD_BOT_TOKEN CAR_DISCORD_APP_ID"
+    return 0
+  fi
+  cfg="${root}/.codex-autorunner/config.yml"
+  if [[ ! -f "${cfg}" ]]; then
+    echo "unknown CAR_DISCORD_BOT_TOKEN CAR_DISCORD_APP_ID"
+    return 0
+  fi
+  "${HELPER_PYTHON}" - "$cfg" <<'PY'
+import sys
+from pathlib import Path
+
+DEFAULT_BOT = "CAR_DISCORD_BOT_TOKEN"
+DEFAULT_APP = "CAR_DISCORD_APP_ID"
+
+cfg = Path(sys.argv[1])
+try:
+    import yaml
+except Exception:
+    print(f"unknown {DEFAULT_BOT} {DEFAULT_APP}")
+    raise SystemExit(0)
+
+try:
+    data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+except Exception:
+    print(f"unknown {DEFAULT_BOT} {DEFAULT_APP}")
+    raise SystemExit(0)
+
+if not isinstance(data, dict):
+    print(f"unknown {DEFAULT_BOT} {DEFAULT_APP}")
+    raise SystemExit(0)
+
+discord = data.get("discord_bot")
+if not isinstance(discord, dict):
+    print(f"disabled {DEFAULT_BOT} {DEFAULT_APP}")
+    raise SystemExit(0)
+
+enabled = bool(discord.get("enabled", False))
+bot_env = str(discord.get("bot_token_env", DEFAULT_BOT)).strip() or DEFAULT_BOT
+app_env = str(discord.get("app_id_env", DEFAULT_APP)).strip() or DEFAULT_APP
+state = "enabled" if enabled else "disabled"
+print(f"{state} {bot_env} {app_env}")
+PY
+}
+
+_discord_missing_env_names() {
+  local root cfg_state bot_env app_env missing
+  root="$1"
+  read -r cfg_state bot_env app_env <<<"$(_discord_config "${root}")"
+  missing=()
+  if ! _env_var_is_set "${bot_env}"; then
+    missing+=( "${bot_env}" )
+  fi
+  if ! _env_var_is_set "${app_env}"; then
+    missing+=( "${app_env}" )
+  fi
+  printf '%s\n' "${missing[*]:-}"
+}
+
+_discord_state() {
+  local root cfg_state bot_env app_env
+  root="$1"
+  read -r cfg_state bot_env app_env <<<"$(_discord_config "${root}")"
+
+  if [[ "${ENABLE_DISCORD_BOT}" == "0" || "${ENABLE_DISCORD_BOT}" == "false" ]]; then
+    echo "disabled"
+    return 0
+  fi
+  if [[ "${ENABLE_DISCORD_BOT}" == "1" || "${ENABLE_DISCORD_BOT}" == "true" ]]; then
+    cfg_state="enabled"
+    if [[ -z "${bot_env}" ]]; then
+      bot_env="CAR_DISCORD_BOT_TOKEN"
+    fi
+    if [[ -z "${app_env}" ]]; then
+      app_env="CAR_DISCORD_APP_ID"
+    fi
+  fi
+
+  if [[ "${cfg_state}" != "enabled" ]]; then
+    echo "${cfg_state}"
+    return 0
+  fi
+
+  if ! _env_var_is_set "${bot_env}" || ! _env_var_is_set "${app_env}"; then
+    echo "missing_env"
+    return 0
+  fi
+
+  echo "enabled"
 }
 
 _ensure_telegram_plist_uses_current_venv() {
@@ -748,6 +929,97 @@ _write_telegram_plist() {
   <string>${telegram_log}</string>
   <key>StandardErrorPath</key>
   <string>${telegram_log}</string>
+</dict>
+</plist>
+EOF
+}
+
+_ensure_discord_plist_uses_current_venv() {
+  local desired_bin
+  desired_bin="${CURRENT_VENV_LINK}/bin/codex-autorunner"
+
+  if [[ ! -f "${DISCORD_PLIST_PATH}" ]]; then
+    return 0
+  fi
+
+  if grep -q "${desired_bin}" "${DISCORD_PLIST_PATH}"; then
+    return 0
+  fi
+
+  echo "Updating discord plist to use ${desired_bin}..."
+  "${HELPER_PYTHON}" - <<PY
+from __future__ import annotations
+
+import plistlib
+import re
+from pathlib import Path
+
+plist_path = Path("${DISCORD_PLIST_PATH}")
+desired = "${desired_bin}"
+
+with plist_path.open("rb") as handle:
+    plist = plistlib.load(handle)
+
+program_args = plist.get("ProgramArguments")
+if not isinstance(program_args, list):
+    raise SystemExit("Discord plist missing ProgramArguments list.")
+
+pattern = re.compile(r"(^|[\\s;])[^\\s;]*codex-autorunner(?= discord start\\b)")
+updated = False
+for idx, arg in enumerate(program_args):
+    if not isinstance(arg, str):
+        continue
+    if "discord start" not in arg or "codex-autorunner" not in arg:
+        continue
+    new_arg, count = pattern.subn(lambda m: f"{m.group(1)}{desired}", arg, count=1)
+    if count == 0 and "codex-autorunner discord start" in arg:
+        new_arg = arg.replace("codex-autorunner discord start", f"{desired} discord start", 1)
+        count = 1
+    if count:
+        program_args[idx] = new_arg
+        updated = True
+    break
+
+if not updated:
+    raise SystemExit(
+        "Unable to update discord plist automatically; expected to find a 'codex-autorunner discord start' command."
+    )
+
+with plist_path.open("wb") as handle:
+    plistlib.dump(plist, handle)
+PY
+}
+
+_write_discord_plist() {
+  local root discord_log
+  root="$1"
+  discord_log="${DISCORD_LOG:-${root}/.codex-autorunner/codex-autorunner-discord.log}"
+  echo "Writing launchd plist to ${DISCORD_PLIST_PATH}..."
+  mkdir -p "$(dirname "${DISCORD_PLIST_PATH}")"
+  mkdir -p "${root}/.codex-autorunner"
+  cat > "${DISCORD_PLIST_PATH}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${DISCORD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-lc</string>
+    <string>PATH=${OPENCODE_BIN}:${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; ${CURRENT_VENV_LINK}/bin/codex-autorunner discord start --path ${root}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${root}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${discord_log}</string>
+  <key>StandardErrorPath</key>
+  <string>${discord_log}</string>
 </dict>
 </plist>
 EOF
@@ -902,6 +1174,22 @@ _should_check_telegram() {
   [[ "${telegram_state}" != "disabled" ]]
 }
 
+_should_check_discord() {
+  local hub_root discord_state
+  if [[ "${HEALTH_CHECK_DISCORD}" == "false" ]]; then
+    return 1
+  fi
+  if [[ "${HEALTH_CHECK_DISCORD}" == "true" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${DISCORD_PLIST_PATH}" ]]; then
+    return 1
+  fi
+  hub_root="$(_plist_arg_value path)"
+  discord_state="$(_discord_state "${hub_root}")"
+  [[ "${discord_state}" != "disabled" && "${discord_state}" != "missing_env" ]]
+}
+
 _health_check_once() {
   local port url static_url hub_root
   port="$(_plist_arg_value port)"
@@ -977,6 +1265,35 @@ _wait_telegram_healthy() {
   done
 }
 
+_discord_check_once() {
+  local discord_domain pid
+  discord_domain="gui/$(id -u)/${DISCORD_LABEL}"
+  pid="$(_discord_service_pid)"
+  if [[ -n "${pid}" && "${pid}" != "0" ]] && kill -0 "${pid}" >/dev/null 2>&1; then
+    return 0
+  fi
+  launchctl print "${discord_domain}" 2>/dev/null | awk '
+    /state = running/ {running=1}
+    /pid =/ && $3 != "0" {has_pid=1}
+    END {exit !(running || has_pid)}
+  '
+}
+
+_wait_discord_healthy() {
+  local start now
+  start="$(date +%s)"
+  while true; do
+    if _discord_check_once; then
+      return 0
+    fi
+    now="$(date +%s)"
+    if (( now - start >= HEALTH_TIMEOUT_SECONDS )); then
+      return 1
+    fi
+    sleep "${HEALTH_INTERVAL_SECONDS}"
+  done
+}
+
 _check_hub_health() {
   if [[ "${should_reload_hub}" != "true" ]]; then
     echo "Skipping hub health check (update target: ${UPDATE_TARGET})."
@@ -1010,6 +1327,43 @@ _check_telegram_health() {
   return 1
 }
 
+_check_discord_health() {
+  local hub_root discord_state missing_envs
+  if [[ "${should_reload_discord}" != "true" ]]; then
+    discord_health_reason="Discord update skipped (target: ${UPDATE_TARGET})."
+    return 0
+  fi
+
+  hub_root="$(_plist_arg_value path)"
+  discord_state="$(_discord_state "${hub_root}")"
+  if [[ "${discord_state}" == "disabled" ]]; then
+    discord_health_reason="Discord health check skipped (disabled or not configured)."
+    return 0
+  fi
+  if [[ "${discord_state}" == "missing_env" ]]; then
+    missing_envs="$(_discord_missing_env_names "${hub_root}")"
+    if [[ -n "${missing_envs}" ]]; then
+      discord_health_reason="Discord health check skipped (missing env vars: ${missing_envs})."
+    else
+      discord_health_reason="Discord health check skipped (missing required env vars)."
+    fi
+    return 0
+  fi
+  if ! _should_check_discord; then
+    discord_health_reason="Discord health check skipped (disabled or not configured)."
+    return 0
+  fi
+  if _wait_discord_healthy; then
+    discord_health_checked=true
+    discord_health_reason="Discord restarted and healthy."
+    echo "Discord health check OK."
+    return 0
+  fi
+  discord_health_reason="Discord health check failed."
+  echo "Discord health check failed." >&2
+  return 1
+}
+
 _rollback() {
   local message
   message="$1"
@@ -1024,6 +1378,9 @@ _rollback() {
   fi
   if [[ "${should_reload_telegram}" == "true" ]]; then
     _reload_telegram || true
+  fi
+  if [[ "${should_reload_discord}" == "true" ]]; then
+    _reload_discord || true
   fi
 }
 
@@ -1057,12 +1414,18 @@ fi
 if [[ "${should_reload_telegram}" == "true" ]]; then
   _reload_telegram
 fi
+if [[ "${should_reload_discord}" == "true" ]]; then
+  _reload_discord
+fi
 
 health_ok=true
 if ! _check_hub_health; then
   health_ok=false
 fi
 if ! _check_telegram_health; then
+  health_ok=false
+fi
+if ! _check_discord_health; then
   health_ok=false
 fi
 
@@ -1075,6 +1438,9 @@ if [[ "${health_ok}" == "true" ]]; then
   if [[ -n "${telegram_health_reason}" ]]; then
     status_msg+=" ${telegram_health_reason}"
   fi
+  if [[ -n "${discord_health_reason}" ]]; then
+    status_msg+=" ${discord_health_reason}"
+  fi
   echo "Updating global car CLI..."
   pipx install --force "${PACKAGE_SRC}"
   write_status "ok" "${status_msg}"
@@ -1082,13 +1448,17 @@ else
   _rollback "Health check failed; rolling back to ${current_target}..."
   rollback_hub_ok=true
   rollback_telegram_ok=true
+  rollback_discord_ok=true
   if ! _check_hub_health; then
     rollback_hub_ok=false
   fi
   if ! _check_telegram_health; then
     rollback_telegram_ok=false
   fi
-  if [[ "${rollback_hub_ok}" == "true" && "${rollback_telegram_ok}" == "true" ]]; then
+  if ! _check_discord_health; then
+    rollback_discord_ok=false
+  fi
+  if [[ "${rollback_hub_ok}" == "true" && "${rollback_telegram_ok}" == "true" && "${rollback_discord_ok}" == "true" ]]; then
     echo "Rollback OK; service restored." >&2
     write_status "rollback" "Update failed; rollback succeeded."
   else
@@ -1098,6 +1468,9 @@ else
     fi
     if [[ "${rollback_telegram_ok}" != "true" ]]; then
       failed_checks+=(telegram)
+    fi
+    if [[ "${rollback_discord_ok}" != "true" ]]; then
+      failed_checks+=(discord)
     fi
     if (( ${#failed_checks[@]} > 0 )); then
       failed_summary="Health check failed after rollback (${failed_checks[*]})."
