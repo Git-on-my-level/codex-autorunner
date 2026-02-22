@@ -5,19 +5,16 @@ from codex_autorunner.integrations.telegram.commands_registry import (
     diff_command_lists,
 )
 from codex_autorunner.integrations.telegram.handlers.commands import CommandSpec
+from tests.fixtures.telegram_command_helpers import noop_handler
 
 # Cross-cutting parse/registration contract cases live in
 # tests/test_telegram_command_contract.py. Keep this module registry-specific.
 
 
-async def _noop_handler(*_args, **_kwargs) -> None:
-    return None
-
-
 def test_build_command_payloads_normalizes_names() -> None:
     specs = {
-        "Run": CommandSpec("Run", "Start a task", _noop_handler),
-        "Status": CommandSpec("Status", " Show status ", _noop_handler),
+        "Run": CommandSpec("Run", "Start a task", noop_handler),
+        "Status": CommandSpec("Status", " Show status ", noop_handler),
     }
     commands, invalid = build_command_payloads(specs)
     assert invalid == []
@@ -29,9 +26,9 @@ def test_build_command_payloads_normalizes_names() -> None:
 
 def test_build_command_payloads_rejects_invalid_names() -> None:
     specs = {
-        "Invalid-Hyphen": CommandSpec("foo-bar", "bad", _noop_handler),
-        "Normalized-Upper": CommandSpec("Review", "bad", _noop_handler),
-        "Invalid-Long": CommandSpec("a" * 33, "bad", _noop_handler),
+        "Invalid-Hyphen": CommandSpec("foo-bar", "bad", noop_handler),
+        "Normalized-Upper": CommandSpec("Review", "bad", noop_handler),
+        "Invalid-Long": CommandSpec("a" * 33, "bad", noop_handler),
     }
     commands, invalid = build_command_payloads(specs)
     assert commands == [{"command": "review", "description": "bad"}]
