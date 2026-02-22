@@ -413,6 +413,13 @@ class DiscordBotService:
                 "This channel is not bound. Run `/car bind path:<...>` first.",
             )
             return None
+        if bool(binding.get("pma_enabled", False)):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "PMA mode is enabled for this channel. Run `/pma off` before using `/car flow` commands.",
+            )
+            return None
         workspace_raw = binding.get("workspace_path")
         if not isinstance(workspace_raw, str) or not workspace_raw.strip():
             await self._respond_ephemeral(
