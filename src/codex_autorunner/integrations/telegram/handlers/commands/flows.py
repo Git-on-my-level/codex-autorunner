@@ -1027,10 +1027,6 @@ class FlowCommands(SharedHelpers):
             rows.append(
                 [
                     InlineButton(
-                        "Restart",
-                        _flow_callback_data("restart"),
-                    ),
-                    InlineButton(
                         "Archive",
                         _flow_callback_data("archive"),
                     ),
