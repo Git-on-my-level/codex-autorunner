@@ -376,6 +376,7 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
+                guild_id=guild_id,
                 command_path=command_path,
             )
             return
@@ -462,6 +463,13 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 "This channel is not bound. Run `/car bind path:<...>` first.",
+            )
+            return None
+        if bool(binding.get("pma_enabled", False)):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "PMA mode is enabled for this channel. Run `/pma off` before using `/car flow` commands.",
             )
             return None
         workspace_raw = binding.get("workspace_path")
@@ -826,6 +834,7 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        guild_id: Optional[str],
         command_path: tuple[str, ...],
     ) -> None:
         if not self._config.pma_enabled:
@@ -840,7 +849,10 @@ class DiscordBotService:
 
         if subcommand == "on":
             await self._handle_pma_on(
-                interaction_id, interaction_token, channel_id=channel_id
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                guild_id=guild_id,
             )
         elif subcommand == "off":
             await self._handle_pma_off(
@@ -863,18 +875,28 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        guild_id: Optional[str],
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
+        if binding is not None and binding.get("pma_enabled", False):
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                "PMA mode is already enabled for this channel. Use /pma off to exit.",
             )
             return
 
-        prev_workspace = binding.get("workspace_path")
-        prev_repo_id = binding.get("repo_id")
+        prev_workspace = binding.get("workspace_path") if binding is not None else None
+        prev_repo_id = binding.get("repo_id") if binding is not None else None
+
+        if binding is None:
+            # Match Telegram behavior: /pma on can activate PMA on unbound channels.
+            await self._store.upsert_binding(
+                channel_id=channel_id,
+                guild_id=guild_id,
+                workspace_path=str(self._config.root),
+                repo_id=None,
+            )
 
         await self._store.update_pma_state(
             channel_id=channel_id,
@@ -889,7 +911,11 @@ class DiscordBotService:
             chat_id=channel_id,
         )
 
-        hint = "Use /pma off to exit. Previous binding saved."
+        hint = (
+            "Use /pma off to exit. Previous binding saved."
+            if prev_workspace
+            else "Use /pma off to exit."
+        )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
@@ -905,10 +931,18 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            sink_store = PmaActiveSinkStore(self._config.root)
+            sink = sink_store.load()
+            if (
+                sink is not None
+                and sink.get("platform") == "discord"
+                and sink.get("chat_id") == channel_id
+            ):
+                sink_store.clear()
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                "PMA mode disabled. Back to repo mode.",
             )
             return
 
@@ -940,6 +974,7 @@ class DiscordBotService:
             )
             hint = f"Restored binding to {prev_workspace}."
         else:
+            await self._store.delete_binding(channel_id=channel_id)
             hint = "Back to repo mode."
 
         await self._respond_ephemeral(
@@ -957,10 +992,23 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            sink_store = PmaActiveSinkStore(self._config.root)
+            sink = sink_store.load()
+            active_here = (
+                sink is not None
+                and sink.get("platform") == "discord"
+                and sink.get("chat_id") == channel_id
+            )
+            status = "enabled" if active_here else "disabled"
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                "\n".join(
+                    [
+                        f"PMA mode: {status}",
+                        "Current workspace: unbound",
+                    ]
+                ),
             )
             return
 

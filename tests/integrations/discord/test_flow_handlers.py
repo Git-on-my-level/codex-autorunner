@@ -270,3 +270,43 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         assert "resumed run" in content.lower()
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_commands_blocked_while_pma_enabled(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "PMA mode is enabled" in content
+        assert "/pma off" in content
+    finally:
+        await store.close()
