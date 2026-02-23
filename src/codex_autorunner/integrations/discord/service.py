@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ...core.config import load_repo_config
 from ...core.filebox import (
@@ -22,15 +23,29 @@ from ...core.flows import (
 )
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ...core.logging_utils import log_event
+from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ...core.pma_sink import PmaActiveSinkStore
+from ...core.ports.run_event import Completed, Failed, Started
+from ...core.state import RunnerState
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
+from ...integrations.agents.backend_orchestrator import BackendOrchestrator
+from ...integrations.app_server.threads import (
+    FILE_CHAT_OPENCODE_PREFIX,
+    FILE_CHAT_PREFIX,
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+)
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
 )
-from ...integrations.chat.models import ChatEvent, ChatInteractionEvent
+from ...integrations.chat.models import (
+    ChatEvent,
+    ChatInteractionEvent,
+    ChatMessageEvent,
+)
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
 from .adapter import DiscordChatAdapter
@@ -67,6 +82,8 @@ DISCORD_EPHEMERAL_FLAG = 64
 PAUSE_SCAN_INTERVAL_SECONDS = 5.0
 FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = 20
+MESSAGE_TURN_APPROVAL_POLICY = "never"
+MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
 
 
 class DiscordBotService:
@@ -82,10 +99,14 @@ class DiscordBotService:
         manifest_path: Optional[Path] = None,
         chat_adapter: Optional[DiscordChatAdapter] = None,
         dispatcher: Optional[ChatDispatcher] = None,
+        backend_orchestrator_factory: Optional[
+            Callable[[Path], BackendOrchestrator]
+        ] = None,
     ) -> None:
         self._config = config
         self._logger = logger
         self._manifest_path = manifest_path
+        self._backend_orchestrator_factory = backend_orchestrator_factory
 
         self._rest = (
             rest_client
@@ -143,6 +164,30 @@ class DiscordBotService:
                 event, context
             ),
         )
+        self._backend_orchestrators: dict[str, BackendOrchestrator] = {}
+        self._backend_lock = asyncio.Lock()
+        self._hub_config_path: Optional[Path] = None
+        generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
+        if generated_hub_config.exists():
+            self._hub_config_path = generated_hub_config
+        else:
+            root_hub_config = self._config.root / "codex-autorunner.yml"
+            if root_hub_config.exists():
+                self._hub_config_path = root_hub_config
+
+        self._hub_supervisor = None
+        try:
+            from ...core.hub import HubSupervisor
+
+            self._hub_supervisor = HubSupervisor.from_path(self._config.root)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.pma.hub_supervisor.unavailable",
+                hub_root=str(self._config.root),
+                exc=exc,
+            )
 
     async def run_forever(self) -> None:
         await self._store.initialize()
@@ -170,6 +215,8 @@ class DiscordBotService:
             )
             await self._gateway.run(self._on_dispatch)
         finally:
+            with contextlib.suppress(Exception):
+                await self._dispatcher.wait_idle()
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await dispatcher_loop_task
@@ -192,6 +239,10 @@ class DiscordBotService:
     ) -> None:
         if isinstance(event, ChatInteractionEvent):
             await self._handle_normalized_interaction(event, context)
+            return
+        if isinstance(event, ChatMessageEvent):
+            await self._handle_message_event(event, context)
+            return
 
     def _allowlist_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
         fake_payload = {
@@ -273,6 +324,280 @@ class DiscordBotService:
                 interaction_token,
                 "An unexpected error occurred. Please try again later.",
             )
+
+    async def _handle_message_event(
+        self,
+        event: ChatMessageEvent,
+        context: DispatchContext,
+    ) -> None:
+        channel_id = context.chat_id
+        text = (event.text or "").strip()
+        if not text:
+            return
+        if text.startswith("/"):
+            return
+
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._send_channel_message(
+                channel_id,
+                {
+                    "content": "This channel is not bound. Run `/car bind path:<workspace>` or `/pma on`.",
+                },
+            )
+            return
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            await self._send_channel_message(
+                channel_id,
+                {"content": "Binding is invalid. Run `/car bind path:<workspace>`."},
+            )
+            return
+
+        workspace_root = canonicalize_path(Path(workspace_raw))
+        if not workspace_root.exists() or not workspace_root.is_dir():
+            await self._send_channel_message(
+                channel_id,
+                {"content": f"Workspace path does not exist: {workspace_root}"},
+            )
+            return
+
+        if not pma_enabled:
+            paused = await self._find_paused_flow_run(workspace_root)
+            if paused is not None:
+                reply_path = self._write_user_reply(workspace_root, paused, text)
+                controller = build_ticket_flow_controller(workspace_root)
+                try:
+                    updated = await controller.resume_flow(paused.id)
+                except ValueError as exc:
+                    await self._send_channel_message(
+                        channel_id,
+                        {"content": f"Failed to resume paused run: {exc}"},
+                    )
+                    return
+                ensure_result = ensure_worker(
+                    workspace_root,
+                    updated.id,
+                    is_terminal=updated.status.is_terminal(),
+                )
+                self._close_worker_handles(ensure_result)
+                await self._send_channel_message(
+                    channel_id,
+                    {
+                        "content": (
+                            f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
+                        )
+                    },
+                )
+                return
+
+        prompt_text = text
+        if pma_enabled:
+            try:
+                snapshot = await build_hub_snapshot(
+                    self._hub_supervisor, hub_root=self._config.root
+                )
+                prompt_base = load_pma_prompt(self._config.root)
+                prompt_text = format_pma_prompt(
+                    prompt_base,
+                    snapshot,
+                    text,
+                    hub_root=self._config.root,
+                )
+                PmaActiveSinkStore(self._config.root).set_chat(
+                    platform="discord",
+                    chat_id=channel_id,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.pma.prompt_build.failed",
+                    channel_id=channel_id,
+                    exc=exc,
+                )
+                await self._send_channel_message(
+                    channel_id,
+                    {"content": "Failed to build PMA context. Please try again."},
+                )
+                return
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+        model_override = binding.get("model_override")
+        if not isinstance(model_override, str) or not model_override.strip():
+            model_override = None
+        reasoning_effort = binding.get("reasoning_effort")
+        if not isinstance(reasoning_effort, str) or not reasoning_effort.strip():
+            reasoning_effort = None
+
+        session_key = self._build_message_session_key(
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            pma_enabled=pma_enabled,
+            agent=agent,
+        )
+        try:
+            response_text = await self._run_agent_turn_for_message(
+                workspace_root=workspace_root,
+                prompt_text=prompt_text,
+                agent=agent,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                session_key=session_key,
+                orchestrator_channel_key=(
+                    channel_id if not pma_enabled else f"pma:{channel_id}"
+                ),
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.turn.failed",
+                channel_id=channel_id,
+                workspace_root=str(workspace_root),
+                agent=agent,
+                exc=exc,
+            )
+            await self._send_channel_message(
+                channel_id,
+                {"content": f"Turn failed: {exc}"},
+            )
+            return
+
+        chunks = chunk_discord_message(
+            response_text or "(No response text returned.)",
+            max_len=self._config.max_message_length,
+            with_numbering=True,
+        )
+        if not chunks:
+            chunks = ["(No response text returned.)"]
+        for chunk in chunks:
+            await self._send_channel_message(channel_id, {"content": chunk})
+
+    async def _find_paused_flow_run(
+        self, workspace_root: Path
+    ) -> Optional[FlowRunRecord]:
+        try:
+            store = self._open_flow_store(workspace_root)
+        except Exception:
+            return None
+        try:
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+            return next(
+                (record for record in runs if record.status == FlowRunStatus.PAUSED),
+                None,
+            )
+        except Exception:
+            return None
+        finally:
+            store.close()
+
+    def _build_message_session_key(
+        self,
+        *,
+        channel_id: str,
+        workspace_root: Path,
+        pma_enabled: bool,
+        agent: str,
+    ) -> str:
+        if pma_enabled:
+            return PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+        digest = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:12]
+        prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
+        return f"{prefix}discord.{channel_id}.{digest}"
+
+    def _build_runner_state(
+        self,
+        *,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+    ) -> RunnerState:
+        return RunnerState(
+            last_run_id=None,
+            status="idle",
+            last_exit_code=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            autorunner_agent_override=agent,
+            autorunner_model_override=model_override,
+            autorunner_effort_override=reasoning_effort,
+            autorunner_approval_policy=MESSAGE_TURN_APPROVAL_POLICY,
+            autorunner_sandbox_mode=MESSAGE_TURN_SANDBOX_POLICY,
+        )
+
+    async def _orchestrator_for_workspace(
+        self, workspace_root: Path, *, channel_id: str
+    ) -> BackendOrchestrator:
+        key = f"{channel_id}:{workspace_root}"
+        async with self._backend_lock:
+            existing = self._backend_orchestrators.get(key)
+            if existing is not None:
+                return existing
+            if self._backend_orchestrator_factory is not None:
+                orchestrator = self._backend_orchestrator_factory(workspace_root)
+            else:
+                repo_config = load_repo_config(
+                    workspace_root,
+                    hub_path=self._hub_config_path,
+                )
+                orchestrator = BackendOrchestrator(
+                    repo_root=workspace_root,
+                    config=repo_config,
+                    logger=self._logger,
+                )
+            self._backend_orchestrators[key] = orchestrator
+            return orchestrator
+
+    async def _run_agent_turn_for_message(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        orchestrator = await self._orchestrator_for_workspace(
+            workspace_root, channel_id=orchestrator_channel_key
+        )
+        state = self._build_runner_state(
+            agent=agent,
+            model_override=model_override,
+            reasoning_effort=reasoning_effort,
+        )
+        known_session = orchestrator.get_thread_id(session_key)
+        final_message = ""
+        error_message = None
+        session_from_events = known_session
+        async for run_event in orchestrator.run_turn(
+            agent_id=agent,
+            state=state,
+            prompt=prompt_text,
+            model=model_override,
+            reasoning=reasoning_effort,
+            session_key=session_key,
+            session_id=known_session,
+            workspace_root=workspace_root,
+        ):
+            if isinstance(run_event, Started):
+                if isinstance(run_event.session_id, str) and run_event.session_id:
+                    session_from_events = run_event.session_id
+            elif isinstance(run_event, Completed):
+                final_message = run_event.final_message or final_message
+            elif isinstance(run_event, Failed):
+                error_message = run_event.error_message or "Turn failed"
+        if session_from_events:
+            orchestrator.set_thread_id(session_key, session_from_events)
+        if error_message:
+            raise RuntimeError(error_message)
+        return final_message
 
     async def _handle_normalized_car_command(
         self,
@@ -583,6 +908,12 @@ class DiscordBotService:
         if self._owns_store:
             with contextlib.suppress(Exception):
                 await self._store.close()
+        async with self._backend_lock:
+            orchestrators = list(self._backend_orchestrators.values())
+            self._backend_orchestrators.clear()
+        for orchestrator in orchestrators:
+            with contextlib.suppress(Exception):
+                await orchestrator.close_all()
 
     async def _watch_ticket_flow_pauses(self) -> None:
         while True:
@@ -680,7 +1011,9 @@ class DiscordBotService:
         if event_type == "INTERACTION_CREATE":
             await self._handle_interaction(payload)
         elif event_type == "MESSAGE_CREATE":
-            self._chat_adapter.enqueue_message_event(payload)
+            event = self._chat_adapter.parse_message_event(payload)
+            if event is not None:
+                await self._dispatcher.dispatch(event, self._handle_chat_event)
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
         interaction_id = extract_interaction_id(interaction_payload)

@@ -121,6 +121,8 @@ In an allowed Discord channel:
 2. Bind workspace with `/car bind path:<workspace-path>`.
 3. Run `/car flow runs` or `/car flow status`.
 
+Note: `/car` and `/pma` responses are ephemeral (visible only to the invoking user).
+
 If the bot replies with an authorization error, check allowlists first.
 
 ### Step 7: Discord Permission Checklist
@@ -138,7 +140,7 @@ You usually do not need broad admin permissions for baseline CAR Discord usage.
 
 ## PMA (Proactive Mode Agent) Support
 
-Discord supports PMA mode, enabling interactive agent conversations directly in Discord channels.
+Discord supports PMA mode for routing PMA output to a channel, managing PMA state with slash commands, and running free-text turns from channel messages.
 
 ### Enabling PMA Mode
 
@@ -147,6 +149,28 @@ In any allowlisted Discord channel:
 1. Run `/pma on` to enable PMA mode for the channel.
 2. If the channel was previously bound to a workspace, that binding is saved and restored when PMA is disabled.
 3. PMA output from the agent will be delivered to the channel.
+
+### How to Actually Chat With an Agent Today
+
+Telegram-style back-and-forth is now supported in Discord.
+
+For repo/workspace mode:
+
+1. Run `/car bind path:<workspace-path>`.
+2. Optional: set agent/model with `/car agent ...` and `/car model ...`.
+3. Send a normal channel message (do not start with `/`).
+4. The bot runs a turn and replies in-channel (non-ephemeral).
+
+For PMA mode:
+
+1. Run `/pma on`.
+2. Send a normal channel message (do not start with `/`).
+3. The bot runs a PMA turn and replies in-channel.
+4. Run `/pma off` to return to the previous workspace binding.
+
+Notes:
+- Slash command responses remain ephemeral.
+- If a ticket flow run is paused in repo mode, the next free-text message is treated as the flow reply and resumes that run.
 
 ### PMA Commands
 
