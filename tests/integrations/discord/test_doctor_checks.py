@@ -77,6 +77,61 @@ def test_discord_doctor_checks_empty_allowlists_is_actionable_failure(
     assert "Configure at least one" in allowlist_check.fix
 
 
+def test_discord_doctor_checks_legacy_message_content_intent_is_actionable_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
+
+    hub_config = _load_hub_with_discord(
+        tmp_path,
+        {
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "allowed_guild_ids": ["123"],
+            "intents": 513,
+        },
+    )
+
+    checks = discord_doctor_checks(hub_config)
+    intents_check = next(
+        check for check in checks if check.check_id == "discord.intents"
+    )
+
+    assert intents_check.passed is True
+    assert intents_check.severity == "warning"
+    assert intents_check.fix is not None
+    assert "33281" in intents_check.fix
+
+
+def test_discord_doctor_checks_missing_message_content_intent_is_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
+
+    hub_config = _load_hub_with_discord(
+        tmp_path,
+        {
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "allowed_guild_ids": ["123"],
+            "intents": 1,
+        },
+    )
+
+    checks = discord_doctor_checks(hub_config)
+    intents_check = next(
+        check for check in checks if check.check_id == "discord.intents"
+    )
+
+    assert intents_check.passed is False
+    assert intents_check.fix is not None
+    assert "32768" in intents_check.fix
+
+
 def test_discord_doctor_checks_disabled_reports_status(
     tmp_path: Path,
 ) -> None:

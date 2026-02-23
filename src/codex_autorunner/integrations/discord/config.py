@@ -22,6 +22,7 @@ DEFAULT_INTENTS = (
     | DISCORD_INTENT_GUILD_MESSAGES
     | DISCORD_INTENT_MESSAGE_CONTENT
 )
+LEGACY_DEFAULT_INTENTS = DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES
 
 
 class DiscordBotConfigError(Exception):
@@ -95,6 +96,8 @@ class DiscordBotConfig:
             raise DiscordBotConfigError("discord_bot.intents must be an integer")
         if intents_value < 0:
             raise DiscordBotConfigError("discord_bot.intents must be >= 0")
+        if intents_value == LEGACY_DEFAULT_INTENTS:
+            intents_value = DEFAULT_INTENTS
 
         max_message_length_value = cfg.get(
             "max_message_length", DISCORD_MAX_MESSAGE_LENGTH

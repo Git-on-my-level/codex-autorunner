@@ -15,12 +15,11 @@ from .rest import DiscordRestClient
 
 try:
     import websockets
-    from websockets.exceptions import ConnectionClosed as WebSocketConnectionClosed
+    from websockets.exceptions import ConnectionClosed
 except (
     ImportError
 ):  # pragma: no cover - optional dependency gate handles this at runtime.
     websockets = None  # type: ignore[assignment]
-    WebSocketConnectionClosed = None  # type: ignore[assignment,misc]
 
     class ConnectionClosed(Exception):
         pass
@@ -127,7 +126,7 @@ class DiscordGatewayClient:
                     await self._run_connection(websocket, on_dispatch)
             except asyncio.CancelledError:
                 raise
-            except (WebSocketConnectionClosed, ConnectionClosed):
+            except ConnectionClosed:
                 self._logger.info("Discord gateway socket closed; reconnecting")
             except Exception as exc:
                 self._logger.warning("Discord gateway error; reconnecting: %s", exc)
