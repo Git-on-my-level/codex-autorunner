@@ -74,6 +74,7 @@ from .interactions import (
     extract_interaction_id,
     extract_interaction_token,
     extract_user_id,
+    is_component_interaction,
 )
 from .outbox import DiscordOutboxManager
 from .rendering import (
@@ -1027,6 +1028,10 @@ class DiscordBotService:
                 await self._dispatcher.dispatch(event, self._handle_chat_event)
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
+        if is_component_interaction(interaction_payload):
+            await self._handle_component_interaction(interaction_payload)
+            return
+
         interaction_id = extract_interaction_id(interaction_payload)
         interaction_token = extract_interaction_token(interaction_payload)
         channel_id = extract_channel_id(interaction_payload)
