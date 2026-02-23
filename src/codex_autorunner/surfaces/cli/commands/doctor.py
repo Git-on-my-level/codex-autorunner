@@ -269,6 +269,11 @@ def register_doctor_commands(
         json_output: bool = typer.Option(
             False, "--json", help="Output JSON for scripting"
         ),
+        dev: bool = typer.Option(
+            False,
+            "--dev",
+            help="Include developer-focused parity checks",
+        ),
     ):
         if ctx.invoked_subcommand:
             return
@@ -288,18 +293,18 @@ def register_doctor_commands(
             telegram_checks = telegram_doctor_checks(
                 repo_config or hub_config, repo_root=repo_root
             )
-            chat_checks = chat_doctor_checks(repo_root=repo_root)
             discord_checks = discord_doctor_checks(hub_config)
             pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
             hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
+            chat_checks = chat_doctor_checks(repo_root=repo_root) if dev else []
 
             report = DoctorReport(
                 checks=report.checks
                 + telegram_checks
-                + chat_checks
                 + discord_checks
                 + pma_checks
                 + hub_worktree_checks
+                + chat_checks
             )
         except ConfigError as exc:
             raise_exit(str(exc), cause=exc)

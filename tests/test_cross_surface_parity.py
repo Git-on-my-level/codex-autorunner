@@ -343,20 +343,17 @@ def test_cross_surface_parity_report(hub_env) -> None:
     cli_doctor_text = Path(
         "src/codex_autorunner/surfaces/cli/commands/doctor.py"
     ).read_text(encoding="utf-8")
-    doctor_chat_parity_guardrail = (
-        _contains_all(
-            chat_doctor_text,
-            "chat.parity_contract",
-            "run_parity_checks(",
-        )
-        and "chat_doctor_checks(" in cli_doctor_text
-    )
+    doctor_chat_parity_guardrail = _contains_all(
+        chat_doctor_text,
+        "chat.parity_contract",
+        "run_parity_checks(",
+    ) and _contains_all(cli_doctor_text, "chat_doctor_checks(", "--dev", "if dev")
     checks.append(
         ParityCheck(
             entrypoint="doctor",
             primitive="chat_parity_contract_guardrail",
             passed=doctor_chat_parity_guardrail,
-            details="doctor includes chat parity contract checks",
+            details="doctor gates chat parity contract checks behind --dev",
         )
     )
 

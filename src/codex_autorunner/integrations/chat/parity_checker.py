@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
+import ast
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from .command_contract import COMMAND_CONTRACT, CommandContractEntry
 
@@ -16,6 +16,7 @@ _TELEGRAM_TRIGGER_MODE_PATH = Path(
 _TELEGRAM_MESSAGES_PATH = Path(
     "src/codex_autorunner/integrations/telegram/handlers/messages.py"
 )
+_FUNCTION_NODE_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 @dataclass(frozen=True)
@@ -36,21 +37,25 @@ def run_parity_checks(
     telegram_trigger_mode_text = _read_text(root / _TELEGRAM_TRIGGER_MODE_PATH)
     telegram_messages_text = _read_text(root / _TELEGRAM_MESSAGES_PATH)
 
+    discord_service_ast = _parse_module(discord_service_text)
+    telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
+    telegram_messages_ast = _parse_module(telegram_messages_text)
+
     return (
         _check_discord_contract_commands_routed(
             contract=contract,
-            discord_service_text=discord_service_text,
+            discord_service_ast=discord_service_ast,
         ),
         _check_discord_known_commands_not_in_generic_fallback(
-            discord_service_text=discord_service_text,
+            discord_service_ast=discord_service_ast,
         ),
         _check_discord_canonicalize_command_ingress_usage(
-            discord_service_text=discord_service_text,
+            discord_service_ast=discord_service_ast,
         ),
         _check_shared_plain_text_turn_policy_usage(
-            discord_service_text=discord_service_text,
-            telegram_trigger_mode_text=telegram_trigger_mode_text,
-            telegram_messages_text=telegram_messages_text,
+            discord_service_ast=discord_service_ast,
+            telegram_trigger_mode_ast=telegram_trigger_mode_ast,
+            telegram_messages_ast=telegram_messages_ast,
         ),
     )
 
@@ -66,15 +71,22 @@ def _read_text(path: Path) -> str:
         return ""
 
 
+def _parse_module(source: str) -> ast.Module | None:
+    try:
+        return ast.parse(source)
+    except SyntaxError:
+        return None
+
+
 def _check_discord_contract_commands_routed(
     *,
     contract: Sequence[CommandContractEntry],
-    discord_service_text: str,
+    discord_service_ast: ast.Module | None,
 ) -> ParityCheckResult:
     missing_ids: list[str] = []
 
     for entry in contract:
-        if _is_command_routed_in_discord_service(entry, discord_service_text):
+        if _is_command_routed_in_discord_service(entry, discord_service_ast):
             continue
         missing_ids.append(entry.id)
 
@@ -97,55 +109,68 @@ def _check_discord_contract_commands_routed(
 
 def _is_command_routed_in_discord_service(
     entry: CommandContractEntry,
-    discord_service_text: str,
+    discord_service_ast: ast.Module | None,
 ) -> bool:
+    if discord_service_ast is None:
+        return False
+
     prefix = entry.path[0] if entry.path else ""
 
     if prefix == "car":
-        pattern = (
-            r"(?:if|elif)\s+command_path\s*==\s*"
-            + _tuple_literal_pattern(entry.path)
-            + r"\s*:"
-        )
-        return re.search(pattern, discord_service_text) is not None
+        return _module_has_command_path_route(discord_service_ast, entry.path)
 
     if prefix == "pma":
         subcommand = entry.path[1] if len(entry.path) > 1 else ""
-        pattern = (
-            r'(?:if|elif)\s+subcommand\s*==\s*"' + re.escape(subcommand) + r'"\s*:'
-        )
-        return len(re.findall(pattern, discord_service_text)) >= 2
+        return _module_has_pma_subcommand_route(discord_service_ast, subcommand)
 
     return False
 
 
 def _check_discord_known_commands_not_in_generic_fallback(
     *,
-    discord_service_text: str,
+    discord_service_ast: ast.Module | None,
 ) -> ParityCheckResult:
+    normalized_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_normalized_interaction",
+    )
+    interaction_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_interaction",
+    )
+
     checks = {
-        "normalized_car_prefix_guard": (
-            'if ingress is not None and ingress.command_path[:1] == ("car",):'
-            in discord_service_text
+        "normalized_car_prefix_guard": _has_prefix_guard_in_functions(
+            normalized_handlers,
+            prefix="car",
+            require_ingress_not_none=True,
         ),
-        "normalized_pma_prefix_guard": (
-            'elif ingress is not None and ingress.command_path[:1] == ("pma",):'
-            in discord_service_text
+        "normalized_pma_prefix_guard": _has_prefix_guard_in_functions(
+            normalized_handlers,
+            prefix="pma",
+            require_ingress_not_none=True,
         ),
-        "interaction_car_prefix_guard": (
-            'if ingress.command_path[:1] == ("car",):' in discord_service_text
+        "interaction_car_prefix_guard": _has_prefix_guard_in_functions(
+            interaction_handlers,
+            prefix="car",
+            require_ingress_not_none=False,
         ),
-        "interaction_pma_prefix_guard": (
-            'if ingress.command_path[:1] == ("pma",):' in discord_service_text
+        "interaction_pma_prefix_guard": _has_prefix_guard_in_functions(
+            interaction_handlers,
+            prefix="pma",
+            require_ingress_not_none=False,
         ),
-        "generic_fallback_present": (
-            "Command not implemented yet for Discord." in discord_service_text
+        "generic_fallback_present": _module_has_string_literal(
+            discord_service_ast,
+            exact="Command not implemented yet for Discord.",
         ),
-        "car_specific_fallback_present": (
-            "Unknown car subcommand:" in discord_service_text
+        "car_specific_fallback_present": _module_has_string_literal(
+            discord_service_ast,
+            contains="Unknown car subcommand:",
         ),
-        "pma_specific_fallback_present": (
-            "Unknown PMA subcommand. Use on, off, or status." in discord_service_text
+        "pma_specific_fallback_present": _module_has_string_literal(
+            discord_service_ast,
+            exact="Unknown PMA subcommand. Use on, off, or status.",
         ),
     }
 
@@ -170,32 +195,50 @@ def _check_discord_known_commands_not_in_generic_fallback(
 
 def _check_discord_canonicalize_command_ingress_usage(
     *,
-    discord_service_text: str,
+    discord_service_ast: ast.Module | None,
 ) -> ParityCheckResult:
+    normalized_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_normalized_interaction",
+    )
+    interaction_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_interaction",
+    )
+
     checks = {
-        "import_present": (
-            "integrations.chat.command_ingress import canonicalize_command_ingress"
-            in discord_service_text
+        "import_present": _module_imports_name(
+            discord_service_ast,
+            module_suffix="integrations.chat.command_ingress",
+            name="canonicalize_command_ingress",
         ),
-        "normalized_interaction_call_present": bool(
-            re.search(
-                (
-                    r"canonicalize_command_ingress\(\s*"
-                    r"command=payload_data\.get\(\"command\"\)\s*,\s*"
-                    r"options=payload_data\.get\(\"options\"\)\s*,?\s*\)"
-                ),
-                discord_service_text,
-            )
+        "normalized_interaction_call_present": _has_call_in_functions(
+            normalized_handlers,
+            callee_name="canonicalize_command_ingress",
+            required_keywords={
+                "command": lambda expr: _is_dict_get(
+                    expr,
+                    object_name="payload_data",
+                    key="command",
+                )
+                or isinstance(expr, ast.Name),
+                "options": lambda expr: _is_dict_get(
+                    expr,
+                    object_name="payload_data",
+                    key="options",
+                )
+                or isinstance(expr, ast.Name),
+            },
         ),
-        "interaction_call_present": bool(
-            re.search(
-                (
-                    r"canonicalize_command_ingress\(\s*"
-                    r"command_path=command_path\s*,\s*"
-                    r"options=options\s*,?\s*\)"
-                ),
-                discord_service_text,
-            )
+        "interaction_call_present": _has_call_in_functions(
+            interaction_handlers,
+            callee_name="canonicalize_command_ingress",
+            required_keywords={
+                "command_path": lambda expr: _is_name(expr, "command_path")
+                or isinstance(expr, ast.Name),
+                "options": lambda expr: _is_name(expr, "options")
+                or isinstance(expr, ast.Name),
+            },
         ),
     }
 
@@ -220,27 +263,38 @@ def _check_discord_canonicalize_command_ingress_usage(
 
 def _check_shared_plain_text_turn_policy_usage(
     *,
-    discord_service_text: str,
-    telegram_trigger_mode_text: str,
-    telegram_messages_text: str,
+    discord_service_ast: ast.Module | None,
+    telegram_trigger_mode_ast: ast.Module | None,
+    telegram_messages_ast: ast.Module | None,
 ) -> ParityCheckResult:
+    discord_message_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_message_event",
+    )
+    telegram_trigger_handlers = _find_functions_by_name(
+        telegram_trigger_mode_ast,
+        "should_trigger_run",
+    )
+
     checks = {
-        "discord_shared_policy_call": _contains_all(
-            discord_service_text,
-            "should_trigger_plain_text_turn(",
-            "PlainTextTurnContext(",
-            'mode="always"',
+        "discord_shared_policy_call": _has_plain_text_turn_policy_call(
+            discord_message_handlers,
+            mode="always",
         ),
-        "telegram_shared_policy_call": _contains_all(
-            telegram_trigger_mode_text,
-            "should_trigger_plain_text_turn(",
-            "PlainTextTurnContext(",
-            'mode="mentions"',
+        "telegram_shared_policy_call": _has_plain_text_turn_policy_call(
+            telegram_trigger_handlers,
+            mode="mentions",
         ),
-        "telegram_trigger_bridge": _contains_all(
-            telegram_messages_text,
-            "from ..trigger_mode import should_trigger_run",
-            "should_trigger_run(",
+        "telegram_trigger_bridge": (
+            _module_imports_name(
+                telegram_messages_ast,
+                module_suffix="trigger_mode",
+                name="should_trigger_run",
+            )
+            and _module_has_call(
+                telegram_messages_ast,
+                callee_name="should_trigger_run",
+            )
         ),
     }
 
@@ -265,12 +319,375 @@ def _check_shared_plain_text_turn_policy_usage(
     )
 
 
-def _contains_all(text: str, *snippets: str) -> bool:
-    return all(snippet in text for snippet in snippets)
+def _find_functions_by_name(
+    tree: ast.Module | None,
+    name: str,
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    if tree is None:
+        return ()
+    return tuple(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, _FUNCTION_NODE_TYPES) and node.name == name
+    )
 
 
-def _tuple_literal_pattern(path: tuple[str, ...]) -> str:
-    parts = [r'"' + re.escape(part) + r'"' for part in path]
-    if len(parts) == 1:
-        return r"\(\s*" + parts[0] + r"\s*,\s*\)"
-    return r"\(\s*" + r"\s*,\s*".join(parts) + r"\s*\)"
+def _module_has_command_path_route(tree: ast.Module, path: tuple[str, ...]) -> bool:
+    for compare in _iter_compares(tree):
+        if _compare_matches_command_path_eq_tuple(compare, path):
+            return True
+    return False
+
+
+def _module_has_pma_subcommand_route(tree: ast.Module, subcommand: str) -> bool:
+    expected_functions = (
+        "_handle_pma_command",
+        "_handle_pma_command_from_normalized",
+    )
+
+    for function_name in expected_functions:
+        functions = _find_functions_by_name(tree, function_name)
+        if not functions:
+            return False
+        if not any(
+            subcommand in _extract_subcommand_compares(function)
+            for function in functions
+        ):
+            return False
+
+    return True
+
+
+def _extract_subcommand_compares(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    values: set[str] = set()
+    for compare in _iter_compares(function):
+        literal = _extract_name_eq_string(compare, "subcommand")
+        if literal is not None:
+            values.add(literal)
+    return values
+
+
+def _has_prefix_guard_in_functions(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    prefix: str,
+    require_ingress_not_none: bool,
+) -> bool:
+    for function in functions:
+        has_none_guard = (
+            _function_has_ingress_none_return_guard(function)
+            if require_ingress_not_none
+            else False
+        )
+        for node in ast.walk(function):
+            if not isinstance(node, ast.If):
+                continue
+            has_prefix = _condition_has_ingress_prefix_guard(node.test, prefix=prefix)
+            if not has_prefix:
+                continue
+            if require_ingress_not_none and not _condition_has_ingress_not_none_guard(
+                node.test
+            ):
+                if not has_none_guard:
+                    continue
+            return True
+    return False
+
+
+def _condition_has_ingress_prefix_guard(test: ast.expr, *, prefix: str) -> bool:
+    for term in _iter_boolean_terms(test):
+        if _compare_matches_ingress_prefix(term, prefix):
+            return True
+    return False
+
+
+def _condition_has_ingress_not_none_guard(test: ast.expr) -> bool:
+    for term in _iter_boolean_terms(test):
+        if _is_name(term, "ingress"):
+            return True
+        if not isinstance(term, ast.Compare):
+            continue
+        if len(term.ops) != 1 or not isinstance(term.ops[0], ast.IsNot):
+            continue
+        left = term.left
+        right = term.comparators[0]
+        if (_is_name(left, "ingress") and _is_none(right)) or (
+            _is_name(right, "ingress") and _is_none(left)
+        ):
+            return True
+    return False
+
+
+def _condition_has_ingress_is_none_guard(test: ast.expr) -> bool:
+    for term in _iter_boolean_terms(test):
+        if not isinstance(term, ast.Compare):
+            continue
+        if len(term.ops) != 1 or not isinstance(term.ops[0], ast.Is):
+            continue
+        left = term.left
+        right = term.comparators[0]
+        if (_is_name(left, "ingress") and _is_none(right)) or (
+            _is_name(right, "ingress") and _is_none(left)
+        ):
+            return True
+    return False
+
+
+def _function_has_ingress_none_return_guard(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    for node in ast.walk(function):
+        if not isinstance(node, ast.If):
+            continue
+        if not _condition_has_ingress_is_none_guard(node.test):
+            continue
+        if any(isinstance(statement, ast.Return) for statement in node.body):
+            return True
+    return False
+
+
+def _iter_boolean_terms(expr: ast.expr) -> Iterable[ast.expr]:
+    if isinstance(expr, ast.BoolOp):
+        for value in expr.values:
+            yield from _iter_boolean_terms(value)
+        return
+    yield expr
+
+
+def _compare_matches_ingress_prefix(expr: ast.expr, prefix: str) -> bool:
+    if not isinstance(expr, ast.Compare):
+        return False
+    if len(expr.ops) != 1 or not isinstance(expr.ops[0], ast.Eq):
+        return False
+    left = expr.left
+    right = expr.comparators[0]
+    return (
+        _is_ingress_command_path_prefix_slice(left)
+        and _is_singleton_string_tuple(right, prefix)
+    ) or (
+        _is_ingress_command_path_prefix_slice(right)
+        and _is_singleton_string_tuple(left, prefix)
+    )
+
+
+def _is_ingress_command_path_prefix_slice(expr: ast.expr) -> bool:
+    if not isinstance(expr, ast.Subscript):
+        return False
+    if not (
+        isinstance(expr.value, ast.Attribute)
+        and expr.value.attr == "command_path"
+        and _is_name(expr.value.value, "ingress")
+    ):
+        return False
+    return _is_first_item_slice(expr.slice)
+
+
+def _is_first_item_slice(slice_node: ast.slice) -> bool:
+    # ast.Index exists in older Python versions and wraps the real slice node.
+    index_type = getattr(ast, "Index", None)
+    if index_type is not None and isinstance(slice_node, index_type):
+        slice_node = slice_node.value  # type: ignore[assignment]
+    if not isinstance(slice_node, ast.Slice):
+        return False
+    lower_ok = slice_node.lower is None or _is_int_constant(slice_node.lower, 0)
+    upper_ok = _is_int_constant(slice_node.upper, 1)
+    step_ok = slice_node.step is None
+    return lower_ok and upper_ok and step_ok
+
+
+def _module_has_string_literal(
+    tree: ast.Module | None,
+    *,
+    exact: str | None = None,
+    contains: str | None = None,
+) -> bool:
+    if tree is None:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if exact is not None and node.value == exact:
+            return True
+        if contains is not None and contains in node.value:
+            return True
+    return False
+
+
+def _module_imports_name(
+    tree: ast.Module | None,
+    *,
+    module_suffix: str,
+    name: str,
+) -> bool:
+    if tree is None:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        module = node.module or ""
+        if not module.endswith(module_suffix):
+            continue
+        for imported in node.names:
+            if imported.name == name:
+                return True
+    return False
+
+
+def _has_call_in_functions(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    callee_name: str,
+    required_keywords: dict[str, Callable[[ast.expr], bool]],
+) -> bool:
+    for function in functions:
+        for call in _iter_calls(function):
+            if _call_name(call.func) != callee_name:
+                continue
+            if _call_has_required_keywords(call, required_keywords):
+                return True
+    return False
+
+
+def _has_plain_text_turn_policy_call(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    mode: str,
+) -> bool:
+    return _has_call_in_functions(
+        functions,
+        callee_name="should_trigger_plain_text_turn",
+        required_keywords={
+            "mode": lambda expr: _is_string_constant(expr, mode),
+            "context": _is_plain_text_context_call,
+        },
+    )
+
+
+def _is_plain_text_context_call(expr: ast.expr) -> bool:
+    if isinstance(expr, ast.Name):
+        return True
+    if not isinstance(expr, ast.Call):
+        return False
+    return _call_name(expr.func) == "PlainTextTurnContext"
+
+
+def _module_has_call(tree: ast.Module | None, *, callee_name: str) -> bool:
+    if tree is None:
+        return False
+    for call in _iter_calls(tree):
+        if _call_name(call.func) == callee_name:
+            return True
+    return False
+
+
+def _call_has_required_keywords(
+    call: ast.Call,
+    required_keywords: dict[str, Callable[[ast.expr], bool]],
+) -> bool:
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg is not None}
+    for key, predicate in required_keywords.items():
+        value = keywords.get(key)
+        if value is None or not predicate(value):
+            return False
+    return True
+
+
+def _call_name(expr: ast.expr) -> str | None:
+    if isinstance(expr, ast.Name):
+        return expr.id
+    if isinstance(expr, ast.Attribute):
+        return expr.attr
+    return None
+
+
+def _is_dict_get(expr: ast.expr, *, object_name: str, key: str) -> bool:
+    if not isinstance(expr, ast.Call):
+        return False
+    if not (
+        isinstance(expr.func, ast.Attribute)
+        and expr.func.attr == "get"
+        and _is_name(expr.func.value, object_name)
+    ):
+        return False
+    if not expr.args:
+        return False
+    return _is_string_constant(expr.args[0], key)
+
+
+def _iter_calls(node: ast.AST) -> Iterable[ast.Call]:
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            yield child
+
+
+def _iter_compares(node: ast.AST) -> Iterable[ast.Compare]:
+    for child in ast.walk(node):
+        if isinstance(child, ast.Compare):
+            yield child
+
+
+def _compare_matches_command_path_eq_tuple(
+    compare: ast.Compare,
+    path: tuple[str, ...],
+) -> bool:
+    if len(compare.ops) != 1 or not isinstance(compare.ops[0], ast.Eq):
+        return False
+    right = compare.comparators[0]
+    return (
+        _is_name(compare.left, "command_path") and _is_string_tuple(right, path)
+    ) or (_is_name(right, "command_path") and _is_string_tuple(compare.left, path))
+
+
+def _extract_name_eq_string(compare: ast.Compare, name: str) -> str | None:
+    if len(compare.ops) != 1 or not isinstance(compare.ops[0], ast.Eq):
+        return None
+    right = compare.comparators[0]
+    if _is_name(compare.left, name):
+        return _string_constant_value(right)
+    if _is_name(right, name):
+        return _string_constant_value(compare.left)
+    return None
+
+
+def _is_singleton_string_tuple(expr: ast.expr, value: str) -> bool:
+    return _string_tuple(expr) == (value,)
+
+
+def _is_string_tuple(expr: ast.expr, expected: tuple[str, ...]) -> bool:
+    return _string_tuple(expr) == expected
+
+
+def _string_tuple(expr: ast.expr) -> tuple[str, ...] | None:
+    if not isinstance(expr, ast.Tuple):
+        return None
+    values: list[str] = []
+    for item in expr.elts:
+        literal = _string_constant_value(item)
+        if literal is None:
+            return None
+        values.append(literal)
+    return tuple(values)
+
+
+def _string_constant_value(expr: ast.expr) -> str | None:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return expr.value
+    return None
+
+
+def _is_name(expr: ast.expr, expected: str) -> bool:
+    return isinstance(expr, ast.Name) and expr.id == expected
+
+
+def _is_string_constant(expr: ast.expr, expected: str) -> bool:
+    return _string_constant_value(expr) == expected
+
+
+def _is_int_constant(expr: ast.expr | None, expected: int) -> bool:
+    return isinstance(expr, ast.Constant) and expr.value == expected
+
+
+def _is_none(expr: ast.expr) -> bool:
+    return isinstance(expr, ast.Constant) and expr.value is None
