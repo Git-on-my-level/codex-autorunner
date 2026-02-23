@@ -25,7 +25,6 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramBotClient,
     TelegramCommand,
     TelegramMessage,
-    TelegramMessageEntity,
     TelegramUpdate,
     UpdateCallback,
     allowlist_allows,
@@ -69,25 +68,29 @@ from codex_autorunner.integrations.telegram.api_schemas import (
     parse_message_payload,
     parse_update_payload,
 )
+from tests.fixtures.telegram_command_helpers import bot_command_entity
+
+# Cross-cutting command/registration invariants live in
+# tests/test_telegram_command_contract.py. This module keeps adapter-focused cases.
+# Helper usage: use shared command setup helpers only where they reduce local
+# noise; keep adapter transport/parse behavior explicit in each test.
 
 
 def test_parse_command_basic() -> None:
-    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len("/new"))]
+    entities = [bot_command_entity("/new")]
     command = parse_command("/new", entities=entities)
     assert command == TelegramCommand(name="new", args="", raw="/new")
 
 
 def test_parse_command_with_args() -> None:
-    entities = [
-        TelegramMessageEntity(type="bot_command", offset=0, length=len("/bind"))
-    ]
+    entities = [bot_command_entity("/bind")]
     command = parse_command("/bind repo-1", entities=entities)
     assert command == TelegramCommand(name="bind", args="repo-1", raw="/bind repo-1")
 
 
 def test_parse_command_username_match() -> None:
     token = "/resume@CodexBot"
-    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len(token))]
+    entities = [bot_command_entity(token)]
     command = parse_command(
         f"{token} 3",
         entities=entities,
@@ -98,7 +101,7 @@ def test_parse_command_username_match() -> None:
 
 def test_parse_command_username_mismatch() -> None:
     token = "/resume@OtherBot"
-    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len(token))]
+    entities = [bot_command_entity(token)]
     command = parse_command(
         f"{token} 3",
         entities=entities,
@@ -168,7 +171,7 @@ def test_parse_command_fallback_rejects_too_long() -> None:
 
 
 def test_parse_command_requires_offset_zero() -> None:
-    entities = [TelegramMessageEntity(type="bot_command", offset=1, length=len("/new"))]
+    entities = [bot_command_entity("/new", offset=1)]
     command = parse_command(" /new", entities=entities)
     assert command is None
 

@@ -6,7 +6,19 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-_SLASH_COMMAND_RE = re.compile(r"^/([a-z0-9_]{1,32})(?:@([A-Za-z0-9_]{3,64}))?$")
+MIN_COMMAND_NAME_LENGTH = 1
+MAX_COMMAND_NAME_LENGTH = 32
+MIN_COMMAND_MENTION_LENGTH = 3
+MAX_COMMAND_MENTION_LENGTH = 64
+_COMMAND_NAME_CHARCLASS = "a-z0-9_"
+_COMMAND_MENTION_CHARCLASS = "A-Za-z0-9_"
+_SLASH_COMMAND_PATTERN = (
+    rf"^/([{_COMMAND_NAME_CHARCLASS}]"
+    rf"{{{MIN_COMMAND_NAME_LENGTH},{MAX_COMMAND_NAME_LENGTH}}})"
+    rf"(?:@([{_COMMAND_MENTION_CHARCLASS}]"
+    rf"{{{MIN_COMMAND_MENTION_LENGTH},{MAX_COMMAND_MENTION_LENGTH}}}))?$"
+)
+_SLASH_COMMAND_RE = re.compile(_SLASH_COMMAND_PATTERN)
 
 
 @dataclass(frozen=True)
@@ -25,6 +37,15 @@ def parse_chat_command(
 
     This parser is platform-agnostic and intentionally limited to plain-text
     command detection; adapters can provide stricter entity-aware parsing.
+    Call-site contract:
+    - Callers should pass a string value (or explicit string fallback) for `text`.
+    Normalization contract:
+    - `raw` stores the outer-trimmed input text exactly as parsed.
+    - `args` stores the post-command remainder with surrounding whitespace trimmed.
+    - Non-string input values are rejected.
+    Current non-goals (intentional rejections) include:
+    - uppercase command names (for example `/Status`)
+    - non-slash-prefixed forms (for example `!/status`)
 
     TODO: For Discord/Slack readiness, this parser needs enhancement:
     - Discord: Commands come as application interactions (not plain text),
@@ -38,14 +59,19 @@ def parse_chat_command(
       modes while maintaining backward compatibility.
     """
 
-    raw = str(text or "").strip()
+    if not isinstance(text, str):
+        return None
+    raw = text.strip()
     if not raw or not raw.startswith("/"):
         return None
-    token, _, remainder = raw.partition(" ")
+    parts = raw.split(None, 1)
+    token = parts[0]
+    remainder = parts[1] if len(parts) > 1 else ""
     match = _SLASH_COMMAND_RE.match(token)
     if match is None:
         return None
     name, mention = match.group(1), match.group(2)
-    if mention and bot_username and mention.lower() != bot_username.lower():
+    normalized_bot = (bot_username or "").strip().lstrip("@").lower()
+    if mention and normalized_bot and mention.lower() != normalized_bot:
         return None
     return ChatCommand(name=name, args=remainder.strip(), raw=raw)

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, Optional, Sequence, Tuple
 
+from ..chat.commands import parse_chat_command
 from .api_schemas import TelegramMessageEntitySchema
-
-_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 
 def parse_command_payload(
@@ -60,38 +58,17 @@ def _parse_command_from_entities(
         return None
 
     command_text = text[:command_length]
-    if not command_text.startswith("/"):
-        return None
-    command = command_text.lstrip("/")
-    if not command:
+    parsed_command = parse_chat_command(command_text, bot_username=bot_username)
+    if parsed_command is None:
         return None
     tail = text[command_entity.length :].strip()
-    if "@" in command:
-        name, _, target = command.partition("@")
-        if bot_username and target.lower() != bot_username.lower():
-            return None
-        command = name
-    return command.lower(), tail.strip(), text.strip()
+    return parsed_command.name.lower(), tail.strip(), text.strip()
 
 
 def _parse_command_from_text(
     text: str, bot_username: Optional[str]
 ) -> Optional[Tuple[str, str, str]]:
-    trimmed = text.strip()
-    if not trimmed.startswith("/"):
+    parsed = parse_chat_command(text, bot_username=bot_username)
+    if parsed is None:
         return None
-
-    parts = trimmed.split(None, 1)
-    command = parts[0].lstrip("/")
-    if not command:
-        return None
-    if "@" in command:
-        name, _, target = command.partition("@")
-        if bot_username and target.lower() != bot_username.lower():
-            return None
-        command = name
-    if not command or not _COMMAND_NAME_RE.fullmatch(command):
-        return None
-
-    args = parts[1].strip() if len(parts) > 1 else ""
-    return command.lower(), args, trimmed
+    return parsed.name.lower(), parsed.args, parsed.raw
