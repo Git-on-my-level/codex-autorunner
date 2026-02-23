@@ -157,6 +157,24 @@ def _pma_interaction(*, name: str, user_id: str = "user-1") -> dict[str, Any]:
     }
 
 
+def _bind_select_interaction(
+    *, selected_repo_id: str = "repo-1", user_id: str = "user-1"
+) -> dict[str, Any]:
+    return {
+        "id": "inter-component-1",
+        "token": "token-component-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "type": 3,
+        "member": {"user": {"id": user_id}},
+        "data": {
+            "component_type": 3,
+            "custom_id": "bind_select",
+            "values": [selected_repo_id],
+        },
+    }
+
+
 def _normalized_interaction_event(
     *, command: str, options: dict[str, Any] | None = None, user_id: str = "user-1"
 ) -> ChatInteractionEvent:
@@ -252,6 +270,39 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         assert status_payload["data"]["flags"] == 64
         assert "bound this channel" in bind_payload["data"]["content"].lower()
         assert "channel is bound" in status_payload["data"]["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_routes_bind_picker_component_interaction(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_bind_select_interaction(selected_repo_id="repo-1")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_manifest_repos = lambda: [("repo-1", str(workspace))]
+
+    try:
+        await service.run_forever()
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["repo_id"] == "repo-1"
+        assert binding["workspace_path"] == str(workspace.resolve())
+
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "bound this channel to: repo-1" in content
     finally:
         await store.close()
 
