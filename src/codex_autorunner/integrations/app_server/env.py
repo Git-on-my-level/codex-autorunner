@@ -7,6 +7,8 @@ from typing import Any, Optional, Sequence
 from ...core.logging_utils import log_event
 from ...core.utils import resolve_executable, subprocess_env
 
+_SEEDED_CONFIG_FILES = ("config.toml", "config.json")
+
 
 def _workspace_car_path_prefixes(workspace_root: Path) -> list[str]:
     prefixes: list[str] = []
@@ -59,22 +61,8 @@ def seed_codex_home(
     event_prefix: str = "app_server",
 ) -> None:
     logger = logger or __import__("logging").getLogger(__name__)
-    auth_path = codex_home / "auth.json"
     source_root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
     if source_root.resolve() == codex_home.resolve():
-        return
-    source_auth = source_root / "auth.json"
-    if auth_path.exists():
-        if auth_path.is_symlink() and auth_path.resolve() == source_auth.resolve():
-            return
-        log_event(
-            logger,
-            __import__("logging").INFO,
-            f"{event_prefix}.codex_home.seed.skipped",
-            reason="auth_exists",
-            source=str(source_root),
-            target=str(codex_home),
-        )
         return
     if not source_root.exists():
         log_event(
@@ -86,7 +74,41 @@ def seed_codex_home(
             target=str(codex_home),
         )
         return
-    if not source_auth.exists():
+
+    source_auth = source_root / "auth.json"
+    auth_path = codex_home / "auth.json"
+    if auth_path.exists():
+        if not (
+            auth_path.is_symlink() and auth_path.resolve() == source_auth.resolve()
+        ):
+            log_event(
+                logger,
+                __import__("logging").INFO,
+                f"{event_prefix}.codex_home.seed.skipped",
+                reason="auth_exists",
+                source=str(source_root),
+                target=str(codex_home),
+            )
+    elif source_auth.exists():
+        try:
+            auth_path.symlink_to(source_auth)
+            log_event(
+                logger,
+                __import__("logging").INFO,
+                f"{event_prefix}.codex_home.seeded",
+                source=str(source_root),
+                target=str(codex_home),
+            )
+        except OSError as exc:
+            log_event(
+                logger,
+                __import__("logging").WARNING,
+                f"{event_prefix}.codex_home.seed.failed",
+                exc=exc,
+                source=str(source_root),
+                target=str(codex_home),
+            )
+    else:
         log_event(
             logger,
             __import__("logging").WARNING,
@@ -95,25 +117,27 @@ def seed_codex_home(
             source=str(source_root),
             target=str(codex_home),
         )
-        return
-    try:
-        auth_path.symlink_to(source_auth)
-        log_event(
-            logger,
-            __import__("logging").INFO,
-            f"{event_prefix}.codex_home.seeded",
-            source=str(source_root),
-            target=str(codex_home),
-        )
-    except OSError as exc:
-        log_event(
-            logger,
-            __import__("logging").WARNING,
-            f"{event_prefix}.codex_home.seed.failed",
-            exc=exc,
-            source=str(source_root),
-            target=str(codex_home),
-        )
+
+    for config_name in _SEEDED_CONFIG_FILES:
+        source_config = source_root / config_name
+        if not source_config.exists():
+            continue
+        target_config = codex_home / config_name
+        try:
+            source_payload = source_config.read_bytes()
+            if target_config.exists() and target_config.read_bytes() == source_payload:
+                continue
+            target_config.parent.mkdir(parents=True, exist_ok=True)
+            target_config.write_bytes(source_payload)
+        except OSError as exc:
+            log_event(
+                logger,
+                __import__("logging").WARNING,
+                f"{event_prefix}.codex_home.config.seed.failed",
+                exc=exc,
+                source=str(source_config),
+                target=str(target_config),
+            )
 
 
 def build_app_server_env(
