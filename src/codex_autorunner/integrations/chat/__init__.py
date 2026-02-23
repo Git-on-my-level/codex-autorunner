@@ -27,6 +27,7 @@ from .callbacks import (
     encode_logical_callback,
 )
 from .capabilities import ChatCapabilities
+from .command_contract import COMMAND_CONTRACT, CommandContractEntry, CommandStatus
 from .commands import ChatCommand, parse_chat_command
 from .dispatcher import (
     ChatDispatcher,
@@ -64,6 +65,7 @@ from .models import (
     ChatMessageRef,
     ChatThreadRef,
 )
+from .parity_checker import ParityCheckResult, run_parity_checks
 from .renderer import RenderedText, TextRenderer
 from .runtime import iter_exception_chain
 from .service import ChatBotServiceCore
@@ -85,6 +87,8 @@ __all__ = [
     "ChatAdapterTransientError",
     "ChatAttachment",
     "ChatCapabilities",
+    "CommandContractEntry",
+    "CommandStatus",
     "ChatCommand",
     "ChatContext",
     "ChatBotServiceCore",
@@ -99,6 +103,8 @@ __all__ = [
     "ChatMessageRef",
     "ChatOutboxRecord",
     "ChatPendingApprovalRecord",
+    "COMMAND_CONTRACT",
+    "ParityCheckResult",
     "ChatQuestionHandlers",
     "ChatSelectionHandlers",
     "ChatStateStore",
@@ -142,6 +148,7 @@ __all__ = [
     "parse_chat_command",
     "chunk_text",
     "PlainTextTurnContext",
+    "run_parity_checks",
     "TurnTriggerMode",
     "run_chat_bootstrap_steps",
     "should_trigger_plain_text_turn",
