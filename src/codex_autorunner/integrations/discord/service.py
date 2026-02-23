@@ -1060,6 +1060,16 @@ class DiscordBotService:
             options=options,
         )
         if ingress is None:
+            self._logger.warning(
+                "handle_interaction: failed to canonicalize command ingress (command_path=%s, options=%s)",
+                command_path,
+                options,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not parse this interaction. Please retry the command.",
+            )
             return
 
         try:
