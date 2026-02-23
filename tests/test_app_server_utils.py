@@ -1,7 +1,11 @@
 import os
 from pathlib import Path
 
-from codex_autorunner.core.app_server_utils import app_server_env, build_app_server_env
+from codex_autorunner.core.app_server_utils import (
+    app_server_env,
+    build_app_server_env,
+    seed_codex_home,
+)
 
 
 def _path_entries(value: str) -> list[str]:
@@ -77,3 +81,54 @@ def test_app_server_env_workspace_shim_precedes_global_path(tmp_path: Path) -> N
     assert str(shim_dir) in entries
     assert str(global_dir) in entries
     assert entries.index(str(shim_dir)) < entries.index(str(global_dir))
+
+
+def test_seed_codex_home_copies_global_config_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    source_auth.write_text('{"token":"abc"}\n', encoding="utf-8")
+    source_config_toml = source_home / "config.toml"
+    source_config_toml.write_text("multi_agent = true\n", encoding="utf-8")
+    source_config_json = source_home / "config.json"
+    source_config_json.write_text('{"model":"gpt-5.3-codex"}\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    target_home = tmp_path / "target-codex-home"
+    target_home.mkdir()
+
+    seed_codex_home(target_home, event_prefix="test")
+
+    target_auth = target_home / "auth.json"
+    assert target_auth.is_symlink()
+    assert target_auth.resolve() == source_auth.resolve()
+    assert (target_home / "config.toml").read_text(
+        encoding="utf-8"
+    ) == source_config_toml.read_text(encoding="utf-8")
+    assert (target_home / "config.json").read_text(
+        encoding="utf-8"
+    ) == source_config_json.read_text(encoding="utf-8")
+
+
+def test_seed_codex_home_resyncs_config_when_auth_already_seeded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text('{"token":"abc"}\n', encoding="utf-8")
+    source_config_toml = source_home / "config.toml"
+    source_config_toml.write_text("multi_agent = false\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    target_home = tmp_path / "target-codex-home"
+    target_home.mkdir()
+
+    seed_codex_home(target_home, event_prefix="test")
+    source_config_toml.write_text("multi_agent = true\n", encoding="utf-8")
+    seed_codex_home(target_home, event_prefix="test")
+
+    assert (target_home / "config.toml").read_text(
+        encoding="utf-8"
+    ) == "multi_agent = true\n"
