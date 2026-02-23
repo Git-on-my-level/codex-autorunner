@@ -337,6 +337,29 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
+    chat_doctor_text = Path(
+        "src/codex_autorunner/integrations/chat/doctor.py"
+    ).read_text(encoding="utf-8")
+    cli_doctor_text = Path(
+        "src/codex_autorunner/surfaces/cli/commands/doctor.py"
+    ).read_text(encoding="utf-8")
+    doctor_chat_parity_guardrail = (
+        _contains_all(
+            chat_doctor_text,
+            "chat.parity_contract",
+            "run_parity_checks(",
+        )
+        and "chat_doctor_checks(" in cli_doctor_text
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="doctor",
+            primitive="chat_parity_contract_guardrail",
+            passed=doctor_chat_parity_guardrail,
+            details="doctor includes chat parity contract checks",
+        )
+    )
+
     report_path = _write_parity_report(repo_root=repo_root, checks=checks)
 
     assert report_path == (
@@ -349,7 +372,7 @@ def test_cross_surface_parity_report(hub_env) -> None:
     critical_failures = [
         check
         for check in checks
-        if check.entrypoint in {"cli", "web", "telegram", "discord"}
+        if check.entrypoint in {"cli", "web", "telegram", "discord", "doctor"}
         and not check.passed
     ]
     assert not critical_failures

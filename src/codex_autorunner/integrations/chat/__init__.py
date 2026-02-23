@@ -37,6 +37,7 @@ from .dispatcher import (
     conversation_id_for,
     is_bypass_event,
 )
+from .doctor import chat_doctor_checks
 from .errors import (
     ChatAdapterError,
     ChatAdapterPermanentError,
@@ -147,6 +148,7 @@ __all__ = [
     "iter_exception_chain",
     "parse_chat_command",
     "chunk_text",
+    "chat_doctor_checks",
     "PlainTextTurnContext",
     "run_parity_checks",
     "TurnTriggerMode",
