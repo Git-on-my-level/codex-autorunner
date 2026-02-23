@@ -69,6 +69,9 @@ def run_parity_checks(
         _check_discord_canonicalize_command_ingress_usage(
             discord_service_ast=discord_service_ast,
         ),
+        _check_discord_interaction_component_guard_paths(
+            discord_service_ast=discord_service_ast,
+        ),
         _check_shared_plain_text_turn_policy_usage(
             discord_service_ast=discord_service_ast,
             telegram_trigger_mode_ast=telegram_trigger_mode_ast,
@@ -145,6 +148,12 @@ def _source_unavailable_results(
         ),
         ParityCheckResult(
             id="discord.canonical_command_ingress_usage",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="discord.interaction_component_guard_paths",
             passed=True,
             message=message,
             metadata=metadata,
@@ -415,6 +424,101 @@ def _check_shared_plain_text_turn_policy_usage(
     )
 
 
+def _check_discord_interaction_component_guard_paths(
+    *,
+    discord_service_ast: ast.Module | None,
+) -> ParityCheckResult:
+    interaction_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_interaction",
+    )
+    component_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_component_interaction",
+    )
+
+    checks = {
+        "interaction_parse_failure_response": _has_guard_response(
+            interaction_handlers,
+            guard_predicate=_condition_has_ingress_is_none_guard,
+            response_contains="could not parse this interaction",
+        ),
+        "interaction_unknown_command_fallback": _has_call_with_string_argument(
+            interaction_handlers,
+            callee_name="_respond_ephemeral",
+            exact="Command not implemented yet for Discord.",
+        ),
+        "interaction_unhandled_error_logged": _has_log_event_call(
+            interaction_handlers,
+            event_name="discord.interaction.unhandled_error",
+        ),
+        "interaction_unhandled_error_response": _has_call_with_string_argument(
+            interaction_handlers,
+            callee_name="_respond_ephemeral",
+            exact="An unexpected error occurred. Please try again later.",
+        ),
+        "component_missing_custom_id_response": _has_guard_response(
+            component_handlers,
+            guard_predicate=lambda test: _condition_has_name_negation(
+                test, name="custom_id"
+            ),
+            response_contains="could not identify this interaction action",
+        ),
+        "component_bind_selection_requires_value": _has_nested_guard_response(
+            component_handlers,
+            outer_guard_name="custom_id",
+            outer_guard_value="bind_select",
+            nested_guard_name="values",
+            response_contains="select a repository",
+        ),
+        "component_flow_runs_selection_requires_value": _has_nested_guard_response(
+            component_handlers,
+            outer_guard_name="custom_id",
+            outer_guard_value="flow_runs_select",
+            nested_guard_name="values",
+            response_contains="select a run",
+        ),
+        "component_unknown_fallback": _has_call_with_string_argument(
+            component_handlers,
+            callee_name="_respond_ephemeral",
+            contains="Unknown component:",
+        ),
+        "component_unhandled_error_logged": _has_log_event_call(
+            component_handlers,
+            event_name="discord.component.unhandled_error",
+        ),
+        "component_unhandled_error_response": _has_call_with_string_argument(
+            component_handlers,
+            callee_name="_respond_ephemeral",
+            exact="An unexpected error occurred. Please try again later.",
+        ),
+    }
+
+    failed_predicates = [key for key, passed in checks.items() if not passed]
+    passed = not failed_predicates
+
+    if passed:
+        message = (
+            "Discord interaction/component handlers keep observable guards and "
+            "explicit fallback responses."
+        )
+    else:
+        message = (
+            "Discord interaction/component guard coverage is incomplete and may "
+            "allow silent handling regressions."
+        )
+
+    return ParityCheckResult(
+        id="discord.interaction_component_guard_paths",
+        passed=passed,
+        message=message,
+        metadata={
+            "failed_predicates": failed_predicates,
+            "predicates": checks,
+        },
+    )
+
+
 def _find_functions_by_name(
     tree: ast.Module | None,
     name: str,
@@ -674,6 +778,137 @@ def _module_has_call(tree: ast.Module | None, *, callee_name: str) -> bool:
         return False
     for call in _iter_calls(tree):
         if _call_name(call.func) == callee_name:
+            return True
+    return False
+
+
+def _has_call_with_string_argument(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    callee_name: str,
+    exact: str | None = None,
+    contains: str | None = None,
+) -> bool:
+    for function in functions:
+        for call in _iter_calls(function):
+            if _call_name(call.func) != callee_name:
+                continue
+            if _call_has_string_argument(call, exact=exact, contains=contains):
+                return True
+    return False
+
+
+def _call_has_string_argument(
+    call: ast.Call,
+    *,
+    exact: str | None = None,
+    contains: str | None = None,
+) -> bool:
+    values = list(call.args)
+    values.extend(kw.value for kw in call.keywords if kw.arg is not None)
+
+    for value in values:
+        if exact is not None and _is_string_constant(value, exact):
+            return True
+        if contains is not None and _expr_contains_string(value, contains=contains):
+            return True
+    return False
+
+
+def _expr_contains_string(expr: ast.expr, *, contains: str) -> bool:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return contains in expr.value
+    if isinstance(expr, ast.JoinedStr):
+        for value in expr.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                if contains in value.value:
+                    return True
+    return False
+
+
+def _has_log_event_call(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    event_name: str,
+) -> bool:
+    return _has_call_with_string_argument(
+        functions,
+        callee_name="log_event",
+        exact=event_name,
+    )
+
+
+def _has_guard_response(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    guard_predicate: Callable[[ast.expr], bool],
+    response_contains: str,
+) -> bool:
+    for function in functions:
+        for node in ast.walk(function):
+            if not isinstance(node, ast.If):
+                continue
+            if not guard_predicate(node.test):
+                continue
+            if _body_has_response_call(node.body, contains=response_contains):
+                return True
+    return False
+
+
+def _has_nested_guard_response(
+    functions: Sequence[ast.FunctionDef | ast.AsyncFunctionDef],
+    *,
+    outer_guard_name: str,
+    outer_guard_value: str,
+    nested_guard_name: str,
+    response_contains: str,
+) -> bool:
+    for function in functions:
+        for node in ast.walk(function):
+            if not isinstance(node, ast.If):
+                continue
+            if not _condition_has_name_eq_string(
+                node.test,
+                name=outer_guard_name,
+                value=outer_guard_value,
+            ):
+                continue
+            for nested in ast.walk(node):
+                if not isinstance(nested, ast.If):
+                    continue
+                if not _condition_has_name_negation(
+                    nested.test, name=nested_guard_name
+                ):
+                    continue
+                if _body_has_response_call(nested.body, contains=response_contains):
+                    return True
+    return False
+
+
+def _body_has_response_call(statements: Sequence[ast.stmt], *, contains: str) -> bool:
+    for statement in statements:
+        for call in _iter_calls(statement):
+            if _call_name(call.func) != "_respond_ephemeral":
+                continue
+            if _call_has_string_argument(call, contains=contains):
+                return True
+    return False
+
+
+def _condition_has_name_negation(test: ast.expr, *, name: str) -> bool:
+    for term in _iter_boolean_terms(test):
+        if not isinstance(term, ast.UnaryOp) or not isinstance(term.op, ast.Not):
+            continue
+        if _is_name(term.operand, name):
+            return True
+    return False
+
+
+def _condition_has_name_eq_string(test: ast.expr, *, name: str, value: str) -> bool:
+    for term in _iter_boolean_terms(test):
+        if not isinstance(term, ast.Compare):
+            continue
+        if _extract_name_eq_string(term, name) == value:
             return True
     return False
 

@@ -175,6 +175,25 @@ def _bind_select_interaction(
     }
 
 
+def _component_interaction(
+    *, custom_id: str | None, values: list[Any] | None = None, user_id: str = "user-1"
+) -> dict[str, Any]:
+    data: dict[str, Any] = {"component_type": 3}
+    if custom_id is not None:
+        data["custom_id"] = custom_id
+    if values is not None:
+        data["values"] = values
+    return {
+        "id": "inter-component-1",
+        "token": "token-component-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "type": 3,
+        "member": {"user": {"id": user_id}},
+        "data": data,
+    }
+
+
 def _normalized_interaction_event(
     *, command: str, options: dict[str, Any] | None = None, user_id: str = "user-1"
 ) -> ChatInteractionEvent:
@@ -303,6 +322,138 @@ async def test_service_routes_bind_picker_component_interaction(tmp_path: Path) 
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "bound this channel to: repo-1" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_interaction_missing_custom_id_returns_error(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_component_interaction(custom_id=None, values=["repo-1"])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "could not identify this interaction action" in content
+        assert await store.get_binding(channel_id="channel-1") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("custom_id", "expected_error_snippet"),
+    [
+        ("bind_select", "please select a repository"),
+        ("flow_runs_select", "please select a run"),
+    ],
+)
+async def test_component_interaction_with_empty_values_returns_error(
+    tmp_path: Path, custom_id: str, expected_error_snippet: str
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_component_interaction(custom_id=custom_id, values=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert expected_error_snippet in content
+        assert await store.get_binding(channel_id="channel-1") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_malformed_direct_payload_returns_parse_error(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            {
+                "id": "inter-1",
+                "token": "token-1",
+                "channel_id": "channel-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": "malformed",
+            }
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "could not parse this interaction" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_direct_payload_missing_token_remains_unanswered(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            {
+                "id": "inter-1",
+                "channel_id": "channel-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "car"},
+            }
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.interaction_responses == []
     finally:
         await store.close()
 

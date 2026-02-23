@@ -168,6 +168,18 @@ def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):
             "shared helper usage for command ingress",
             "canonicalize_command_ingress",
         ),
+        (
+            ParityCheckResult(
+                id="discord.interaction_component_guard_paths",
+                passed=False,
+                message="guard coverage incomplete",
+                metadata={
+                    "failed_predicates": ["component_unknown_fallback"],
+                },
+            ),
+            "guard coverage incomplete",
+            "align command routing/guard helpers",
+        ),
     ],
 )
 def test_chat_doctor_checks_failures_are_actionable(
