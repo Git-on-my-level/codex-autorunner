@@ -170,13 +170,14 @@ async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> N
 
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            ("INTERACTION_CREATE", _bind_interaction(str(workspace))),
-            ("MESSAGE_CREATE", _message_create("ship it")),
-        ]
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
     )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
     service = DiscordBotService(
         _config(tmp_path),
         logger=logging.getLogger("test"),
