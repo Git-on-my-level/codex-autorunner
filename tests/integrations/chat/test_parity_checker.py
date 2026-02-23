@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codex_autorunner.integrations.chat import parity_checker
 from codex_autorunner.integrations.chat.parity_checker import run_parity_checks
 
 
@@ -141,6 +142,17 @@ def test_parity_checker_accepts_truthy_ingress_guard_and_named_context(
 
     assert results_by_id["discord.no_generic_fallback_leak"].passed
     assert results_by_id["chat.shared_plain_text_turn_policy_usage"].passed
+
+
+def test_parity_checker_skips_when_source_files_are_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        parity_checker,
+        "_resolve_source_path",
+        lambda **_kwargs: None,
+    )
+    results = run_parity_checks(repo_root=None)
+    assert all(result.passed for result in results)
+    assert all(result.metadata.get("skipped") is True for result in results)
 
 
 def _write_fixture_repo(

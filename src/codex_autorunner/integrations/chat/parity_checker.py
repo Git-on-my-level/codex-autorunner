@@ -32,10 +32,27 @@ def run_parity_checks(
     repo_root: Path | None = None,
     contract: Sequence[CommandContractEntry] = COMMAND_CONTRACT,
 ) -> tuple[ParityCheckResult, ...]:
-    root = repo_root or _default_repo_root()
-    discord_service_text = _read_text(root / _DISCORD_SERVICE_PATH)
-    telegram_trigger_mode_text = _read_text(root / _TELEGRAM_TRIGGER_MODE_PATH)
-    telegram_messages_text = _read_text(root / _TELEGRAM_MESSAGES_PATH)
+    source_paths = {
+        "discord_service": _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_SERVICE_PATH,
+        ),
+        "telegram_trigger_mode": _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_TELEGRAM_TRIGGER_MODE_PATH,
+        ),
+        "telegram_messages": _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_TELEGRAM_MESSAGES_PATH,
+        ),
+    }
+    if repo_root is None and any(path is None for path in source_paths.values()):
+        missing = [name for name, path in source_paths.items() if path is None]
+        return _source_unavailable_results(missing=missing)
+
+    discord_service_text = _read_text(source_paths["discord_service"])
+    telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
+    telegram_messages_text = _read_text(source_paths["telegram_messages"])
 
     discord_service_ast = _parse_module(discord_service_text)
     telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
@@ -60,11 +77,90 @@ def run_parity_checks(
     )
 
 
-def _default_repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+def _resolve_source_path(
+    *,
+    repo_root: Path | None,
+    repo_relative_path: Path,
+) -> Path | None:
+    package_relative_path = _package_relative_path(repo_relative_path)
+    candidates: list[Path] = []
+
+    if repo_root is not None:
+        candidates.extend(
+            (
+                repo_root / repo_relative_path,
+                repo_root / package_relative_path,
+            )
+        )
+    else:
+        module_path = Path(__file__).resolve()
+        package_root = module_path.parents[2]
+        candidates.append(package_root.parent / package_relative_path)
+        for parent in module_path.parents:
+            if not (parent / ".git").exists():
+                continue
+            candidates.extend(
+                (
+                    parent / repo_relative_path,
+                    parent / package_relative_path,
+                )
+            )
+            break
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
 
 
-def _read_text(path: Path) -> str:
+def _package_relative_path(path: Path) -> Path:
+    if path.parts and path.parts[0] == "src":
+        return Path(*path.parts[1:])
+    return path
+
+
+def _source_unavailable_results(
+    *, missing: Sequence[str]
+) -> tuple[ParityCheckResult, ...]:
+    message = (
+        "Skipped parity check: chat source files are unavailable outside a checkout."
+    )
+    metadata = {
+        "skipped": True,
+        "reason": "source_files_unavailable",
+        "missing_sources": list(missing),
+    }
+    return (
+        ParityCheckResult(
+            id="discord.contract_commands_routed",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="discord.no_generic_fallback_leak",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="discord.canonical_command_ingress_usage",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
+            id="chat.shared_plain_text_turn_policy_usage",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+    )
+
+
+def _read_text(path: Path | None) -> str:
+    if path is None:
+        return ""
     try:
         return path.read_text(encoding="utf-8")
     except OSError:

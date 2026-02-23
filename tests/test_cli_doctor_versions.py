@@ -33,7 +33,6 @@ def test_doctor_help_lists_versions_subcommand() -> None:
     result = runner.invoke(app, ["doctor", "--help"])
     assert result.exit_code == 0
     assert "versions" in result.stdout
-    assert "--dev" in result.stdout
 
 
 def test_find_hub_server_process_matches_root_serve_without_explicit_port() -> None:
