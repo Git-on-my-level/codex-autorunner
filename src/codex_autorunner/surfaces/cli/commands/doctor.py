@@ -25,6 +25,7 @@ from ....core.utils import (
     is_within,
     resolve_executable,
 )
+from ....integrations.chat.doctor import chat_doctor_checks
 from ....integrations.discord.doctor import discord_doctor_checks
 from ....integrations.telegram.doctor import telegram_doctor_checks
 from .utils import get_car_version, raise_exit
@@ -268,6 +269,11 @@ def register_doctor_commands(
         json_output: bool = typer.Option(
             False, "--json", help="Output JSON for scripting"
         ),
+        dev: bool = typer.Option(
+            False,
+            "--dev",
+            help="Include developer-focused parity checks",
+        ),
     ):
         if ctx.invoked_subcommand:
             return
@@ -290,6 +296,7 @@ def register_doctor_commands(
             discord_checks = discord_doctor_checks(hub_config)
             pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
             hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
+            chat_checks = chat_doctor_checks(repo_root=repo_root) if dev else []
 
             report = DoctorReport(
                 checks=report.checks
@@ -297,6 +304,7 @@ def register_doctor_commands(
                 + discord_checks
                 + pma_checks
                 + hub_worktree_checks
+                + chat_checks
             )
         except ConfigError as exc:
             raise_exit(str(exc), cause=exc)

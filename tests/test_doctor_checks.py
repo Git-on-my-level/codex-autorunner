@@ -1,4 +1,4 @@
-"""Tests for PMA and Telegram doctor checks."""
+"""Tests for PMA, Telegram, and chat doctor checks."""
 
 import os
 from pathlib import Path
@@ -13,6 +13,8 @@ from codex_autorunner.core.runtime import (
     hub_worktree_doctor_checks,
     pma_doctor_checks,
 )
+from codex_autorunner.integrations.chat.doctor import chat_doctor_checks
+from codex_autorunner.integrations.chat.parity_checker import ParityCheckResult
 from codex_autorunner.integrations.telegram.doctor import (
     telegram_doctor_checks,
 )
@@ -110,6 +112,83 @@ def test_hub_worktree_doctor_checks_detects_orphans(tmp_path: Path):
     assert check.passed is False
     assert str(hub_config.worktrees_root) in check.message
     assert check.fix == f"Run: car hub scan --path {hub_root}"
+
+
+def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.doctor.run_parity_checks",
+        lambda repo_root=None: (
+            ParityCheckResult(
+                id="discord.contract_commands_routed",
+                passed=True,
+                message="All routed.",
+                metadata={},
+            ),
+        ),
+    )
+
+    checks = chat_doctor_checks()
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.passed is True
+    assert check.severity == "info"
+    assert check.check_id == "chat.parity_contract"
+
+
+@pytest.mark.parametrize(
+    ("result", "message_snippet", "fix_snippet"),
+    [
+        (
+            ParityCheckResult(
+                id="discord.contract_commands_routed",
+                passed=False,
+                message="missing route",
+                metadata={"missing_ids": ["car.model"]},
+            ),
+            "missing discord command route handling",
+            "missing contract commands",
+        ),
+        (
+            ParityCheckResult(
+                id="discord.no_generic_fallback_leak",
+                passed=False,
+                message="fallback leak",
+                metadata={"failed_predicates": ["interaction_pma_prefix_guard"]},
+            ),
+            "known discord command prefixes can leak",
+            "command-prefix guards",
+        ),
+        (
+            ParityCheckResult(
+                id="discord.canonical_command_ingress_usage",
+                passed=False,
+                message="shared helper missing",
+                metadata={"failed_predicates": ["import_present"]},
+            ),
+            "shared helper usage for command ingress",
+            "canonicalize_command_ingress",
+        ),
+    ],
+)
+def test_chat_doctor_checks_failures_are_actionable(
+    monkeypatch,
+    result: ParityCheckResult,
+    message_snippet: str,
+    fix_snippet: str,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.doctor.run_parity_checks",
+        lambda repo_root=None: (result,),
+    )
+
+    checks = chat_doctor_checks()
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.passed is False
+    assert check.check_id == "chat.parity_contract"
+    assert message_snippet in check.message.lower()
+    assert check.fix is not None
+    assert fix_snippet in check.fix
 
 
 @pytest.fixture
