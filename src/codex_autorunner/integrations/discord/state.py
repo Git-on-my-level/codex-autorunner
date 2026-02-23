@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 
-DISCORD_STATE_SCHEMA_VERSION = 3
+DISCORD_STATE_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -112,6 +112,34 @@ class DiscordStateStore:
             pma_enabled,
             pma_prev_workspace_path,
             pma_prev_repo_id,
+        )
+
+    async def update_agent_state(
+        self,
+        *,
+        channel_id: str,
+        agent: str,
+    ) -> None:
+        await self._run(
+            self._update_agent_state_sync,
+            channel_id,
+            agent,
+        )
+
+    async def update_model_state(
+        self,
+        *,
+        channel_id: str,
+        model_override: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+        clear_model: bool = False,
+    ) -> None:
+        await self._run(
+            self._update_model_state_sync,
+            channel_id,
+            model_override,
+            reasoning_effort,
+            clear_model,
         )
 
     async def record_outbox_failure(
@@ -234,6 +262,14 @@ class DiscordStateStore:
             conn.execute(
                 "ALTER TABLE channel_bindings ADD COLUMN pma_prev_repo_id TEXT"
             )
+        if "agent" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN agent TEXT")
+        if "model_override" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN model_override TEXT")
+        if "reasoning_effort" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN reasoning_effort TEXT"
+            )
 
     def _upsert_binding_sync(
         self,
@@ -271,6 +307,13 @@ class DiscordStateStore:
 
     def _binding_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         pma_enabled_raw = row["pma_enabled"] if "pma_enabled" in row.keys() else 0
+        agent_raw = row["agent"] if "agent" in row.keys() else None
+        model_override_raw = (
+            row["model_override"] if "model_override" in row.keys() else None
+        )
+        reasoning_effort_raw = (
+            row["reasoning_effort"] if "reasoning_effort" in row.keys() else None
+        )
         return {
             "channel_id": str(row["channel_id"]),
             "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
@@ -298,6 +341,13 @@ class DiscordStateStore:
                 if "pma_prev_repo_id" in row.keys()
                 and isinstance(row["pma_prev_repo_id"], str)
                 else None
+            ),
+            "agent": agent_raw if isinstance(agent_raw, str) else None,
+            "model_override": (
+                model_override_raw if isinstance(model_override_raw, str) else None
+            ),
+            "reasoning_effort": (
+                reasoning_effort_raw if isinstance(reasoning_effort_raw, str) else None
             ),
             "updated_at": str(row["updated_at"]),
         }
@@ -372,6 +422,56 @@ class DiscordStateStore:
                     channel_id,
                 ),
             )
+
+    def _update_agent_state_sync(
+        self,
+        channel_id: str,
+        agent: str,
+    ) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET agent = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (agent, now_iso(), channel_id),
+            )
+
+    def _update_model_state_sync(
+        self,
+        channel_id: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        clear_model: bool,
+    ) -> None:
+        conn = self._connection_sync()
+        if clear_model:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE channel_bindings
+                    SET model_override = NULL,
+                        reasoning_effort = NULL,
+                        updated_at = ?
+                    WHERE channel_id = ?
+                    """,
+                    (now_iso(), channel_id),
+                )
+        else:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE channel_bindings
+                    SET model_override = ?,
+                        reasoning_effort = ?,
+                        updated_at = ?
+                    WHERE channel_id = ?
+                    """,
+                    (model_override, reasoning_effort, now_iso(), channel_id),
+                )
 
     def _upsert_outbox_sync(self, record: OutboxRecord) -> OutboxRecord:
         conn = self._connection_sync()

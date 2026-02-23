@@ -104,6 +104,7 @@ def _config(
         state_file=root / ".codex-autorunner" / "discord_state.sqlite3",
         intents=1,
         max_message_length=2000,
+        message_overflow="split",
         pma_enabled=True,
     )
 

@@ -20,7 +20,23 @@ def test_build_application_commands_structure_is_stable() -> None:
     assert car["type"] == 1
 
     options = car["options"]
-    assert [opt["name"] for opt in options] == ["bind", "status", "flow"]
+    expected_subcommands = [
+        "bind",
+        "status",
+        "debug",
+        "agent",
+        "model",
+        "help",
+        "ids",
+        "diff",
+        "skills",
+        "mcp",
+        "init",
+        "repos",
+        "files",
+        "flow",
+    ]
+    assert [opt["name"] for opt in options] == expected_subcommands
 
     flow = _find_option(options, "flow")
     flow_options = flow["options"]
@@ -45,7 +61,7 @@ def test_required_options_are_marked_required() -> None:
 
     bind = _find_option(car_options, "bind")
     bind_workspace = _find_option(bind["options"], "workspace")
-    assert bind_workspace["required"] is True
+    assert bind_workspace["required"] is False
 
     flow = _find_option(car_options, "flow")
     flow_reply = _find_option(flow["options"], "reply")
