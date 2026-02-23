@@ -70,6 +70,11 @@ from .service import ChatBotServiceCore
 from .state_store import ChatOutboxRecord, ChatPendingApprovalRecord, ChatStateStore
 from .text_chunking import chunk_text
 from .transport import ChatTransport
+from .turn_policy import (
+    PlainTextTurnContext,
+    TurnTriggerMode,
+    should_trigger_plain_text_turn,
+)
 
 __all__ = [
     "ChatAction",
@@ -136,5 +141,8 @@ __all__ = [
     "iter_exception_chain",
     "parse_chat_command",
     "chunk_text",
+    "PlainTextTurnContext",
+    "TurnTriggerMode",
     "run_chat_bootstrap_steps",
+    "should_trigger_plain_text_turn",
 ]

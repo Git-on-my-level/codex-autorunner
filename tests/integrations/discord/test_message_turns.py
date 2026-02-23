@@ -238,6 +238,97 @@ async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_message_create_honors_shared_turn_policy_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    def _deny_policy(*, mode: str, context: Any) -> bool:
+        calls.append((mode, context.text))
+        return False
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("agent turn should not run when shared policy denies")
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.should_trigger_plain_text_turn",
+        _deny_policy,
+    )
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+
+    try:
+        await service.run_forever()
+        assert calls == [("always", "ship it")]
+        assert rest.channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_ignores_slash_prefixed_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("/car status"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("slash-prefixed text should not run message turns")
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+
+    try:
+        await service.run_forever()
+        assert rest.channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()

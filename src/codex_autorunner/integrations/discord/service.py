@@ -47,6 +47,10 @@ from ...integrations.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
+from ...integrations.chat.turn_policy import (
+    PlainTextTurnContext,
+    should_trigger_plain_text_turn,
+)
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
 from .adapter import DiscordChatAdapter
@@ -339,6 +343,11 @@ class DiscordBotService:
         if not text:
             return
         if text.startswith("/"):
+            return
+        if not should_trigger_plain_text_turn(
+            mode="always",
+            context=PlainTextTurnContext(text=text),
+        ):
             return
 
         binding = await self._store.get_binding(channel_id=channel_id)
