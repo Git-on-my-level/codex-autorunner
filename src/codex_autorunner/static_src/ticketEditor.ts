@@ -43,6 +43,7 @@ type FrontmatterState = {
 
 type EditorState = {
   isOpen: boolean;
+  isClosing: boolean;
   mode: "create" | "edit";
   ticketIndex: number | null;
   ticketChatKey: string | null;
@@ -65,6 +66,7 @@ const DEFAULT_FRONTMATTER: FrontmatterState = {
 
 const state: EditorState = {
   isOpen: false,
+  isClosing: false,
   mode: "create",
   ticketIndex: null,
   ticketChatKey: null,
@@ -83,6 +85,11 @@ let scheduledAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let scheduledAutosaveForce = false;
 let autosaveInFlight: Promise<void> | null = null;
 let autosaveNeedsRerun = false;
+let autosaveAllowWhenClosedRequested = false;
+
+type AutosaveOptions = {
+  allowWhenClosed?: boolean;
+};
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -578,7 +585,11 @@ function clearScheduledAutosave(): void {
 /**
  * Perform autosave (silent save without closing modal)
  */
-async function performAutosave(): Promise<void> {
+async function performAutosave(options: AutosaveOptions = {}): Promise<void> {
+  if (options.allowWhenClosed) {
+    autosaveAllowWhenClosedRequested = true;
+  }
+
   if (autosaveInFlight) {
     autosaveNeedsRerun = true;
     await autosaveInFlight;
@@ -588,21 +599,24 @@ async function performAutosave(): Promise<void> {
   autosaveInFlight = (async () => {
     try {
       do {
+        const allowWhenClosed = autosaveAllowWhenClosedRequested;
+        autosaveAllowWhenClosedRequested = false;
         autosaveNeedsRerun = false;
-        await performAutosaveOnce();
+        await performAutosaveOnce({ allowWhenClosed });
       } while (autosaveNeedsRerun);
     } finally {
       autosaveInFlight = null;
       autosaveNeedsRerun = false;
+      autosaveAllowWhenClosedRequested = false;
     }
   })();
 
   await autosaveInFlight;
 }
 
-async function performAutosaveOnce(): Promise<void> {
+async function performAutosaveOnce(options: AutosaveOptions = {}): Promise<void> {
   const { content } = els();
-  if (!content || !state.isOpen) return;
+  if (!content || (!state.isOpen && !options.allowWhenClosed)) return;
   
   // Don't autosave if no changes
   if (!hasUnsavedChanges()) return;
@@ -704,6 +718,7 @@ function onFrontmatterChange(): void {
 export function openTicketEditor(ticket?: TicketData): void {
   const { modal, content, deleteBtn, chatInput, fmTitle } = els();
   if (!modal || !content) return;
+  if (state.isClosing) return;
 
   clearScheduledAutosave();
   hideError();
@@ -834,45 +849,54 @@ export function openTicketEditor(ticket?: TicketData): void {
 export function closeTicketEditor(): void {
   const { modal } = els();
   if (!modal) return;
+  if (state.isClosing) return;
 
   clearScheduledAutosave();
+  state.isOpen = false;
+  state.isClosing = true;
+  modal.classList.add("hidden");
+  hideError();
 
-  // Autosave on close if there are changes
+  const finalizeClose = () => {
+    // Cancel any running chat
+    if (ticketChatState.status === "running") {
+      void cancelTicketChat();
+    }
+
+    state.ticketIndex = null;
+    state.ticketChatKey = null;
+    state.originalBody = "";
+    state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
+    state.lastSavedBody = "";
+    state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
+    state.undoStack = [];
+    ticketDocEditor?.destroy();
+    ticketDocEditor = null;
+    state.isClosing = false;
+
+    // Clear ticket from URL
+    updateUrlParams({ ticket: null });
+
+    void updateTicketNavButtons();
+
+    // Reset chat state
+    resetTicketChatState();
+    setTicketIndex(null, null);
+
+    // Notify that editor was closed (for selection state cleanup)
+    publish("ticket-editor:closed", {});
+  };
+
+  // Autosave on close if there are changes.
+  // Allow this pass to run even though isOpen was just set false.
   if (hasUnsavedChanges()) {
     // Fire-and-forget: swallow rejection because the error is already flashed
     // inside performAutosave and DocEditor keeps the buffer dirty for retry.
-    void performAutosave().catch(() => {});
+    void performAutosave({ allowWhenClosed: true }).catch(() => {}).finally(finalizeClose);
+    return;
   }
 
-  // Cancel any running chat
-  if (ticketChatState.status === "running") {
-    void cancelTicketChat();
-  }
-
-  state.isOpen = false;
-  state.ticketIndex = null;
-  state.ticketChatKey = null;
-  state.originalBody = "";
-  state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
-  state.lastSavedBody = "";
-  state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
-  state.undoStack = [];
-  modal.classList.add("hidden");
-  hideError();
-  ticketDocEditor?.destroy();
-  ticketDocEditor = null;
-
-  // Clear ticket from URL
-  updateUrlParams({ ticket: null });
-
-  void updateTicketNavButtons();
-  
-  // Reset chat state
-  resetTicketChatState();
-  setTicketIndex(null, null);
-  
-  // Notify that editor was closed (for selection state cleanup)
-  publish("ticket-editor:closed", {});
+  finalizeClose();
 }
 
 /**
