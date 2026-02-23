@@ -138,6 +138,14 @@ class DiscordChatAdapter(ChatAdapter):
             self._event_queue.put_nowait(event)
         return event
 
+    def parse_message_event(
+        self, message_payload: dict[str, Any]
+    ) -> Optional[ChatMessageEvent]:
+        event = self._parse_message_to_event(message_payload)
+        if isinstance(event, ChatMessageEvent):
+            return event
+        return None
+
     def _parse_message_to_event(self, payload: dict[str, Any]) -> Optional[ChatEvent]:
         channel_id = payload.get("channel_id")
         guild_id = payload.get("guild_id")

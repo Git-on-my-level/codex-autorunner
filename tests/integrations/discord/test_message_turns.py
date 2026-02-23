@@ -8,7 +8,12 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.integrations.app_server.threads import PMA_KEY
+from codex_autorunner.integrations.app_server.threads import (
+    FILE_CHAT_OPENCODE_PREFIX,
+    FILE_CHAT_PREFIX,
+    PMA_KEY,
+    normalize_feature_key,
+)
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -215,7 +220,13 @@ async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> N
         assert captured[0]["workspace_root"] == workspace.resolve()
         assert captured[0]["prompt_text"] == "ship it"
         assert captured[0]["agent"] == "codex"
-        assert captured[0]["session_key"].startswith("discord:channel-1:codex:")
+        assert captured[0]["session_key"].startswith(
+            f"{FILE_CHAT_PREFIX}discord.channel-1."
+        )
+        assert (
+            normalize_feature_key(captured[0]["session_key"])
+            == captured[0]["session_key"]
+        )
         assert captured[0]["orchestrator_channel_key"] == "channel-1"
         assert any(
             "Done from fake turn" in msg["payload"].get("content", "")
@@ -286,6 +297,33 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         )
     finally:
         await store.close()
+
+
+def test_build_message_session_key_is_registry_valid(tmp_path: Path) -> None:
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    codex_key = service._build_message_session_key(
+        channel_id="channel-1",
+        workspace_root=workspace,
+        pma_enabled=False,
+        agent="codex",
+    )
+    opencode_key = service._build_message_session_key(
+        channel_id="channel-1",
+        workspace_root=workspace,
+        pma_enabled=False,
+        agent="opencode",
+    )
+
+    assert codex_key.startswith(f"{FILE_CHAT_PREFIX}discord.channel-1.")
+    assert opencode_key.startswith(f"{FILE_CHAT_OPENCODE_PREFIX}discord.channel-1.")
+    assert normalize_feature_key(codex_key) == codex_key
+    assert normalize_feature_key(opencode_key) == opencode_key
 
 
 @pytest.mark.anyio

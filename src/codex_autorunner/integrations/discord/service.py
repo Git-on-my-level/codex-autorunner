@@ -30,7 +30,12 @@ from ...core.state import RunnerState
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
-from ...integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from ...integrations.app_server.threads import (
+    FILE_CHAT_OPENCODE_PREFIX,
+    FILE_CHAT_PREFIX,
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+)
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
@@ -500,7 +505,8 @@ class DiscordBotService:
         if pma_enabled:
             return PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
         digest = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:12]
-        return f"discord:{channel_id}:{agent}:{digest}"
+        prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
+        return f"{prefix}discord.{channel_id}.{digest}"
 
     def _build_runner_state(
         self,
@@ -1003,7 +1009,9 @@ class DiscordBotService:
         if event_type == "INTERACTION_CREATE":
             await self._handle_interaction(payload)
         elif event_type == "MESSAGE_CREATE":
-            self._chat_adapter.enqueue_message_event(payload)
+            event = self._chat_adapter.parse_message_event(payload)
+            if event is not None:
+                await self._dispatcher.dispatch(event, self._handle_chat_event)
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
         interaction_id = extract_interaction_id(interaction_payload)
