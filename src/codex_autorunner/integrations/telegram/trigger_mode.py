@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
+from ..chat.turn_policy import PlainTextTurnContext, should_trigger_plain_text_turn
 from .adapter import TelegramMessage
 
 TriggerMode = Literal["all", "mentions"]
@@ -24,30 +25,15 @@ def should_trigger_run(
     - Otherwise, do not trigger (commands and other explicit affordances are handled elsewhere).
     """
 
-    if message.chat_type == "private":
-        return True
-
-    lowered = (text or "").lower()
-    if bot_username:
-        needle = f"@{bot_username}".lower()
-        if needle in lowered:
-            return True
-
-    implicit_topic_reply = (
-        message.thread_id is not None
-        and message.reply_to_message_id is not None
-        and message.reply_to_message_id == message.thread_id
+    return should_trigger_plain_text_turn(
+        mode="mentions",
+        context=PlainTextTurnContext(
+            text=text,
+            chat_type=message.chat_type,
+            bot_username=bot_username,
+            reply_to_is_bot=message.reply_to_is_bot,
+            reply_to_username=message.reply_to_username,
+            reply_to_message_id=message.reply_to_message_id,
+            thread_id=message.thread_id,
+        ),
     )
-
-    if message.reply_to_is_bot and not implicit_topic_reply:
-        return True
-
-    if (
-        bot_username
-        and message.reply_to_username
-        and message.reply_to_username.lower() == bot_username.lower()
-        and not implicit_topic_reply
-    ):
-        return True
-
-    return False
