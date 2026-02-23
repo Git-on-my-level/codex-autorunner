@@ -11,6 +11,7 @@ from .constants import (
     DISCORD_INTENT_MESSAGE_CONTENT,
     DISCORD_MAX_MESSAGE_LENGTH,
 )
+from .overflow import DEFAULT_MESSAGE_OVERFLOW, MESSAGE_OVERFLOW_OPTIONS
 
 DEFAULT_BOT_TOKEN_ENV = "CAR_DISCORD_BOT_TOKEN"
 DEFAULT_APP_ID_ENV = "CAR_DISCORD_APP_ID"
@@ -49,6 +50,7 @@ class DiscordBotConfig:
     state_file: Path
     intents: int
     max_message_length: int
+    message_overflow: str
     pma_enabled: bool
 
     @classmethod
@@ -105,6 +107,14 @@ class DiscordBotConfig:
             raise DiscordBotConfigError("discord_bot.max_message_length must be > 0")
         max_message_length = min(max_message_length_value, DISCORD_MAX_MESSAGE_LENGTH)
 
+        message_overflow = str(
+            cfg.get("message_overflow", DEFAULT_MESSAGE_OVERFLOW)
+        ).strip()
+        if message_overflow:
+            message_overflow = message_overflow.lower()
+        if message_overflow not in MESSAGE_OVERFLOW_OPTIONS:
+            message_overflow = DEFAULT_MESSAGE_OVERFLOW
+
         if enabled:
             if not bot_token:
                 raise DiscordBotConfigError(
@@ -133,6 +143,7 @@ class DiscordBotConfig:
             state_file=(root / state_file_value).resolve(),
             intents=intents_value,
             max_message_length=max_message_length,
+            message_overflow=message_overflow,
             pma_enabled=pma_enabled,
         )
 

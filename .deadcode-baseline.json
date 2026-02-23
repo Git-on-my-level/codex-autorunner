@@ -1,9 +1,8 @@
 {
   "findings": [
-    "python:class:src/codex_autorunner/core/app_server_logging.py:72:AppServerEventFormatter",
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
     "python:class:src/codex_autorunner/integrations/chat/testing.py:93:FakeChatAdapter",
-    "python:class:src/codex_autorunner/integrations/telegram/chat_adapter.py:79:TelegramChatAdapter",
+    "python:class:src/codex_autorunner/integrations/discord/errors.py:40:DiscordPermanentError",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:212:GithubIssueRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:216:GithubContextRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:220:GithubPrSyncRequest",
@@ -19,6 +18,10 @@
     "python:function:src/codex_autorunner/core/state_roots.py:166:get_canonical_roots",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:21:run_turn_with_backend",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:72:stream_turn_events",
+    "python:function:src/codex_autorunner/integrations/discord/rendering.py:29:format_code_block",
+    "python:function:src/codex_autorunner/integrations/discord/rendering.py:38:format_inline_code",
+    "python:function:src/codex_autorunner/integrations/discord/rendering.py:45:format_bold",
+    "python:function:src/codex_autorunner/integrations/discord/rendering.py:52:format_italic",
     "python:function:src/codex_autorunner/integrations/github/service.py:257:parse_pr_input",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:138:log_stream",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:171:jsonl_event_stream",
