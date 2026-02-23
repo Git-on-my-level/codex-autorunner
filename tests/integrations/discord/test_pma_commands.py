@@ -132,7 +132,7 @@ def _bind_interaction(*, path: str, user_id: str = "user-1") -> dict[str, Any]:
                 {
                     "type": 1,
                     "name": "bind",
-                    "options": [{"type": 3, "name": "path", "value": path}],
+                    "options": [{"type": 3, "name": "workspace", "value": path}],
                 }
             ],
         },

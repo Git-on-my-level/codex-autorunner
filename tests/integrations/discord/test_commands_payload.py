@@ -60,8 +60,8 @@ def test_required_options_are_marked_required() -> None:
     car_options = commands[0]["options"]
 
     bind = _find_option(car_options, "bind")
-    bind_path = _find_option(bind["options"], "path")
-    assert bind_path["required"] is False
+    bind_workspace = _find_option(bind["options"], "workspace")
+    assert bind_workspace["required"] is False
 
     flow = _find_option(car_options, "flow")
     flow_reply = _find_option(flow["options"], "reply")
