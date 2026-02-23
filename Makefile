@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test check preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
+.PHONY: install dev hooks build test test-discord-contract check preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -72,6 +72,14 @@ hooks:
 
 test:
 	$(PYTHON) -m pytest -m "not integration"
+
+test-discord-contract:
+	$(PYTHON) -m pytest -q \
+		tests/integrations/discord/test_service_routing.py \
+		tests/integrations/discord/test_interactions_parse.py \
+		tests/integrations/chat/test_parity_checker.py \
+		tests/test_doctor_checks.py::test_chat_doctor_checks_use_parity_contract_group \
+		tests/test_doctor_checks.py::test_chat_doctor_checks_failures_are_actionable
 
 test-integration:
 	$(PYTHON) -m pytest -m integration

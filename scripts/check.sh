@@ -41,6 +41,7 @@ elif command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
 fi
 need_cmd "$PYTHON_BIN"
+need_cmd make
 need_cmd node
 need_cmd pnpm
 
@@ -57,6 +58,9 @@ paths=(src)
 if [ -d tests ]; then
   paths+=(tests)
 fi
+
+echo "Running fast Discord contract guardrails..."
+make test-discord-contract PYTHON="$PYTHON_BIN"
 
 echo "Formatting check (black)..."
 "$PYTHON_BIN" -m black --check "${paths[@]}"

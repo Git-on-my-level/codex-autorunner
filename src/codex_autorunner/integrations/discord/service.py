@@ -1060,6 +1060,16 @@ class DiscordBotService:
             options=options,
         )
         if ingress is None:
+            self._logger.warning(
+                "handle_interaction: failed to canonicalize command ingress (command_path=%s, options=%s)",
+                command_path,
+                options,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not parse this interaction. Please retry the command.",
+            )
             return
 
         try:
@@ -2768,34 +2778,51 @@ class DiscordBotService:
                 "handle_component_interaction: missing custom_id (interaction_id=%s)",
                 interaction_id,
             )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not identify this interaction action. Please retry.",
+            )
             return
 
         try:
             if custom_id == "bind_select":
                 values = extract_component_values(interaction_payload)
-                if values:
-                    await self._handle_bind_selection(
+                if not values:
+                    await self._respond_ephemeral(
                         interaction_id,
                         interaction_token,
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                        selected_repo_id=values[0],
+                        "Please select a repository and try again.",
                     )
+                    return
+                await self._handle_bind_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    guild_id=extract_guild_id(interaction_payload),
+                    selected_repo_id=values[0],
+                )
                 return
 
             if custom_id == "flow_runs_select":
                 values = extract_component_values(interaction_payload)
-                if values:
-                    workspace_root = await self._require_bound_workspace(
-                        interaction_id, interaction_token, channel_id=channel_id
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a run and try again.",
                     )
-                    if workspace_root:
-                        await self._handle_flow_status(
-                            interaction_id,
-                            interaction_token,
-                            workspace_root=workspace_root,
-                            options={"run_id": values[0]},
-                        )
+                    return
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id, interaction_token, channel_id=channel_id
+                )
+                if workspace_root:
+                    await self._handle_flow_status(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": values[0]},
+                    )
                 return
 
             if custom_id.startswith("flow:"):

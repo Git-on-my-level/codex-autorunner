@@ -69,6 +69,12 @@ def test_extract_component_custom_id() -> None:
     assert extract_component_custom_id(payload) == "flow:run-123:resume"
 
 
+def test_extract_component_custom_id_returns_none_for_missing_or_blank() -> None:
+    assert extract_component_custom_id({"data": {}}) is None
+    assert extract_component_custom_id({"data": {"custom_id": "   "}}) is None
+    assert extract_component_custom_id({"data": "not-a-dict"}) is None
+
+
 def test_extract_component_values() -> None:
     payload = {"data": {"values": ["repo-1", "repo-2"]}}
     assert extract_component_values(payload) == ["repo-1", "repo-2"]
@@ -77,3 +83,14 @@ def test_extract_component_values() -> None:
 def test_extract_component_values_returns_empty_for_no_values() -> None:
     payload = {"data": {}}
     assert extract_component_values(payload) == []
+
+
+def test_extract_component_values_filters_non_scalar_values() -> None:
+    payload = {"data": {"values": ["repo-1", 2, 3.5, None, {"k": "v"}, ["nested"]]}}
+    assert extract_component_values(payload) == ["repo-1", "2", "3.5"]
+
+
+def test_extract_command_path_and_options_returns_empty_for_malformed_payload() -> None:
+    assert extract_command_path_and_options({}) == ((), {})
+    assert extract_command_path_and_options({"data": "not-a-dict"}) == ((), {})
+    assert extract_command_path_and_options({"data": {"name": ""}}) == ((), {})
