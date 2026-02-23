@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramCommand,
     parse_command,
@@ -43,12 +45,24 @@ def test_contract_registration_normalizes_name_and_runtime_rejects_uppercase() -
 def test_contract_registration_rejects_invalid_names() -> None:
     specs = {
         "invalid-hyphen": make_command_spec("foo-bar", "bad"),
+        "invalid-whitespace": make_command_spec("foo bar", "bad"),
+        "invalid-mention": make_command_spec("foo@codexbot", "bad"),
         "invalid-too-long": make_command_spec("a" * 33, "bad"),
     }
     commands, invalid = build_command_payloads(specs)
     assert commands == []
-    assert invalid == ["foo-bar", "a" * 33]
+    assert invalid == ["foo-bar", "foo bar", "foo@codexbot", "a" * 33]
 
 
 def test_contract_readme_revisit_threshold_policy_minimum() -> None:
     assert README_REVISIT_GUIDANCE_MIN_MODULE_THRESHOLD >= 6
+
+
+def test_contract_helper_guidance_module_count_below_readme_revisit_threshold() -> None:
+    tests_dir = Path(__file__).resolve().parent
+    guidance_module_count = sum(
+        1
+        for path in tests_dir.glob("test_telegram_*.py")
+        if "Helper usage:" in path.read_text(encoding="utf-8")
+    )
+    assert guidance_module_count < README_REVISIT_GUIDANCE_MIN_MODULE_THRESHOLD

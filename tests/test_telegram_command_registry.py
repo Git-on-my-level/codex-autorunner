@@ -27,12 +27,14 @@ def test_build_command_payloads_normalizes_names() -> None:
 def test_build_command_payloads_rejects_invalid_names() -> None:
     specs = {
         "Invalid-Hyphen": make_command_spec("foo-bar", "bad"),
+        "Invalid-Whitespace": make_command_spec("foo bar", "bad"),
+        "Invalid-Mention": make_command_spec("foo@codexbot", "bad"),
         "Normalized-Upper": make_command_spec("Review", "bad"),
         "Invalid-Long": make_command_spec("a" * 33, "bad"),
     }
     commands, invalid = build_command_payloads(specs)
     assert commands == [{"command": "review", "description": "bad"}]
-    assert invalid == ["foo-bar", "a" * 33]
+    assert invalid == ["foo-bar", "foo bar", "foo@codexbot", "a" * 33]
 
 
 def test_diff_command_lists_detects_changes() -> None:

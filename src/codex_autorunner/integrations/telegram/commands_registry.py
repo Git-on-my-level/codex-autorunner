@@ -88,6 +88,8 @@ def _validate_command_name(name: str) -> Optional[str]:
     parsed = parse_chat_command(f"/{normalized}")
     if parsed is None:
         return None
+    if parsed.name != normalized or parsed.args:
+        return None
     return parsed.name
 
 
