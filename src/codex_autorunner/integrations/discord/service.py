@@ -396,12 +396,12 @@ class DiscordBotService:
         guild_id: Optional[str],
         options: dict[str, Any],
     ) -> None:
-        raw_path = options.get("path")
+        raw_path = options.get("workspace")
         if not isinstance(raw_path, str) or not raw_path.strip():
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Missing required option: path",
+                "Missing required option: workspace",
             )
             return
 
@@ -439,7 +439,7 @@ class DiscordBotService:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = (
-                "This channel is not bound. Use /car bind path:<workspace>. "
+                "This channel is not bound. Use /car bind workspace:<workspace>. "
                 "Then use /car flow status once flow commands are enabled."
             )
         else:

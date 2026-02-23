@@ -144,7 +144,7 @@ async def test_service_enforces_allowlist_and_denies_command(tmp_path: Path) -> 
         [
             _interaction(
                 name="bind",
-                options=[{"type": 3, "name": "path", "value": str(tmp_path)}],
+                options=[{"type": 3, "name": "workspace", "value": str(tmp_path)}],
                 user_id="unauthorized",
             )
         ]
@@ -181,7 +181,7 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         [
             _interaction(
                 name="bind",
-                options=[{"type": 3, "name": "path", "value": str(workspace)}],
+                options=[{"type": 3, "name": "workspace", "value": str(workspace)}],
             ),
             _interaction(name="status", options=[]),
         ]
