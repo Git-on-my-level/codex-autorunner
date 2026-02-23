@@ -37,6 +37,7 @@ from ...integrations.app_server.threads import (
     PMA_OPENCODE_KEY,
 )
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
+from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -278,22 +279,25 @@ class DiscordBotService:
             )
             return
 
-        command = payload_data.get("command", "")
-        options = payload_data.get("options", {})
+        ingress = canonicalize_command_ingress(
+            command=payload_data.get("command"),
+            options=payload_data.get("options"),
+        )
+        command = ingress.command if ingress is not None else ""
         guild_id = payload_data.get("guild_id")
 
         try:
-            if command.startswith("car:"):
-                await self._handle_normalized_car_command(
+            if ingress is not None and ingress.command_path[:1] == ("car",):
+                await self._handle_car_command(
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
-                    command=command,
-                    options=options,
-                    event=event,
-                    context=context,
+                    guild_id=context.thread_id,
+                    user_id=event.from_user_id,
+                    command_path=ingress.command_path,
+                    options=ingress.options,
                 )
-            elif command.startswith("pma:"):
+            elif ingress is not None and ingress.command_path[:1] == ("pma",):
                 await self._handle_pma_command_from_normalized(
                     interaction_id,
                     interaction_token,
@@ -599,27 +603,25 @@ class DiscordBotService:
             raise RuntimeError(error_message)
         return final_message
 
-    async def _handle_normalized_car_command(
+    async def _handle_car_command(
         self,
         interaction_id: str,
         interaction_token: str,
         *,
         channel_id: str,
-        command: str,
+        guild_id: Optional[str],
+        user_id: Optional[str],
+        command_path: tuple[str, ...],
         options: dict[str, Any],
-        event: ChatInteractionEvent,
-        context: DispatchContext,
     ) -> None:
-        command_parts = command.split(":")
-        command_path = tuple(command_parts)
-        primary = command_parts[1] if len(command_parts) > 1 else ""
+        primary = command_path[1] if len(command_path) > 1 else ""
 
         if command_path == ("car", "bind"):
             await self._handle_bind(
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
-                guild_id=context.thread_id,
+                guild_id=guild_id,
                 options=options,
             )
             return
@@ -648,8 +650,8 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
-                guild_id=context.thread_id,
-                user_id=event.from_user_id,
+                guild_id=guild_id,
+                user_id=user_id,
             )
             return
         if command_path == ("car", "agent"):
@@ -1039,198 +1041,33 @@ class DiscordBotService:
             return
 
         command_path, options = extract_command_path_and_options(interaction_payload)
-        if not command_path:
+        ingress = canonicalize_command_ingress(
+            command_path=command_path,
+            options=options,
+        )
+        if ingress is None:
             return
 
         try:
-            if command_path == ("car", "bind"):
-                await self._handle_bind(
+            if ingress.command_path[:1] == ("car",):
+                await self._handle_car_command(
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
                     guild_id=guild_id,
-                    options=options,
-                )
-                return
-            if command_path == ("car", "status"):
-                await self._handle_status(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                )
-                return
-            if command_path == ("car", "debug"):
-                await self._handle_debug(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                )
-                return
-            if command_path == ("car", "help"):
-                await self._handle_help(
-                    interaction_id,
-                    interaction_token,
-                )
-                return
-            if command_path == ("car", "ids"):
-                user_id = extract_user_id(interaction_payload)
-                await self._handle_ids(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                    user_id=user_id,
-                )
-                return
-            if command_path == ("car", "repos"):
-                await self._handle_repos(
-                    interaction_id,
-                    interaction_token,
-                )
-                return
-            if command_path == ("car", "diff"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root is None:
-                    return
-                await self._handle_diff(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                    options=options,
-                )
-                return
-            if command_path == ("car", "skills"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root is None:
-                    return
-                await self._handle_skills(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                )
-                return
-            if command_path == ("car", "mcp"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root is None:
-                    return
-                await self._handle_mcp(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                )
-                return
-            if command_path == ("car", "init"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root is None:
-                    return
-                await self._handle_init(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
+                    user_id=extract_user_id(interaction_payload),
+                    command_path=ingress.command_path,
+                    options=ingress.options,
                 )
                 return
 
-            if command_path[:2] == ("car", "flow"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root is None:
-                    return
-
-                if command_path == ("car", "flow", "status"):
-                    await self._handle_flow_status(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options=options,
-                    )
-                    return
-                if command_path == ("car", "flow", "runs"):
-                    await self._handle_flow_runs(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options=options,
-                    )
-                    return
-                if command_path == ("car", "flow", "resume"):
-                    await self._handle_flow_resume(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options=options,
-                    )
-                    return
-                if command_path == ("car", "flow", "stop"):
-                    await self._handle_flow_stop(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options=options,
-                    )
-                    return
-                if command_path == ("car", "flow", "archive"):
-                    await self._handle_flow_archive(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options=options,
-                    )
-                    return
-                if command_path == ("car", "flow", "reply"):
-                    await self._handle_flow_reply(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options=options,
-                    )
-                    return
-
-            if command_path[:2] == ("car", "files"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root is None:
-                    return
-
-                if command_path == ("car", "files", "inbox"):
-                    await self._handle_files_inbox(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                    )
-                    return
-                if command_path == ("car", "files", "outbox"):
-                    await self._handle_files_outbox(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                    )
-                    return
-                if command_path == ("car", "files", "clear"):
-                    await self._handle_files_clear(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options=options,
-                    )
-                    return
-
-            if command_path[:1] == ("pma",):
+            if ingress.command_path[:1] == ("pma",):
                 await self._handle_pma_command(
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
                     guild_id=guild_id,
-                    command_path=command_path,
+                    command_path=ingress.command_path,
                 )
                 return
 
@@ -1247,7 +1084,7 @@ class DiscordBotService:
                 self._logger,
                 logging.ERROR,
                 "discord.interaction.unhandled_error",
-                command_path=":".join(command_path) if command_path else "unknown",
+                command_path=ingress.command,
                 channel_id=channel_id,
                 exc=exc,
             )

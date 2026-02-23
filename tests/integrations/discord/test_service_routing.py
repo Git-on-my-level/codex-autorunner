@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
+from codex_autorunner.integrations.chat.models import (
+    ChatInteractionEvent,
+    ChatInteractionRef,
+    ChatThreadRef,
+)
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -134,6 +141,42 @@ def _interaction(
             "options": [{"type": 1, "name": name, "options": options}],
         },
     }
+
+
+def _pma_interaction(*, name: str, user_id: str = "user-1") -> dict[str, Any]:
+    return {
+        "id": "inter-1",
+        "token": "token-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": user_id}},
+        "data": {
+            "name": "pma",
+            "options": [{"type": 1, "name": name, "options": []}],
+        },
+    }
+
+
+def _normalized_interaction_event(
+    *, command: str, options: dict[str, Any] | None = None, user_id: str = "user-1"
+) -> ChatInteractionEvent:
+    thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id="guild-1")
+    return ChatInteractionEvent(
+        update_id="discord:normalized:1",
+        thread=thread,
+        interaction=ChatInteractionRef(thread=thread, interaction_id="inter-1"),
+        from_user_id=user_id,
+        payload=json.dumps(
+            {
+                "_discord_interaction_id": "inter-1",
+                "_discord_token": "token-1",
+                "command": command,
+                "options": options or {},
+                "guild_id": "guild-1",
+            },
+            separators=(",", ":"),
+        ),
+    )
 
 
 @pytest.mark.anyio
@@ -316,5 +359,115 @@ async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
         assert "not bound" in payload["data"]["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("subcommand", ["agent", "model"])
+async def test_service_routes_car_agent_and_model_without_generic_fallback(
+    tmp_path: Path, subcommand: str
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name=subcommand, options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "not bound" in content
+        assert "not implemented yet for discord" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_normalized_interaction_routes_car_agent_without_generic_fallback(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        event = _normalized_interaction_event(command="car:agent")
+        context = build_dispatch_context(event)
+        await service._handle_normalized_interaction(event, context)
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "not bound" in content
+        assert "not implemented yet for discord" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_unknown_car_subcommand_has_explicit_unknown_message(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="mystery", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "unknown car subcommand: mystery" in content
+        assert "not implemented yet for discord" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_unknown_pma_subcommand_has_explicit_unknown_message(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(name="mystery")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "unknown pma subcommand" in content
+        assert "not implemented yet for discord" not in content
     finally:
         await store.close()
