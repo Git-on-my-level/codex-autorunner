@@ -9,7 +9,10 @@ from codex_autorunner.integrations.chat.callbacks import (
     LogicalCallback,
     encode_logical_callback,
 )
-from codex_autorunner.integrations.chat.dispatcher import ChatDispatcher
+from codex_autorunner.integrations.chat.dispatcher import (
+    ChatDispatcher,
+    is_bypass_event,
+)
 from codex_autorunner.integrations.chat.models import (
     ChatInteractionEvent,
     ChatInteractionRef,
@@ -178,3 +181,33 @@ async def test_dispatcher_supports_custom_bypass_rules() -> None:
     assert bypassed.status == "dispatched"
     assert bypassed.bypassed is True
     assert observed[:4] == ["normal-1-start", "bypass", "normal-1-end", "queued"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_param"),
+    [
+        ({"bypass_interaction_prefixes": "qopt:"}, "bypass_interaction_prefixes"),
+        ({"bypass_callback_ids": "question_done"}, "bypass_callback_ids"),
+        ({"bypass_message_texts": "!stop"}, "bypass_message_texts"),
+    ],
+)
+def test_dispatcher_rejects_scalar_string_bypass_iterables(
+    kwargs: dict[str, str], expected_param: str
+) -> None:
+    with pytest.raises(TypeError, match=expected_param):
+        ChatDispatcher(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_param"),
+    [
+        ({"interaction_prefixes": "qopt:"}, "interaction_prefixes"),
+        ({"callback_ids": "question_done"}, "callback_ids"),
+        ({"message_texts": "!stop"}, "message_texts"),
+    ],
+)
+def test_is_bypass_event_rejects_scalar_string_iterables(
+    kwargs: dict[str, str], expected_param: str
+) -> None:
+    with pytest.raises(TypeError, match=expected_param):
+        is_bypass_event(_interaction_event("u-1"), **kwargs)

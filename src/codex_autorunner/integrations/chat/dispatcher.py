@@ -64,6 +64,26 @@ DEFAULT_BYPASS_MESSAGE_TEXTS = frozenset(
 )
 
 
+def _normalize_casefolded_values(
+    values: Optional[Iterable[str]],
+    *,
+    default: Iterable[str],
+    parameter_name: str,
+) -> tuple[str, ...]:
+    source = default if values is None else values
+    if isinstance(source, str):
+        raise TypeError(
+            f"{parameter_name} must be an iterable of strings, not a string"
+        )
+
+    normalized: list[str] = []
+    for value in source:
+        if not isinstance(value, str):
+            raise TypeError(f"{parameter_name} values must be strings")
+        normalized.append(value.lower())
+    return tuple(normalized)
+
+
 @dataclass(frozen=True)
 class DispatchContext:
     """Normalized dispatch metadata derived from an inbound chat event."""
@@ -118,28 +138,23 @@ class ChatDispatcher:
         self._allowlist_predicate = allowlist_predicate
         self._dedupe_predicate = dedupe_predicate
         self._bypass_predicate = bypass_predicate
-        self._bypass_interaction_prefixes = tuple(
-            prefix.lower()
-            for prefix in (
-                bypass_interaction_prefixes
-                if bypass_interaction_prefixes is not None
-                else DEFAULT_BYPASS_INTERACTION_PREFIXES
-            )
+        self._bypass_interaction_prefixes = _normalize_casefolded_values(
+            bypass_interaction_prefixes,
+            default=DEFAULT_BYPASS_INTERACTION_PREFIXES,
+            parameter_name="bypass_interaction_prefixes",
         )
         self._bypass_callback_ids = frozenset(
-            callback_id.lower()
-            for callback_id in (
-                bypass_callback_ids
-                if bypass_callback_ids is not None
-                else DEFAULT_BYPASS_CALLBACK_IDS
+            _normalize_casefolded_values(
+                bypass_callback_ids,
+                default=DEFAULT_BYPASS_CALLBACK_IDS,
+                parameter_name="bypass_callback_ids",
             )
         )
         self._bypass_message_texts = frozenset(
-            text.lower()
-            for text in (
-                bypass_message_texts
-                if bypass_message_texts is not None
-                else DEFAULT_BYPASS_MESSAGE_TEXTS
+            _normalize_casefolded_values(
+                bypass_message_texts,
+                default=DEFAULT_BYPASS_MESSAGE_TEXTS,
+                parameter_name="bypass_message_texts",
             )
         )
         self._lock = asyncio.Lock()
@@ -374,24 +389,23 @@ def is_bypass_event(
 ) -> bool:
     """Return True for events that should bypass per-conversation queues."""
 
-    interaction_prefixes = tuple(
-        prefix.lower()
-        for prefix in (
-            interaction_prefixes
-            if interaction_prefixes is not None
-            else DEFAULT_BYPASS_INTERACTION_PREFIXES
-        )
+    interaction_prefixes = _normalize_casefolded_values(
+        interaction_prefixes,
+        default=DEFAULT_BYPASS_INTERACTION_PREFIXES,
+        parameter_name="interaction_prefixes",
     )
     callback_ids = frozenset(
-        callback_id.lower()
-        for callback_id in (
-            callback_ids if callback_ids is not None else DEFAULT_BYPASS_CALLBACK_IDS
+        _normalize_casefolded_values(
+            callback_ids,
+            default=DEFAULT_BYPASS_CALLBACK_IDS,
+            parameter_name="callback_ids",
         )
     )
     message_texts = frozenset(
-        text.lower()
-        for text in (
-            message_texts if message_texts is not None else DEFAULT_BYPASS_MESSAGE_TEXTS
+        _normalize_casefolded_values(
+            message_texts,
+            default=DEFAULT_BYPASS_MESSAGE_TEXTS,
+            parameter_name="message_texts",
         )
     )
 
