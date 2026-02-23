@@ -69,6 +69,9 @@ class DiscordStateStore:
     async def list_bindings(self) -> list[dict[str, Any]]:
         return await self._run(self._list_bindings_sync)  # type: ignore[no-any-return]
 
+    async def delete_binding(self, *, channel_id: str) -> None:
+        await self._run(self._delete_binding_sync, channel_id)
+
     async def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
         return await self._run(self._upsert_outbox_sync, record)  # type: ignore[no-any-return]
 
@@ -365,6 +368,14 @@ class DiscordStateStore:
             "SELECT * FROM channel_bindings ORDER BY updated_at DESC"
         ).fetchall()
         return [self._binding_from_row(row) for row in rows]
+
+    def _delete_binding_sync(self, channel_id: str) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                "DELETE FROM channel_bindings WHERE channel_id = ?",
+                (channel_id,),
+            )
 
     def _mark_pause_dispatch_seen_sync(
         self,

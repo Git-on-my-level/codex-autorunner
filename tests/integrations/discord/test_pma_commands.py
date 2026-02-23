@@ -261,7 +261,7 @@ async def test_pma_status_shows_disabled(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_pma_on_requires_bound_channel(tmp_path: Path) -> None:
+async def test_pma_on_unbound_channel_auto_binds_for_pma(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
 
@@ -280,7 +280,100 @@ async def test_pma_on_requires_bound_channel(tmp_path: Path) -> None:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert "not bound" in payload["data"]["content"].lower()
+        assert "PMA mode enabled" in payload["data"]["content"]
+        assert "Use /pma off to exit." in payload["data"]["content"]
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding.get("pma_enabled") is True
+        assert binding.get("pma_prev_workspace_path") is None
+        assert binding.get("pma_prev_repo_id") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_off_after_unbound_pma_on_returns_to_unbound(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_pma_interaction(subcommand="on"), _pma_interaction(subcommand="off")]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        on_payload = rest.interaction_responses[0]["payload"]["data"]["content"]
+        off_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
+        assert "PMA mode enabled" in on_payload
+        assert "PMA mode disabled" in off_payload
+        assert "Back to repo mode." in off_payload
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_status_unbound_channel_reports_disabled(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="status")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        content = payload["data"]["content"]
+        assert "PMA mode: disabled" in content
+        assert "Current workspace: unbound" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_off_unbound_channel_is_idempotent(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="off")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert "PMA mode disabled" in payload["data"]["content"]
+        assert "Back to repo mode." in payload["data"]["content"]
     finally:
         await store.close()
 
