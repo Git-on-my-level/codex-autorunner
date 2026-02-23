@@ -24,6 +24,10 @@ class ParityCheck:
     details: str = ""
 
 
+def _contains_all(text: str, *snippets: str) -> bool:
+    return all(snippet in text for snippet in snippets)
+
+
 def _write_parity_report(*, repo_root: Path, checks: list[ParityCheck]) -> Path:
     lines: list[str] = [
         "# Cross-Surface Parity Report",
@@ -167,8 +171,16 @@ def test_cross_surface_parity_report(hub_env) -> None:
     spec_path = Path(
         "src/codex_autorunner/integrations/telegram/handlers/commands_spec.py"
     )
+    trigger_mode_path = Path(
+        "src/codex_autorunner/integrations/telegram/trigger_mode.py"
+    )
+    telegram_messages_path = Path(
+        "src/codex_autorunner/integrations/telegram/handlers/messages.py"
+    )
     runtime_text = runtime_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8")
+    trigger_mode_text = trigger_mode_path.read_text(encoding="utf-8")
+    telegram_messages_text = telegram_messages_path.read_text(encoding="utf-8")
 
     telegram_shell_passthrough = "def _handle_bang_shell(" in runtime_text
     checks.append(
@@ -197,6 +209,35 @@ def test_cross_surface_parity_report(hub_env) -> None:
             primitive="pma_command",
             passed=telegram_pma_command,
             details="/pma command available",
+        )
+    )
+
+    telegram_mentions_path = _contains_all(
+        telegram_messages_text,
+        "from ..trigger_mode import should_trigger_run",
+        "should_trigger_run(",
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="telegram",
+            primitive="mentions_trigger_path",
+            passed=telegram_mentions_path,
+            details="message trigger path routes mentions mode through trigger_mode",
+        )
+    )
+
+    telegram_shared_turn_policy = _contains_all(
+        trigger_mode_text,
+        "should_trigger_plain_text_turn(",
+        "PlainTextTurnContext(",
+        'mode="mentions"',
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="telegram",
+            primitive="shared_turn_policy",
+            passed=telegram_shared_turn_policy,
+            details="mentions trigger delegates to shared chat turn policy",
         )
     )
 
@@ -237,6 +278,53 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
+    discord_car_agent_support = _contains_all(
+        discord_commands_text,
+        '"name": "agent"',
+        '"description": "View or set the agent"',
+    ) and _contains_all(
+        discord_service_text,
+        'if command_path == ("car", "agent"):',
+        "await self._handle_car_agent(",
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="discord",
+            primitive="car_agent_support",
+            passed=discord_car_agent_support,
+            details="/car agent registered and routed to handler",
+        )
+    )
+
+    discord_shared_command_ingress = (
+        "integrations.chat.command_ingress import canonicalize_command_ingress"
+        in discord_service_text
+        and discord_service_text.count("canonicalize_command_ingress(") >= 2
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="discord",
+            primitive="shared_command_ingress",
+            passed=discord_shared_command_ingress,
+            details="Discord interaction handling uses shared command ingress normalization",
+        )
+    )
+
+    discord_shared_turn_policy = _contains_all(
+        discord_service_text,
+        "should_trigger_plain_text_turn(",
+        "PlainTextTurnContext(",
+        'mode="always"',
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="discord",
+            primitive="shared_turn_policy",
+            passed=discord_shared_turn_policy,
+            details="direct-chat path uses shared plain-text turn policy",
+        )
+    )
+
     discord_pma_delivery = "_resolve_discord_target" in Path(
         "src/codex_autorunner/integrations/pma_delivery.py"
     ).read_text(encoding="utf-8")
@@ -261,6 +349,7 @@ def test_cross_surface_parity_report(hub_env) -> None:
     critical_failures = [
         check
         for check in checks
-        if check.entrypoint in {"cli", "web"} and not check.passed
+        if check.entrypoint in {"cli", "web", "telegram", "discord"}
+        and not check.passed
     ]
     assert not critical_failures

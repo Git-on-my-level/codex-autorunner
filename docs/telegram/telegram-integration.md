@@ -114,6 +114,11 @@ implicit_topic_reply = (
 
 When `implicit_topic_reply` is true, reply-to checks are skipped.
 
+### Shared Direct-Chat Policy
+
+- Mentions-mode trigger evaluation delegates to shared chat turn policy (`should_trigger_plain_text_turn` with `mode="mentions"`).
+- This policy only governs plain-text direct-chat turns; explicit slash commands continue through the command-dispatch path.
+
 ## Dispatch Specification
 
 The dispatch system routes Telegram updates to appropriate handlers.

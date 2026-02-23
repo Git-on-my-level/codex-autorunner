@@ -171,6 +171,8 @@ For PMA mode:
 Notes:
 - Slash command responses remain ephemeral.
 - If a ticket flow run is paused in repo mode, the next free-text message is treated as the flow reply and resumes that run.
+- `/car ...` and `/pma ...` slash commands are normalized through CAR's shared command-ingress parser before dispatch.
+- Direct-chat turns use the shared plain-text turn policy in `always` mode, so non-command messages trigger turns while slash commands stay command-only.
 
 ### PMA Commands
 
