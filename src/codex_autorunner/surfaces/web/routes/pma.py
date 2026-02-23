@@ -229,8 +229,6 @@ def build_pma_routes() -> APIRouter:
         lifecycle_event: Optional[dict[str, Any]],
         turn_id: Optional[str] = None,
     ) -> None:
-        if not lifecycle_event:
-            return
         status = result.get("status") or "error"
         if status != "ok":
             return
