@@ -30,6 +30,7 @@ from .interactions import (
     extract_channel_id,
     extract_command_path_and_options,
     extract_component_custom_id,
+    extract_guild_id,
     extract_interaction_id,
     extract_interaction_token,
     extract_user_id,
@@ -139,6 +140,7 @@ class DiscordChatAdapter(ChatAdapter):
 
     def _parse_message_to_event(self, payload: dict[str, Any]) -> Optional[ChatEvent]:
         channel_id = payload.get("channel_id")
+        guild_id = payload.get("guild_id")
         message_id = payload.get("id")
         author = payload.get("author", {})
         user_id = author.get("id") if isinstance(author, dict) else None
@@ -150,7 +152,9 @@ class DiscordChatAdapter(ChatAdapter):
             return None
 
         thread = ChatThreadRef(
-            platform="discord", chat_id=str(channel_id), thread_id=None
+            platform="discord",
+            chat_id=str(channel_id),
+            thread_id=str(guild_id) if isinstance(guild_id, str) and guild_id else None,
         )
         message_ref = ChatMessageRef(thread=thread, message_id=str(message_id))
 
@@ -224,6 +228,7 @@ class DiscordChatAdapter(ChatAdapter):
         import json
 
         channel_id = extract_channel_id(payload)
+        guild_id = extract_guild_id(payload)
         interaction_id = extract_interaction_id(payload)
         interaction_token = extract_interaction_token(payload)
         user_id = extract_user_id(payload)
@@ -233,7 +238,11 @@ class DiscordChatAdapter(ChatAdapter):
 
         self._interaction_tokens[interaction_id] = interaction_token
 
-        thread = ChatThreadRef(platform="discord", chat_id=channel_id, thread_id=None)
+        thread = ChatThreadRef(
+            platform="discord",
+            chat_id=channel_id,
+            thread_id=guild_id,
+        )
         interaction_ref = ChatInteractionRef(
             thread=thread, interaction_id=interaction_id
         )
@@ -248,6 +257,7 @@ class DiscordChatAdapter(ChatAdapter):
         payload_data: dict[str, Any] = {
             "_discord_token": interaction_token,
             "_discord_interaction_id": interaction_id,
+            "guild_id": guild_id,
         }
 
         if is_component_interaction(payload):
