@@ -34,7 +34,6 @@ def _extract_output_delta(params: Dict[str, Any]) -> str:
             return value
     return ""
 
-
 def _output_delta_type_for_method(method: object) -> str:
     if not isinstance(method, str):
         return "assistant_stream"
@@ -45,8 +44,6 @@ def _output_delta_type_for_method(method: object) -> str:
     }:
         return "log_line"
     return "assistant_stream"
-
-
 def _normalize_tool_name(params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     item = params.get("item")
     item_dict = item if isinstance(item, dict) else {}
