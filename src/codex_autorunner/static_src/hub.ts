@@ -1095,7 +1095,7 @@ async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
         try {
           await api(`/hub/repos/${encodeURIComponent(repo.id)}/worktree-setup`, {
             method: "POST",
-            body: JSON.stringify({ commands }),
+            body: { commands },
           });
           flash(
             commands.length

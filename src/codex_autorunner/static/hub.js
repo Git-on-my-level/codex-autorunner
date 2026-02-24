@@ -828,7 +828,7 @@ async function openRepoSettingsModal(repo) {
                 try {
                     await api(`/hub/repos/${encodeURIComponent(repo.id)}/worktree-setup`, {
                         method: "POST",
-                        body: JSON.stringify({ commands }),
+                        body: { commands },
                     });
                     flash(commands.length
                         ? `Saved ${commands.length} setup command(s) for ${repo.id}`
