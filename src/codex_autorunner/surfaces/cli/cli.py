@@ -168,6 +168,8 @@ register_worktree_commands(
     require_hub_config=_require_hub_config,
     raise_exit=_raise_exit,
     build_supervisor=_build_hub_supervisor,
+    build_server_url=_build_server_url,
+    request_json=_request_json,
 )
 hub_app.add_typer(hub_tickets_app, name="tickets")
 app.add_typer(telegram_app, name="telegram")

@@ -1621,6 +1621,12 @@ a.hub-pr-pill:hover {
   color: var(--accent-2);
 }
 
+.pill-success {
+  border-color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+}
+
 .pill-action {
   border-color: #f5a623;
   background: rgba(245, 166, 35, 0.15);
