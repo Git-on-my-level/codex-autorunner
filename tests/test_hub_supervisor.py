@@ -626,6 +626,7 @@ def test_create_worktree_runs_configured_setup_commands(tmp_path: Path):
 def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(
@@ -695,6 +696,7 @@ def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
 def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     supervisor = HubSupervisor(

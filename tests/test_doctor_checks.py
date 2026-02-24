@@ -111,7 +111,8 @@ def test_hub_worktree_doctor_checks_detects_orphans(tmp_path: Path):
     assert check.severity == "warning"
     assert check.passed is False
     assert str(hub_config.worktrees_root) in check.message
-    assert check.fix == f"Run: car hub scan --path {hub_root}"
+    assert f"car hub scan --path {hub_root}" in check.fix
+    assert "car hub worktree cleanup" in check.fix
 
 
 def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):
