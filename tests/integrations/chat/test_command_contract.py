@@ -26,6 +26,7 @@ def test_command_contract_contains_expected_commands() -> None:
         "car.model": (("car", "model"), True, "stable"),
         "car.status": (("car", "status"), False, "stable"),
         "car.new": (("car", "new"), True, "stable"),
+        "car.update": (("car", "update"), False, "stable"),
         "pma.on": (("pma", "on"), False, "stable"),
         "pma.off": (("pma", "off"), False, "stable"),
         "pma.status": (("pma", "status"), False, "stable"),

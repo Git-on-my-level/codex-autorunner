@@ -25,6 +25,18 @@ def test_parity_checker_fails_when_contract_route_is_missing(tmp_path: Path) -> 
     assert "car.model" in route_check.metadata["missing_ids"]
 
 
+def test_parity_checker_fails_when_update_route_is_missing(tmp_path: Path) -> None:
+    repo_root = _write_fixture_repo(tmp_path, include_car_update_route=False)
+
+    results_by_id = {
+        result.id: result for result in run_parity_checks(repo_root=repo_root)
+    }
+
+    route_check = results_by_id["discord.contract_commands_routed"]
+    assert not route_check.passed
+    assert "car.update" in route_check.metadata["missing_ids"]
+
+
 def test_parity_checker_fails_when_known_prefix_can_leak_to_generic_fallback(
     tmp_path: Path,
 ) -> None:
@@ -196,6 +208,7 @@ def _write_fixture_repo(
     root: Path,
     *,
     include_car_model_route: bool = True,
+    include_car_update_route: bool = True,
     include_interaction_pma_prefix_guard: bool = True,
     include_canonicalize_usage: bool = True,
     include_discord_turn_policy: bool = True,
@@ -215,6 +228,7 @@ def _write_fixture_repo(
 ) -> Path:
     discord_service = _build_discord_service_fixture(
         include_car_model_route=include_car_model_route,
+        include_car_update_route=include_car_update_route,
         include_interaction_pma_prefix_guard=include_interaction_pma_prefix_guard,
         include_canonicalize_usage=include_canonicalize_usage,
         include_discord_turn_policy=include_discord_turn_policy,
@@ -256,6 +270,7 @@ def _write_fixture_repo(
 def _build_discord_service_fixture(
     *,
     include_car_model_route: bool,
+    include_car_update_route: bool,
     include_interaction_pma_prefix_guard: bool,
     include_canonicalize_usage: bool,
     include_discord_turn_policy: bool,
@@ -354,6 +369,11 @@ def _build_discord_service_fixture(
     car_model_route = (
         '    if command_path == ("car", "model"):\n        return\n'
         if include_car_model_route
+        else ""
+    )
+    car_update_route = (
+        '    if command_path == ("car", "update"):\n        return\n'
+        if include_car_update_route
         else ""
     )
 
@@ -544,6 +564,7 @@ def _handle_car_command(command_path: tuple[str, ...]) -> None:
         return
 """
         + car_model_route
+        + car_update_route
         + """
     _ = "Unknown car subcommand: x"
 

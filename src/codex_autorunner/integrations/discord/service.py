@@ -6,6 +6,7 @@ import hashlib
 import logging
 import sqlite3
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -28,6 +29,14 @@ from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_
 from ...core.pma_sink import PmaActiveSinkStore
 from ...core.ports.run_event import Completed, Failed, Started
 from ...core.state import RunnerState
+from ...core.update import (
+    UpdateInProgressError,
+    _normalize_update_ref,
+    _normalize_update_target,
+    _read_update_status,
+    _spawn_update_process,
+)
+from ...core.update_paths import resolve_update_paths
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
@@ -91,6 +100,8 @@ FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = 20
 MESSAGE_TURN_APPROVAL_POLICY = "never"
 MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
+DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
+DEFAULT_UPDATE_REPO_REF = "main"
 
 
 class DiscordBotService:
@@ -109,11 +120,21 @@ class DiscordBotService:
         backend_orchestrator_factory: Optional[
             Callable[[Path], BackendOrchestrator]
         ] = None,
+        update_repo_url: Optional[str] = None,
+        update_repo_ref: Optional[str] = None,
+        update_skip_checks: bool = False,
+        update_backend: str = "auto",
+        update_linux_service_names: Optional[dict[str, str]] = None,
     ) -> None:
         self._config = config
         self._logger = logger
         self._manifest_path = manifest_path
         self._backend_orchestrator_factory = backend_orchestrator_factory
+        self._update_repo_url = update_repo_url
+        self._update_repo_ref = update_repo_ref
+        self._update_skip_checks = update_skip_checks
+        self._update_backend = update_backend
+        self._update_linux_service_names = update_linux_service_names or {}
 
         self._rest = (
             rest_client
@@ -692,6 +713,13 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
+                options=options,
+            )
+            return
+        if command_path == ("car", "update"):
+            await self._handle_car_update(
+                interaction_id,
+                interaction_token,
                 options=options,
             )
             return
@@ -1404,6 +1432,7 @@ class DiscordBotService:
             "/car repos - List available repos",
             "/car agent [name] - Set or show agent",
             "/car model [name] - Set or show model",
+            "/car update [target] - Start update or check status",
             "",
             "**Flow Commands:**",
             "/car flow status [run_id] - Show flow status",
@@ -1622,12 +1651,17 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="This channel is not bound. Run `/car bind path:<...>` first.",
             )
             return
 
@@ -1642,10 +1676,11 @@ class DiscordBotService:
             if pma_enabled:
                 workspace_root = canonicalize_path(Path(self._config.root))
             else:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Binding is invalid. Run `/car bind path:<workspace>`.",
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text="Binding is invalid. Run `/car bind path:<workspace>`.",
                 )
                 return
 
@@ -1669,13 +1704,152 @@ class DiscordBotService:
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=(
+                f"Started a fresh {mode_label} session for `{agent}` "
+                f"({state_label})."
+            ),
+        )
+
+    async def _handle_car_update(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        raw_target = options.get("target")
+        if isinstance(raw_target, str) and raw_target.strip().lower() == "status":
+            await self._handle_car_update_status(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+            return
+
+        try:
+            update_target = _normalize_update_target(
+                raw_target if isinstance(raw_target, str) else None
+            )
+        except ValueError as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"{exc} Use target:status to check progress.",
+            )
+            return
+
+        repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
+        if not repo_url:
+            repo_url = DEFAULT_UPDATE_REPO_URL
+        repo_ref = _normalize_update_ref(
+            self._update_repo_ref or DEFAULT_UPDATE_REPO_REF
+        )
+        update_dir = resolve_update_paths().cache_dir
+
+        linux_hub_service_name: Optional[str] = None
+        linux_telegram_service_name: Optional[str] = None
+        update_services = self._update_linux_service_names
+        if isinstance(update_services, dict):
+            hub_service = update_services.get("hub")
+            telegram_service = update_services.get("telegram")
+            if isinstance(hub_service, str) and hub_service.strip():
+                linux_hub_service_name = hub_service.strip()
+            if isinstance(telegram_service, str) and telegram_service.strip():
+                linux_telegram_service_name = telegram_service.strip()
+
+        try:
+            await asyncio.to_thread(
+                _spawn_update_process,
+                repo_url=repo_url,
+                repo_ref=repo_ref,
+                update_dir=update_dir,
+                logger=self._logger,
+                update_target=update_target,
+                skip_checks=bool(self._update_skip_checks),
+                update_backend=self._update_backend,
+                linux_hub_service_name=linux_hub_service_name,
+                linux_telegram_service_name=linux_telegram_service_name,
+            )
+        except UpdateInProgressError as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"{exc} Use `/car update target:status` for current state.",
+            )
+            return
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.update.failed_start",
+                update_target=update_target,
+                exc=exc,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Update failed to start. Check logs for details.",
+            )
+            return
+
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
             (
-                f"Started a fresh {mode_label} session for `{agent}` "
-                f"({state_label})."
+                f"Update started ({update_target}). The selected service(s) will restart. "
+                "Use `/car update target:status` for progress."
             ),
+        )
+
+    async def _handle_car_update_status(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> None:
+        status = await asyncio.to_thread(_read_update_status)
+        if not isinstance(status, dict):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No update status recorded yet.",
+            )
+            return
+
+        state = str(status.get("status", "unknown"))
+        message_raw = status.get("message")
+        message = message_raw if isinstance(message_raw, str) else ""
+
+        lines = [f"Update status: {state}"]
+        if message:
+            lines.append(message)
+
+        target = status.get("update_target")
+        if isinstance(target, str) and target.strip():
+            lines.append(f"Target: {target.strip()}")
+
+        repo_ref = status.get("repo_ref")
+        if isinstance(repo_ref, str) and repo_ref.strip():
+            lines.append(f"Ref: {repo_ref.strip()}")
+
+        at_raw = status.get("at")
+        if isinstance(at_raw, (int, float)):
+            at_text = datetime.fromtimestamp(float(at_raw)).isoformat(
+                timespec="seconds"
+            )
+            lines.append(f"Updated: {at_text}")
+
+        log_path = status.get("log_path")
+        if isinstance(log_path, str) and log_path.strip():
+            lines.append(f"Log: {log_path.strip()}")
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "\n".join(lines),
         )
 
     VALID_AGENT_VALUES = ("codex", "opencode")
@@ -2845,6 +3019,50 @@ class DiscordBotService:
                     interaction_id,
                 )
 
+    async def _defer_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={
+                    "type": 5,
+                    "data": {
+                        "flags": DISCORD_EPHEMERAL_FLAG,
+                    },
+                },
+            )
+        except DiscordAPIError as exc:
+            self._logger.warning(
+                "Failed to defer ephemeral response: %s (interaction_id=%s)",
+                exc,
+                interaction_id,
+            )
+            return False
+        return True
+
+    async def _send_or_respond_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        if deferred:
+            max_len = max(int(self._config.max_message_length), 32)
+            sent = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=truncate_for_discord(text, max_len=max_len),
+            )
+            if sent:
+                return
+        await self._respond_ephemeral(interaction_id, interaction_token, text)
+
     async def _respond_with_components(
         self,
         interaction_id: str,
@@ -3161,5 +3379,19 @@ def create_discord_bot_service(
     *,
     logger: logging.Logger,
     manifest_path: Optional[Path] = None,
+    update_repo_url: Optional[str] = None,
+    update_repo_ref: Optional[str] = None,
+    update_skip_checks: bool = False,
+    update_backend: str = "auto",
+    update_linux_service_names: Optional[dict[str, str]] = None,
 ) -> DiscordBotService:
-    return DiscordBotService(config, logger=logger, manifest_path=manifest_path)
+    return DiscordBotService(
+        config,
+        logger=logger,
+        manifest_path=manifest_path,
+        update_repo_url=update_repo_url,
+        update_repo_ref=update_repo_ref,
+        update_skip_checks=update_skip_checks,
+        update_backend=update_backend,
+        update_linux_service_names=update_linux_service_names,
+    )

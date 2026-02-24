@@ -85,8 +85,19 @@ def register_discord_commands(
             if not discord_cfg.enabled:
                 raise_exit("discord_bot is disabled; set discord_bot.enabled: true")
             logger = setup_rotating_logger("codex-autorunner-discord", config.log)
+            update_repo_url = config.update_repo_url
+            update_repo_ref = config.update_repo_ref
+            update_backend = config.update_backend
+            update_linux_service_names = config.update_linux_service_names
             service = create_discord_bot_service(
-                discord_cfg, logger=logger, manifest_path=config.manifest_path
+                discord_cfg,
+                logger=logger,
+                manifest_path=config.manifest_path,
+                update_repo_url=update_repo_url,
+                update_repo_ref=update_repo_ref,
+                update_skip_checks=config.update_skip_checks,
+                update_backend=update_backend,
+                update_linux_service_names=update_linux_service_names,
             )
             asyncio.run(service.run_forever())
         except DiscordBotConfigError as exc:

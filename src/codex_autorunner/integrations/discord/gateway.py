@@ -27,7 +27,6 @@ except (
 
 
 FATAL_GATEWAY_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013, 4014}
-FATAL_RETRY_MIN_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -146,6 +145,7 @@ class DiscordGatewayClient:
         while not self._stop_event.is_set():
             established_session = False
             fatal_failure = False
+            fatal_reason: Optional[str] = None
             self._ready_in_connection = False
             try:
                 gateway_url = await self._resolve_gateway_url()
@@ -158,16 +158,18 @@ class DiscordGatewayClient:
                 raise
             except DiscordPermanentError as exc:
                 fatal_failure = True
+                fatal_reason = str(exc)
                 self._logger.error(
-                    "Discord gateway encountered permanent failure; reconnecting slowly: %s",
+                    "Discord gateway encountered permanent failure; halting reconnect loop: %s",
                     exc,
                 )
             except ConnectionClosed as exc:
                 close_code = gateway_close_code(exc)
                 if close_code in FATAL_GATEWAY_CLOSE_CODES:
                     fatal_failure = True
+                    fatal_reason = f"gateway_close_code={close_code}"
                     self._logger.error(
-                        "Discord gateway closed with fatal code=%s; reconnecting slowly",
+                        "Discord gateway closed with fatal code=%s; halting reconnect loop",
                         close_code,
                     )
                 else:
@@ -180,11 +182,17 @@ class DiscordGatewayClient:
 
             if self._stop_event.is_set():
                 break
+            if fatal_failure:
+                self._logger.error(
+                    "Discord gateway is halted after fatal failure (%s). "
+                    "Fix token/intents/configuration and restart the service.",
+                    fatal_reason or "unknown",
+                )
+                await self._stop_event.wait()
+                break
             if established_session or self._ready_in_connection:
                 reconnect_attempt = 0
             backoff = calculate_reconnect_backoff(reconnect_attempt)
-            if fatal_failure:
-                backoff = max(backoff, FATAL_RETRY_MIN_SECONDS)
             reconnect_attempt += 1
             await asyncio.sleep(backoff)
 
