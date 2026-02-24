@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from codex_autorunner.integrations.chat import parity_checker
+from codex_autorunner.integrations.chat.command_contract import (
+    COMMAND_CONTRACT,
+    CommandContractEntry,
+)
 from codex_autorunner.integrations.chat.parity_checker import run_parity_checks
 
 
@@ -11,6 +15,45 @@ def test_parity_checker_passes_on_current_repo_layout() -> None:
     failures = [result for result in results if not result.passed]
 
     assert failures == []
+
+
+def test_parity_checker_fails_when_registry_command_is_uncataloged() -> None:
+    contract = tuple(entry for entry in COMMAND_CONTRACT if entry.id != "car.bind")
+    results_by_id = {
+        result.id: result for result in run_parity_checks(contract=contract)
+    }
+
+    coverage_check = results_by_id["contract.registry_entries_cataloged"]
+    assert not coverage_check.passed
+    assert "car:bind" in coverage_check.metadata["missing_discord_paths"]
+    assert "bind" in coverage_check.metadata["missing_telegram_commands"]
+
+
+def test_parity_checker_reports_non_stable_route_gaps_informationally(
+    tmp_path: Path,
+) -> None:
+    repo_root = _write_fixture_repo(tmp_path)
+    contract = (
+        CommandContractEntry(
+            id="car.future.partial",
+            path=("car", "future"),
+            requires_bound_workspace=False,
+            status="partial",
+            discord_paths=(("car", "future"),),
+            telegram_commands=("future",),
+        ),
+    )
+    results_by_id = {
+        result.id: result
+        for result in run_parity_checks(
+            repo_root=repo_root,
+            contract=contract,
+        )
+    }
+
+    route_check = results_by_id["discord.contract_commands_routed"]
+    assert route_check.passed
+    assert "car.future.partial" in route_check.metadata["missing_non_stable_ids"]
 
 
 def test_parity_checker_fails_when_contract_route_is_missing(tmp_path: Path) -> None:

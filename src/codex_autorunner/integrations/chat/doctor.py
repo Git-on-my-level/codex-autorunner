@@ -47,6 +47,28 @@ def chat_doctor_checks(repo_root: Path | None = None) -> list[DoctorCheck]:
 
 
 def _failure_details(result: ParityCheckResult) -> tuple[str, str]:
+    if result.id == "contract.registry_entries_cataloged":
+        missing_discord = _metadata_list(result.metadata, "missing_discord_paths")
+        missing_telegram = _metadata_list(result.metadata, "missing_telegram_commands")
+        stable_missing_surface = _metadata_list(
+            result.metadata, "stable_missing_surface_mapping"
+        )
+        problems: list[str] = []
+        if missing_discord:
+            problems.append(f"discord={', '.join(missing_discord)}")
+        if missing_telegram:
+            problems.append(f"telegram={', '.join(missing_telegram)}")
+        if stable_missing_surface:
+            problems.append(f"stable_surface={', '.join(stable_missing_surface)}")
+        details = "; ".join(problems) if problems else "<unknown>"
+        return (
+            "Chat parity contract failed: command registry coverage is incomplete "
+            f"({details}).",
+            "Update `COMMAND_CONTRACT` so every user-facing Telegram/Discord command "
+            "is cataloged with explicit status and stable entries define both "
+            "Telegram and Discord mappings.",
+        )
+
     if result.id == "discord.contract_commands_routed":
         missing_ids = _metadata_list(result.metadata, "missing_ids")
         missing_text = ", ".join(missing_ids) if missing_ids else "<unknown>"
