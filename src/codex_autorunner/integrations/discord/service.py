@@ -114,6 +114,7 @@ MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
 DEFAULT_UPDATE_REPO_REF = "main"
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
+DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 8
 DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS = 120
 
@@ -642,6 +643,7 @@ class DiscordBotService:
         progress_last_updated = 0.0
         progress_failure_count = 0
         progress_edit_disabled = False
+        progress_heartbeat_task: Optional[asyncio.Task[None]] = None
         max_progress_len = max(int(self._config.max_message_length), 32)
 
         async def _edit_progress(*, force: bool = False) -> None:
@@ -691,6 +693,11 @@ class DiscordBotService:
             progress_rendered = content
             progress_last_updated = now
 
+        async def _progress_heartbeat() -> None:
+            while True:
+                await asyncio.sleep(DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
+                await _edit_progress()
+
         try:
             initial_rendered = render_progress_text(
                 tracker, max_length=max_progress_len, now=time.monotonic()
@@ -707,6 +714,7 @@ class DiscordBotService:
                 progress_message_id = message_id
                 progress_rendered = initial_content
                 progress_last_updated = time.monotonic()
+                progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
         except Exception as exc:
             log_event(
                 self._logger,
@@ -761,7 +769,10 @@ class DiscordBotService:
                     notice = run_event.message.strip() if run_event.message else ""
                     if not notice:
                         notice = run_event.kind.strip() if run_event.kind else "notice"
-                    tracker.add_action("notice", notice, "update")
+                    if run_event.kind in {"thinking", "reasoning"}:
+                        tracker.note_thinking(notice)
+                    else:
+                        tracker.add_action("notice", notice, "update")
                     await _edit_progress()
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
@@ -778,6 +789,11 @@ class DiscordBotService:
             tracker.set_label("failed")
             await _edit_progress(force=True)
             raise
+        finally:
+            if progress_heartbeat_task is not None:
+                progress_heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await progress_heartbeat_task
         if session_from_events:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
