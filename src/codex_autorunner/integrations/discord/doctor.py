@@ -18,6 +18,8 @@ from .config import (
 )
 from .constants import DISCORD_INTENT_MESSAGE_CONTENT
 
+RECOMMENDED_BOT_PERMISSIONS_INTEGER = "2322563695115328"
+
 
 def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
     """Run Discord-specific doctor checks for hub configuration."""
@@ -111,6 +113,22 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                 severity="info",
             )
         )
+        checks.append(
+            DoctorCheck(
+                name="Discord invite URL",
+                passed=True,
+                message=(
+                    "Use this OAuth URL to (re)invite the bot with expected scopes "
+                    "and permissions. This often fixes the case where slash commands "
+                    "work but plain text turns do not.\n"
+                    f"https://discord.com/oauth2/authorize?client_id={app_id}"
+                    f"&permissions={RECOMMENDED_BOT_PERMISSIONS_INTEGER}"
+                    "&scope=bot%20applications.commands"
+                ),
+                check_id="discord.invite_url",
+                severity="info",
+            )
+        )
     else:
         checks.append(
             DoctorCheck(
@@ -119,6 +137,19 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                 message=f"Discord application ID not found in environment: {app_id_env}",
                 check_id="discord.app_id",
                 fix=f"Set {app_id_env} environment variable.",
+            )
+        )
+        checks.append(
+            DoctorCheck(
+                name="Discord invite URL",
+                passed=True,
+                message=(
+                    "Set Discord application ID first, then generate a re-invite URL "
+                    "with scopes `bot applications.commands` and permissions integer "
+                    f"{RECOMMENDED_BOT_PERMISSIONS_INTEGER}."
+                ),
+                check_id="discord.invite_url",
+                severity="info",
             )
         )
 

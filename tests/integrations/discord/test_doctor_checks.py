@@ -47,6 +47,8 @@ def test_discord_doctor_checks_missing_env_vars_are_failures(
     assert "TEST_DISCORD_TOKEN" in by_id["discord.bot_token"].message
     assert by_id["discord.app_id"].passed is False
     assert "TEST_DISCORD_APP_ID" in by_id["discord.app_id"].message
+    assert by_id["discord.invite_url"].passed is True
+    assert "2322563695115328" in by_id["discord.invite_url"].message
 
 
 def test_discord_doctor_checks_empty_allowlists_is_actionable_failure(
@@ -75,6 +77,12 @@ def test_discord_doctor_checks_empty_allowlists_is_actionable_failure(
     assert allowlist_check.passed is False
     assert allowlist_check.fix is not None
     assert "Configure at least one" in allowlist_check.fix
+
+    invite_check = next(
+        check for check in checks if check.check_id == "discord.invite_url"
+    )
+    assert invite_check.passed is True
+    assert "client_id=123456" in invite_check.message
 
 
 def test_discord_doctor_checks_legacy_message_content_intent_is_actionable_warning(
