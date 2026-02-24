@@ -29,6 +29,7 @@ from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ...core.pma_sink import PmaActiveSinkStore
 from ...core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
     Completed,
     Failed,
@@ -739,6 +740,8 @@ class DiscordBotService:
                     if isinstance(run_event.session_id, str) and run_event.session_id:
                         session_from_events = run_event.session_id
                 elif isinstance(run_event, OutputDelta):
+                    if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
+                        continue
                     if isinstance(run_event.content, str) and run_event.content.strip():
                         tracker.note_output(run_event.content)
                         await _edit_progress()

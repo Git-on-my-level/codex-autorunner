@@ -485,6 +485,68 @@ async def test_message_create_streaming_turn_completion_still_sends_final_respon
 
 
 @pytest.mark.anyio
+async def test_message_create_streaming_turn_ignores_user_message_delta(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    secret = "SECRET PMA CONTEXT SHOULD NOT LEAK"
+    visible = "assistant output"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=secret,
+                delta_type="user_message",
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:02Z",
+                content=visible,
+                delta_type="assistant_stream",
+            ),
+            Completed(timestamp="2026-01-01T00:00:03Z", final_message="done"),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        rendered_progress = [
+            msg["payload"].get("content", "") for msg in rest.edited_channel_messages
+        ]
+        assert rendered_progress
+        assert not any(secret in text for text in rendered_progress)
+        assert any(visible in text for text in rendered_progress)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_progress_failures_are_best_effort_and_do_not_block_completion(
     tmp_path: Path,
 ) -> None:
