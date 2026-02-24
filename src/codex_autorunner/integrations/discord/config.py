@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,6 +17,8 @@ DEFAULT_BOT_TOKEN_ENV = "CAR_DISCORD_BOT_TOKEN"
 DEFAULT_APP_ID_ENV = "CAR_DISCORD_APP_ID"
 DEFAULT_STATE_FILE = ".codex-autorunner/discord_state.sqlite3"
 DEFAULT_COMMAND_SCOPE = "guild"
+DEFAULT_SHELL_TIMEOUT_MS = 120000
+DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
 DEFAULT_INTENTS = (
     DISCORD_INTENT_GUILDS
     | DISCORD_INTENT_GUILD_MESSAGES
@@ -39,6 +41,13 @@ class DiscordCommandRegistration:
 
 
 @dataclass(frozen=True)
+class DiscordBotShellConfig:
+    enabled: bool = True
+    timeout_ms: int = DEFAULT_SHELL_TIMEOUT_MS
+    max_output_chars: int = DEFAULT_SHELL_MAX_OUTPUT_CHARS
+
+
+@dataclass(frozen=True)
 class DiscordBotConfig:
     root: Path
     enabled: bool
@@ -55,6 +64,7 @@ class DiscordBotConfig:
     max_message_length: int
     message_overflow: str
     pma_enabled: bool
+    shell: DiscordBotShellConfig = field(default_factory=DiscordBotShellConfig)
 
     @classmethod
     def from_raw(
@@ -120,6 +130,25 @@ class DiscordBotConfig:
         if message_overflow not in MESSAGE_OVERFLOW_OPTIONS:
             message_overflow = DEFAULT_MESSAGE_OVERFLOW
 
+        shell_raw = cfg.get("shell")
+        shell_cfg = shell_raw if isinstance(shell_raw, dict) else {}
+        shell_enabled = bool(shell_cfg.get("enabled", True))
+        shell_timeout_ms = _parse_positive_int_or_default(
+            shell_cfg.get("timeout_ms"),
+            default=DEFAULT_SHELL_TIMEOUT_MS,
+            key="discord_bot.shell.timeout_ms",
+        )
+        shell_max_output_chars = _parse_positive_int_or_default(
+            shell_cfg.get("max_output_chars"),
+            default=DEFAULT_SHELL_MAX_OUTPUT_CHARS,
+            key="discord_bot.shell.max_output_chars",
+        )
+        shell = DiscordBotShellConfig(
+            enabled=shell_enabled,
+            timeout_ms=shell_timeout_ms,
+            max_output_chars=shell_max_output_chars,
+        )
+
         if enabled:
             if not bot_token:
                 raise DiscordBotConfigError(
@@ -150,6 +179,7 @@ class DiscordBotConfig:
             max_message_length=max_message_length,
             message_overflow=message_overflow,
             pma_enabled=pma_enabled,
+            shell=shell,
         )
 
 
@@ -162,4 +192,16 @@ def _parse_string_ids(value: Any) -> list[str]:
         token = str(item).strip()
         if token:
             parsed.append(token)
+    return parsed
+
+
+def _parse_positive_int_or_default(value: Any, *, default: int, key: str) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise DiscordBotConfigError(f"{key} must be an integer") from exc
+    if parsed <= 0:
+        return default
     return parsed

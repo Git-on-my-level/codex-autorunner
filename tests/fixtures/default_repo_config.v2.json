@@ -90,6 +90,11 @@
     "enabled": false,
     "intents": 33281,
     "max_message_length": 2000,
+    "shell": {
+      "enabled": true,
+      "max_output_chars": 3800,
+      "timeout_ms": 120000
+    },
     "state_file": ".codex-autorunner/discord_state.sqlite3"
   },
   "docs": {

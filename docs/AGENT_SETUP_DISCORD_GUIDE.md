@@ -86,6 +86,10 @@ discord_bot:
     scope: guild
     guild_ids:
       - "123456789012345678"
+  shell:
+    enabled: true
+    timeout_ms: 120000
+    max_output_chars: 3800
 ```
 
 Allowlist behavior:
@@ -180,6 +184,7 @@ Notes:
 - If a ticket flow run is paused in repo mode, the next free-text message is treated as the flow reply and resumes that run.
 - `/car ...` and `/pma ...` slash commands are normalized through CAR's shared command-ingress parser before dispatch.
 - Direct-chat turns use the shared plain-text turn policy in `always` mode, so non-command messages trigger turns while slash commands stay command-only.
+- `!<cmd>` runs a local non-interactive shell command in the bound workspace when `discord_bot.shell.enabled` is `true`.
 
 ### PMA Commands
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -17,6 +18,7 @@ from codex_autorunner.integrations.app_server.threads import (
 )
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
@@ -27,6 +29,7 @@ class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
+        self.attachment_messages: list[dict[str, Any]] = []
         self.edited_channel_messages: list[dict[str, Any]] = []
         self.message_ops: list[dict[str, Any]] = []
 
@@ -57,6 +60,33 @@ class _FakeRest:
                 "op": "send",
                 "channel_id": channel_id,
                 "payload": dict(payload),
+                "message_id": message["id"],
+            }
+        )
+        return message
+
+    async def create_channel_message_with_attachment(
+        self,
+        *,
+        channel_id: str,
+        data: bytes,
+        filename: str,
+        caption: Optional[str] = None,
+    ) -> dict[str, Any]:
+        self.attachment_messages.append(
+            {
+                "channel_id": channel_id,
+                "data": data,
+                "filename": filename,
+                "caption": caption,
+            }
+        )
+        message = {"id": f"att-{len(self.attachment_messages)}"}
+        self.message_ops.append(
+            {
+                "op": "send_attachment",
+                "channel_id": channel_id,
+                "filename": filename,
                 "message_id": message["id"],
             }
         )
@@ -230,6 +260,9 @@ def _config(
     allowed_channel_ids: frozenset[str] = frozenset({"channel-1"}),
     command_registration_enabled: bool = False,
     pma_enabled: bool = True,
+    shell_enabled: bool = True,
+    shell_timeout_ms: int = 120000,
+    shell_max_output_chars: int = 3800,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -251,6 +284,11 @@ def _config(
         max_message_length=2000,
         message_overflow="split",
         pma_enabled=pma_enabled,
+        shell=DiscordBotShellConfig(
+            enabled=shell_enabled,
+            timeout_ms=shell_timeout_ms,
+            max_output_chars=shell_max_output_chars,
+        ),
     )
 
 
@@ -790,6 +828,168 @@ async def test_message_create_ignores_slash_prefixed_text(
     try:
         await service.run_forever()
         assert rest.channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_bang_shell_executes_in_bound_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!pwd"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    seen: dict[str, Any] = {}
+
+    def _fake_shell_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args[0], 0, "/tmp/workspace\n", "")
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("bang-prefixed messages should bypass agent turn path")
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _fake_shell_run,
+    )
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+
+    try:
+        await service.run_forever()
+        assert seen["args"][0] == ["bash", "-lc", "pwd"]
+        assert seen["kwargs"]["cwd"] == workspace.resolve()
+        assert any(
+            "$ pwd" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert any(
+            "/tmp/workspace" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_bang_shell_honors_shell_disable_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!ls"))])
+    service = DiscordBotService(
+        _config(tmp_path, shell_enabled=False),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("bang-prefixed shell command should not run agent turn")
+
+    def _should_not_run_shell(*args: Any, **kwargs: Any) -> None:  # pragma: no cover
+        raise AssertionError("shell execution should stay disabled")
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _should_not_run_shell,
+    )
+
+    try:
+        await service.run_forever()
+        assert any(
+            "Shell commands are disabled" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_bang_shell_attaches_oversized_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!echo long"))])
+    service = DiscordBotService(
+        _config(tmp_path, shell_max_output_chars=12),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    long_output = "1234567890abcdefghijklmnopqrstuvwxyz\n"
+
+    def _fake_shell_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args[0], 0, long_output, "")
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _fake_shell_run,
+    )
+
+    try:
+        await service.run_forever()
+        assert any(
+            "$ echo long" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert rest.attachment_messages
+        assert rest.attachment_messages[0]["filename"].startswith("shell-output-")
+        assert (
+            long_output.encode("utf-8").rstrip(b"\n")
+            in rest.attachment_messages[0]["data"]
+        )
     finally:
         await store.close()
 
