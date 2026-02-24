@@ -60,6 +60,13 @@ class _FakeRest:
         return commands
 
 
+class _FailingChannelRest(_FakeRest):
+    async def create_channel_message(
+        self, *, channel_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        raise RuntimeError("simulated channel send failure")
+
+
 class _FakeGateway:
     def __init__(self, events: list[tuple[str, dict[str, Any]]]) -> None:
         self._events = events
@@ -391,6 +398,75 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         await store.close()
 
 
+@pytest.mark.anyio
+async def test_message_create_in_pma_mode_falls_back_to_hub_root_when_binding_path_invalid(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(tmp_path / "missing-workspace"),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("status please"))])
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured: list[dict[str, Any]] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        captured.append(
+            {
+                "workspace_root": workspace_root,
+                "prompt_text": prompt_text,
+                "agent": agent,
+                "session_key": session_key,
+                "orchestrator_channel_key": orchestrator_channel_key,
+            }
+        )
+        return "fallback root ok"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured
+        assert captured[0]["workspace_root"] == tmp_path.resolve()
+        assert captured[0]["session_key"] == PMA_KEY
+        assert any(
+            "fallback root ok" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
 def test_build_message_session_key_is_registry_valid(tmp_path: Path) -> None:
     service = DiscordBotService(
         _config(tmp_path),
@@ -513,6 +589,60 @@ async def test_message_create_resumes_paused_flow_run_in_repo_mode(
         assert any(
             "resumed paused run `run-paused`" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_enqueues_outbox_when_channel_send_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FailingChannelRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        return "queued reply"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        outbox = await store.list_outbox()
+        assert outbox
+        assert any(
+            "queued reply" in item.payload_json.get("content", "") for item in outbox
         )
     finally:
         await store.close()

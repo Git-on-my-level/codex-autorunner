@@ -8,6 +8,10 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.integrations.app_server.threads import (
+    FILE_CHAT_PREFIX,
+    PMA_OPENCODE_KEY,
+)
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.chat.models import (
     ChatInteractionEvent,
@@ -18,6 +22,7 @@ from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
 )
+from codex_autorunner.integrations.discord.errors import DiscordAPIError
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
@@ -25,6 +30,7 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.followup_messages: list[dict[str, Any]] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
@@ -46,6 +52,22 @@ class _FakeRest:
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+
+    async def create_followup_message(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.followup_messages.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return {"id": "followup-1"}
 
     async def bulk_overwrite_application_commands(
         self,
@@ -125,6 +147,17 @@ class _FailingSyncRest(_FakeRest):
         guild_id: str | None = None,
     ) -> list[dict[str, Any]]:
         raise RuntimeError("simulated sync failure")
+
+
+class _InitialResponseFailingRest(_FakeRest):
+    async def create_interaction_response(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> None:
+        raise DiscordAPIError("simulated initial response failure")
 
 
 def _interaction(
@@ -566,7 +599,35 @@ async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("subcommand", ["agent", "model"])
+async def test_service_falls_back_to_followup_when_initial_response_fails(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _InitialResponseFailingRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.interaction_responses == []
+        assert len(rest.followup_messages) == 1
+        payload = rest.followup_messages[0]["payload"]
+        assert payload["flags"] == 64
+        assert "not bound" in payload["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("subcommand", ["agent", "model", "new"])
 async def test_service_routes_car_agent_and_model_without_generic_fallback(
     tmp_path: Path, subcommand: str
 ) -> None:
@@ -671,5 +732,115 @@ async def test_unknown_pma_subcommand_has_explicit_unknown_message(
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "unknown pma subcommand" in content
         assert "not implemented yet for discord" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="new", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeOrchestrator:
+        def __init__(self) -> None:
+            self.reset_keys: list[str] = []
+
+        def reset_thread_id(self, session_key: str) -> bool:
+            self.reset_keys.append(session_key)
+            return True
+
+    fake_orchestrator = _FakeOrchestrator()
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return fake_orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert fake_orchestrator.reset_keys
+        assert fake_orchestrator.reset_keys[0].startswith(FILE_CHAT_PREFIX)
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "fresh repo session" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_new_resets_pma_session_key_for_current_agent(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_agent_state(channel_id="channel-1", agent="opencode")
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="new", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeOrchestrator:
+        def __init__(self) -> None:
+            self.reset_keys: list[str] = []
+
+        def reset_thread_id(self, session_key: str) -> bool:
+            self.reset_keys.append(session_key)
+            return True
+
+    fake_orchestrator = _FakeOrchestrator()
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return fake_orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert fake_orchestrator.reset_keys == [PMA_OPENCODE_KEY]
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "fresh pma session" in content
     finally:
         await store.close()

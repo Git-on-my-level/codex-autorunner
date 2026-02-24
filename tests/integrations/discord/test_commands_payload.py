@@ -23,6 +23,7 @@ def test_build_application_commands_structure_is_stable() -> None:
     expected_subcommands = [
         "bind",
         "status",
+        "new",
         "debug",
         "agent",
         "model",
