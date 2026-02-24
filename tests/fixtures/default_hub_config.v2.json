@@ -181,6 +181,8 @@
   },
   "pma": {
     "active_context_max_lines": 200,
+    "cleanup_auto_delete_orphans": false,
+    "cleanup_require_archive": true,
     "context_log_tail_lines": 120,
     "default_agent": "codex",
     "docs_max_chars": 12000,
