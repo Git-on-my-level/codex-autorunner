@@ -230,7 +230,7 @@ def register_worktree_commands(
                 "POST",
                 url,
                 token_env=config.server_auth_token_env,
-                data=json.dumps({"commands": normalized_commands}),
+                payload={"commands": normalized_commands},
             )
         except Exception as exc:
             raise_exit(
