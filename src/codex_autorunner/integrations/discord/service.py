@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import logging
 import sqlite3
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,15 @@ from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ...core.pma_sink import PmaActiveSinkStore
-from ...core.ports.run_event import Completed, Failed, Started
+from ...core.ports.run_event import (
+    ApprovalRequested,
+    Completed,
+    Failed,
+    OutputDelta,
+    RunNotice,
+    Started,
+    ToolCall,
+)
 from ...core.state import RunnerState
 from ...core.update import (
     UpdateInProgressError,
@@ -63,6 +72,7 @@ from ...integrations.chat.turn_policy import (
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
+from ..telegram.progress_stream import TurnProgressTracker, render_progress_text
 from .adapter import DiscordChatAdapter
 from .allowlist import DiscordAllowlist, allowlist_allows
 from .command_registry import sync_commands
@@ -102,6 +112,9 @@ MESSAGE_TURN_APPROVAL_POLICY = "never"
 MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
 DEFAULT_UPDATE_REPO_REF = "main"
+DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
+DISCORD_TURN_PROGRESS_MAX_ACTIONS = 8
+DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS = 120
 
 
 class DiscordBotService:
@@ -610,6 +623,98 @@ class DiscordBotService:
         orchestrator = await self._orchestrator_for_workspace(
             workspace_root, channel_id=orchestrator_channel_key
         )
+        progress_channel_id = (
+            orchestrator_channel_key.split(":", 1)[1]
+            if orchestrator_channel_key.startswith("pma:")
+            else orchestrator_channel_key
+        )
+        tracker = TurnProgressTracker(
+            started_at=time.monotonic(),
+            agent=agent,
+            model=model_override or "default",
+            label="working",
+            max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
+            max_output_chars=DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS,
+        )
+        progress_message_id: Optional[str] = None
+        progress_rendered: Optional[str] = None
+        progress_last_updated = 0.0
+        progress_failure_count = 0
+        progress_edit_disabled = False
+        max_progress_len = max(int(self._config.max_message_length), 32)
+
+        async def _edit_progress(*, force: bool = False) -> None:
+            nonlocal progress_rendered
+            nonlocal progress_last_updated
+            nonlocal progress_failure_count
+            nonlocal progress_edit_disabled
+            if not progress_message_id:
+                return
+            if progress_edit_disabled:
+                return
+            now = time.monotonic()
+            if (
+                not force
+                and (now - progress_last_updated)
+                < DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS
+            ):
+                return
+            rendered = render_progress_text(
+                tracker, max_length=max_progress_len, now=now
+            )
+            content = truncate_for_discord(rendered, max_len=max_progress_len)
+            if not force and content == progress_rendered:
+                return
+            try:
+                await self._rest.edit_channel_message(
+                    channel_id=progress_channel_id,
+                    message_id=progress_message_id,
+                    payload={"content": content},
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.turn.progress.edit_failed",
+                    channel_id=progress_channel_id,
+                    message_id=progress_message_id,
+                    failure_count=progress_failure_count + 1,
+                    exc=exc,
+                )
+                progress_failure_count += 1
+                progress_last_updated = now
+                if progress_failure_count >= 3:
+                    progress_edit_disabled = True
+                return
+            progress_failure_count = 0
+            progress_rendered = content
+            progress_last_updated = now
+
+        try:
+            initial_rendered = render_progress_text(
+                tracker, max_length=max_progress_len, now=time.monotonic()
+            )
+            initial_content = truncate_for_discord(
+                initial_rendered, max_len=max_progress_len
+            )
+            response = await self._send_channel_message(
+                progress_channel_id,
+                {"content": initial_content},
+            )
+            message_id = response.get("id")
+            if isinstance(message_id, str) and message_id:
+                progress_message_id = message_id
+                progress_rendered = initial_content
+                progress_last_updated = time.monotonic()
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.turn.progress.placeholder_failed",
+                channel_id=progress_channel_id,
+                exc=exc,
+            )
+
         state = self._build_runner_state(
             agent=agent,
             model_override=model_override,
@@ -619,23 +724,57 @@ class DiscordBotService:
         final_message = ""
         error_message = None
         session_from_events = known_session
-        async for run_event in orchestrator.run_turn(
-            agent_id=agent,
-            state=state,
-            prompt=prompt_text,
-            model=model_override,
-            reasoning=reasoning_effort,
-            session_key=session_key,
-            session_id=known_session,
-            workspace_root=workspace_root,
-        ):
-            if isinstance(run_event, Started):
-                if isinstance(run_event.session_id, str) and run_event.session_id:
-                    session_from_events = run_event.session_id
-            elif isinstance(run_event, Completed):
-                final_message = run_event.final_message or final_message
-            elif isinstance(run_event, Failed):
-                error_message = run_event.error_message or "Turn failed"
+        try:
+            async for run_event in orchestrator.run_turn(
+                agent_id=agent,
+                state=state,
+                prompt=prompt_text,
+                model=model_override,
+                reasoning=reasoning_effort,
+                session_key=session_key,
+                session_id=known_session,
+                workspace_root=workspace_root,
+            ):
+                if isinstance(run_event, Started):
+                    if isinstance(run_event.session_id, str) and run_event.session_id:
+                        session_from_events = run_event.session_id
+                elif isinstance(run_event, OutputDelta):
+                    if isinstance(run_event.content, str) and run_event.content.strip():
+                        tracker.note_output(run_event.content)
+                        await _edit_progress()
+                elif isinstance(run_event, ToolCall):
+                    tool_name = (
+                        run_event.tool_name.strip() if run_event.tool_name else ""
+                    )
+                    tracker.note_tool(tool_name or "Tool call")
+                    await _edit_progress()
+                elif isinstance(run_event, ApprovalRequested):
+                    summary = (
+                        run_event.description.strip() if run_event.description else ""
+                    )
+                    tracker.note_approval(summary or "Approval requested")
+                    await _edit_progress()
+                elif isinstance(run_event, RunNotice):
+                    notice = run_event.message.strip() if run_event.message else ""
+                    if not notice:
+                        notice = run_event.kind.strip() if run_event.kind else "notice"
+                    tracker.add_action("notice", notice, "update")
+                    await _edit_progress()
+                elif isinstance(run_event, Completed):
+                    final_message = run_event.final_message or final_message
+                    tracker.set_label("done")
+                    await _edit_progress(force=True)
+                elif isinstance(run_event, Failed):
+                    error_message = run_event.error_message or "Turn failed"
+                    tracker.note_error(error_message)
+                    tracker.set_label("failed")
+                    await _edit_progress(force=True)
+        except Exception as exc:
+            error_message = str(exc) or "Turn failed"
+            tracker.note_error(error_message)
+            tracker.set_label("failed")
+            await _edit_progress(force=True)
+            raise
         if session_from_events:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
