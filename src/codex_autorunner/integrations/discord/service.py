@@ -36,6 +36,7 @@ from ...core.ports.run_event import (
     OutputDelta,
     RunNotice,
     Started,
+    TokenUsage,
     ToolCall,
 )
 from ...core.state import RunnerState
@@ -73,6 +74,7 @@ from ...integrations.chat.turn_policy import (
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
+from ..telegram.helpers import _extract_context_usage_percent
 from ..telegram.progress_stream import TurnProgressTracker, render_progress_text
 from .adapter import DiscordChatAdapter
 from .allowlist import DiscordAllowlist, allowlist_allows
@@ -794,6 +796,12 @@ class DiscordBotService:
                         notice = run_event.kind.strip() if run_event.kind else "notice"
                     tracker.add_action("notice", notice, "update")
                     await _edit_progress()
+                elif isinstance(run_event, TokenUsage):
+                    token_usage = run_event.usage
+                    if isinstance(token_usage, dict):
+                        tracker.context_usage_percent = _extract_context_usage_percent(
+                            token_usage
+                        )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
                     tracker.set_label("done")
