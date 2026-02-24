@@ -250,6 +250,11 @@ class BackendOrchestrator:
         with self._app_server_threads_lock:
             self._app_server_threads.set_thread_id(session_key, thread_id)
 
+    def reset_thread_id(self, session_key: str) -> bool:
+        """Reset the persisted thread ID for a given session key."""
+        with self._app_server_threads_lock:
+            return self._app_server_threads.reset_thread(session_key)
+
     def _agent_backend_factory(self) -> Optional[AgentBackendFactory]:
         if isinstance(self._backend_factory, AgentBackendFactory):
             return self._backend_factory

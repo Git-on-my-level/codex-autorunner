@@ -94,3 +94,21 @@ def test_extract_command_path_and_options_returns_empty_for_malformed_payload() 
     assert extract_command_path_and_options({}) == ((), {})
     assert extract_command_path_and_options({"data": "not-a-dict"}) == ((), {})
     assert extract_command_path_and_options({"data": {"name": ""}}) == ((), {})
+
+
+def test_extract_command_path_and_options_for_car_new() -> None:
+    payload = {
+        "data": {
+            "name": "car",
+            "options": [
+                {
+                    "type": 1,
+                    "name": "new",
+                    "options": [],
+                }
+            ],
+        }
+    }
+    path, options = extract_command_path_and_options(payload)
+    assert path == ("car", "new")
+    assert options == {}

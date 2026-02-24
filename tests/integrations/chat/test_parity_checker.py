@@ -538,6 +538,8 @@ def _handle_component_interaction(custom_id: str | None) -> None:
 def _handle_car_command(command_path: tuple[str, ...]) -> None:
     if command_path == ("car", "status"):
         return
+    if command_path == ("car", "new"):
+        return
     if command_path == ("car", "agent"):
         return
 """

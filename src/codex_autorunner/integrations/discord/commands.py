@@ -36,6 +36,11 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
+                    "name": "new",
+                    "description": "Start a fresh chat session for this channel",
+                },
+                {
+                    "type": SUB_COMMAND,
                     "name": "debug",
                     "description": "Show debug info for troubleshooting",
                 },
