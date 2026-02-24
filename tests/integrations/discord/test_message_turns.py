@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.core.filebox import inbox_dir, outbox_pending_dir
 from codex_autorunner.core.ports.run_event import Completed, OutputDelta, Started
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
@@ -31,7 +32,10 @@ class _FakeRest:
         self.channel_messages: list[dict[str, Any]] = []
         self.attachment_messages: list[dict[str, Any]] = []
         self.edited_channel_messages: list[dict[str, Any]] = []
+        self.deleted_channel_messages: list[dict[str, Any]] = []
         self.message_ops: list[dict[str, Any]] = []
+        self.download_requests: list[dict[str, Any]] = []
+        self.attachment_data_by_url: dict[str, bytes] = {}
 
     async def create_interaction_response(
         self,
@@ -111,6 +115,26 @@ class _FakeRest:
             }
         )
         return {"id": message_id}
+
+    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
+        self.deleted_channel_messages.append(
+            {"channel_id": channel_id, "message_id": message_id}
+        )
+        self.message_ops.append(
+            {
+                "op": "delete",
+                "channel_id": channel_id,
+                "message_id": message_id,
+            }
+        )
+
+    async def download_attachment(
+        self, *, url: str, max_size_bytes: Optional[int] = None
+    ) -> bytes:
+        self.download_requests.append({"url": url, "max_size_bytes": max_size_bytes})
+        if url not in self.attachment_data_by_url:
+            raise RuntimeError(f"no attachment fixture for {url}")
+        return self.attachment_data_by_url[url]
 
     async def bulk_overwrite_application_commands(
         self,
@@ -263,6 +287,7 @@ def _config(
     shell_enabled: bool = True,
     shell_timeout_ms: int = 120000,
     shell_max_output_chars: int = 3800,
+    max_message_length: int = 2000,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -281,7 +306,7 @@ def _config(
         ),
         state_file=root / ".codex-autorunner" / "discord_state.sqlite3",
         intents=1,
-        max_message_length=2000,
+        max_message_length=max_message_length,
         message_overflow="split",
         pma_enabled=pma_enabled,
         shell=DiscordBotShellConfig(
@@ -327,18 +352,20 @@ def _pma_interaction(subcommand: str) -> dict[str, Any]:
 
 
 def _message_create(
-    content: str,
+    content: str = "",
     *,
+    message_id: str = "m-1",
     guild_id: str = "guild-1",
     channel_id: str = "channel-1",
+    attachments: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     return {
-        "id": "m-1",
+        "id": message_id,
         "channel_id": channel_id,
         "guild_id": guild_id,
         "content": content,
         "author": {"id": "user-1", "bot": False},
-        "attachments": [],
+        "attachments": attachments or [],
     }
 
 
@@ -417,6 +444,182 @@ async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_message_create_attachment_only_downloads_to_inbox_and_runs_turn(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/file-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"attachment-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-1",
+                            "filename": "report.txt",
+                            "content_type": "text/plain",
+                            "size": 16,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done with attachment"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "Inbound Discord attachments:" in prompt
+        assert "Outbox (pending):" in prompt
+        inbox = inbox_dir(workspace.resolve())
+        saved_files = [path for path in inbox.iterdir() if path.is_file()]
+        assert len(saved_files) == 1
+        assert saved_files[0].read_bytes() == b"attachment-bytes"
+        assert str(saved_files[0]) in prompt
+        assert str(outbox_pending_dir(workspace.resolve())) in prompt
+        assert len(rest.download_requests) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_attachment_and_text_keeps_text_and_adds_file_context(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/file-2"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"image-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="Please analyze the screenshot.",
+                    attachments=[
+                        {
+                            "id": "att-2",
+                            "filename": "screen.png",
+                            "content_type": "image/png",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done with text+attachment"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert prompt.startswith("Please analyze the screenshot.")
+        assert "Inbound Discord attachments:" in prompt
+        assert "screen.png" in prompt
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,
 ) -> None:
@@ -472,7 +675,7 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_completion_still_sends_final_response(
+async def test_message_create_streaming_turn_completion_edits_preview_for_single_chunk(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -514,10 +717,71 @@ async def test_message_create_streaming_turn_completion_still_sends_final_respon
     try:
         await service.run_forever()
         assert rest.edited_channel_messages
+        assert rest.deleted_channel_messages == []
         assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.edited_channel_messages
+        )
+        assert not any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sends_chunks(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=80),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "\n".join(
+        [f"line {index} with enough content for chunking" for index in range(1, 20)]
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.deleted_channel_messages
+        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
+        final_sends = [
+            op
+            for op in rest.message_ops
+            if op.get("op") == "send" and op.get("message_id") != "msg-1"
+        ]
+        assert len(final_sends) >= 2
     finally:
         await store.close()
 
@@ -679,6 +943,7 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
     try:
         await service.run_forever()
         assert 1 <= rest.edit_attempts <= 2
+        assert rest.deleted_channel_messages
         assert any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages

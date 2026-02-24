@@ -5,7 +5,10 @@ from typing import Any
 import httpx
 import pytest
 
-from codex_autorunner.integrations.discord.errors import DiscordPermanentError
+from codex_autorunner.integrations.discord.errors import (
+    DiscordAPIError,
+    DiscordPermanentError,
+)
 from codex_autorunner.integrations.discord.rest import DiscordRestClient
 
 
@@ -141,3 +144,36 @@ async def test_auth_failures_raise_permanent_error_without_retry(
         await client.close()
 
     assert attempts["count"] == 1
+
+
+@pytest.mark.anyio
+async def test_download_attachment_rejects_untrusted_url() -> None:
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    try:
+        with pytest.raises(DiscordAPIError, match="untrusted URL"):
+            await client.download_attachment(url="https://example.com/file.png")
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_download_attachment_streaming_enforces_max_size() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host in {"cdn.discordapp.com", "media.discordapp.net"}:
+            return httpx.Response(200, content=b"1234567890")
+        return httpx.Response(404, json={})
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        with pytest.raises(DiscordAPIError, match="too large"):
+            await client.download_attachment(
+                url="https://cdn.discordapp.com/attachments/demo.bin",
+                max_size_bytes=4,
+            )
+    finally:
+        await client.close()

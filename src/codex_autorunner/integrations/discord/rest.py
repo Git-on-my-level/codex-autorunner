@@ -6,6 +6,7 @@ import random
 from contextlib import asynccontextmanager
 from io import BytesIO
 from typing import Any, AsyncIterator, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -16,6 +17,7 @@ from .constants import DISCORD_API_BASE_URL
 from .errors import DiscordAPIError, DiscordPermanentError
 
 logger = logging.getLogger(__name__)
+_DISCORD_ATTACHMENT_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
 
 
 class DiscordRestClient:
@@ -446,3 +448,77 @@ class DiscordRestClient:
             f"/channels/{channel_id}/messages/{message_id}",
             expect_json=False,
         )
+
+    async def download_attachment(
+        self,
+        *,
+        url: str,
+        max_size_bytes: Optional[int] = None,
+    ) -> bytes:
+        parsed = urlparse(url)
+        if (
+            parsed.scheme.lower() != "https"
+            or parsed.hostname not in _DISCORD_ATTACHMENT_HOSTS
+        ):
+            raise DiscordAPIError(
+                f"Refusing to download attachment from untrusted URL: {url!r}"
+            )
+
+        rate_limit_retries = 0
+        retry_attempt = 0
+        path = "/attachments/download"
+
+        while True:
+            try:
+                async with self._resilience_guard(path):
+                    async with self._client.stream("GET", url) as response:
+                        response.raise_for_status()
+                        size = 0
+                        chunks: list[bytes] = []
+                        async for chunk in response.aiter_bytes():
+                            if not chunk:
+                                continue
+                            size += len(chunk)
+                            if max_size_bytes is not None and size > max_size_bytes:
+                                raise DiscordAPIError(
+                                    "Discord attachment too large "
+                                    f"({size} bytes > {max_size_bytes}): {url!r}"
+                                )
+                            chunks.append(chunk)
+                        return b"".join(chunks)
+            except CircuitOpenError:
+                raise
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                body_preview = (
+                    (exc.response.text or "").strip().replace("\n", " ")[:200]
+                )
+                if status_code == 429:
+                    retry_after_raw = exc.response.headers.get("Retry-After")
+                    if (
+                        retry_after_raw is not None
+                        and rate_limit_retries < self._max_retries
+                    ):
+                        rate_limit_retries += 1
+                        try:
+                            retry_after = max(float(retry_after_raw), 0.0)
+                        except ValueError:
+                            retry_after = 0.0
+                        await asyncio.sleep(retry_after)
+                        continue
+                if 500 <= status_code < 600 and retry_attempt < self._max_retries:
+                    retry_attempt += 1
+                    await asyncio.sleep(self._calculate_retry_delay(retry_attempt))
+                    continue
+                raise DiscordAPIError(
+                    "Discord attachment download failed: "
+                    f"status={status_code} url={url!r} body={body_preview!r}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                if self._is_retryable_error(exc) and retry_attempt < self._max_retries:
+                    retry_attempt += 1
+                    await asyncio.sleep(self._calculate_retry_delay(retry_attempt))
+                    continue
+                raise DiscordAPIError(
+                    f"Discord attachment download network error for {url!r}: {exc}"
+                ) from exc

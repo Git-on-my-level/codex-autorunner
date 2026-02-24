@@ -44,6 +44,7 @@ class ChatAttachment:
     file_name: Optional[str] = None
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
+    source_url: Optional[str] = None
 
 
 @dataclass(frozen=True)

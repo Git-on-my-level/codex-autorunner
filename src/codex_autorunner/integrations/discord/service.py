@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -26,6 +27,7 @@ from ...core.flows import (
     load_latest_paused_ticket_flow_dispatch,
 )
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
+from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ...core.pma_sink import PmaActiveSinkStore
@@ -120,6 +122,13 @@ DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 8
 DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS = 120
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
+DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
+
+
+@dataclass(frozen=True)
+class DiscordMessageTurnResult:
+    final_message: str
+    preview_message_id: Optional[str] = None
 
 
 class DiscordBotService:
@@ -381,11 +390,12 @@ class DiscordBotService:
     ) -> None:
         channel_id = context.chat_id
         text = (event.text or "").strip()
-        if not text:
+        has_attachments = bool(event.attachments)
+        if not text and not has_attachments:
             return
         if text.startswith("/"):
             return
-        if not should_trigger_plain_text_turn(
+        if text and not should_trigger_plain_text_turn(
             mode="always",
             context=PlainTextTurnContext(text=text),
         ):
@@ -425,7 +435,7 @@ class DiscordBotService:
             )
             return
 
-        if not pma_enabled:
+        if not pma_enabled and text:
             paused = await self._find_paused_flow_run(workspace_root)
             if paused is not None:
                 reply_path = self._write_user_reply(workspace_root, paused, text)
@@ -493,6 +503,33 @@ class DiscordBotService:
                 )
                 return
 
+        prompt_text, saved_attachments, failed_attachments = (
+            await self._with_attachment_context(
+                prompt_text=prompt_text,
+                workspace_root=workspace_root,
+                attachments=event.attachments,
+                channel_id=channel_id,
+            )
+        )
+        if failed_attachments > 0:
+            warning = (
+                "Some Discord attachments could not be downloaded. "
+                "Continuing with available inputs."
+            )
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": warning},
+            )
+        if not prompt_text.strip():
+            if has_attachments and saved_attachments == 0:
+                await self._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": "Failed to download attachments from Discord. Please retry.",
+                    },
+                )
+            return
+
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
@@ -510,7 +547,7 @@ class DiscordBotService:
             agent=agent,
         )
         try:
-            response_text = await self._run_agent_turn_for_message(
+            turn_result = await self._run_agent_turn_for_message(
                 workspace_root=workspace_root,
                 prompt_text=prompt_text,
                 agent=agent,
@@ -537,6 +574,13 @@ class DiscordBotService:
             )
             return
 
+        preview_message_id: Optional[str] = None
+        if isinstance(turn_result, DiscordMessageTurnResult):
+            response_text = turn_result.final_message
+            preview_message_id = turn_result.preview_message_id
+        else:
+            response_text = str(turn_result or "")
+
         chunks = chunk_discord_message(
             response_text or "(No response text returned.)",
             max_len=self._config.max_message_length,
@@ -544,12 +588,152 @@ class DiscordBotService:
         )
         if not chunks:
             chunks = ["(No response text returned.)"]
+        if preview_message_id:
+            if len(chunks) == 1:
+                try:
+                    await self._rest.edit_channel_message(
+                        channel_id=channel_id,
+                        message_id=preview_message_id,
+                        payload={"content": chunks[0]},
+                    )
+                    return
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.turn.preview.final_edit_failed",
+                        channel_id=channel_id,
+                        message_id=preview_message_id,
+                        exc=exc,
+                    )
+            try:
+                await self._rest.delete_channel_message(
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.turn.preview.delete_failed",
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    exc=exc,
+                )
         for idx, chunk in enumerate(chunks, 1):
             await self._send_channel_message_safe(
                 channel_id,
                 {"content": chunk},
                 record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
             )
+
+    async def _with_attachment_context(
+        self,
+        *,
+        prompt_text: str,
+        workspace_root: Path,
+        attachments: tuple[Any, ...],
+        channel_id: str,
+    ) -> tuple[str, int, int]:
+        if not attachments:
+            return prompt_text, 0, 0
+
+        inbox = inbox_dir(workspace_root)
+        inbox.mkdir(parents=True, exist_ok=True)
+        saved: list[tuple[str, Path, Optional[str], int]] = []
+        failed = 0
+        for index, attachment in enumerate(attachments, start=1):
+            source_url = getattr(attachment, "source_url", None)
+            if not isinstance(source_url, str) or not source_url.strip():
+                failed += 1
+                continue
+            try:
+                size_bytes = getattr(attachment, "size_bytes", None)
+                if (
+                    isinstance(size_bytes, int)
+                    and size_bytes > DISCORD_ATTACHMENT_MAX_BYTES
+                ):
+                    raise RuntimeError(
+                        f"attachment exceeds max size ({size_bytes} > {DISCORD_ATTACHMENT_MAX_BYTES})"
+                    )
+                data = await self._rest.download_attachment(
+                    url=source_url,
+                    max_size_bytes=DISCORD_ATTACHMENT_MAX_BYTES,
+                )
+                file_name = self._build_attachment_filename(attachment, index=index)
+                path = inbox / file_name
+                path.write_bytes(data)
+                original_name = getattr(attachment, "file_name", None) or path.name
+                mime_type = getattr(attachment, "mime_type", None)
+                saved.append((str(original_name), path, mime_type, len(data)))
+            except Exception as exc:
+                failed += 1
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.turn.attachment.download_failed",
+                    channel_id=channel_id,
+                    file_id=getattr(attachment, "file_id", None),
+                    exc=exc,
+                )
+
+        if not saved:
+            return prompt_text, 0, failed
+
+        details: list[str] = ["Inbound Discord attachments:"]
+        for original_name, path, mime_type, size in saved:
+            details.append(f"- Name: {original_name}")
+            details.append(f"  Saved to: {path}")
+            details.append(f"  Size: {size} bytes")
+            if mime_type:
+                details.append(f"  Mime: {mime_type}")
+        details.append("")
+        details.append(
+            wrap_injected_context(
+                "\n".join(
+                    [
+                        f"Inbox: {inbox}",
+                        f"Outbox (pending): {outbox_pending_dir(workspace_root)}",
+                        "Use inbox files as local inputs and place reply files in outbox (pending).",
+                    ]
+                )
+            )
+        )
+        attachment_context = "\n".join(details)
+
+        if prompt_text.strip():
+            separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+            return f"{prompt_text}{separator}{attachment_context}", len(saved), failed
+        return attachment_context, len(saved), failed
+
+    def _build_attachment_filename(self, attachment: Any, *, index: int) -> str:
+        raw_name = getattr(attachment, "file_name", None) or f"attachment-{index}"
+        base_name = Path(str(raw_name)).name.strip()
+        if not base_name or base_name in {".", ".."}:
+            base_name = f"attachment-{index}"
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in base_name
+        ).strip("._")
+        if not safe_name:
+            safe_name = f"attachment-{index}"
+
+        path = Path(safe_name)
+        stem = path.stem or f"attachment-{index}"
+        suffix = path.suffix.lower()
+        if not suffix:
+            mime_type = getattr(attachment, "mime_type", None)
+            if isinstance(mime_type, str):
+                mime_key = mime_type.lower().split(";", 1)[0].strip()
+                suffix = {
+                    "image/png": ".png",
+                    "image/jpeg": ".jpg",
+                    "image/jpg": ".jpg",
+                    "image/gif": ".gif",
+                    "image/webp": ".webp",
+                    "application/pdf": ".pdf",
+                    "text/plain": ".txt",
+                }.get(mime_key, "")
+        return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
 
     async def _find_paused_flow_run(
         self, workspace_root: Path
@@ -636,7 +820,7 @@ class DiscordBotService:
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
-    ) -> str:
+    ) -> DiscordMessageTurnResult:
         orchestrator = await self._orchestrator_for_workspace(
             workspace_root, channel_id=orchestrator_channel_key
         )
@@ -813,7 +997,10 @@ class DiscordBotService:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
             raise RuntimeError(error_message)
-        return final_message
+        return DiscordMessageTurnResult(
+            final_message=final_message,
+            preview_message_id=progress_message_id,
+        )
 
     @staticmethod
     def _extract_command_result(

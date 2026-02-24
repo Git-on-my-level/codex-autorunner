@@ -10,14 +10,19 @@ class _UnusedRestClient:
     pass
 
 
-def _message_payload(*, message_id: str, content: str) -> dict[str, object]:
+def _message_payload(
+    *,
+    message_id: str,
+    content: str,
+    attachments: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     return {
         "id": message_id,
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "content": content,
         "author": {"id": "user-1", "bot": False},
-        "attachments": [],
+        "attachments": attachments or [],
     }
 
 
@@ -79,3 +84,45 @@ def test_adapter_enqueues_off_loop_after_queue_init_and_delivers_event() -> None
         assert event.text == "hello off-loop"
 
     asyncio.run(_run())
+
+
+def test_adapter_parses_attachment_source_url_metadata() -> None:
+    adapter = DiscordChatAdapter(
+        rest_client=_UnusedRestClient(),  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+    event = adapter.parse_message_event(
+        _message_payload(
+            message_id="m-3",
+            content="",
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "photo.png",
+                    "content_type": "image/png",
+                    "size": 1234,
+                    "url": "https://cdn.discordapp.com/attachments/photo.png",
+                },
+                {
+                    "id": "att-2",
+                    "filename": "alt.png",
+                    "content_type": "image/png",
+                    "size": 42,
+                    "proxy_url": "https://media.discordapp.net/attachments/alt.png",
+                },
+            ],
+        )
+    )
+
+    assert isinstance(event, ChatMessageEvent)
+    assert len(event.attachments) == 2
+    attachment = event.attachments[0]
+    assert attachment.file_id == "att-1"
+    assert attachment.file_name == "photo.png"
+    assert attachment.kind == "image"
+    assert attachment.source_url == "https://cdn.discordapp.com/attachments/photo.png"
+    proxy_attachment = event.attachments[1]
+    assert proxy_attachment.file_id == "att-2"
+    assert proxy_attachment.source_url == (
+        "https://media.discordapp.net/attachments/alt.png"
+    )
