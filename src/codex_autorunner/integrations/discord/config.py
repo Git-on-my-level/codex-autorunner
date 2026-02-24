@@ -132,7 +132,11 @@ class DiscordBotConfig:
 
         shell_raw = cfg.get("shell")
         shell_cfg = shell_raw if isinstance(shell_raw, dict) else {}
-        shell_enabled = bool(shell_cfg.get("enabled", True))
+        shell_enabled = _parse_bool_or_default(
+            shell_cfg.get("enabled"),
+            default=True,
+            key="discord_bot.shell.enabled",
+        )
         shell_timeout_ms = _parse_positive_int_or_default(
             shell_cfg.get("timeout_ms"),
             default=DEFAULT_SHELL_TIMEOUT_MS,
@@ -205,3 +209,11 @@ def _parse_positive_int_or_default(value: Any, *, default: int, key: str) -> int
     if parsed <= 0:
         return default
     return parsed
+
+
+def _parse_bool_or_default(value: Any, *, default: bool, key: str) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise DiscordBotConfigError(f"{key} must be a boolean")

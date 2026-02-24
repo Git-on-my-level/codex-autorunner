@@ -154,3 +154,14 @@ def test_discord_bot_config_shell_invalid_timeout_raises(tmp_path) -> None:
                 "shell": {"timeout_ms": "abc"},
             },
         )
+
+
+def test_discord_bot_config_shell_invalid_enabled_raises(tmp_path) -> None:
+    with pytest.raises(DiscordBotConfigError):
+        DiscordBotConfig.from_raw(
+            root=tmp_path,
+            raw={
+                "enabled": False,
+                "shell": {"enabled": "false"},
+            },
+        )
