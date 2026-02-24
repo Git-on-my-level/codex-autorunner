@@ -33,7 +33,6 @@ def _extract_output_delta(params: Dict[str, Any]) -> str:
         if isinstance(value, str):
             return value
     return ""
-
 def _output_delta_type_for_method(method: object) -> str:
     if not isinstance(method, str):
         return "assistant_stream"
