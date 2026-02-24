@@ -83,7 +83,9 @@ class DiscordChatAdapter(ChatAdapter):
         self._application_id = application_id
         self._logger = logger or logging.getLogger(__name__)
         self._renderer = DiscordTextRenderer()
-        self._event_queue: asyncio.Queue[ChatEvent] = asyncio.Queue()
+        self._event_queue: Optional[asyncio.Queue[ChatEvent]] = None
+        self._event_queue_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._pending_events: list[ChatEvent] = []
         self._message_overflow = message_overflow
         self._interaction_tokens: dict[str, str] = {}
         self._message_interaction_tokens: dict[str, str] = {}
@@ -114,10 +116,9 @@ class DiscordChatAdapter(ChatAdapter):
     async def poll_events(
         self, *, timeout_seconds: float = 30.0
     ) -> Sequence[ChatEvent]:
+        event_queue = self._ensure_event_queue()
         try:
-            event = await asyncio.wait_for(
-                self._event_queue.get(), timeout=timeout_seconds
-            )
+            event = await asyncio.wait_for(event_queue.get(), timeout=timeout_seconds)
             return (event,)
         except asyncio.TimeoutError:
             return ()
@@ -127,7 +128,7 @@ class DiscordChatAdapter(ChatAdapter):
     ) -> Optional[ChatEvent]:
         event = self._parse_interaction_to_event(interaction_payload)
         if event is not None:
-            self._event_queue.put_nowait(event)
+            self._enqueue_event(event)
         return event
 
     def enqueue_message_event(
@@ -135,8 +136,47 @@ class DiscordChatAdapter(ChatAdapter):
     ) -> Optional[ChatEvent]:
         event = self._parse_message_to_event(message_payload)
         if event is not None:
-            self._event_queue.put_nowait(event)
+            self._enqueue_event(event)
         return event
+
+    def _ensure_event_queue(self) -> asyncio.Queue[ChatEvent]:
+        loop = asyncio.get_running_loop()
+        if self._event_queue is not None and self._event_queue_loop is not loop:
+            while True:
+                try:
+                    self._pending_events.append(self._event_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            self._event_queue = None
+            self._event_queue_loop = None
+
+        if self._event_queue is None:
+            self._event_queue = asyncio.Queue()
+            self._event_queue_loop = loop
+
+        if self._pending_events:
+            for pending_event in self._pending_events:
+                self._event_queue.put_nowait(pending_event)
+            self._pending_events.clear()
+
+        return self._event_queue
+
+    def _enqueue_event(self, event: ChatEvent) -> None:
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if (
+            self._event_queue is not None
+            and self._event_queue_loop is running_loop
+            and running_loop is not None
+            and not running_loop.is_closed()
+        ):
+            self._event_queue.put_nowait(event)
+            return
+
+        self._pending_events.append(event)
 
     def parse_message_event(
         self, message_payload: dict[str, Any]

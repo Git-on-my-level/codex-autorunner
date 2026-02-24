@@ -13,6 +13,35 @@ from codex_autorunner.integrations.discord.gateway import (
 )
 
 
+@pytest.mark.anyio
+async def test_run_reconnect_path_does_not_raise_name_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord import gateway as gateway_module
+
+    if gateway_module.websockets is None:
+        pytest.skip("websockets dependency is not installed")
+
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+        gateway_url="wss://example.invalid",
+    )
+
+    class _FailingWebSocketModule:
+        def connect(self, _gateway_url: str):
+            client._stop_event.set()
+            raise RuntimeError("simulated connect failure")
+
+    monkeypatch.setattr(gateway_module, "websockets", _FailingWebSocketModule())
+
+    async def _noop_dispatch(_event_type: str, _payload: dict[str, object]) -> None:
+        return None
+
+    await client.run(_noop_dispatch)
+
+
 def test_build_identify_payload_contains_required_keys() -> None:
     payload = build_identify_payload(bot_token="bot-token", intents=513)
     assert payload["op"] == 2

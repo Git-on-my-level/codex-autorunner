@@ -76,12 +76,16 @@ async def deliver_pma_output_to_active_sink(
     telegram_state_path: Path,
     discord_state_path: Optional[Path] = None,
 ) -> bool:
-    if not lifecycle_event:
-        return False
     if not assistant_text or not assistant_text.strip():
         return False
     if not isinstance(turn_id, str) or not turn_id:
         return False
+    event_type = (
+        lifecycle_event.get("event_type")
+        if isinstance(lifecycle_event, dict)
+        and isinstance(lifecycle_event.get("event_type"), str)
+        else None
+    )
 
     sink_store = PmaActiveSinkStore(hub_root)
     sink = sink_store.load()
@@ -90,6 +94,13 @@ async def deliver_pma_output_to_active_sink(
 
     last_delivery = sink.get("last_delivery_turn_id")
     if isinstance(last_delivery, str) and last_delivery == turn_id:
+        log_event(
+            logger,
+            logging.INFO,
+            "pma.delivery.skip_duplicate_turn",
+            turn_id=turn_id,
+            event_type=event_type,
+        )
         return False
 
     discord_channel_id = _resolve_discord_target(sink)
@@ -100,6 +111,7 @@ async def deliver_pma_output_to_active_sink(
             assistant_text=assistant_text,
             turn_id=turn_id,
             discord_state_path=discord_state_path,
+            event_type=event_type,
         )
 
     target = _resolve_telegram_target(sink)
@@ -137,6 +149,16 @@ async def deliver_pma_output_to_active_sink(
         await store.close()
 
     sink_store.mark_delivered(turn_id)
+    log_event(
+        logger,
+        logging.INFO,
+        "pma.delivery.telegram",
+        turn_id=turn_id,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        chunk_count=len(chunks),
+        event_type=event_type,
+    )
     return True
 
 
@@ -147,6 +169,7 @@ async def _deliver_to_discord(
     assistant_text: str,
     turn_id: str,
     discord_state_path: Optional[Path] = None,
+    event_type: Optional[str] = None,
 ) -> bool:
     if discord_state_path is None:
         discord_state_path = hub_root / ".codex-autorunner" / "discord_state.sqlite3"
@@ -187,6 +210,7 @@ async def _deliver_to_discord(
         turn_id=turn_id,
         channel_id=channel_id,
         chunk_count=len(chunks),
+        event_type=event_type,
     )
     return True
 
