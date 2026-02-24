@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from .constants import DISCORD_GATEWAY_URL
-from .errors import DiscordAPIError
+from .errors import DiscordAPIError, DiscordPermanentError
 from .rest import DiscordRestClient
 
 try:
@@ -23,6 +23,10 @@ except (
 
     class ConnectionClosed(Exception):
         pass
+
+
+FATAL_GATEWAY_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013, 4014}
+FATAL_RETRY_MIN_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,17 @@ def calculate_reconnect_backoff(
     return result
 
 
+def gateway_close_code(exc: BaseException) -> int | None:
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code
+    received = getattr(exc, "rcvd", None)
+    received_code = getattr(received, "code", None)
+    if isinstance(received_code, int):
+        return received_code
+    return None
+
+
 class DiscordGatewayClient:
     def __init__(
         self,
@@ -97,6 +112,7 @@ class DiscordGatewayClient:
         self._gateway_url = gateway_url
         self._sequence: Optional[int] = None
         self._last_heartbeat_ack: Optional[float] = None
+        self._ready_in_connection = False
         self._stop_event = asyncio.Event()
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
         self._websocket: Any = None
@@ -118,16 +134,34 @@ class DiscordGatewayClient:
 
         reconnect_attempt = 0
         while not self._stop_event.is_set():
-            gateway_url = await self._resolve_gateway_url()
+            established_session = False
+            fatal_failure = False
+            self._ready_in_connection = False
             try:
+                gateway_url = await self._resolve_gateway_url()
                 async with websockets.connect(gateway_url) as websocket:
                     self._websocket = websocket
-                    reconnect_attempt = 0
-                    await self._run_connection(websocket, on_dispatch)
+                    established_session = await self._run_connection(
+                        websocket, on_dispatch
+                    )
             except asyncio.CancelledError:
                 raise
-            except ConnectionClosed:
-                self._logger.info("Discord gateway socket closed; reconnecting")
+            except DiscordPermanentError as exc:
+                fatal_failure = True
+                self._logger.error(
+                    "Discord gateway encountered permanent failure; reconnecting slowly: %s",
+                    exc,
+                )
+            except ConnectionClosed as exc:
+                close_code = gateway_close_code(exc)
+                if close_code in FATAL_GATEWAY_CLOSE_CODES:
+                    fatal_failure = True
+                    self._logger.error(
+                        "Discord gateway closed with fatal code=%s; reconnecting slowly",
+                        close_code,
+                    )
+                else:
+                    self._logger.info("Discord gateway socket closed; reconnecting")
             except Exception as exc:
                 self._logger.warning("Discord gateway error; reconnecting: %s", exc)
             finally:
@@ -136,7 +170,11 @@ class DiscordGatewayClient:
 
             if self._stop_event.is_set():
                 break
+            if established_session or self._ready_in_connection:
+                reconnect_attempt = 0
             backoff = calculate_reconnect_backoff(reconnect_attempt)
+            if fatal_failure:
+                backoff = max(backoff, FATAL_RETRY_MIN_SECONDS)
             reconnect_attempt += 1
             await asyncio.sleep(backoff)
 
@@ -156,7 +194,7 @@ class DiscordGatewayClient:
         self,
         websocket: Any,
         on_dispatch: Callable[[str, dict[str, Any]], Awaitable[None]],
-    ) -> None:
+    ) -> bool:
         raw = await websocket.recv()
         hello = parse_gateway_frame(raw)
         if hello.op != 10:
@@ -176,6 +214,7 @@ class DiscordGatewayClient:
                 build_identify_payload(bot_token=self._bot_token, intents=self._intents)
             )
         )
+        established_session = False
 
         async for raw_message in websocket:
             frame = parse_gateway_frame(raw_message)
@@ -183,6 +222,9 @@ class DiscordGatewayClient:
                 self._sequence = frame.s
 
             if frame.op == 0:
+                if frame.t == "READY":
+                    established_session = True
+                    self._ready_in_connection = True
                 if frame.t and isinstance(frame.d, dict):
                     await on_dispatch(frame.t, frame.d)
                 continue
@@ -196,17 +238,12 @@ class DiscordGatewayClient:
                 continue
             if frame.op == 7:
                 self._logger.info("Discord gateway requested reconnect")
-                return
+                return established_session
             if frame.op == 9:
-                await asyncio.sleep(1.0)
-                await websocket.send(
-                    json.dumps(
-                        build_identify_payload(
-                            bot_token=self._bot_token, intents=self._intents
-                        )
-                    )
-                )
-                continue
+                self._logger.warning("Discord gateway reported invalid session")
+                return established_session
+
+        return established_session
 
     async def _heartbeat_loop(self, websocket: Any, interval_seconds: float) -> None:
         try:

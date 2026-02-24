@@ -5,12 +5,17 @@ import logging
 
 import pytest
 
+from codex_autorunner.integrations.discord.errors import DiscordPermanentError
 from codex_autorunner.integrations.discord.gateway import (
     DiscordGatewayClient,
     build_identify_payload,
     calculate_reconnect_backoff,
     parse_gateway_frame,
 )
+
+
+async def _noop_dispatch(_event_type: str, _payload: dict[str, object]) -> None:
+    return None
 
 
 @pytest.mark.anyio
@@ -36,10 +41,246 @@ async def test_run_reconnect_path_does_not_raise_name_error(
 
     monkeypatch.setattr(gateway_module, "websockets", _FailingWebSocketModule())
 
-    async def _noop_dispatch(_event_type: str, _payload: dict[str, object]) -> None:
-        return None
-
     await client.run(_noop_dispatch)
+
+
+@pytest.mark.anyio
+async def test_run_retries_resolve_failures_without_exiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord import gateway as gateway_module
+
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+    monkeypatch.setattr(gateway_module, "websockets", object())
+
+    async def _fail_resolve() -> str:
+        raise RuntimeError("resolve failed")
+
+    monkeypatch.setattr(client, "_resolve_gateway_url", _fail_resolve)
+    backoff_attempts: list[int] = []
+    monkeypatch.setattr(
+        gateway_module,
+        "calculate_reconnect_backoff",
+        lambda attempt: float(backoff_attempts.append(attempt) or 2.0),
+    )
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        client._stop_event.set()
+
+    monkeypatch.setattr(gateway_module.asyncio, "sleep", _fake_sleep)
+    await client.run(_noop_dispatch)
+
+    assert backoff_attempts == [0]
+    assert sleep_calls == [2.0]
+
+
+@pytest.mark.anyio
+async def test_run_slow_retries_on_permanent_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord import gateway as gateway_module
+
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+    monkeypatch.setattr(gateway_module, "websockets", object())
+
+    async def _fail_resolve() -> str:
+        raise DiscordPermanentError("invalid credentials")
+
+    monkeypatch.setattr(client, "_resolve_gateway_url", _fail_resolve)
+    monkeypatch.setattr(gateway_module, "calculate_reconnect_backoff", lambda _a: 1.0)
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        client._stop_event.set()
+
+    monkeypatch.setattr(gateway_module.asyncio, "sleep", _fake_sleep)
+    await client.run(_noop_dispatch)
+
+    assert sleep_calls == [60.0]
+
+
+@pytest.mark.anyio
+async def test_run_slow_retries_for_fatal_gateway_close_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord import gateway as gateway_module
+
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+
+    class _FakeConnectionClosed(Exception):
+        def __init__(self, code: int) -> None:
+            super().__init__(f"code={code}")
+            self.code = code
+
+    class _FailingWebSocketModule:
+        def connect(self, _gateway_url: str):
+            class _Context:
+                async def __aenter__(self) -> object:
+                    raise _FakeConnectionClosed(4004)
+
+                async def __aexit__(self, *_exc: object) -> bool:
+                    return False
+
+            return _Context()
+
+    monkeypatch.setattr(gateway_module, "ConnectionClosed", _FakeConnectionClosed)
+    monkeypatch.setattr(gateway_module, "websockets", _FailingWebSocketModule())
+
+    async def _resolve_gateway_url() -> str:
+        return "wss://example.invalid"
+
+    monkeypatch.setattr(client, "_resolve_gateway_url", _resolve_gateway_url)
+    monkeypatch.setattr(gateway_module, "calculate_reconnect_backoff", lambda _a: 1.0)
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        client._stop_event.set()
+
+    monkeypatch.setattr(gateway_module.asyncio, "sleep", _fake_sleep)
+    await client.run(_noop_dispatch)
+
+    assert sleep_calls == [60.0]
+
+
+@pytest.mark.anyio
+async def test_run_resets_backoff_only_after_established_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord import gateway as gateway_module
+
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+
+    class _WebSocketModule:
+        def connect(self, _gateway_url: str):
+            class _Context:
+                async def __aenter__(self) -> object:
+                    return object()
+
+                async def __aexit__(self, *_exc: object) -> bool:
+                    return False
+
+            return _Context()
+
+    monkeypatch.setattr(gateway_module, "websockets", _WebSocketModule())
+
+    async def _resolve_gateway_url() -> str:
+        return "wss://example.invalid"
+
+    monkeypatch.setattr(client, "_resolve_gateway_url", _resolve_gateway_url)
+    call_count = 0
+
+    async def _run_connection(_websocket: object, _dispatch: object) -> bool:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("early disconnect")
+        return True
+
+    monkeypatch.setattr(client, "_run_connection", _run_connection)
+    attempts: list[int] = []
+    monkeypatch.setattr(
+        gateway_module,
+        "calculate_reconnect_backoff",
+        lambda attempt: float(attempts.append(attempt) or (attempt + 1)),
+    )
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        if len(sleep_calls) >= 2:
+            client._stop_event.set()
+
+    monkeypatch.setattr(gateway_module.asyncio, "sleep", _fake_sleep)
+    await client.run(_noop_dispatch)
+
+    assert attempts == [0, 0]
+    assert sleep_calls == [1.0, 1.0]
+
+
+@pytest.mark.anyio
+async def test_run_resets_backoff_when_ready_seen_before_socket_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord import gateway as gateway_module
+
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+
+    class _FakeConnectionClosed(Exception):
+        def __init__(self, code: int) -> None:
+            super().__init__(f"code={code}")
+            self.code = code
+
+    class _WebSocketModule:
+        def connect(self, _gateway_url: str):
+            class _Context:
+                async def __aenter__(self) -> object:
+                    return object()
+
+                async def __aexit__(self, *_exc: object) -> bool:
+                    return False
+
+            return _Context()
+
+    monkeypatch.setattr(gateway_module, "ConnectionClosed", _FakeConnectionClosed)
+    monkeypatch.setattr(gateway_module, "websockets", _WebSocketModule())
+
+    async def _resolve_gateway_url() -> str:
+        return "wss://example.invalid"
+
+    monkeypatch.setattr(client, "_resolve_gateway_url", _resolve_gateway_url)
+    call_count = 0
+
+    async def _run_connection(_websocket: object, _dispatch: object) -> bool:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            client._ready_in_connection = True
+            raise _FakeConnectionClosed(1000)
+        raise RuntimeError("early disconnect")
+
+    monkeypatch.setattr(client, "_run_connection", _run_connection)
+    attempts: list[int] = []
+    monkeypatch.setattr(
+        gateway_module,
+        "calculate_reconnect_backoff",
+        lambda attempt: float(attempts.append(attempt) or (attempt + 1)),
+    )
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        if len(sleep_calls) >= 2:
+            client._stop_event.set()
+
+    monkeypatch.setattr(gateway_module.asyncio, "sleep", _fake_sleep)
+    await client.run(_noop_dispatch)
+
+    assert attempts == [0, 1]
+    assert sleep_calls == [1.0, 2.0]
 
 
 def test_build_identify_payload_contains_required_keys() -> None:

@@ -13,7 +13,7 @@ from codex_autorunner.core.circuit_breaker import CircuitBreaker
 from codex_autorunner.core.exceptions import CircuitOpenError
 
 from .constants import DISCORD_API_BASE_URL
-from .errors import DiscordAPIError
+from .errors import DiscordAPIError, DiscordPermanentError
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +127,14 @@ class DiscordRestClient:
                         f"Discord API rate limit exceeded for {method} {path}"
                     ) from exc
 
-                if 200 <= exc.response.status_code < 300:
+                status_code = exc.response.status_code
+                body_preview = (
+                    (exc.response.text or "").strip().replace("\n", " ")[:200]
+                )
+
+                if 200 <= status_code < 300:
                     response = exc.response
-                elif 500 <= exc.response.status_code < 600:
+                elif 500 <= status_code < 600:
                     if retry_attempt < self._max_retries:
                         retry_attempt += 1
                         delay = self._calculate_retry_delay(retry_attempt)
@@ -144,20 +149,19 @@ class DiscordRestClient:
                         )
                         await asyncio.sleep(delay)
                         continue
-                    body_preview = (
-                        (exc.response.text or "").strip().replace("\n", " ")[:200]
-                    )
                     raise DiscordAPIError(
                         f"Discord API server error for {method} {path}: "
-                        f"status={exc.response.status_code} body={body_preview!r}"
+                        f"status={status_code} body={body_preview!r}"
+                    ) from exc
+                elif status_code in {401, 403}:
+                    raise DiscordPermanentError(
+                        f"Discord API authentication failure for {method} {path}: "
+                        f"status={status_code} body={body_preview!r}"
                     ) from exc
                 else:
-                    body_preview = (
-                        (exc.response.text or "").strip().replace("\n", " ")[:200]
-                    )
                     raise DiscordAPIError(
                         f"Discord API request failed for {method} {path}: "
-                        f"status={exc.response.status_code} body={body_preview!r}"
+                        f"status={status_code} body={body_preview!r}"
                     ) from exc
             except httpx.HTTPError as exc:
                 if self._is_retryable_error(exc) and retry_attempt < self._max_retries:
