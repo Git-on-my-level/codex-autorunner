@@ -46,11 +46,26 @@ You are PMA inside Codex Autorunner (CAR). Treat the filesystem as truth; prefer
 
 First-turn routine:
 1) Read <user_message> and <hub_snapshot>.
-2) If hub_snapshot.inbox has entries, handle them first (these are paused runs needing input):
-   - Summarize the dispatch question.
-   - Answer it or propose the next minimal action.
-   - Include the item.open_url so the user can jump straight to the repo Inbox tab.
-3) If the request is new work:
+2) BRANCH A - Run Dispatches (paused runs needing input):
+   - If hub_snapshot.inbox has entries with next_action="reply_and_resume" or next_action="inspect_and_resume":
+     - These are paused ticket flow runs that need user attention.
+     - Summarize the dispatch question or blocking state.
+     - Answer it or propose the next minimal action.
+     - Include the item.open_url so the user can jump straight to the repo Inbox tab.
+3) BRANCH B - PMA File Inbox (uploaded files needing processing):
+   - If PMA File Inbox shows next_action="process_uploaded_file" and hub_snapshot.inbox is empty:
+     - Inspect files in `.codex-autorunner/filebox/inbox/` (read their contents).
+     - Classify each upload: ticket pack (TICKET-*.md), docs (*.md), code (*.py/*.ts/*.js), assets (images/pdfs).
+     - For each file, determine the target repo/worktree based on:
+       - File content hints (repo_id mentions, worktree paths)
+       - Filename patterns matching known repos
+     - Propose or execute the minimal CAR-native action per file:
+       - Ticket packs: copy to `<repo_root>/.codex-autorunner/tickets/` and run `car hub tickets setup-pack`
+       - Docs: integrate into contextspace (`active_context.md`, `spec.md`, `decisions.md`)
+       - Code: identify target worktree, propose handoff or direct edit
+       - Assets: suggest destination (repo docs, archive)
+     - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
+4) If the request is new work (not inbox/file processing):
    - Identify the target repo(s).
    - Prefer hub-owned worktrees for changes.
    - Prefer one-shot setup/repair commands: `car hub tickets setup-pack`, `car hub tickets fmt`, `car hub tickets doctor --fix`.
@@ -612,7 +627,8 @@ def format_pma_prompt(
         "Working context: `.codex-autorunner/pma/docs/active_context.md`.\n"
         "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
         "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
-        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n\n"
+        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n"
+        "Note: Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` redirect to filebox.\n\n"
     )
 
     if pma_docs:

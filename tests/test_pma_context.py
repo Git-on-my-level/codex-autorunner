@@ -499,3 +499,137 @@ def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None
     assert "unreadable dispatch metadata" in (item.get("reason") or "").lower()
     run_state = item.get("run_state") or {}
     assert run_state.get("state") == "blocked"
+
+
+def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [
+            {
+                "item_type": "run_dispatch",
+                "next_action": "reply_and_resume",
+                "repo_id": "repo-1",
+                "run_id": "run-1",
+                "seq": 1,
+                "dispatch": {
+                    "mode": "pause",
+                    "title": "Need input",
+                    "body": "Please respond",
+                    "is_handoff": False,
+                },
+                "files": ["request.md"],
+                "open_url": "/repos/repo-1/?tab=inbox&run_id=run-1",
+                "run_state": {
+                    "state": "paused",
+                    "blocking_reason": "Waiting for user input",
+                },
+            }
+        ],
+        "repos": [],
+        "pma_files": {"inbox": ["upload.md", "data.csv"], "outbox": []},
+        "pma_files_detail": {
+            "inbox": [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "upload.md",
+                    "source": "filebox",
+                    "size": "100",
+                    "modified_at": "2024-01-01T00:00:00Z",
+                },
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "data.csv",
+                    "source": "filebox",
+                    "size": "500",
+                    "modified_at": "2024-01-01T00:01:00Z",
+                },
+            ],
+            "outbox": [],
+        },
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Run Dispatches (paused runs needing attention):" in result
+    assert "next_action=reply_and_resume" in result
+    assert "repo_id=repo-1" in result
+
+    assert "PMA File Inbox:" in result
+    assert "inbox: [upload.md, data.csv]" in result
+    assert "next_action: process_uploaded_file" in result
+
+
+def test_render_hub_snapshot_pma_files_only(tmp_path: Path) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [],
+        "repos": [],
+        "pma_files": {"inbox": ["ticket-pack.md"], "outbox": []},
+        "pma_files_detail": {
+            "inbox": [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "ticket-pack.md",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2024-01-01T00:00:00Z",
+                }
+            ],
+            "outbox": [],
+        },
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Run Dispatches" not in result
+    assert "PMA File Inbox:" in result
+    assert "inbox: [ticket-pack.md]" in result
+    assert "next_action: process_uploaded_file" in result
+
+
+def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [],
+        "repos": [],
+        "pma_files": {"inbox": [], "outbox": []},
+        "pma_files_detail": {"inbox": [], "outbox": []},
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Run Dispatches" not in result
+    assert "PMA File Inbox:" not in result
+    assert "next_action: process_uploaded_file" not in result
+
+
+def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {"test": "data"}
+    base_prompt = "Base prompt"
+    message = "User message"
+
+    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+
+    assert ".codex-autorunner/filebox/outbox/" in result
+    assert ".codex-autorunner/filebox/inbox/" in result
+    assert "Legacy paths" in result
+    assert ".codex-autorunner/pma/inbox/" in result
