@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import platform
 import random
 from dataclasses import dataclass
@@ -80,7 +81,16 @@ def calculate_reconnect_backoff(
     max_seconds: float = 30.0,
     rand_float: Callable[[], float] = random.random,
 ) -> float:
-    scaled = base_seconds * (2 ** max(attempt, 0))
+    normalized_attempt = max(attempt, 0)
+    if max_seconds <= 0.0:
+        return 0.0
+    if base_seconds <= 0.0:
+        return 0.0
+    min_jitter = 0.8
+    cap_threshold = math.ceil(math.log2(max_seconds / (base_seconds * min_jitter)))
+    if normalized_attempt >= max(cap_threshold, 0):
+        return max_seconds
+    scaled = base_seconds * (2**normalized_attempt)
     jitter_factor = 0.8 + (0.4 * min(max(rand_float(), 0.0), 1.0))
     result: float = min(max_seconds, max(0.0, scaled * jitter_factor))
     return result

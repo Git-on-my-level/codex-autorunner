@@ -312,6 +312,15 @@ def test_calculate_reconnect_backoff_stays_within_bounds() -> None:
     assert 0.0 <= high <= 30.0
 
 
+def test_calculate_reconnect_backoff_large_attempt_short_circuits() -> None:
+    value = calculate_reconnect_backoff(
+        attempt=100_000,
+        base_seconds=1.0,
+        max_seconds=30.0,
+    )
+    assert value == 30.0
+
+
 def test_parse_gateway_frame_allows_unknown_fields() -> None:
     frame = parse_gateway_frame(
         {
