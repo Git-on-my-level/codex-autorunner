@@ -23,7 +23,7 @@ class DiscordRestClient:
         self,
         *,
         bot_token: str,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float = 30.0,
         base_url: str = DISCORD_API_BASE_URL,
         max_retries: int = 3,
         retry_base_delay: float = 1.0,
