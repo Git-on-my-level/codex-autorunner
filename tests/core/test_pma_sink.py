@@ -34,3 +34,23 @@ def test_set_chat_preserves_last_delivery_turn_id(tmp_path: Path) -> None:
 
     payload = store.set_chat("telegram", chat_id="111", thread_id="222")
     assert payload["last_delivery_turn_id"] == "turn-42"
+
+
+def test_set_chat_resets_last_delivery_when_target_changes(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaActiveSinkStore(hub_root)
+    store.set_chat("discord", chat_id="111")
+    assert store.mark_delivered("turn-42") is True
+
+    payload = store.set_chat("discord", chat_id="222")
+    assert payload["last_delivery_turn_id"] is None
+
+
+def test_set_telegram_preserves_last_delivery_for_same_target(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaActiveSinkStore(hub_root)
+    store.set_telegram(chat_id=111, thread_id=222)
+    assert store.mark_delivered("turn-42") is True
+
+    payload = store.set_telegram(chat_id=111, thread_id=222)
+    assert payload["last_delivery_turn_id"] == "turn-42"

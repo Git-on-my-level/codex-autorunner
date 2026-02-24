@@ -9,7 +9,14 @@ from typing import Any
 from ...core.config import HubConfig
 from ...core.optional_dependencies import missing_optional_dependencies
 from ...core.runtime import DoctorCheck
-from .config import DEFAULT_APP_ID_ENV, DEFAULT_BOT_TOKEN_ENV, DEFAULT_STATE_FILE
+from .config import (
+    DEFAULT_APP_ID_ENV,
+    DEFAULT_BOT_TOKEN_ENV,
+    DEFAULT_INTENTS,
+    DEFAULT_STATE_FILE,
+    LEGACY_DEFAULT_INTENTS,
+)
+from .constants import DISCORD_INTENT_MESSAGE_CONTENT
 
 
 def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
@@ -118,6 +125,54 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
     allowed_guild_ids = _parse_string_ids(discord_cfg.get("allowed_guild_ids"))
     allowed_channel_ids = _parse_string_ids(discord_cfg.get("allowed_channel_ids"))
     allowed_user_ids = _parse_string_ids(discord_cfg.get("allowed_user_ids"))
+    intents_value = discord_cfg.get("intents", DEFAULT_INTENTS)
+
+    if isinstance(intents_value, int) and intents_value == LEGACY_DEFAULT_INTENTS:
+        checks.append(
+            DoctorCheck(
+                name="Discord intents",
+                passed=True,
+                message=(
+                    "discord_bot.intents is set to legacy value 513; runtime "
+                    "auto-upgrades this to include MESSAGE_CONTENT."
+                ),
+                check_id="discord.intents",
+                severity="warning",
+                fix=(
+                    "Update discord_bot.intents to 33281 (DEFAULT_INTENTS) to "
+                    "make intent behavior explicit in config."
+                ),
+            )
+        )
+    elif (
+        isinstance(intents_value, int)
+        and intents_value & DISCORD_INTENT_MESSAGE_CONTENT
+    ):
+        checks.append(
+            DoctorCheck(
+                name="Discord intents",
+                passed=True,
+                message=f"Discord intents include MESSAGE_CONTENT ({intents_value}).",
+                check_id="discord.intents",
+                severity="info",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                name="Discord intents",
+                passed=False,
+                message=(
+                    "discord_bot.intents is missing DISCORD_INTENT_MESSAGE_CONTENT; "
+                    "message content events will not be delivered."
+                ),
+                check_id="discord.intents",
+                fix=(
+                    "Set discord_bot.intents to 33281 (DEFAULT_INTENTS), or add "
+                    "32768 (DISCORD_INTENT_MESSAGE_CONTENT) to your current bitmask."
+                ),
+            )
+        )
 
     if not allowed_guild_ids and not allowed_channel_ids and not allowed_user_ids:
         checks.append(

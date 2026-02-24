@@ -4,6 +4,7 @@ import pytest
 
 from codex_autorunner.core.config import collect_env_overrides
 from codex_autorunner.integrations.discord.config import (
+    DEFAULT_INTENTS,
     DiscordBotConfig,
     DiscordBotConfigError,
 )
@@ -101,3 +102,20 @@ def test_discord_bot_config_preserves_non_legacy_intents_value(tmp_path) -> None
         raw={"enabled": False, "intents": DISCORD_INTENT_GUILDS},
     )
     assert cfg.intents == DISCORD_INTENT_GUILDS
+
+
+def test_discord_bot_config_migrates_legacy_intents_to_default(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "1234567890")
+    cfg = DiscordBotConfig.from_raw(
+        root=tmp_path,
+        raw={
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "intents": 513,
+        },
+    )
+    assert cfg.intents == DEFAULT_INTENTS

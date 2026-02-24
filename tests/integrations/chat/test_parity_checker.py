@@ -43,6 +43,43 @@ def test_parity_checker_fails_when_known_prefix_can_leak_to_generic_fallback(
     )
 
 
+def test_parity_checker_fails_when_component_fallback_is_missing(
+    tmp_path: Path,
+) -> None:
+    repo_root = _write_fixture_repo(
+        tmp_path,
+        include_component_unknown_fallback=False,
+    )
+
+    results_by_id = {
+        result.id: result for result in run_parity_checks(repo_root=repo_root)
+    }
+
+    guard_check = results_by_id["discord.interaction_component_guard_paths"]
+    assert not guard_check.passed
+    assert "component_unknown_fallback" in guard_check.metadata["failed_predicates"]
+
+
+def test_parity_checker_fails_when_parse_error_response_is_missing(
+    tmp_path: Path,
+) -> None:
+    repo_root = _write_fixture_repo(
+        tmp_path,
+        include_interaction_parse_failure_response=False,
+    )
+
+    results_by_id = {
+        result.id: result for result in run_parity_checks(repo_root=repo_root)
+    }
+
+    guard_check = results_by_id["discord.interaction_component_guard_paths"]
+    assert not guard_check.passed
+    assert (
+        "interaction_parse_failure_response"
+        in guard_check.metadata["failed_predicates"]
+    )
+
+
 def test_parity_checker_fails_when_shared_helper_usage_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -166,6 +203,11 @@ def _write_fixture_repo(
     include_telegram_trigger_bridge: bool = True,
     include_pma_status_route_in_normalized: bool = True,
     include_pma_status_route_in_direct: bool = True,
+    include_component_unknown_fallback: bool = True,
+    include_interaction_parse_failure_response: bool = True,
+    include_component_missing_custom_id_response: bool = True,
+    include_component_bind_value_response: bool = True,
+    include_component_flow_runs_value_response: bool = True,
     use_canonicalize_temporary_names: bool = False,
     use_early_ingress_none_guard_in_normalized: bool = False,
     use_truthy_ingress_guard_in_normalized: bool = False,
@@ -178,6 +220,11 @@ def _write_fixture_repo(
         include_discord_turn_policy=include_discord_turn_policy,
         include_pma_status_route_in_normalized=include_pma_status_route_in_normalized,
         include_pma_status_route_in_direct=include_pma_status_route_in_direct,
+        include_component_unknown_fallback=include_component_unknown_fallback,
+        include_interaction_parse_failure_response=include_interaction_parse_failure_response,
+        include_component_missing_custom_id_response=include_component_missing_custom_id_response,
+        include_component_bind_value_response=include_component_bind_value_response,
+        include_component_flow_runs_value_response=include_component_flow_runs_value_response,
         use_canonicalize_temporary_names=use_canonicalize_temporary_names,
         use_early_ingress_none_guard_in_normalized=use_early_ingress_none_guard_in_normalized,
         use_truthy_ingress_guard_in_normalized=use_truthy_ingress_guard_in_normalized,
@@ -214,6 +261,11 @@ def _build_discord_service_fixture(
     include_discord_turn_policy: bool,
     include_pma_status_route_in_normalized: bool,
     include_pma_status_route_in_direct: bool,
+    include_component_unknown_fallback: bool,
+    include_interaction_parse_failure_response: bool,
+    include_component_missing_custom_id_response: bool,
+    include_component_bind_value_response: bool,
+    include_component_flow_runs_value_response: bool,
     use_canonicalize_temporary_names: bool,
     use_early_ingress_none_guard_in_normalized: bool,
     use_truthy_ingress_guard_in_normalized: bool,
@@ -294,7 +346,7 @@ def _build_discord_service_fixture(
 """
 
     interaction_pma_guard = (
-        '    if ingress.command_path[:1] == ("pma",):\n        return\n'
+        '        if ingress.command_path[:1] == ("pma",):\n            return\n'
         if include_interaction_pma_prefix_guard
         else ""
     )
@@ -335,6 +387,61 @@ def _handle_message_event(text: str) -> None:
         if include_pma_status_route_in_direct
         else ""
     )
+    component_unknown_fallback = (
+        """
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            f"Unknown component: {custom_id}",
+        )
+"""
+        if include_component_unknown_fallback
+        else ""
+    )
+    interaction_parse_failure_response = (
+        """
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            "I could not parse this interaction. Please retry the command.",
+        )
+"""
+        if include_interaction_parse_failure_response
+        else ""
+    )
+    component_missing_custom_id_response = (
+        """
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            "I could not identify this interaction action. Please retry.",
+        )
+"""
+        if include_component_missing_custom_id_response
+        else ""
+    )
+    component_bind_value_response = (
+        """
+                _respond_ephemeral(
+                    "interaction-id",
+                    "interaction-token",
+                    "Please select a repository and try again.",
+                )
+"""
+        if include_component_bind_value_response
+        else ""
+    )
+    component_flow_runs_value_response = (
+        """
+                _respond_ephemeral(
+                    "interaction-id",
+                    "interaction-token",
+                    "Please select a run and try again.",
+                )
+"""
+        if include_component_flow_runs_value_response
+        else ""
+    )
 
     return (
         "from ...integrations.chat.turn_policy import PlainTextTurnContext, should_trigger_plain_text_turn\n"
@@ -353,16 +460,85 @@ def _handle_interaction(command_path: tuple[str, ...], options: dict[str, object
 """
         + interaction_ingress
         + """
-    if ingress.command_path[:1] == ("car",):
+    if ingress is None:
+"""
+        + interaction_parse_failure_response
+        + """
         return
+
+    try:
+        if ingress.command_path[:1] == ("car",):
+            return
 """
         + interaction_pma_guard
         + """
-    _ = "Command not implemented yet for Discord."
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            "Command not implemented yet for Discord.",
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            40,
+            "discord.interaction.unhandled_error",
+            exc=exc,
+        )
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            "An unexpected error occurred. Please try again later.",
+        )
+
+
+def _handle_component_interaction(custom_id: str | None) -> None:
+    if not custom_id:
+        self._logger.debug("missing custom_id")
+"""
+        + component_missing_custom_id_response
+        + """
+        return
+
+    try:
+        if custom_id == "bind_select":
+            values = []
+            if not values:
+"""
+        + component_bind_value_response
+        + """
+                return
+            return
+        if custom_id == "flow_runs_select":
+            values = []
+            if not values:
+"""
+        + component_flow_runs_value_response
+        + """
+                return
+            return
+        if custom_id.startswith("flow:"):
+            return
+"""
+        + component_unknown_fallback
+        + """
+    except Exception as exc:
+        log_event(
+            logger,
+            40,
+            "discord.component.unhandled_error",
+            exc=exc,
+        )
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            "An unexpected error occurred. Please try again later.",
+        )
 
 
 def _handle_car_command(command_path: tuple[str, ...]) -> None:
     if command_path == ("car", "status"):
+        return
+    if command_path == ("car", "new"):
         return
     if command_path == ("car", "agent"):
         return

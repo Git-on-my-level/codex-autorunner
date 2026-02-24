@@ -43,6 +43,11 @@ class PmaActiveSinkStore:
         thread_id: Optional[int],
         topic_key: Optional[str] = None,
     ) -> dict[str, Any]:
+        target = (
+            "telegram",
+            str(int(chat_id)),
+            str(int(thread_id)) if thread_id is not None else None,
+        )
         payload: dict[str, Any] = {
             "version": 1,
             "kind": "telegram",
@@ -54,6 +59,10 @@ class PmaActiveSinkStore:
         if topic_key:
             payload["topic_key"] = topic_key
         with file_lock(self._lock_path()):
+            existing = self._load_unlocked()
+            payload["last_delivery_turn_id"] = self._last_delivery_for_target(
+                existing, target
+            )
             self._save_unlocked(payload)
         return payload
 
@@ -79,14 +88,10 @@ class PmaActiveSinkStore:
             if isinstance(conversation_key, str) and conversation_key
             else None
         )
+        target = (platform_norm, chat_id_norm, thread_id_norm)
         with file_lock(self._lock_path()):
             existing = self._load_unlocked()
-            last_delivery_turn_id = (
-                existing.get("last_delivery_turn_id")
-                if isinstance(existing, dict)
-                and isinstance(existing.get("last_delivery_turn_id"), str)
-                else None
-            )
+            last_delivery_turn_id = self._last_delivery_for_target(existing, target)
             payload: dict[str, Any] = {
                 "version": 2,
                 "kind": "chat",
@@ -143,6 +148,51 @@ class PmaActiveSinkStore:
     def _save_unlocked(self, payload: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(self._path, json.dumps(payload, indent=2) + "\n")
+
+    def _last_delivery_for_target(
+        self,
+        payload: Optional[dict[str, Any]],
+        target: tuple[str, str, Optional[str]],
+    ) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        payload_target = self._target_key(payload)
+        if payload_target != target:
+            return None
+        last_delivery_turn_id = payload.get("last_delivery_turn_id")
+        if isinstance(last_delivery_turn_id, str) and last_delivery_turn_id:
+            return last_delivery_turn_id
+        return None
+
+    def _target_key(
+        self, payload: dict[str, Any]
+    ) -> Optional[tuple[str, str, Optional[str]]]:
+        kind = payload.get("kind")
+        if kind == "telegram":
+            chat_id = payload.get("chat_id")
+            if not isinstance(chat_id, int):
+                return None
+            thread_id = payload.get("thread_id")
+            if thread_id is not None and not isinstance(thread_id, int):
+                thread_norm: Optional[str] = None
+            else:
+                thread_norm = str(thread_id) if thread_id is not None else None
+            return ("telegram", str(chat_id), thread_norm)
+
+        if kind != "chat":
+            return None
+        platform = payload.get("platform")
+        chat_id = payload.get("chat_id")
+        if not isinstance(platform, str) or not platform.strip():
+            return None
+        if not isinstance(chat_id, str) or not chat_id.strip():
+            return None
+        thread_id = payload.get("thread_id")
+        if isinstance(thread_id, str) and thread_id.strip():
+            thread_norm = thread_id.strip()
+        else:
+            thread_norm = None
+        return (platform.strip().lower(), chat_id.strip(), thread_norm)
 
 
 __all__ = ["PmaActiveSinkStore", "PMA_ACTIVE_SINK_FILENAME"]

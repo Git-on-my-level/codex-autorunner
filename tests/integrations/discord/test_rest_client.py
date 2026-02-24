@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 import pytest
 
+from codex_autorunner.integrations.discord.errors import DiscordPermanentError
 from codex_autorunner.integrations.discord.rest import DiscordRestClient
 
 
@@ -116,3 +117,27 @@ async def test_rate_limit_retry_after_retries_and_succeeds(
     assert payload == {"id": "msg-1"}
     assert attempts["count"] == 3
     assert sleeps == [0.25, 0.25]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status_code", [401, 403])
+async def test_auth_failures_raise_permanent_error_without_retry(
+    status_code: int,
+) -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(status_code, json={"message": "Unauthorized"})
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        with pytest.raises(DiscordPermanentError):
+            await client.get_gateway_bot()
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 1

@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import logging
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -353,7 +354,7 @@ class DiscordBotService:
 
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
-            await self._send_channel_message(
+            await self._send_channel_message_safe(
                 channel_id,
                 {
                     "content": "This channel is not bound. Run `/car bind path:<workspace>` or `/pma on`.",
@@ -363,18 +364,21 @@ class DiscordBotService:
 
         pma_enabled = bool(binding.get("pma_enabled", False))
         workspace_raw = binding.get("workspace_path")
-        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
-            await self._send_channel_message(
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            candidate = canonicalize_path(Path(workspace_raw))
+            if candidate.exists() and candidate.is_dir():
+                workspace_root = candidate
+
+        if workspace_root is None and pma_enabled:
+            fallback = canonicalize_path(Path(self._config.root))
+            if fallback.exists() and fallback.is_dir():
+                workspace_root = fallback
+
+        if workspace_root is None:
+            await self._send_channel_message_safe(
                 channel_id,
                 {"content": "Binding is invalid. Run `/car bind path:<workspace>`."},
-            )
-            return
-
-        workspace_root = canonicalize_path(Path(workspace_raw))
-        if not workspace_root.exists() or not workspace_root.is_dir():
-            await self._send_channel_message(
-                channel_id,
-                {"content": f"Workspace path does not exist: {workspace_root}"},
             )
             return
 
@@ -386,7 +390,7 @@ class DiscordBotService:
                 try:
                     updated = await controller.resume_flow(paused.id)
                 except ValueError as exc:
-                    await self._send_channel_message(
+                    await self._send_channel_message_safe(
                         channel_id,
                         {"content": f"Failed to resume paused run: {exc}"},
                     )
@@ -397,7 +401,7 @@ class DiscordBotService:
                     is_terminal=updated.status.is_terminal(),
                 )
                 self._close_worker_handles(ensure_result)
-                await self._send_channel_message(
+                await self._send_channel_message_safe(
                     channel_id,
                     {
                         "content": (
@@ -432,7 +436,7 @@ class DiscordBotService:
                     channel_id=channel_id,
                     exc=exc,
                 )
-                await self._send_channel_message(
+                await self._send_channel_message_safe(
                     channel_id,
                     {"content": "Failed to build PMA context. Please try again."},
                 )
@@ -476,7 +480,7 @@ class DiscordBotService:
                 agent=agent,
                 exc=exc,
             )
-            await self._send_channel_message(
+            await self._send_channel_message_safe(
                 channel_id,
                 {"content": f"Turn failed: {exc}"},
             )
@@ -489,8 +493,12 @@ class DiscordBotService:
         )
         if not chunks:
             chunks = ["(No response text returned.)"]
-        for chunk in chunks:
-            await self._send_channel_message(channel_id, {"content": chunk})
+        for idx, chunk in enumerate(chunks, 1):
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": chunk},
+                record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
+            )
 
     async def _find_paused_flow_run(
         self, workspace_root: Path
@@ -637,6 +645,13 @@ class DiscordBotService:
             return
         if command_path == ("car", "status"):
             await self._handle_status(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+            )
+            return
+        if command_path == ("car", "new"):
+            await self._handle_car_new(
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
@@ -1019,6 +1034,48 @@ class DiscordBotService:
             channel_id=channel_id, payload=payload
         )
 
+    async def _send_channel_message_safe(
+        self,
+        channel_id: str,
+        payload: dict[str, Any],
+        *,
+        record_id: Optional[str] = None,
+    ) -> None:
+        try:
+            await self._send_channel_message(channel_id, payload)
+            return
+        except Exception as exc:
+            outbox_record_id = (
+                record_id or f"retry:{channel_id}:{uuid.uuid4().hex[:12]}"
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_message.send_failed",
+                channel_id=channel_id,
+                record_id=outbox_record_id,
+                exc=exc,
+            )
+            try:
+                await self._store.enqueue_outbox(
+                    OutboxRecord(
+                        record_id=outbox_record_id,
+                        channel_id=channel_id,
+                        message_id=None,
+                        operation="send",
+                        payload_json=dict(payload),
+                    )
+                )
+            except Exception as enqueue_exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.channel_message.enqueue_failed",
+                    channel_id=channel_id,
+                    record_id=outbox_record_id,
+                    exc=enqueue_exc,
+                )
+
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
             await self._handle_interaction(payload)
@@ -1336,6 +1393,7 @@ class DiscordBotService:
             "",
             "/car bind [path] - Bind channel to workspace",
             "/car status - Show binding status",
+            "/car new - Start a fresh chat session",
             "/car debug - Show debug info",
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
@@ -1555,6 +1613,69 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             "\n".join(lines),
+        )
+
+    async def _handle_car_new(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This channel is not bound. Run `/car bind path:<...>` first.",
+            )
+            return
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            if not workspace_root.exists() or not workspace_root.is_dir():
+                workspace_root = None
+        if workspace_root is None:
+            if pma_enabled:
+                workspace_root = canonicalize_path(Path(self._config.root))
+            else:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Binding is invalid. Run `/car bind path:<workspace>`.",
+                )
+                return
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+
+        session_key = self._build_message_session_key(
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            pma_enabled=pma_enabled,
+            agent=agent,
+        )
+        orchestrator_channel_key = (
+            channel_id if not pma_enabled else f"pma:{channel_id}"
+        )
+        orchestrator = await self._orchestrator_for_workspace(
+            workspace_root, channel_id=orchestrator_channel_key
+        )
+        had_previous = orchestrator.reset_thread_id(session_key)
+        mode_label = "PMA" if pma_enabled else "repo"
+        state_label = "cleared previous thread" if had_previous else "new thread ready"
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            (
+                f"Started a fresh {mode_label} session for `{agent}` "
+                f"({state_label})."
+            ),
         )
 
     VALID_AGENT_VALUES = ("codex", "opencode")
@@ -2713,11 +2834,16 @@ class DiscordBotService:
                 },
             )
         except DiscordAPIError as exc:
-            self._logger.error(
-                "Failed to send ephemeral response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
+            sent_followup = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=content,
             )
+            if not sent_followup:
+                self._logger.error(
+                    "Failed to send ephemeral response: %s (interaction_id=%s)",
+                    exc,
+                    interaction_id,
+                )
 
     async def _respond_with_components(
         self,
@@ -2742,11 +2868,43 @@ class DiscordBotService:
                 },
             )
         except DiscordAPIError as exc:
-            self._logger.error(
-                "Failed to send component response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
+            sent_followup = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=content,
+                components=components,
             )
+            if not sent_followup:
+                self._logger.error(
+                    "Failed to send component response: %s (interaction_id=%s)",
+                    exc,
+                    interaction_id,
+                )
+
+    async def _send_followup_ephemeral(
+        self,
+        *,
+        interaction_token: str,
+        content: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        application_id = (self._config.application_id or "").strip()
+        if not application_id:
+            return False
+        payload: dict[str, Any] = {
+            "content": content,
+            "flags": DISCORD_EPHEMERAL_FLAG,
+        }
+        if components:
+            payload["components"] = components
+        try:
+            await self._rest.create_followup_message(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                payload=payload,
+            )
+        except Exception:
+            return False
+        return True
 
     async def _handle_component_interaction(
         self, interaction_payload: dict[str, Any]
@@ -2778,34 +2936,51 @@ class DiscordBotService:
                 "handle_component_interaction: missing custom_id (interaction_id=%s)",
                 interaction_id,
             )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not identify this interaction action. Please retry.",
+            )
             return
 
         try:
             if custom_id == "bind_select":
                 values = extract_component_values(interaction_payload)
-                if values:
-                    await self._handle_bind_selection(
+                if not values:
+                    await self._respond_ephemeral(
                         interaction_id,
                         interaction_token,
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                        selected_repo_id=values[0],
+                        "Please select a repository and try again.",
                     )
+                    return
+                await self._handle_bind_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    guild_id=extract_guild_id(interaction_payload),
+                    selected_repo_id=values[0],
+                )
                 return
 
             if custom_id == "flow_runs_select":
                 values = extract_component_values(interaction_payload)
-                if values:
-                    workspace_root = await self._require_bound_workspace(
-                        interaction_id, interaction_token, channel_id=channel_id
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a run and try again.",
                     )
-                    if workspace_root:
-                        await self._handle_flow_status(
-                            interaction_id,
-                            interaction_token,
-                            workspace_root=workspace_root,
-                            options={"run_id": values[0]},
-                        )
+                    return
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id, interaction_token, channel_id=channel_id
+                )
+                if workspace_root:
+                    await self._handle_flow_status(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": values[0]},
+                    )
                 return
 
             if custom_id.startswith("flow:"):
