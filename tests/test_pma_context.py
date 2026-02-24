@@ -633,3 +633,54 @@ def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
     assert ".codex-autorunner/filebox/inbox/" in result
     assert "Legacy paths" in result
     assert ".codex-autorunner/pma/inbox/" in result
+
+
+def test_render_hub_snapshot_includes_all_next_action_types(tmp_path: Path) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [
+            {
+                "item_type": "worker_dead",
+                "next_action": "restart_worker",
+                "repo_id": "repo-1",
+                "run_id": "run-1",
+                "seq": 1,
+                "dispatch": None,
+                "files": [],
+                "open_url": "/repos/repo-1/?tab=inbox&run_id=run-1",
+                "run_state": {
+                    "state": "dead",
+                    "blocking_reason": "Worker not running",
+                },
+            },
+            {
+                "item_type": "run_failed",
+                "next_action": "diagnose_or_restart",
+                "repo_id": "repo-2",
+                "run_id": "run-2",
+                "seq": 2,
+                "dispatch": None,
+                "files": [],
+                "open_url": "/repos/repo-2/?tab=inbox&run_id=run-2",
+                "run_state": {
+                    "state": "blocked",
+                    "blocking_reason": "Run failed",
+                },
+            },
+        ],
+        "repos": [],
+        "pma_files": {"inbox": [], "outbox": []},
+        "pma_files_detail": {"inbox": [], "outbox": []},
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Run Dispatches (paused runs needing attention):" in result
+    assert "next_action=restart_worker" in result
+    assert "next_action=diagnose_or_restart" in result
+    assert "repo_id=repo-1" in result
+    assert "repo_id=repo-2" in result
+    assert "PMA File Inbox:" not in result
