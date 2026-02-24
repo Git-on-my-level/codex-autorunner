@@ -121,6 +121,18 @@ def test_codex_notification_parser_supports_outputdelta_reasoning_and_item_compl
             "params": {"turnId": "turn-1", "delta": "hello"},
         },
         {
+            "method": "item/agentMessage/delta",
+            "params": {"turnId": "turn-1", "itemId": "msg-1", "delta": " there"},
+        },
+        {
+            "method": "item/commandExecution/outputDelta",
+            "params": {"turnId": "turn-1", "itemId": "cmd-1", "delta": "ls output"},
+        },
+        {
+            "method": "item/fileChange/outputDelta",
+            "params": {"turnId": "turn-1", "itemId": "file-1", "delta": "patch line"},
+        },
+        {
             "method": "item/completed",
             "params": {
                 "turnId": "turn-1",
@@ -156,15 +168,28 @@ def test_codex_notification_parser_supports_outputdelta_reasoning_and_item_compl
 
     assert isinstance(events[1], OutputDelta)
     assert events[1].content == "hello"
+    assert events[1].delta_type == "assistant_stream"
 
-    assert isinstance(events[2], ToolCall)
-    assert events[2].tool_name == "ls -la"
+    assert isinstance(events[2], OutputDelta)
+    assert events[2].content == " there"
+    assert events[2].delta_type == "assistant_stream"
 
     assert isinstance(events[3], OutputDelta)
-    assert events[3].content == "done"
+    assert events[3].content == "ls output"
+    assert events[3].delta_type == "log_line"
 
-    assert isinstance(events[4], TokenUsage)
-    assert events[4].usage["input_tokens"] == 10
+    assert isinstance(events[4], OutputDelta)
+    assert events[4].content == "patch line"
+    assert events[4].delta_type == "log_line"
+
+    assert isinstance(events[5], ToolCall)
+    assert events[5].tool_name == "ls -la"
+
+    assert isinstance(events[6], OutputDelta)
+    assert events[6].content == "done"
+
+    assert isinstance(events[7], TokenUsage)
+    assert events[7].usage["input_tokens"] == 10
 
 
 def test_opencode_sse_parser_golden_transcript() -> None:

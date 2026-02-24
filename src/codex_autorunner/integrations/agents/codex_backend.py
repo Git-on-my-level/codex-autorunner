@@ -35,6 +35,18 @@ def _extract_output_delta(params: Dict[str, Any]) -> str:
     return ""
 
 
+def _output_delta_type_for_method(method: object) -> str:
+    if not isinstance(method, str):
+        return "assistant_stream"
+    normalized = method.strip().lower()
+    if normalized in {
+        "item/commandexecution/outputdelta",
+        "item/filechange/outputdelta",
+    }:
+        return "log_line"
+    return "assistant_stream"
+
+
 def _normalize_tool_name(params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     item = params.get("item")
     item_dict = item if isinstance(item, dict) else {}
@@ -471,12 +483,21 @@ class CodexAppServerBackend(AgentBackend):
                 return RunNotice(timestamp=now_iso(), kind="thinking", message=delta)
             return None
 
-        if method == "turn/streamDelta" or "outputdelta" in method_lower:
+        if method == "item/agentMessage/delta":
             content = _extract_output_delta(params)
             if not content:
                 return None
             return OutputDelta(
                 timestamp=now_iso(), content=content, delta_type="assistant_stream"
+            )
+
+        if method == "turn/streamDelta" or "outputdelta" in method_lower:
+            content = _extract_output_delta(params)
+            if not content:
+                return None
+            delta_type = _output_delta_type_for_method(method)
+            return OutputDelta(
+                timestamp=now_iso(), content=content, delta_type=delta_type
             )
 
         if method == "item/toolCall/start":
@@ -529,13 +550,20 @@ class CodexAppServerBackend(AgentBackend):
         params = event_data.get("params", {})
         method_lower = method.lower() if isinstance(method, str) else ""
 
-        if method == "turn/streamDelta" or "outputdelta" in method_lower:
+        if method == "item/agentMessage/delta":
             content = _extract_output_delta(params)
             if not content:
                 return AgentEvent.stream_delta(content="", delta_type="unknown_event")
             return AgentEvent.stream_delta(
                 content=content, delta_type="assistant_stream"
             )
+
+        if method == "turn/streamDelta" or "outputdelta" in method_lower:
+            content = _extract_output_delta(params)
+            if not content:
+                return AgentEvent.stream_delta(content="", delta_type="unknown_event")
+            delta_type = _output_delta_type_for_method(method)
+            return AgentEvent.stream_delta(content=content, delta_type=delta_type)
 
         if method == "item/toolCall/start":
             tool_name, tool_input = _normalize_tool_name(params)
