@@ -435,10 +435,41 @@ class DiscordBotService:
             )
             return
 
-        if not pma_enabled and text:
+        if not pma_enabled:
             paused = await self._find_paused_flow_run(workspace_root)
             if paused is not None:
-                reply_path = self._write_user_reply(workspace_root, paused, text)
+                reply_text = text
+                if has_attachments:
+                    reply_text, saved_attachments, failed_attachments = (
+                        await self._with_attachment_context(
+                            prompt_text=text,
+                            workspace_root=workspace_root,
+                            attachments=event.attachments,
+                            channel_id=channel_id,
+                        )
+                    )
+                    if failed_attachments > 0:
+                        warning = (
+                            "Some Discord attachments could not be downloaded. "
+                            "Continuing with available inputs."
+                        )
+                        await self._send_channel_message_safe(
+                            channel_id,
+                            {"content": warning},
+                        )
+                    if not reply_text.strip() and saved_attachments == 0:
+                        await self._send_channel_message_safe(
+                            channel_id,
+                            {
+                                "content": (
+                                    "Failed to download attachments from Discord. "
+                                    "Please retry."
+                                ),
+                            },
+                        )
+                        return
+
+                reply_path = self._write_user_reply(workspace_root, paused, reply_text)
                 controller = build_ticket_flow_controller(workspace_root)
                 try:
                     updated = await controller.resume_flow(paused.id)

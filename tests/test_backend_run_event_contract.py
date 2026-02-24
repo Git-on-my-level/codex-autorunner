@@ -192,6 +192,45 @@ def test_codex_notification_parser_supports_outputdelta_reasoning_and_item_compl
     assert events[7].usage["input_tokens"] == 10
 
 
+def test_codex_notification_parser_accumulates_reasoning_deltas_per_item() -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=Path("."),
+    )
+    notifications = [
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "itemId": "reason-1", "delta": "plan"},
+        },
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "itemId": "reason-1", "delta": " next"},
+        },
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "itemId": "reason-1", "delta": " step"},
+        },
+    ]
+
+    events = [
+        event
+        for event in (
+            backend._map_to_run_event(notification) for notification in notifications
+        )
+        if event is not None
+    ]
+
+    assert [type(event).__name__ for event in events] == [
+        "RunNotice",
+        "RunNotice",
+        "RunNotice",
+    ]
+    assert all(isinstance(event, RunNotice) for event in events)
+    assert events[0].message == "plan"
+    assert events[1].message == "plan next"
+    assert events[2].message == "plan next step"
+
+
 def test_opencode_sse_parser_golden_transcript() -> None:
     backend = OpenCodeBackend(workspace_root=Path("."), supervisor=None)
     payloads = json.loads(

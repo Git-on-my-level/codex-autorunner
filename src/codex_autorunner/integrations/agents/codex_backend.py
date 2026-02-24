@@ -33,6 +33,8 @@ def _extract_output_delta(params: Dict[str, Any]) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
 def _output_delta_type_for_method(method: object) -> str:
     if not isinstance(method, str):
         return "assistant_stream"
@@ -43,6 +45,8 @@ def _output_delta_type_for_method(method: object) -> str:
     }:
         return "log_line"
     return "assistant_stream"
+
+
 def _normalize_tool_name(params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     item = params.get("item")
     item_dict = item if isinstance(item, dict) else {}
@@ -142,6 +146,7 @@ class CodexAppServerBackend(AgentBackend):
         self._thread_id: Optional[str] = None
         self._turn_id: Optional[str] = None
         self._thread_info: Optional[Dict[str, Any]] = None
+        self._reasoning_summary_buffers: dict[str, str] = {}
 
         self._circuit_breaker = CircuitBreaker("CodexAppServer", logger=_logger)
         self._event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
@@ -205,6 +210,7 @@ class CodexAppServerBackend(AgentBackend):
         resume_session = context.get("session_id") or context.get("thread_id")
         # Ensure we don't reuse a stale turn id when a new session begins.
         self._turn_id = None
+        self._reasoning_summary_buffers.clear()
         if isinstance(resume_session, str) and resume_session:
             try:
                 resume_result = await client.thread_resume(resume_session)
@@ -244,6 +250,7 @@ class CodexAppServerBackend(AgentBackend):
             self._thread_id = session_id
             # Reset last turn to avoid interrupting the wrong turn when reusing backends.
             self._turn_id = None
+            self._reasoning_summary_buffers.clear()
 
         if not self._thread_id:
             await self.start_session(target={}, context={})
@@ -296,6 +303,7 @@ class CodexAppServerBackend(AgentBackend):
         if session_id:
             self._thread_id = session_id
             self._turn_id = None
+            self._reasoning_summary_buffers.clear()
 
         if not self._thread_id:
             actual_session_id = await self.start_session(target={}, context={})
@@ -475,8 +483,14 @@ class CodexAppServerBackend(AgentBackend):
 
         if method == "item/reasoning/summaryTextDelta":
             delta = params.get("delta")
-            if isinstance(delta, str) and delta.strip():
-                return RunNotice(timestamp=now_iso(), kind="thinking", message=delta)
+            if isinstance(delta, str):
+                message = self._accumulate_reasoning_delta(params, delta)
+                if message.strip():
+                    return RunNotice(
+                        timestamp=now_iso(),
+                        kind="thinking",
+                        message=message,
+                    )
             return None
 
         if method == "item/agentMessage/delta":
@@ -509,6 +523,9 @@ class CodexAppServerBackend(AgentBackend):
 
         if method == "item/completed":
             item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "reasoning":
+                self._clear_reasoning_buffers_for_params(params)
+                return None
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 text = item.get("text")
                 if isinstance(text, str) and text.strip():
@@ -536,6 +553,7 @@ class CodexAppServerBackend(AgentBackend):
             return None
 
         if method == "turn/error":
+            self._clear_reasoning_buffers_for_params(params)
             error_message = params.get("message", "Unknown error")
             return Failed(timestamp=now_iso(), error_message=error_message)
 
@@ -594,6 +612,28 @@ class CodexAppServerBackend(AgentBackend):
             return AgentEvent.error(error_message=error_message)
 
         return AgentEvent.stream_delta(content="", delta_type="unknown_event")
+
+    def _reasoning_buffer_key(self, params: Dict[str, Any]) -> Optional[str]:
+        for key in ("itemId", "item_id", "turnId", "turn_id"):
+            value = params.get(key)
+            if isinstance(value, str) and value:
+                return value
+        if isinstance(self._turn_id, str) and self._turn_id:
+            return self._turn_id
+        return None
+
+    def _accumulate_reasoning_delta(self, params: Dict[str, Any], delta: str) -> str:
+        key = self._reasoning_buffer_key(params)
+        if not key:
+            return delta
+        combined = f"{self._reasoning_summary_buffers.get(key, '')}{delta}"
+        self._reasoning_summary_buffers[key] = combined
+        return combined
+
+    def _clear_reasoning_buffers_for_params(self, params: Dict[str, Any]) -> None:
+        key = self._reasoning_buffer_key(params)
+        if key is not None:
+            self._reasoning_summary_buffers.pop(key, None)
 
     @property
     def last_turn_id(self) -> Optional[str]:
