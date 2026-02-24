@@ -1633,10 +1633,10 @@ function prefetchRepo(url) {
     fetch(url, { method: "GET", headers: { "x-prefetch": "1" } }).catch(() => { });
 }
 export function initHub() {
-    if (!repoListEl)
-        return;
     attachHubHandlers();
     initHubRepoListControls();
+    if (!repoListEl)
+        return;
     initHubUsageChartControls();
     initNotificationBell();
     const cachedHub = loadSessionCache(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);

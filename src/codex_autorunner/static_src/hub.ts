@@ -2011,9 +2011,9 @@ function prefetchRepo(url: string): void {
 }
 
 export function initHub(): void {
-  if (!repoListEl) return;
   attachHubHandlers();
   initHubRepoListControls();
+  if (!repoListEl) return;
   initHubUsageChartControls();
   initNotificationBell();
   const cachedHub = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
