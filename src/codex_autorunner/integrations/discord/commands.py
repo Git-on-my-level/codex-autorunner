@@ -78,6 +78,19 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
+                    "name": "update",
+                    "description": "Update CAR service (both, web, telegram, or status)",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "target",
+                            "description": "Target: both, web, telegram, or status (default: both)",
+                            "required": False,
+                        }
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
                     "name": "help",
                     "description": "Show available commands",
                 },

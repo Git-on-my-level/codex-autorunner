@@ -18,6 +18,7 @@ from codex_autorunner.integrations.chat.models import (
     ChatInteractionRef,
     ChatThreadRef,
 )
+from codex_autorunner.integrations.discord import service as discord_service_module
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -627,7 +628,7 @@ async def test_service_falls_back_to_followup_when_initial_response_fails(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("subcommand", ["agent", "model", "new"])
+@pytest.mark.parametrize("subcommand", ["agent", "model"])
 async def test_service_routes_car_agent_and_model_without_generic_fallback(
     tmp_path: Path, subcommand: str
 ) -> None:
@@ -648,6 +649,35 @@ async def test_service_routes_car_agent_and_model_without_generic_fallback(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "not bound" in content
+        assert "not implemented yet for discord" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_routes_car_new_without_generic_fallback(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="new", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "not bound" in content
         assert "not implemented yet for discord" not in content
     finally:
@@ -820,7 +850,9 @@ async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
         assert fake_orchestrator.reset_keys
         assert fake_orchestrator.reset_keys[0].startswith(FILE_CHAT_PREFIX)
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "fresh repo session" in content
     finally:
         await store.close()
@@ -878,7 +910,114 @@ async def test_car_new_resets_pma_session_key_for_current_agent(tmp_path: Path) 
         await service.run_forever()
         assert fake_orchestrator.reset_keys == [PMA_OPENCODE_KEY]
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "fresh pma session" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_status_reports_absent_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(discord_service_module, "_read_update_status", lambda: None)
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "status"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "no update status recorded" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_starts_worker_with_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="update", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_spawn_update_process(**kwargs: Any) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert observed["update_target"] == "both"
+        assert observed["repo_ref"] == "main"
+        assert "codex-autorunner.git" in observed["repo_url"]
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "update started (both)" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_rejects_invalid_target(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "invalid-target"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "unsupported update target" in content
     finally:
         await store.close()

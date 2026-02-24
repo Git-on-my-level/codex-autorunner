@@ -42,6 +42,12 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
     ),
     CommandContractEntry(
+        id="car.update",
+        path=("car", "update"),
+        requires_bound_workspace=False,
+        status="stable",
+    ),
+    CommandContractEntry(
         id="pma.on",
         path=("pma", "on"),
         requires_bound_workspace=False,

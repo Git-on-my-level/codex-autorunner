@@ -27,6 +27,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "debug",
         "agent",
         "model",
+        "update",
         "help",
         "ids",
         "diff",
@@ -63,6 +64,9 @@ def test_required_options_are_marked_required() -> None:
     bind = _find_option(car_options, "bind")
     bind_workspace = _find_option(bind["options"], "workspace")
     assert bind_workspace["required"] is False
+    update = _find_option(car_options, "update")
+    update_target = _find_option(update["options"], "target")
+    assert update_target["required"] is False
 
     flow = _find_option(car_options, "flow")
     flow_reply = _find_option(flow["options"], "reply")

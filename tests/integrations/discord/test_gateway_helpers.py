@@ -81,7 +81,7 @@ async def test_run_retries_resolve_failures_without_exiting(
 
 
 @pytest.mark.anyio
-async def test_run_slow_retries_on_permanent_errors(
+async def test_run_halts_reconnects_on_permanent_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from codex_autorunner.integrations.discord import gateway as gateway_module
@@ -97,21 +97,26 @@ async def test_run_slow_retries_on_permanent_errors(
         raise DiscordPermanentError("invalid credentials")
 
     monkeypatch.setattr(client, "_resolve_gateway_url", _fail_resolve)
-    monkeypatch.setattr(gateway_module, "calculate_reconnect_backoff", lambda _a: 1.0)
+    wait_calls: list[bool] = []
+
+    async def _fake_wait() -> None:
+        wait_calls.append(True)
+
+    monkeypatch.setattr(client._stop_event, "wait", _fake_wait)
     sleep_calls: list[float] = []
 
     async def _fake_sleep(seconds: float) -> None:
         sleep_calls.append(seconds)
-        client._stop_event.set()
 
     monkeypatch.setattr(gateway_module.asyncio, "sleep", _fake_sleep)
     await client.run(_noop_dispatch)
 
-    assert sleep_calls == [60.0]
+    assert wait_calls == [True]
+    assert sleep_calls == []
 
 
 @pytest.mark.anyio
-async def test_run_slow_retries_for_fatal_gateway_close_codes(
+async def test_run_halts_reconnects_for_fatal_gateway_close_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from codex_autorunner.integrations.discord import gateway as gateway_module
@@ -145,7 +150,12 @@ async def test_run_slow_retries_for_fatal_gateway_close_codes(
         return "wss://example.invalid"
 
     monkeypatch.setattr(client, "_resolve_gateway_url", _resolve_gateway_url)
-    monkeypatch.setattr(gateway_module, "calculate_reconnect_backoff", lambda _a: 1.0)
+    wait_calls: list[bool] = []
+
+    async def _fake_wait() -> None:
+        wait_calls.append(True)
+
+    monkeypatch.setattr(client._stop_event, "wait", _fake_wait)
     sleep_calls: list[float] = []
 
     async def _fake_sleep(seconds: float) -> None:
@@ -155,7 +165,8 @@ async def test_run_slow_retries_for_fatal_gateway_close_codes(
     monkeypatch.setattr(gateway_module.asyncio, "sleep", _fake_sleep)
     await client.run(_noop_dispatch)
 
-    assert sleep_calls == [60.0]
+    assert wait_calls == [True]
+    assert sleep_calls == []
 
 
 @pytest.mark.anyio
