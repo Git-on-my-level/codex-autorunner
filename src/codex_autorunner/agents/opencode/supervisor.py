@@ -24,6 +24,7 @@ from ...core.process_termination import terminate_record
 from ...core.state_roots import resolve_global_state_root
 from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
 from ...core.utils import infer_home_from_workspace, subprocess_env
+from ...integrations.app_server.env import _workspace_car_path_prefixes
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient, OpenCodeProtocolError
 
@@ -856,6 +857,14 @@ class OpenCodeSupervisor:
 
     def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:
         env = subprocess_env(base_env=self._base_env)
+        car_path_prefixes = _workspace_car_path_prefixes(workspace_root)
+        if car_path_prefixes:
+            existing_path = env.get("PATH", "")
+            merged = list(car_path_prefixes)
+            for entry in existing_path.split(os.pathsep):
+                if entry and entry not in merged:
+                    merged.append(entry)
+            env["PATH"] = os.pathsep.join(merged)
         inferred_home = infer_home_from_workspace(workspace_root)
         if inferred_home is None:
             return env
