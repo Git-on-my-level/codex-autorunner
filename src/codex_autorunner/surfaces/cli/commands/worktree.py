@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 import typer
 
@@ -26,6 +26,8 @@ def register_worktree_commands(
     require_hub_config: Callable[[Optional[Path]], HubConfig],
     raise_exit: Callable,
     build_supervisor: Callable[[HubConfig], HubSupervisor],
+    build_server_url: Callable,
+    request_json: Callable,
 ) -> None:
     @worktree_app.command("create")
     def hub_worktree_create(
@@ -182,3 +184,61 @@ def register_worktree_commands(
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
         typer.echo("ok")
+
+    @worktree_app.command("setup")
+    def hub_worktree_setup(
+        repo_id: str = typer.Argument(..., help="Base repo id to configure"),
+        commands: Optional[List[str]] = typer.Argument(
+            None, help="Commands to run after worktree creation (one per arg)"
+        ),
+        hub: Optional[Path] = typer.Option(
+            None, "--path", "--hub", help="Hub root path"
+        ),
+        clear: bool = typer.Option(
+            False, "--clear", help="Clear all worktree setup commands"
+        ),
+        base_path: Optional[str] = typer.Option(
+            None, "--base-path", help="Override hub server base path (e.g. /car)"
+        ),
+    ):
+        """
+        Configure commands to run automatically after creating a new worktree.
+
+        Commands run with /bin/sh -lc in the new worktree directory.
+
+        Examples:
+          car hub worktree setup my-repo 'make setup' 'pre-commit install'
+          car hub worktree setup my-repo --clear
+        """
+        config = require_hub_config(hub)
+        normalized_commands: List[str] = []
+        if clear:
+            normalized_commands = []
+        elif commands:
+            normalized_commands = [cmd.strip() for cmd in commands if cmd.strip()]
+        else:
+            raise_exit(
+                "Provide commands as arguments or use --clear to remove them.\n"
+                "Example: car hub worktree setup my-repo 'make setup' 'pre-commit install'"
+            )
+            return
+        url = build_server_url(
+            config, f"/hub/repos/{repo_id}/worktree-setup", base_path_override=base_path
+        )
+        try:
+            request_json(
+                "POST",
+                url,
+                token_env=config.server_auth_token_env,
+                data=json.dumps({"commands": normalized_commands}),
+            )
+        except Exception as exc:
+            raise_exit(
+                f"Failed to set worktree setup commands for {repo_id}: {exc}",
+                cause=exc,
+            )
+        count = len(normalized_commands)
+        if count:
+            typer.echo(f"Set {count} worktree setup command(s) for {repo_id}")
+        else:
+            typer.echo(f"Cleared worktree setup commands for {repo_id}")

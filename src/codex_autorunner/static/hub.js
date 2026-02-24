@@ -732,10 +732,10 @@ function buildActions(repo) {
     if (!missing && kind === "base") {
         actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
         actions.push({
-            key: "worktree_setup",
-            label: "Setup",
+            key: "repo_settings",
+            label: "Settings",
             kind: "ghost",
-            title: "Configure commands to run after creating a new worktree",
+            title: "Repository settings",
         });
         const clean = repo.is_clean;
         const syncDisabled = clean !== true;
@@ -763,41 +763,54 @@ function buildActions(repo) {
     }
     return actions;
 }
-async function editWorktreeSetupCommands(repo) {
+async function openRepoSettingsModal(repo) {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.hidden = true;
     const dialog = document.createElement("div");
-    dialog.className = "modal-dialog";
+    dialog.className = "modal-dialog repo-settings-dialog";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    const title = document.createElement("h3");
-    title.textContent = `Worktree setup for ${repo.display_name || repo.id}`;
-    const desc = document.createElement("p");
-    desc.className = "muted small";
-    desc.textContent =
-        "One command per line. Commands run with /bin/sh -lc in the new worktree. Leave blank to disable setup.";
+    const header = document.createElement("div");
+    header.className = "modal-header";
+    const title = document.createElement("span");
+    title.className = "label";
+    title.textContent = `Settings: ${repo.display_name || repo.id}`;
+    header.appendChild(title);
+    const body = document.createElement("div");
+    body.className = "modal-body";
+    const worktreeSection = document.createElement("div");
+    worktreeSection.className = "form-group";
+    const worktreeLabel = document.createElement("label");
+    worktreeLabel.textContent = "Worktree Setup Commands";
+    const worktreeHint = document.createElement("p");
+    worktreeHint.className = "muted small";
+    worktreeHint.textContent =
+        "Commands run with /bin/sh -lc after creating a new worktree. One per line, leave blank to disable.";
     const textarea = document.createElement("textarea");
-    textarea.rows = 8;
+    textarea.rows = 6;
     textarea.style.width = "100%";
     textarea.style.resize = "vertical";
-    textarea.placeholder = "make setup\npnpm install";
+    textarea.placeholder = "make setup\npnpm install\npre-commit install";
     textarea.value = (repo.worktree_setup_commands || []).join("\n");
-    const actions = document.createElement("div");
-    actions.className = "modal-actions";
+    worktreeSection.append(worktreeLabel, worktreeHint, textarea);
+    body.appendChild(worktreeSection);
+    const footer = document.createElement("div");
+    footer.className = "modal-actions";
     const cancelBtn = document.createElement("button");
+    cancelBtn.className = "ghost";
     cancelBtn.textContent = "Cancel";
     const saveBtn = document.createElement("button");
     saveBtn.className = "primary";
     saveBtn.textContent = "Save";
-    actions.append(cancelBtn, saveBtn);
-    dialog.append(title, desc, textarea, actions);
+    footer.append(cancelBtn, saveBtn);
+    dialog.append(header, body, footer);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     return new Promise((resolve) => {
         let closeModal = null;
         let settled = false;
-        const finalize = (value) => {
+        const finalize = async (saved) => {
             if (settled)
                 return;
             settled = true;
@@ -807,31 +820,40 @@ async function editWorktreeSetupCommands(repo) {
                 close();
             }
             overlay.remove();
-            resolve(value);
+            if (saved) {
+                const commands = textarea.value
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter(Boolean);
+                try {
+                    await api(`/hub/repos/${encodeURIComponent(repo.id)}/worktree-setup`, {
+                        method: "POST",
+                        body: JSON.stringify({ commands }),
+                    });
+                    flash(commands.length
+                        ? `Saved ${commands.length} setup command(s) for ${repo.id}`
+                        : `Cleared setup commands for ${repo.id}`, "success");
+                    await refreshHub();
+                }
+                catch (err) {
+                    flash(err.message || "Failed to save settings", "error");
+                }
+            }
+            resolve();
         };
         closeModal = openModal(overlay, {
             initialFocus: textarea,
             returnFocusTo: document.activeElement,
-            onRequestClose: () => finalize(null),
+            onRequestClose: () => finalize(false),
             onKeydown: (event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                     event.preventDefault();
-                    const commands = textarea.value
-                        .split("\n")
-                        .map((line) => line.trim())
-                        .filter(Boolean);
-                    finalize(commands);
+                    finalize(true);
                 }
             },
         });
-        cancelBtn.addEventListener("click", () => finalize(null));
-        saveBtn.addEventListener("click", () => {
-            const commands = textarea.value
-                .split("\n")
-                .map((line) => line.trim())
-                .filter(Boolean);
-            finalize(commands);
-        });
+        cancelBtn.addEventListener("click", () => finalize(false));
+        saveBtn.addEventListener("click", () => finalize(true));
     });
 }
 function buildMountBadge(repo) {
@@ -1062,11 +1084,11 @@ function renderRepos(repos) {
         if (lastActivity) {
             infoItems.push(lastActivity);
         }
-        if ((repo.worktree_setup_commands || []).length > 0 && repo.kind === "base") {
-            infoItems.push(`setup:${(repo.worktree_setup_commands || []).length} command(s)`);
-        }
         const infoLine = infoItems.length > 0
             ? `<span class="hub-repo-info-line">${escapeHtml(infoItems.join(" · "))}</span>`
+            : "";
+        const setupBadge = (repo.worktree_setup_commands || []).length > 0 && repo.kind === "base"
+            ? '<span class="pill pill-small pill-success">setup</span>'
             : "";
         const usageInfo = getRepoUsage(repo.id);
         const usageLine = `
@@ -1104,6 +1126,7 @@ function renderRepos(repos) {
             ${mountBadge}
             ${lockBadge}
             ${initBadge}
+            ${setupBadge}
           </div>
         <div class="hub-repo-center">
           <span class="hub-repo-title">${escapeHtml(repo.display_name)}</span>
@@ -1350,23 +1373,13 @@ async function handleRepoAction(repoId, action) {
             }
             return;
         }
-        if (action === "worktree_setup") {
+        if (action === "repo_settings") {
             const repo = hubData.repos.find((item) => item.id === repoId);
             if (!repo) {
                 flash(`Repo not found: ${repoId}`, "error");
                 return;
             }
-            const commands = await editWorktreeSetupCommands(repo);
-            if (commands === null)
-                return;
-            await api(`/hub/repos/${encodeURIComponent(repoId)}/worktree-setup`, {
-                method: "POST",
-                body: JSON.stringify({ commands }),
-            });
-            flash(commands.length
-                ? `Saved ${commands.length} setup command(s) for ${repoId}`
-                : `Cleared setup commands for ${repoId}`, "success");
-            await refreshHub();
+            await openRepoSettingsModal(repo);
             return;
         }
         if (action === "cleanup_worktree") {
