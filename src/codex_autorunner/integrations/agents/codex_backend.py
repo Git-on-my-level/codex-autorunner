@@ -13,6 +13,7 @@ from ...core.ports.run_event import (
     Failed,
     OutputDelta,
     RunEvent,
+    RunNotice,
     Started,
     TokenUsage,
     ToolCall,
@@ -24,6 +25,63 @@ _logger = logging.getLogger(__name__)
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
+
+
+def _extract_output_delta(params: Dict[str, Any]) -> str:
+    for key in ("delta", "text", "output"):
+        value = params.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def _output_delta_type_for_method(method: object) -> str:
+    if not isinstance(method, str):
+        return "assistant_stream"
+    normalized = method.strip().lower()
+    if normalized in {
+        "item/commandexecution/outputdelta",
+        "item/filechange/outputdelta",
+    }:
+        return "log_line"
+    return "assistant_stream"
+
+
+def _normalize_tool_name(params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+    item = params.get("item")
+    item_dict = item if isinstance(item, dict) else {}
+    item_type = item_dict.get("type")
+
+    if item_type == "commandExecution":
+        command = item_dict.get("command")
+        if not command:
+            command = params.get("command")
+        if isinstance(command, list):
+            command = " ".join(str(part) for part in command).strip()
+        if isinstance(command, str) and command:
+            return command, {"command": command}
+        return "commandExecution", {}
+
+    if item_type == "fileChange":
+        files = item_dict.get("files")
+        if isinstance(files, list):
+            paths = [str(entry) for entry in files if isinstance(entry, str)]
+            if paths:
+                return "fileChange", {"files": paths}
+        return "fileChange", {}
+
+    if item_type == "tool":
+        name = item_dict.get("name") or item_dict.get("tool") or item_dict.get("id")
+        if isinstance(name, str) and name:
+            return name, {}
+        return "tool", {}
+
+    name = params.get("name")
+    if isinstance(name, str) and name:
+        return name, (
+            params.get("input") if isinstance(params.get("input"), dict) else {}
+        )
+    return "", {}
 
 
 class CodexAppServerBackend(AgentBackend):
@@ -417,25 +475,66 @@ class CodexAppServerBackend(AgentBackend):
     def _map_to_run_event(self, event_data: Dict[str, Any]) -> Optional[RunEvent]:
         method = event_data.get("method", "")
         params = event_data.get("params", {}) or {}
+        method_lower = method.lower() if isinstance(method, str) else ""
 
-        if method == "turn/streamDelta":
-            content = params.get("delta", "")
+        if method == "item/reasoning/summaryTextDelta":
+            delta = params.get("delta")
+            if isinstance(delta, str) and delta.strip():
+                return RunNotice(timestamp=now_iso(), kind="thinking", message=delta)
+            return None
+
+        if method == "item/agentMessage/delta":
+            content = _extract_output_delta(params)
+            if not content:
+                return None
             return OutputDelta(
                 timestamp=now_iso(), content=content, delta_type="assistant_stream"
             )
 
+        if method == "turn/streamDelta" or "outputdelta" in method_lower:
+            content = _extract_output_delta(params)
+            if not content:
+                return None
+            delta_type = _output_delta_type_for_method(method)
+            return OutputDelta(
+                timestamp=now_iso(), content=content, delta_type=delta_type
+            )
+
         if method == "item/toolCall/start":
+            tool_name, tool_input = _normalize_tool_name(params)
             return ToolCall(
                 timestamp=now_iso(),
-                tool_name=params.get("name", ""),
-                tool_input=params.get("input", {}),
+                tool_name=tool_name or "toolCall",
+                tool_input=tool_input,
             )
 
         if method == "item/toolCall/end":
             return None
 
-        if method in {"turn/tokenUsage", "turn/usage"}:
+        if method == "item/completed":
+            item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "agentMessage":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    return OutputDelta(
+                        timestamp=now_iso(),
+                        content=text,
+                        delta_type="assistant_stream",
+                    )
+                return None
+            tool_name, tool_input = _normalize_tool_name(params)
+            if tool_name:
+                return ToolCall(
+                    timestamp=now_iso(),
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )
+            return None
+
+        if method in {"turn/tokenUsage", "turn/usage", "thread/tokenUsage/updated"}:
             usage = params.get("usage")
+            if not isinstance(usage, dict):
+                usage = params.get("tokenUsage")
             if isinstance(usage, dict):
                 return TokenUsage(timestamp=now_iso(), usage=usage)
             return None
@@ -448,30 +547,53 @@ class CodexAppServerBackend(AgentBackend):
 
     def _parse_raw_event(self, event_data: Dict[str, Any]) -> AgentEvent:
         method = event_data.get("method", "")
+        params = event_data.get("params", {})
+        method_lower = method.lower() if isinstance(method, str) else ""
 
-        if method == "turn/streamDelta":
-            content = event_data.get("params", {}).get("delta", "")
+        if method == "item/agentMessage/delta":
+            content = _extract_output_delta(params)
+            if not content:
+                return AgentEvent.stream_delta(content="", delta_type="unknown_event")
             return AgentEvent.stream_delta(
                 content=content, delta_type="assistant_stream"
             )
 
+        if method == "turn/streamDelta" or "outputdelta" in method_lower:
+            content = _extract_output_delta(params)
+            if not content:
+                return AgentEvent.stream_delta(content="", delta_type="unknown_event")
+            delta_type = _output_delta_type_for_method(method)
+            return AgentEvent.stream_delta(content=content, delta_type=delta_type)
+
         if method == "item/toolCall/start":
-            params = event_data.get("params", {})
+            tool_name, tool_input = _normalize_tool_name(params)
             return AgentEvent.tool_call(
-                tool_name=params.get("name", ""),
-                tool_input=params.get("input", {}),
+                tool_name=tool_name or "toolCall",
+                tool_input=tool_input,
             )
 
         if method == "item/toolCall/end":
-            params = event_data.get("params", {})
             return AgentEvent.tool_result(
                 tool_name=params.get("name", ""),
                 result=params.get("result"),
                 error=params.get("error"),
             )
 
+        if method == "item/completed":
+            item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "agentMessage":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    return AgentEvent.stream_delta(
+                        content=text, delta_type="assistant_stream"
+                    )
+                return AgentEvent.stream_delta(content="", delta_type="unknown_event")
+            tool_name, tool_input = _normalize_tool_name(params)
+            if tool_name:
+                return AgentEvent.tool_call(tool_name=tool_name, tool_input=tool_input)
+            return AgentEvent.stream_delta(content="", delta_type="unknown_event")
+
         if method == "turn/error":
-            params = event_data.get("params", {})
             error_message = params.get("message", "Unknown error")
             return AgentEvent.error(error_message=error_message)
 

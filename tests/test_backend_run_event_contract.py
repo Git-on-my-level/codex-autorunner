@@ -12,8 +12,10 @@ from codex_autorunner.core.ports.run_event import (
     Completed,
     Failed,
     OutputDelta,
+    RunNotice,
     Started,
     TokenUsage,
+    ToolCall,
     is_terminal_run_event,
 )
 from codex_autorunner.integrations.agents.codex_backend import CodexAppServerBackend
@@ -100,6 +102,94 @@ def test_codex_notification_parser_golden_transcript() -> None:
     assert usage[0].usage["total_tokens"] == 20
     assert isinstance(events[-1], Failed)
     assert "permission denied" in events[-1].error_message
+
+
+def test_codex_notification_parser_supports_outputdelta_reasoning_and_item_completed() -> (
+    None
+):
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=Path("."),
+    )
+    notifications = [
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "delta": "planning next step"},
+        },
+        {
+            "method": "outputDelta",
+            "params": {"turnId": "turn-1", "delta": "hello"},
+        },
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"turnId": "turn-1", "itemId": "msg-1", "delta": " there"},
+        },
+        {
+            "method": "item/commandExecution/outputDelta",
+            "params": {"turnId": "turn-1", "itemId": "cmd-1", "delta": "ls output"},
+        },
+        {
+            "method": "item/fileChange/outputDelta",
+            "params": {"turnId": "turn-1", "itemId": "file-1", "delta": "patch line"},
+        },
+        {
+            "method": "item/completed",
+            "params": {
+                "turnId": "turn-1",
+                "item": {"type": "commandExecution", "command": ["ls", "-la"]},
+            },
+        },
+        {
+            "method": "item/completed",
+            "params": {
+                "turnId": "turn-1",
+                "item": {"type": "agentMessage", "text": "done"},
+            },
+        },
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "turnId": "turn-1",
+                "tokenUsage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+    ]
+    events = [
+        event
+        for event in (
+            backend._map_to_run_event(notification) for notification in notifications
+        )
+        if event is not None
+    ]
+
+    assert isinstance(events[0], RunNotice)
+    assert events[0].kind == "thinking"
+    assert "planning" in events[0].message
+
+    assert isinstance(events[1], OutputDelta)
+    assert events[1].content == "hello"
+    assert events[1].delta_type == "assistant_stream"
+
+    assert isinstance(events[2], OutputDelta)
+    assert events[2].content == " there"
+    assert events[2].delta_type == "assistant_stream"
+
+    assert isinstance(events[3], OutputDelta)
+    assert events[3].content == "ls output"
+    assert events[3].delta_type == "log_line"
+
+    assert isinstance(events[4], OutputDelta)
+    assert events[4].content == "patch line"
+    assert events[4].delta_type == "log_line"
+
+    assert isinstance(events[5], ToolCall)
+    assert events[5].tool_name == "ls -la"
+
+    assert isinstance(events[6], OutputDelta)
+    assert events[6].content == "done"
+
+    assert isinstance(events[7], TokenUsage)
+    assert events[7].usage["input_tokens"] == 10
 
 
 def test_opencode_sse_parser_golden_transcript() -> None:
