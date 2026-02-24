@@ -655,6 +655,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         ],
         "reactive_debounce_seconds": 300,
         "reactive_origin_blocklist": ["pma"],
+        # Worktree cleanup policies
+        "cleanup_require_archive": True,
+        "cleanup_auto_delete_orphans": False,
     },
     "templates": {
         "enabled": True,
@@ -828,6 +831,9 @@ class PmaConfig:
     reactive_event_types: List[str] = dataclasses.field(default_factory=list)
     reactive_debounce_seconds: int = 300
     reactive_origin_blocklist: List[str] = dataclasses.field(default_factory=list)
+    # Worktree cleanup policies
+    cleanup_require_archive: bool = True
+    cleanup_auto_delete_orphans: bool = False
 
 
 @dataclasses.dataclass
@@ -1501,6 +1507,17 @@ def _parse_pma_config(
         ]
     else:
         reactive_origin_blocklist = []
+    cleanup_require_archive = bool(
+        cfg.get(
+            "cleanup_require_archive", defaults.get("cleanup_require_archive", True)
+        )
+    )
+    cleanup_auto_delete_orphans = bool(
+        cfg.get(
+            "cleanup_auto_delete_orphans",
+            defaults.get("cleanup_auto_delete_orphans", False),
+        )
+    )
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
@@ -1518,6 +1535,8 @@ def _parse_pma_config(
         reactive_event_types=reactive_event_types,
         reactive_debounce_seconds=reactive_debounce_seconds,
         reactive_origin_blocklist=reactive_origin_blocklist,
+        cleanup_require_archive=cleanup_require_archive,
+        cleanup_auto_delete_orphans=cleanup_auto_delete_orphans,
     )
 
 

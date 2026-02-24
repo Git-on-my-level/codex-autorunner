@@ -123,7 +123,9 @@ def register_worktree_commands(
             False, "--delete-remote", help="Delete the remote branch"
         ),
         archive: bool = typer.Option(
-            True, "--archive/--no-archive", help="Archive worktree snapshot"
+            True,
+            "--archive/--no-archive",
+            help="Archive worktree snapshot before cleanup (required by PMA policy)",
         ),
         force_archive: bool = typer.Option(
             False, "--force-archive", help="Continue cleanup if archive fails"

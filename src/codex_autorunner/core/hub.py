@@ -936,6 +936,12 @@ class HubSupervisor:
         force_archive: bool = False,
         archive_note: Optional[str] = None,
     ) -> None:
+        if self.hub_config.pma.cleanup_require_archive and not archive:
+            raise ValueError(
+                "Worktree cleanup requires archiving per PMA policy "
+                "(pma.cleanup_require_archive is enabled). "
+                "Use archive=True or omit the --no-archive flag."
+            )
         self._invalidate_list_cache()
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         entry = manifest.get(worktree_repo_id)
