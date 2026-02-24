@@ -9,6 +9,7 @@ Discord bot surface and adapters.
 3. Invite the bot to your server with OAuth2 scopes:
    - `bot`
    - `applications.commands`
+   - Recommended permissions integer: `2322563695115328`
 4. Configure `discord_bot.enabled: true` and allowlists in `codex-autorunner.yml`.
 5. Configure command registration:
    - development: `command_registration.scope: guild` with at least one `guild_id`
@@ -21,6 +22,15 @@ Discord bot surface and adapters.
    - `car discord register-commands`
 
 Recommended during development: use guild-scoped command registration so command updates propagate quickly.
+
+## Common Failure Mode: Slash Works, Messages Do Not
+
+If `/car ...` works but normal channel messages do not get replies, the bot usually lacks effective guild/channel access.
+
+1. Re-invite bot with scopes `bot` + `applications.commands`.
+2. Use permissions integer `2322563695115328`.
+3. Ensure channel permissions allow `View Channels`, `Send Messages`, and `Read Message History`.
+4. Restart the Discord bot process and retest.
 
 ## Example config
 

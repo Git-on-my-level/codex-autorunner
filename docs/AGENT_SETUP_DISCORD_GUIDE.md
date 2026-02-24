@@ -50,6 +50,9 @@ In Discord Developer Portal:
 4. Invite the bot to the server with OAuth scopes:
    - `bot`
    - `applications.commands`
+5. In `OAuth2 -> URL Generator`, set Bot Permissions (permissions integer):
+   - `2322563695115328`
+   - Re-invite the bot after changing permissions/scope settings.
 
 Set env vars:
 
@@ -131,7 +134,11 @@ Required or likely-needed permissions:
 
 1. Bot present in target server.
 2. `applications.commands` scope granted (for slash commands).
-3. Bot can send messages in the target channel.
+3. Bot can view and reply in target channels:
+   - `View Channels`
+   - `Send Messages`
+   - `Read Message History`
+   - `Send Messages in Threads` (if using threads)
 4. Operator can run slash commands in that channel.
 
 You usually do not need broad admin permissions for baseline CAR Discord usage.
@@ -219,6 +226,28 @@ If PMA is disabled globally in hub config, `/pma` commands will return an action
 2. Confirm workspace path exists on the CAR host.
 3. Run `car doctor` and check Discord check results for missing deps/env/state file issues.
 
+### Slash commands work, but normal messages get no response
+
+This usually means Discord command registration is fine, but the bot user cannot actually access guild/channel message events.
+
+1. Re-invite the bot with both scopes:
+   - `bot`
+   - `applications.commands`
+2. Use permissions integer:
+   - `2322563695115328`
+3. Confirm channel overrides do not deny:
+   - `View Channels`
+   - `Send Messages`
+   - `Read Message History`
+4. Restart Discord bot process after re-invite/permission changes.
+5. Re-test with:
+   - `/car status` (slash path)
+   - plain text message (non-slash turn path)
+
+High-signal diagnostics for this failure mode:
+- REST responses like `Missing Access (50001)` for channel lookups.
+- REST responses like `Unknown Guild (10004)` for expected guild IDs.
+
 ---
 
 ## Logs and Events to Check First
@@ -233,6 +262,8 @@ High-signal Discord events/logs:
 - `discord.pause_watch.scan_failed`
 - `discord.outbox.send_failed`
 - `Discord gateway error; reconnecting`
+- `Discord API request failed ... Missing Access`
+- `Discord API request failed ... Unknown Guild`
 
 Quick grep:
 
