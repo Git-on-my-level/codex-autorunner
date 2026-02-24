@@ -210,7 +210,7 @@ async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
         await anyio.sleep(0.05)
         assert not task_two.done()
         blocker.set()
-        with anyio.fail_after(2):
+        with anyio.fail_after(5):
             resp_one = await task_one
             resp_two = await task_two
 

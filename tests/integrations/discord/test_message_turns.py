@@ -10,7 +10,12 @@ from typing import Any, Optional
 import pytest
 
 from codex_autorunner.core.filebox import inbox_dir, outbox_pending_dir
-from codex_autorunner.core.ports.run_event import Completed, OutputDelta, Started
+from codex_autorunner.core.ports.run_event import (
+    Completed,
+    OutputDelta,
+    Started,
+    ToolCall,
+)
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -184,6 +189,25 @@ class _EditFailingProgressRest(_FakeRest):
     ) -> dict[str, Any]:
         self.edit_attempts += 1
         raise RuntimeError("simulated progress edit failure")
+
+
+class _FlakyEditProgressRest(_FakeRest):
+    def __init__(self, *, fail_first_edits: int) -> None:
+        super().__init__()
+        self.edit_attempts = 0
+        self.fail_first_edits = max(0, int(fail_first_edits))
+
+    async def edit_channel_message(
+        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.edit_attempts += 1
+        if self.edit_attempts <= self.fail_first_edits:
+            raise RuntimeError("simulated transient progress edit failure")
+        return await super().edit_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+            payload=payload,
+        )
 
 
 class _FakeGateway:
@@ -948,6 +972,71 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_progress_edit_recovers_after_transient_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FlakyEditProgressRest(fail_first_edits=3)
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=80),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS",
+        0.0,
+    )
+    final_text = "\n".join(
+        [f"line {index} with enough content for chunking" for index in range(1, 20)]
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            ToolCall(
+                timestamp="2026-01-01T00:00:02Z",
+                tool_name="first_tool",
+                tool_input={},
+            ),
+            ToolCall(
+                timestamp="2026-01-01T00:00:03Z",
+                tool_name="second_tool",
+                tool_input={},
+            ),
+            OutputDelta(timestamp="2026-01-01T00:00:04Z", content="still thinking"),
+            Completed(timestamp="2026-01-01T00:00:05Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.edit_attempts >= 4
+        assert rest.edited_channel_messages
     finally:
         await store.close()
 
