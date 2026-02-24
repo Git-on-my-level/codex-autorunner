@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.core.ports.run_event import Completed, OutputDelta, Started
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -26,6 +27,8 @@ class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
+        self.edited_channel_messages: list[dict[str, Any]] = []
+        self.message_ops: list[dict[str, Any]] = []
 
     async def create_interaction_response(
         self,
@@ -48,7 +51,36 @@ class _FakeRest:
         self.channel_messages.append(
             {"channel_id": channel_id, "payload": dict(payload)}
         )
-        return {"id": f"msg-{len(self.channel_messages)}"}
+        message = {"id": f"msg-{len(self.channel_messages)}"}
+        self.message_ops.append(
+            {
+                "op": "send",
+                "channel_id": channel_id,
+                "payload": dict(payload),
+                "message_id": message["id"],
+            }
+        )
+        return message
+
+    async def edit_channel_message(
+        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.edited_channel_messages.append(
+            {
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "payload": dict(payload),
+            }
+        )
+        self.message_ops.append(
+            {
+                "op": "edit",
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "payload": dict(payload),
+            }
+        )
+        return {"id": message_id}
 
     async def bulk_overwrite_application_commands(
         self,
@@ -65,6 +97,39 @@ class _FailingChannelRest(_FakeRest):
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         raise RuntimeError("simulated channel send failure")
+
+
+class _FailingProgressRest(_FakeRest):
+    def __init__(self) -> None:
+        super().__init__()
+        self.send_attempts = 0
+
+    async def create_channel_message(
+        self, *, channel_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.send_attempts += 1
+        if self.send_attempts == 1:
+            raise RuntimeError("simulated progress send failure")
+        return await super().create_channel_message(
+            channel_id=channel_id, payload=payload
+        )
+
+    async def edit_channel_message(
+        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        raise RuntimeError("simulated progress edit failure")
+
+
+class _EditFailingProgressRest(_FakeRest):
+    def __init__(self) -> None:
+        super().__init__()
+        self.edit_attempts = 0
+
+    async def edit_channel_message(
+        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.edit_attempts += 1
+        raise RuntimeError("simulated progress edit failure")
 
 
 class _FakeGateway:
@@ -87,6 +152,75 @@ class _FakeOutboxManager:
 
     async def run_loop(self) -> None:
         await asyncio.Event().wait()
+
+
+class _StreamingFakeOrchestrator:
+    def __init__(self, events: list[Any]) -> None:
+        self._events = events
+        self._thread_by_key: dict[str, str] = {}
+
+    def get_thread_id(self, session_key: str) -> Optional[str]:
+        return self._thread_by_key.get(session_key)
+
+    def set_thread_id(self, session_key: str, thread_id: str) -> None:
+        self._thread_by_key[session_key] = thread_id
+
+    async def run_turn(
+        self,
+        agent_id: str,
+        state: Any,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        session_key: Optional[str] = None,
+        session_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
+    ):
+        _ = (
+            agent_id,
+            state,
+            prompt,
+            model,
+            reasoning,
+            session_key,
+            session_id,
+            workspace_root,
+        )
+        for event in self._events:
+            yield event
+
+
+class _RaisingStreamingFakeOrchestrator(_StreamingFakeOrchestrator):
+    def __init__(self, events: list[Any], exc: Exception) -> None:
+        super().__init__(events)
+        self._exc = exc
+
+    async def run_turn(
+        self,
+        agent_id: str,
+        state: Any,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        session_key: Optional[str] = None,
+        session_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
+    ):
+        _ = (
+            agent_id,
+            state,
+            prompt,
+            model,
+            reasoning,
+            session_key,
+            session_id,
+            workspace_root,
+        )
+        for event in self._events:
+            yield event
+        raise self._exc
 
 
 def _config(
@@ -238,6 +372,331 @@ async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> N
         assert captured[0]["orchestrator_channel_key"] == "channel-1"
         assert any(
             "Done from fake turn" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            OutputDelta(timestamp="2026-01-01T00:00:02Z", content="still thinking"),
+            Completed(timestamp="2026-01-01T00:00:03Z", final_message="done"),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        send_indices = [
+            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "send"
+        ]
+        edit_indices = [
+            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "edit"
+        ]
+        assert send_indices
+        assert edit_indices
+        assert send_indices[0] < edit_indices[0]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_completion_still_sends_final_response(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "done from streaming turn"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.edited_channel_messages
+        assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_ignores_user_message_delta(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    secret = "SECRET PMA CONTEXT SHOULD NOT LEAK"
+    visible = "assistant output"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=secret,
+                delta_type="user_message",
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:02Z",
+                content=visible,
+                delta_type="assistant_stream",
+            ),
+            Completed(timestamp="2026-01-01T00:00:03Z", final_message="done"),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        rendered_progress = [
+            msg["payload"].get("content", "") for msg in rest.edited_channel_messages
+        ]
+        assert rendered_progress
+        assert not any(secret in text for text in rendered_progress)
+        assert any(visible in text for text in rendered_progress)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_progress_failures_are_best_effort_and_do_not_block_completion(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FailingProgressRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "final despite progress failures"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.send_attempts >= 2
+        assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_progress_edit_failures_are_best_effort_and_throttled(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _EditFailingProgressRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "final despite edit failures"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            OutputDelta(timestamp="2026-01-01T00:00:02Z", content="still thinking"),
+            Completed(timestamp="2026-01-01T00:00:03Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert 1 <= rest.edit_attempts <= 2
+        assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_exception_marks_progress_failed(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    orchestrator = _RaisingStreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+        ],
+        RuntimeError("boom"),
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.edited_channel_messages
+        assert any(
+            "failed" in msg["payload"].get("content", "")
+            for msg in rest.edited_channel_messages
+        )
+        assert any(
+            "Turn failed: boom" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
     finally:
