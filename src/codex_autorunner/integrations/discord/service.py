@@ -101,6 +101,7 @@ from .interactions import (
 from .outbox import DiscordOutboxManager
 from .rendering import (
     chunk_discord_message,
+    format_discord_message,
     truncate_for_discord,
 )
 from .rest import DiscordRestClient
@@ -392,11 +393,12 @@ class DiscordBotService:
 
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            content = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<workspace>` or `/pma on`."
+            )
             await self._send_channel_message_safe(
                 channel_id,
-                {
-                    "content": "This channel is not bound. Run `/car bind path:<workspace>` or `/pma on`.",
-                },
+                {"content": content},
             )
             return
 
@@ -414,9 +416,12 @@ class DiscordBotService:
                 workspace_root = fallback
 
         if workspace_root is None:
+            content = format_discord_message(
+                "Binding is invalid. Run `/car bind path:<workspace>`."
+            )
             await self._send_channel_message_safe(
                 channel_id,
-                {"content": "Binding is invalid. Run `/car bind path:<workspace>`."},
+                {"content": content},
             )
             return
 
@@ -439,13 +444,12 @@ class DiscordBotService:
                     is_terminal=updated.status.is_terminal(),
                 )
                 self._close_worker_handles(ensure_result)
+                content = format_discord_message(
+                    f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
+                )
                 await self._send_channel_message_safe(
                     channel_id,
-                    {
-                        "content": (
-                            f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
-                        )
-                    },
+                    {"content": content},
                 )
                 return
 
@@ -1808,9 +1812,8 @@ class DiscordBotService:
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",
         ]
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
-        )
+        content = format_discord_message("\n".join(lines))
+        await self._respond_ephemeral(interaction_id, interaction_token, content)
 
     async def _handle_ids(
         self,
@@ -1994,10 +1997,11 @@ class DiscordBotService:
 
         lines.append("\nUse /car bind to select a workspace.")
 
+        content = format_discord_message("\n".join(lines))
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "\n".join(lines),
+            content,
         )
 
     async def _handle_car_new(
@@ -2013,11 +2017,14 @@ class DiscordBotService:
         )
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
-                text="This channel is not bound. Run `/car bind path:<...>` first.",
+                text=text,
             )
             return
 
@@ -2032,11 +2039,14 @@ class DiscordBotService:
             if pma_enabled:
                 workspace_root = canonicalize_path(Path(self._config.root))
             else:
+                text = format_discord_message(
+                    "Binding is invalid. Run `/car bind path:<workspace>`."
+                )
                 await self._send_or_respond_ephemeral(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
-                    text="Binding is invalid. Run `/car bind path:<workspace>`.",
+                    text=text,
                 )
                 return
 
@@ -2060,14 +2070,14 @@ class DiscordBotService:
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
+        text = format_discord_message(
+            f"Started a fresh {mode_label} session for `{agent}` ({state_label})."
+        )
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
-            text=(
-                f"Started a fresh {mode_label} session for `{agent}` "
-                f"({state_label})."
-            ),
+            text=text,
         )
 
     async def _handle_car_update(
@@ -2130,10 +2140,13 @@ class DiscordBotService:
                 linux_telegram_service_name=linux_telegram_service_name,
             )
         except UpdateInProgressError as exc:
+            text = format_discord_message(
+                f"{exc} Use `/car update target:status` for current state."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"{exc} Use `/car update target:status` for current state.",
+                text,
             )
             return
         except Exception as exc:
@@ -2151,13 +2164,14 @@ class DiscordBotService:
             )
             return
 
+        text = format_discord_message(
+            f"Update started ({update_target}). The selected service(s) will restart. "
+            "Use `/car update target:status` for progress."
+        )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            (
-                f"Update started ({update_target}). The selected service(s) will restart. "
-                "Use `/car update target:status` for progress."
-            ),
+            text,
         )
 
     async def _handle_car_update_status(
@@ -2221,10 +2235,13 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                text,
             )
             return
 
@@ -2241,9 +2258,8 @@ class DiscordBotService:
                 "",
                 "Use `/car agent <name>` to switch.",
             ]
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "\n".join(lines)
-            )
+            text = format_discord_message("\n".join(lines))
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
 
         desired = agent_name.lower().strip()
@@ -2282,10 +2298,13 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                text,
             )
             return
 
@@ -2311,9 +2330,8 @@ class DiscordBotService:
                     f"Valid efforts: {', '.join(self.VALID_REASONING_EFFORTS)}",
                 ]
             )
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "\n".join(lines)
-            )
+            text = format_discord_message("\n".join(lines))
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
 
         model_name = model_name.strip()
@@ -2365,25 +2383,34 @@ class DiscordBotService:
     ) -> Optional[Path]:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                text,
             )
             return None
         if bool(binding.get("pma_enabled", False)):
+            text = format_discord_message(
+                "PMA mode is enabled for this channel. Run `/pma off` before using `/car flow` commands."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "PMA mode is enabled for this channel. Run `/pma off` before using `/car flow` commands.",
+                text,
             )
             return None
         workspace_raw = binding.get("workspace_path")
         if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            text = format_discord_message(
+                "Binding is invalid. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Binding is invalid. Run `/car bind path:<...>` first.",
+                text,
             )
             return None
         return canonicalize_path(Path(workspace_raw))

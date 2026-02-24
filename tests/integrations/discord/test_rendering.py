@@ -100,10 +100,11 @@ class TestFormatDiscordMessage:
         result = format_discord_message(text)
         assert "`code`" in result
 
-    def test_escapes_special_chars_outside_code(self) -> None:
-        text = "This is *bold* and _italic_"
+    def test_preserves_bold_and_italic(self) -> None:
+        text = "This is *italic* and **bold**"
         result = format_discord_message(text)
-        assert "\\_" in result
+        assert "*italic*" in result
+        assert "**bold**" in result
 
     def test_handles_empty_text(self) -> None:
         assert format_discord_message("") == ""
