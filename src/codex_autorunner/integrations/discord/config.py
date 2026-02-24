@@ -22,6 +22,8 @@ DEFAULT_INTENTS = (
     | DISCORD_INTENT_GUILD_MESSAGES
     | DISCORD_INTENT_MESSAGE_CONTENT
 )
+# Legacy value from early Discord rollout before message content was required for
+# plain-text turns in bound channels.
 LEGACY_DEFAULT_INTENTS = DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES
 
 

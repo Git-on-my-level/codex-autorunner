@@ -8,6 +8,11 @@ from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordBotConfigError,
 )
+from codex_autorunner.integrations.discord.constants import (
+    DISCORD_INTENT_GUILD_MESSAGES,
+    DISCORD_INTENT_GUILDS,
+    DISCORD_INTENT_MESSAGE_CONTENT,
+)
 
 
 def test_discord_bot_config_disabled_allows_missing_env(
@@ -74,6 +79,29 @@ def test_collect_env_overrides_includes_discord() -> None:
     )
     assert "CAR_DISCORD_BOT_TOKEN" in overrides
     assert "CAR_DISCORD_APP_ID" in overrides
+
+
+def test_discord_bot_config_upgrades_legacy_intents_without_message_content(
+    tmp_path,
+) -> None:
+    legacy_intents = DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES
+    cfg = DiscordBotConfig.from_raw(
+        root=tmp_path,
+        raw={"enabled": False, "intents": legacy_intents},
+    )
+    assert cfg.intents == (
+        DISCORD_INTENT_GUILDS
+        | DISCORD_INTENT_GUILD_MESSAGES
+        | DISCORD_INTENT_MESSAGE_CONTENT
+    )
+
+
+def test_discord_bot_config_preserves_non_legacy_intents_value(tmp_path) -> None:
+    cfg = DiscordBotConfig.from_raw(
+        root=tmp_path,
+        raw={"enabled": False, "intents": DISCORD_INTENT_GUILDS},
+    )
+    assert cfg.intents == DISCORD_INTENT_GUILDS
 
 
 def test_discord_bot_config_migrates_legacy_intents_to_default(
