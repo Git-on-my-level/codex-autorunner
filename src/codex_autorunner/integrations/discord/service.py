@@ -837,13 +837,19 @@ class DiscordBotService:
                 logging.WARNING,
                 "discord.turn.failed",
                 channel_id=channel_id,
+                conversation_id=context.conversation_id,
                 workspace_root=str(workspace_root),
                 agent=agent,
                 exc=exc,
             )
             await self._send_channel_message_safe(
                 channel_id,
-                {"content": f"Turn failed: {exc}"},
+                {
+                    "content": (
+                        f"Turn failed: {exc} "
+                        f"(conversation {context.conversation_id})"
+                    )
+                },
             )
             return
 
