@@ -872,7 +872,6 @@ class DiscordBotService:
         progress_rendered: Optional[str] = None
         progress_last_updated = 0.0
         progress_failure_count = 0
-        progress_edit_disabled = False
         progress_heartbeat_task: Optional[asyncio.Task[None]] = None
         max_progress_len = max(int(self._config.max_message_length), 32)
 
@@ -880,10 +879,7 @@ class DiscordBotService:
             nonlocal progress_rendered
             nonlocal progress_last_updated
             nonlocal progress_failure_count
-            nonlocal progress_edit_disabled
             if not progress_message_id:
-                return
-            if progress_edit_disabled:
                 return
             now = time.monotonic()
             if (
@@ -916,8 +912,6 @@ class DiscordBotService:
                 )
                 progress_failure_count += 1
                 progress_last_updated = now
-                if progress_failure_count >= 3:
-                    progress_edit_disabled = True
                 return
             progress_failure_count = 0
             progress_rendered = content
