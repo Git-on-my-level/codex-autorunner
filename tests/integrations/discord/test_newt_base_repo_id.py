@@ -40,3 +40,19 @@ def test_resolve_base_repo_id_prefers_longest_manifest_prefix_match() -> None:
         )
         == "ml--infra"
     )
+
+
+def test_resolve_base_repo_id_infers_from_legacy_wt_repo_id() -> None:
+    repo_entry = SimpleNamespace(
+        kind="worktree",
+        id="codex-autorunner-wt-1",
+        worktree_of=None,
+    )
+    manifest_repos = [SimpleNamespace(kind="base", id="codex-autorunner")]
+
+    assert (
+        discord_service_module._resolve_base_repo_id(
+            repo_entry, manifest_repos=manifest_repos
+        )
+        == "codex-autorunner"
+    )

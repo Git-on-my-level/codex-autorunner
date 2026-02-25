@@ -885,6 +885,48 @@ async def test_newt_infers_base_repo_from_worktree_id_when_missing_metadata(
 
 
 @pytest.mark.anyio
+async def test_newt_infers_base_repo_from_legacy_wt_worktree_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = hub_root / "worktrees" / "codex-autorunner-wt-1"
+    workspace.mkdir(parents=True)
+    record = TelegramTopicRecord(
+        workspace_path=str(workspace),
+        thread_ids=["old-thread"],
+        active_thread_id="old-thread",
+    )
+    handler = _NewtHandler(record, hub_root=hub_root)
+    manifest_stub = SimpleNamespace(
+        repos=[SimpleNamespace(kind="base", id="codex-autorunner")],
+        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
+            kind="worktree",
+            id="codex-autorunner-wt-1",
+            worktree_of=None,
+        ),
+    )
+    monkeypatch.setattr(
+        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
+    )
+    message = TelegramMessage(
+        update_id=100,
+        message_id=200,
+        chat_id=-7777,
+        thread_id=333,
+        from_user_id=42,
+        text="/newt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_newt(message)
+
+    calls = handler._hub_supervisor.create_calls
+    assert len(calls) == 1
+    assert calls[0]["base_repo_id"] == "codex-autorunner"
+
+
+@pytest.mark.anyio
 async def test_newt_prefers_longest_manifest_base_match_for_worktree_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
