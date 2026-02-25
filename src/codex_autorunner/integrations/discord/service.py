@@ -857,12 +857,12 @@ class DiscordBotService:
                 resolved_root,
                 hub_path=self._hub_config_path,
             )
-            voice_config = VoiceConfig.from_raw(repo_config.voice)
-            self._voice_configs_by_workspace[resolved_root] = voice_config
             workspace_env = resolve_env_for_root(
                 resolved_root,
                 base_env=self._process_env,
             )
+            voice_config = VoiceConfig.from_raw(repo_config.voice, env=workspace_env)
+            self._voice_configs_by_workspace[resolved_root] = voice_config
         except Exception as exc:
             log_event(
                 self._logger,

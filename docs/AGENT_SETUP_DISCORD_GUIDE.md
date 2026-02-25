@@ -98,6 +98,48 @@ discord_bot:
 
 When `discord_bot.media.voice: true`, inbound Discord audio attachments are transcribed through the configured `voice.provider` and injected into attachment context.
 
+### Voice Provider Setup (OpenAI vs Local Whisper)
+
+You can run voice transcription with either OpenAI Whisper (API) or local Whisper (on-device).
+
+OpenAI Whisper (API):
+
+1. Set an API key env var (default key name):
+   - `OPENAI_API_KEY=...`
+2. Keep or set provider:
+   - `voice.provider: openai_whisper`
+
+Local Whisper (on-device):
+
+1. Install local voice dependencies:
+   - `pip install "codex-autorunner[voice-local]"`
+2. Set provider:
+   - `voice.provider: local_whisper`
+   - or env override: `CODEX_AUTORUNNER_VOICE_PROVIDER=local_whisper`
+
+Provider selection and precedence:
+
+- Only one provider is active at runtime.
+- `CODEX_AUTORUNNER_VOICE_PROVIDER` overrides `voice.provider` in config.
+- It is normal to keep both `voice.providers.openai_whisper` and `voice.providers.local_whisper` blocks in config; only the selected provider is used.
+- There is no automatic provider fallback. If the selected provider fails, transcription fails for that request.
+
+Example config:
+
+```yaml
+voice:
+  enabled: true
+  provider: openai_whisper # or local_whisper
+  providers:
+    openai_whisper:
+      api_key_env: OPENAI_API_KEY
+      model: whisper-1
+    local_whisper:
+      model: tiny
+      device: auto
+      compute_type: default
+```
+
 Allowlist behavior:
 - At least one allowlist must be configured.
 - Any non-empty allowlist acts as a required filter.
