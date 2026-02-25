@@ -85,6 +85,18 @@ async def test_codex_backend_run_turn_events_timeout_emits_failed_terminal(
 
     async def _wait(*, timeout: object = None) -> object:
         observed_timeout["value"] = timeout
+        await backend._handle_notification(
+            {
+                "method": "item/reasoning/summaryTextDelta",
+                "params": {
+                    "threadId": "thread-123",
+                    "turnId": "turn-123",
+                    "itemId": "reason-1",
+                    "delta": "**Planning",
+                },
+            }
+        )
+        await asyncio.sleep(0.01)
         raise asyncio.TimeoutError("turn timeout")
 
     with patch.object(
@@ -104,6 +116,9 @@ async def test_codex_backend_run_turn_events_timeout_emits_failed_terminal(
 
     _assert_turn_contract(events)
     assert observed_timeout["value"] == 0.01
+    assert any(
+        isinstance(event, RunNotice) and event.kind == "thinking" for event in events
+    )
     assert isinstance(events[-1], Failed)
     assert "timeout" in events[-1].error_message.lower()
 
