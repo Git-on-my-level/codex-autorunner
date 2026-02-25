@@ -112,3 +112,44 @@ async def test_flush_skips_future_next_attempt_records(tmp_path: Path) -> None:
         assert await store.get_outbox("r1") is not None
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_delete_operation_is_supported(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    calls: list[tuple[str, str]] = []
+
+    async def send_message(_channel_id: str, _payload: dict) -> dict:
+        return {"id": "msg-1"}
+
+    async def delete_message(channel_id: str, message_id: str) -> None:
+        calls.append((channel_id, message_id))
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        delete_message=delete_message,
+        logger=logging.getLogger("test"),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="del-1",
+                channel_id="chan-1",
+                message_id="msg-123",
+                operation="delete",
+                payload_json={},
+                created_at=now_iso(),
+            )
+        )
+        assert delivered is True
+        assert calls == [("chan-1", "msg-123")]
+        assert await store.get_outbox("del-1") is None
+    finally:
+        await store.close()

@@ -204,6 +204,7 @@ class DiscordBotService:
             else DiscordOutboxManager(
                 self._store,
                 send_message=self._send_channel_message,
+                delete_message=self._delete_channel_message,
                 logger=logger,
             )
         )
@@ -695,43 +696,17 @@ class DiscordBotService:
         )
         if not chunks:
             chunks = ["(No response text returned.)"]
-        if preview_message_id:
-            if len(chunks) == 1:
-                try:
-                    await self._rest.edit_channel_message(
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        payload={"content": chunks[0]},
-                    )
-                    return
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.turn.preview.final_edit_failed",
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        exc=exc,
-                    )
-            try:
-                await self._rest.delete_channel_message(
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.turn.preview.delete_failed",
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                    exc=exc,
-                )
         for idx, chunk in enumerate(chunks, 1):
             await self._send_channel_message_safe(
                 channel_id,
                 {"content": chunk},
                 record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
+            )
+        if preview_message_id:
+            await self._delete_channel_message_safe(
+                channel_id,
+                preview_message_id,
+                record_id=f"turn-preview-delete:{session_key}:{uuid.uuid4().hex[:8]}",
             )
 
     async def _with_attachment_context(
@@ -1833,6 +1808,12 @@ class DiscordBotService:
             channel_id=channel_id, payload=payload
         )
 
+    async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
+        await self._rest.delete_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+        )
+
     async def _send_channel_message_safe(
         self,
         channel_id: str,
@@ -1871,6 +1852,52 @@ class DiscordBotService:
                     logging.ERROR,
                     "discord.channel_message.enqueue_failed",
                     channel_id=channel_id,
+                    record_id=outbox_record_id,
+                    exc=enqueue_exc,
+                )
+
+    async def _delete_channel_message_safe(
+        self,
+        channel_id: str,
+        message_id: str,
+        *,
+        record_id: Optional[str] = None,
+    ) -> None:
+        if not isinstance(message_id, str) or not message_id:
+            return
+        try:
+            await self._delete_channel_message(channel_id, message_id)
+            return
+        except Exception as exc:
+            outbox_record_id = (
+                record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_message.delete_failed",
+                channel_id=channel_id,
+                message_id=message_id,
+                record_id=outbox_record_id,
+                exc=exc,
+            )
+            try:
+                await self._store.enqueue_outbox(
+                    OutboxRecord(
+                        record_id=outbox_record_id,
+                        channel_id=channel_id,
+                        message_id=message_id,
+                        operation="delete",
+                        payload_json={},
+                    )
+                )
+            except Exception as enqueue_exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.channel_message.delete_enqueue_failed",
+                    channel_id=channel_id,
+                    message_id=message_id,
                     record_id=outbox_record_id,
                     exc=enqueue_exc,
                 )
