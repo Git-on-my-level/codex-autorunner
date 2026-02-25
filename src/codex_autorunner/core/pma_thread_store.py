@@ -433,6 +433,20 @@ class PmaThreadStore:
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def has_running_turn(self, managed_thread_id: str) -> bool:
+        with open_sqlite(self._path, durable=self._durable) as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                  FROM pma_managed_turns
+                 WHERE managed_thread_id = ?
+                   AND status = 'running'
+                 LIMIT 1
+                """,
+                (managed_thread_id,),
+            ).fetchone()
+        return row is not None
+
     def get_turn(
         self, managed_thread_id: str, managed_turn_id: str
     ) -> Optional[dict[str, Any]]:

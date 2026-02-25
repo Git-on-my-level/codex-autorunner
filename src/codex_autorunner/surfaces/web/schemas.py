@@ -558,3 +558,9 @@ class TicketBulkUpdateResponse(ResponseModel):
     skipped: int
     errors: list[str] = []
     lint_errors: list[str] = []
+
+
+class PmaManagedThreadMessageRequest(Payload):
+    message: str
+    model: Optional[str] = None
+    reasoning: Optional[str] = None

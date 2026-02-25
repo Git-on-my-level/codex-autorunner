@@ -67,7 +67,10 @@ from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ....integrations.telegram.state import OutboxRecord, TelegramStateStore
-from ..schemas import PmaManagedThreadCreateRequest
+from ..schemas import (
+    PmaManagedThreadCreateRequest,
+    PmaManagedThreadMessageRequest,
+)
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
 
@@ -1123,6 +1126,176 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         return {"thread": thread}
 
+    @router.post("/threads/{managed_thread_id}/messages")
+    async def send_managed_thread_message(
+        managed_thread_id: str,
+        request: Request,
+        payload: PmaManagedThreadMessageRequest,
+    ) -> dict[str, Any]:
+        message = (payload.message or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required")
+
+        hub_root = request.app.state.config.root
+        thread_store = PmaThreadStore(hub_root)
+        transcripts = PmaTranscriptStore(hub_root)
+        thread = thread_store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        if (thread.get("status") or "") == "archived":
+            raise HTTPException(
+                status_code=409, detail="Managed thread is archived and read-only"
+            )
+        if thread_store.has_running_turn(managed_thread_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Managed thread {managed_thread_id} already has a running turn",
+            )
+
+        defaults = _get_pma_config(request)
+        model = _normalize_optional_text(payload.model) or defaults.get("model")
+        reasoning = _normalize_optional_text(payload.reasoning) or defaults.get(
+            "reasoning"
+        )
+        stored_backend_id = _normalize_optional_text(thread.get("backend_thread_id"))
+        turn = thread_store.create_turn(
+            managed_thread_id,
+            prompt=message,
+            model=model,
+            reasoning=reasoning,
+        )
+        managed_turn_id = str(turn.get("managed_turn_id") or "")
+        if not managed_turn_id:
+            raise HTTPException(status_code=500, detail="Failed to create managed turn")
+
+        preview = _truncate_text(message, 120)
+        workspace_root = Path(str(thread.get("workspace_root") or "")).resolve()
+        agent = str(thread.get("agent") or "").strip().lower()
+        interrupt_event = asyncio.Event()
+
+        def _finalize_error(
+            detail: str, *, backend_turn_id: Optional[str] = None
+        ) -> dict[str, Any]:
+            thread_store.mark_turn_finished(
+                managed_turn_id,
+                status="error",
+                assistant_text="",
+                error=detail,
+                backend_turn_id=backend_turn_id,
+                transcript_turn_id=None,
+            )
+            return {
+                "status": "error",
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": managed_turn_id,
+                "backend_thread_id": stored_backend_id or "",
+                "assistant_text": "",
+                "error": detail,
+            }
+
+        try:
+            if agent == "opencode":
+                supervisor = getattr(request.app.state, "opencode_supervisor", None)
+                if supervisor is None:
+                    return _finalize_error("OpenCode unavailable")
+                stall_timeout_seconds = None
+                try:
+                    stall_timeout_seconds = (
+                        request.app.state.config.opencode.session_stall_timeout_seconds
+                    )
+                except Exception:
+                    stall_timeout_seconds = None
+                result = await _execute_opencode(
+                    supervisor,
+                    workspace_root,
+                    message,
+                    interrupt_event,
+                    model=model,
+                    reasoning=reasoning,
+                    backend_session_id=stored_backend_id,
+                    stall_timeout_seconds=stall_timeout_seconds,
+                )
+            elif agent == "codex":
+                supervisor = getattr(request.app.state, "app_server_supervisor", None)
+                events = getattr(request.app.state, "app_server_events", None)
+                if supervisor is None or events is None:
+                    return _finalize_error("App-server unavailable")
+                result = await _execute_app_server(
+                    supervisor,
+                    events,
+                    workspace_root,
+                    message,
+                    interrupt_event,
+                    model=model,
+                    reasoning=reasoning,
+                    backend_thread_id=stored_backend_id,
+                )
+            else:
+                return _finalize_error(f"Unknown managed thread agent: {agent}")
+        except HTTPException as exc:
+            detail = (
+                str(exc.detail) if exc.detail else "Managed thread execution failed"
+            )
+            return _finalize_error(detail)
+        except Exception as exc:
+            return _finalize_error(str(exc))
+
+        result = dict(result or {})
+        if str(result.get("status") or "") != "ok":
+            detail = _normalize_optional_text(result.get("detail")) or (
+                "Managed thread execution failed"
+            )
+            backend_turn_id = _normalize_optional_text(result.get("turn_id"))
+            return _finalize_error(detail, backend_turn_id=backend_turn_id)
+
+        assistant_text = str(result.get("message") or "")
+        backend_turn_id = _normalize_optional_text(result.get("turn_id"))
+        backend_thread_id = _normalize_optional_text(
+            result.get("backend_thread_id") or result.get("thread_id")
+        )
+        if backend_thread_id != stored_backend_id:
+            thread_store.set_thread_backend_id(managed_thread_id, backend_thread_id)
+
+        transcript_metadata = {
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "repo_id": thread.get("repo_id"),
+            "workspace_root": str(workspace_root),
+            "agent": agent,
+            "backend_thread_id": backend_thread_id,
+            "backend_turn_id": backend_turn_id,
+            "model": model,
+            "reasoning": reasoning,
+            "status": "ok",
+        }
+        transcripts.write_transcript(
+            turn_id=managed_turn_id,
+            metadata=transcript_metadata,
+            assistant_text=assistant_text,
+        )
+
+        thread_store.mark_turn_finished(
+            managed_turn_id,
+            status="ok",
+            assistant_text=assistant_text,
+            error=None,
+            backend_turn_id=backend_turn_id,
+            transcript_turn_id=managed_turn_id,
+        )
+        thread_store.update_thread_after_turn(
+            managed_thread_id,
+            last_turn_id=managed_turn_id,
+            last_message_preview=preview,
+        )
+        return {
+            "status": "ok",
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "backend_thread_id": backend_thread_id or "",
+            "assistant_text": assistant_text,
+            "error": None,
+        }
+
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
         if (
@@ -1209,15 +1382,19 @@ def build_pma_routes() -> APIRouter:
         *,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        backend_thread_id: Optional[str] = None,
         thread_registry: Optional[Any] = None,
         thread_key: Optional[str] = None,
         on_meta: Optional[Any] = None,
     ) -> dict[str, Any]:
         client = await supervisor.get_client(hub_root)
 
-        thread_id = None
-        if thread_registry is not None and thread_key:
+        if backend_thread_id:
+            thread_id = backend_thread_id
+        elif thread_registry is not None and thread_key:
             thread_id = thread_registry.get_thread_id(thread_key)
+        else:
+            thread_id = None
         if thread_id:
             try:
                 await client.thread_resume(thread_id)
@@ -1300,6 +1477,7 @@ def build_pma_routes() -> APIRouter:
             "status": "ok",
             "message": output,
             "thread_id": thread_id,
+            "backend_thread_id": thread_id,
             "turn_id": handle.turn_id,
             "raw_events": raw_events,
         }
@@ -1312,6 +1490,7 @@ def build_pma_routes() -> APIRouter:
         *,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        backend_session_id: Optional[str] = None,
         thread_registry: Optional[Any] = None,
         thread_key: Optional[str] = None,
         stall_timeout_seconds: Optional[float] = None,
@@ -1328,8 +1507,8 @@ def build_pma_routes() -> APIRouter:
         )
 
         client = await supervisor.get_client(hub_root)
-        session_id = None
-        if thread_registry is not None and thread_key:
+        session_id = backend_session_id
+        if session_id is None and thread_registry is not None and thread_key:
             session_id = thread_registry.get_thread_id(thread_key)
         if not session_id:
             session = await client.create_session(directory=str(hub_root))
@@ -1426,6 +1605,7 @@ def build_pma_routes() -> APIRouter:
             "status": "ok",
             "message": output_result.text,
             "thread_id": session_id,
+            "backend_thread_id": session_id,
             "turn_id": build_turn_id(session_id),
         }
 
