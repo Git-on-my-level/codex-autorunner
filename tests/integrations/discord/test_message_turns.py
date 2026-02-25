@@ -1561,7 +1561,8 @@ async def test_message_create_streaming_turn_exception_marks_progress_failed(
             for msg in rest.edited_channel_messages
         )
         assert any(
-            "Turn failed: boom" in msg["payload"].get("content", "")
+            "Turn failed: boom (conversation discord:channel-1:guild-1)"
+            in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
     finally:
