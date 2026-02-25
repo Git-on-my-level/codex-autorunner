@@ -123,6 +123,8 @@ async def test_dispatcher_dedupe_hook_short_circuits_processing() -> None:
 
     assert duplicate_result.status == "duplicate"
     assert accepted_result.status == "queued"
+    assert accepted_result.queued_pending == 1
+    assert accepted_result.queued_while_busy is False
     assert seen == ["ok"]
 
 
@@ -178,6 +180,8 @@ async def test_dispatcher_supports_custom_bypass_rules() -> None:
 
     assert queued.status == "queued"
     assert queued.bypassed is False
+    assert queued.queued_while_busy is True
+    assert queued.queued_pending == 1
     assert bypassed.status == "dispatched"
     assert bypassed.bypassed is True
     assert observed[:4] == ["normal-1-start", "bypass", "normal-1-end", "queued"]

@@ -9,7 +9,6 @@ import secrets
 import shlex
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -27,6 +26,10 @@ from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
 from ...chat.media import (
     format_media_batch_failure as _format_media_batch_failure,  # noqa: F401
+)
+from ...chat.update_notifier import (
+    format_update_status_message,
+    mark_update_status_notified,
 )
 from ..adapter import (
     CompactCallback,
@@ -2342,6 +2345,12 @@ Summary applied.""",
         notify_reply_to = reply_to
         if notify_reply_to is None and callback is not None:
             notify_reply_to = callback.message_id
+        notify_metadata = self._update_status_notifier.build_spawn_metadata(
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=notify_reply_to,
+            include_legacy_telegram_keys=True,
+        )
         try:
             _spawn_update_process(
                 repo_url=repo_url,
@@ -2354,9 +2363,7 @@ Summary applied.""",
                 linux_hub_service_name=linux_hub_service_name,
                 linux_telegram_service_name=linux_telegram_service_name,
                 linux_discord_service_name=linux_discord_service_name,
-                notify_chat_id=chat_id,
-                notify_thread_id=thread_id,
-                notify_reply_to=notify_reply_to,
+                **notify_metadata,
             )
             log_event(
                 self._logger,
@@ -2401,7 +2408,7 @@ Summary applied.""",
             await self._send_message(
                 chat_id, message, thread_id=thread_id, reply_to=reply_to
             )
-        self._schedule_update_status_watch(chat_id, thread_id)
+        self._schedule_update_status_watch(chat_id, thread_id, reply_to=notify_reply_to)
 
     async def _prompt_update_selection(
         self, message: TelegramMessage, *, prompt: str = UPDATE_PICKER_PROMPT
@@ -2491,22 +2498,7 @@ Summary applied.""",
         return data if isinstance(data, dict) else None
 
     def _format_update_status_message(self, status: Optional[dict[str, Any]]) -> str:
-        if not status:
-            return "No update status recorded."
-        state = str(status.get("status") or "unknown")
-        message = str(status.get("message") or "")
-        timestamp = status.get("at")
-        rendered_time = ""
-        if isinstance(timestamp, (int, float)):
-            rendered_time = datetime.fromtimestamp(timestamp).isoformat(
-                timespec="seconds"
-            )
-        lines = [f"Update status: {state}"]
-        if message:
-            lines.append(f"Message: {message}")
-        if rendered_time:
-            lines.append(f"Last updated: {rendered_time}")
-        return "\n".join(lines)
+        return format_update_status_message(status)
 
     async def _handle_update_status(
         self, message: TelegramMessage, reply_to: Optional[int] = None
@@ -2524,42 +2516,48 @@ Summary applied.""",
         chat_id: int,
         thread_id: Optional[int],
         *,
+        reply_to: Optional[int] = None,
         timeout_seconds: float = 300.0,
         interval_seconds: float = 2.0,
     ) -> None:
-        async def _watch() -> None:
-            deadline = time.monotonic() + timeout_seconds
-            while time.monotonic() < deadline:
-                status = self._read_update_status()
-                if status and status.get("status") in ("ok", "error", "rollback"):
-                    await self._send_message(
-                        chat_id,
-                        self._format_update_status_message(status),
-                        thread_id=thread_id,
-                    )
-                    return
-                await asyncio.sleep(interval_seconds)
-            await self._send_message(
-                chat_id,
-                "Update still running. Use /update status for the latest state.",
-                thread_id=thread_id,
-            )
+        notify_context: dict[str, Any] = {
+            "chat_id": chat_id,
+            "thread_id": thread_id,
+        }
+        if reply_to is not None:
+            notify_context["reply_to"] = reply_to
+        self._update_status_notifier.schedule_watch(
+            notify_context,
+            timeout_seconds=timeout_seconds,
+            interval_seconds=interval_seconds,
+        )
 
-        self._spawn_task(_watch())
+    async def _send_update_status_notice(
+        self, notify_context: dict[str, Any], text: str
+    ) -> None:
+        chat_id = notify_context.get("chat_id")
+        if not isinstance(chat_id, int) or isinstance(chat_id, bool):
+            return
+        thread_id = notify_context.get("thread_id")
+        if not isinstance(thread_id, int) or isinstance(thread_id, bool):
+            thread_id = None
+        reply_to = notify_context.get("reply_to")
+        if not isinstance(reply_to, int) or isinstance(reply_to, bool):
+            reply_to = None
+        await self._send_message(
+            chat_id,
+            text,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
 
     def _mark_update_notified(self, status: dict[str, Any]) -> None:
-        path = self._update_status_path()
-        updated = dict(status)
-        updated["notify_sent_at"] = time.time()
-        try:
-            path.write_text(json.dumps(updated), encoding="utf-8")
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.update.notify_write_failed",
-                exc=exc,
-            )
+        mark_update_status_notified(
+            path=self._update_status_path(),
+            status=status,
+            logger=self._logger,
+            log_event_name="telegram.update.notify_write_failed",
+        )
 
     def _compact_status_path(self) -> Path:
         return resolve_update_paths().compact_status_path
@@ -2611,33 +2609,7 @@ Summary applied.""",
             )
 
     async def _maybe_send_update_status_notice(self) -> None:
-        status = self._read_update_status()
-        if not status:
-            return
-        notify_chat_id = status.get("notify_chat_id")
-        if not isinstance(notify_chat_id, int):
-            return
-        if status.get("notify_sent_at"):
-            return
-        notify_thread_id = status.get("notify_thread_id")
-        if not isinstance(notify_thread_id, int):
-            notify_thread_id = None
-        notify_reply_to = status.get("notify_reply_to")
-        if not isinstance(notify_reply_to, int):
-            notify_reply_to = None
-        state = str(status.get("status") or "")
-        if state in ("running", "spawned"):
-            self._schedule_update_status_watch(notify_chat_id, notify_thread_id)
-            return
-        if state not in ("ok", "error", "rollback"):
-            return
-        await self._send_message(
-            notify_chat_id,
-            self._format_update_status_message(status),
-            thread_id=notify_thread_id,
-            reply_to=notify_reply_to,
-        )
-        self._mark_update_notified(status)
+        await self._update_status_notifier.maybe_send_notice()
 
     async def _maybe_send_compact_status_notice(self) -> None:
         status = self._read_compact_status()

@@ -294,6 +294,8 @@ def _write_update_status(status: str, message: str, **extra) -> None:
             "notify_chat_id",
             "notify_thread_id",
             "notify_reply_to",
+            "notify_platform",
+            "notify_context",
             "notify_sent_at",
         ):
             if key not in payload and key in existing:
@@ -787,6 +789,8 @@ def _spawn_update_process(
     notify_chat_id: Optional[int] = None,
     notify_thread_id: Optional[int] = None,
     notify_reply_to: Optional[int] = None,
+    notify_platform: Optional[str] = None,
+    notify_context: Optional[dict[str, Any]] = None,
     linux_hub_service_name: Optional[str] = None,
     linux_telegram_service_name: Optional[str] = None,
     linux_discord_service_name: Optional[str] = None,
@@ -813,6 +817,8 @@ def _spawn_update_process(
         notify_chat_id=notify_chat_id,
         notify_thread_id=notify_thread_id,
         notify_reply_to=notify_reply_to,
+        notify_platform=notify_platform,
+        notify_context=notify_context if isinstance(notify_context, dict) else None,
         notify_sent_at=None,
     )
     cmd = [
