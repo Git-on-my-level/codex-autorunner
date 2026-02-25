@@ -235,6 +235,7 @@ interface UpdateTargetsResponse {
 async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
   const select = selectId ? document.getElementById(selectId) as HTMLSelectElement | null : null;
   if (!select) return;
+  const isInitialized = select.dataset.updateTargetsInitialized === "1";
   let payload: UpdateTargetsResponse | null = null;
   try {
     payload = await api("/system/update/targets", { method: "GET" }) as UpdateTargetsResponse;
@@ -272,7 +273,12 @@ async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
     option.textContent = item.label;
     select.appendChild(option);
   });
-  select.value = hasPrevious ? previous : fallback;
+  if (isInitialized) {
+    select.value = hasPrevious ? previous : fallback;
+  } else {
+    select.value = fallback;
+    select.dataset.updateTargetsInitialized = "1";
+  }
 }
 
 async function handleSystemUpdate(btnId: string, targetSelectId: string | null): Promise<void> {

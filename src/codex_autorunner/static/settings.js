@@ -195,6 +195,7 @@ async function loadUpdateTargetOptions(selectId) {
     const select = selectId ? document.getElementById(selectId) : null;
     if (!select)
         return;
+    const isInitialized = select.dataset.updateTargetsInitialized === "1";
     let payload = null;
     try {
         payload = await api("/system/update/targets", { method: "GET" });
@@ -235,7 +236,13 @@ async function loadUpdateTargetOptions(selectId) {
         option.textContent = item.label;
         select.appendChild(option);
     });
-    select.value = hasPrevious ? previous : fallback;
+    if (isInitialized) {
+        select.value = hasPrevious ? previous : fallback;
+    }
+    else {
+        select.value = fallback;
+        select.dataset.updateTargetsInitialized = "1";
+    }
 }
 async function handleSystemUpdate(btnId, targetSelectId) {
     const btn = document.getElementById(btnId);
