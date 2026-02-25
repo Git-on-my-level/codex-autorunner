@@ -867,7 +867,7 @@ async def test_message_create_streaming_turn_appends_final_metrics(
     try:
         await service.run_forever()
         final_content = ""
-        for message in rest.edited_channel_messages:
+        for message in rest.channel_messages:
             content = str(message.get("payload", {}).get("content", ""))
             if final_text in content:
                 final_content = content
