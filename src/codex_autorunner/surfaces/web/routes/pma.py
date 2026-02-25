@@ -1320,6 +1320,7 @@ def build_pma_routes() -> APIRouter:
             "reasoning"
         )
         stored_backend_id = _normalize_optional_text(thread.get("backend_thread_id"))
+        known_backend_thread_id = stored_backend_id
         compact_seed = _normalize_optional_text(thread.get("compact_seed"))
         execution_prompt = message
         if not stored_backend_id and compact_seed:
@@ -1354,10 +1355,27 @@ def build_pma_routes() -> APIRouter:
                 "status": "error",
                 "managed_thread_id": managed_thread_id,
                 "managed_turn_id": managed_turn_id,
-                "backend_thread_id": stored_backend_id or "",
+                "backend_thread_id": known_backend_thread_id or "",
                 "assistant_text": "",
                 "error": detail,
             }
+
+        async def _on_managed_turn_meta(
+            backend_thread_id: Optional[str],
+            backend_turn_id: Optional[str],
+        ) -> None:
+            nonlocal known_backend_thread_id
+            resolved_backend_turn_id = _normalize_optional_text(backend_turn_id)
+            if resolved_backend_turn_id:
+                thread_store.set_turn_backend_turn_id(
+                    managed_turn_id, resolved_backend_turn_id
+                )
+            resolved_backend_thread_id = _normalize_optional_text(backend_thread_id)
+            if resolved_backend_thread_id != known_backend_thread_id:
+                thread_store.set_thread_backend_id(
+                    managed_thread_id, resolved_backend_thread_id
+                )
+                known_backend_thread_id = resolved_backend_thread_id
 
         try:
             if agent == "opencode":
@@ -1380,6 +1398,7 @@ def build_pma_routes() -> APIRouter:
                     reasoning=reasoning,
                     backend_session_id=stored_backend_id,
                     stall_timeout_seconds=stall_timeout_seconds,
+                    on_meta=_on_managed_turn_meta,
                 )
             elif agent == "codex":
                 supervisor = getattr(request.app.state, "app_server_supervisor", None)
@@ -1395,6 +1414,7 @@ def build_pma_routes() -> APIRouter:
                     model=model,
                     reasoning=reasoning,
                     backend_thread_id=stored_backend_id,
+                    on_meta=_on_managed_turn_meta,
                 )
             else:
                 return _finalize_error(f"Unknown managed thread agent: {agent}")
@@ -1419,8 +1439,9 @@ def build_pma_routes() -> APIRouter:
         backend_thread_id = _normalize_optional_text(
             result.get("backend_thread_id") or result.get("thread_id")
         )
-        if backend_thread_id != stored_backend_id:
+        if backend_thread_id != known_backend_thread_id:
             thread_store.set_thread_backend_id(managed_thread_id, backend_thread_id)
+            known_backend_thread_id = backend_thread_id
 
         transcript_metadata = {
             "managed_thread_id": managed_thread_id,
@@ -1460,6 +1481,90 @@ def build_pma_routes() -> APIRouter:
             "backend_thread_id": backend_thread_id or "",
             "assistant_text": assistant_text,
             "error": None,
+        }
+
+    @router.post("/threads/{managed_thread_id}/interrupt")
+    async def interrupt_managed_thread(
+        managed_thread_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        hub_root = request.app.state.config.root
+        store = PmaThreadStore(hub_root)
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        running_turn = store.get_running_turn(managed_thread_id)
+        if running_turn is None:
+            raise HTTPException(
+                status_code=409, detail="Managed thread has no running turn"
+            )
+        managed_turn_id = str(running_turn.get("managed_turn_id") or "")
+        if not managed_turn_id:
+            raise HTTPException(status_code=500, detail="Running turn is missing id")
+
+        agent = str(thread.get("agent") or "").strip().lower()
+        backend_thread_id = _normalize_optional_text(thread.get("backend_thread_id"))
+        backend_turn_id = _normalize_optional_text(running_turn.get("backend_turn_id"))
+        backend_error: Optional[str] = None
+        backend_interrupt_attempted = False
+
+        if agent == "codex":
+            supervisor = getattr(request.app.state, "app_server_supervisor", None)
+            if supervisor is None:
+                backend_error = "App-server unavailable"
+            elif not backend_thread_id or not backend_turn_id:
+                backend_error = (
+                    "Codex interrupt requires backend_thread_id and backend_turn_id"
+                )
+            else:
+                backend_interrupt_attempted = True
+                try:
+                    client = await supervisor.get_client(hub_root)
+                    await client.turn_interrupt(
+                        backend_turn_id, thread_id=backend_thread_id
+                    )
+                except Exception as exc:
+                    backend_error = str(exc)
+        elif agent == "opencode":
+            supervisor = getattr(request.app.state, "opencode_supervisor", None)
+            if supervisor is None:
+                backend_error = "OpenCode unavailable"
+            elif not backend_thread_id:
+                backend_error = "OpenCode interrupt requires backend_thread_id"
+            else:
+                backend_interrupt_attempted = True
+                try:
+                    client = await supervisor.get_client(hub_root)
+                    await client.abort(backend_thread_id)
+                except Exception as exc:
+                    backend_error = str(exc)
+        else:
+            backend_error = f"Unknown managed thread agent: {agent}"
+
+        store.mark_turn_interrupted(managed_turn_id)
+        store.append_action(
+            "managed_thread_interrupt",
+            managed_thread_id=managed_thread_id,
+            payload_json=json.dumps(
+                {
+                    "agent": agent,
+                    "managed_turn_id": managed_turn_id,
+                    "backend_thread_id": backend_thread_id,
+                    "backend_turn_id": backend_turn_id,
+                    "backend_interrupt_attempted": backend_interrupt_attempted,
+                    "backend_error": backend_error,
+                },
+                ensure_ascii=True,
+            ),
+        )
+        updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+        return {
+            "status": "ok",
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "turn": updated_turn,
+            "backend_error": backend_error,
         }
 
     @router.get("/agents")

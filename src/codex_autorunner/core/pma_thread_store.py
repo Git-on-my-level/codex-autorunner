@@ -427,6 +427,33 @@ class PmaThreadStore:
                     ),
                 )
 
+    def set_turn_backend_turn_id(
+        self, managed_turn_id: str, backend_turn_id: Optional[str]
+    ) -> None:
+        with self._write_conn() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE pma_managed_turns
+                       SET backend_turn_id = ?
+                     WHERE managed_turn_id = ?
+                    """,
+                    (backend_turn_id, managed_turn_id),
+                )
+
+    def mark_turn_interrupted(self, managed_turn_id: str) -> None:
+        with self._write_conn() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE pma_managed_turns
+                       SET status = 'interrupted',
+                           finished_at = ?
+                     WHERE managed_turn_id = ?
+                    """,
+                    (now_iso(), managed_turn_id),
+                )
+
     def list_turns(
         self, managed_thread_id: str, *, limit: int = 50
     ) -> list[dict[str, Any]]:
@@ -459,6 +486,23 @@ class PmaThreadStore:
                 (managed_thread_id,),
             ).fetchone()
         return row is not None
+
+    def get_running_turn(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
+        with open_sqlite(self._path, durable=self._durable) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM pma_managed_turns
+                 WHERE managed_thread_id = ?
+                   AND status = 'running'
+                 ORDER BY started_at DESC, rowid DESC
+                 LIMIT 1
+                """,
+                (managed_thread_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _row_to_dict(row)
 
     def get_turn(
         self, managed_thread_id: str, managed_turn_id: str
