@@ -162,6 +162,25 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
 )
 
 
+def _resolve_base_repo_id(repo_entry: object) -> Optional[str]:
+    worktree_of = getattr(repo_entry, "worktree_of", None)
+    if isinstance(worktree_of, str) and worktree_of.strip():
+        return worktree_of.strip()
+
+    repo_id = getattr(repo_entry, "id", None)
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        return None
+    repo_id = repo_id.strip()
+
+    if getattr(repo_entry, "kind", None) == "worktree" and "--" in repo_id:
+        base_repo_id, _ = repo_id.split("--", 1)
+        if base_repo_id:
+            return base_repo_id
+        return None
+
+    return repo_id
+
+
 class AppServerUnavailableError(Exception):
     pass
 
@@ -3226,10 +3245,7 @@ class DiscordBotService:
             )
             return
 
-        if repo_entry.kind == "worktree":
-            base_repo_id = repo_entry.worktree_of
-        else:
-            base_repo_id = repo_entry.id
+        base_repo_id = _resolve_base_repo_id(repo_entry)
 
         if not base_repo_id:
             text = format_discord_message(

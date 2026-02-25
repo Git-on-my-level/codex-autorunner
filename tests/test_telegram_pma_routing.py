@@ -837,6 +837,52 @@ async def test_newt_branch_name_includes_chat_identity(
 
 
 @pytest.mark.anyio
+async def test_newt_infers_base_repo_from_worktree_id_when_missing_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = hub_root / "worktrees" / "base-repo--thread-chat-7777-thread-333"
+    workspace.mkdir(parents=True)
+    record = TelegramTopicRecord(
+        workspace_path=str(workspace),
+        thread_ids=["old-thread"],
+        active_thread_id="old-thread",
+    )
+    handler = _NewtHandler(record, hub_root=hub_root)
+    manifest_stub = SimpleNamespace(
+        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
+            kind="worktree",
+            id="base-repo--thread-chat-7777-thread-333",
+            worktree_of=None,
+        )
+    )
+    monkeypatch.setattr(
+        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
+    )
+    message = TelegramMessage(
+        update_id=100,
+        message_id=200,
+        chat_id=-7777,
+        thread_id=333,
+        from_user_id=42,
+        text="/newt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_newt(message)
+
+    calls = handler._hub_supervisor.create_calls
+    assert len(calls) == 1
+    assert calls[0]["base_repo_id"] == "base-repo"
+    assert calls[0]["branch"] == "thread-chat-7777-thread-333"
+    assert all(
+        "Could not determine base repository for worktree creation." not in text
+        for text in handler._sent
+    )
+
+
+@pytest.mark.anyio
 async def test_newt_thread_fallback_and_workspace_state_reset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
