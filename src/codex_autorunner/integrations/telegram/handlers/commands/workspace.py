@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 from dataclasses import dataclass
@@ -1255,6 +1256,276 @@ class WorkspaceCommands(SharedHelpers):
                 [
                     f"Started new thread {thread_id}.",
                     f"Directory: {record.workspace_path or 'unbound'}",
+                    f"Agent: {agent}",
+                    f"Model: {record.model or 'default'}",
+                    f"Effort: {effort_label}",
+                ]
+            ),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_newt(self, message: TelegramMessage) -> None:
+        import re
+
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
+        pma_enabled = bool(record and record.pma_enabled)
+        if pma_enabled:
+            await self._send_message(
+                message.chat_id,
+                "/newt is not available in PMA mode. Use /new instead.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        workspace_root = self._canonical_workspace_root(record.workspace_path)
+        if workspace_root is None:
+            await self._send_message(
+                message.chat_id,
+                "Workspace unavailable.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        hub_root = getattr(self, "_hub_root", None)
+        if hub_root is None:
+            await self._send_message(
+                message.chat_id,
+                "Hub not configured.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        try:
+            from ......core.hub import HubSupervisor
+
+            supervisor = getattr(self, "_hub_supervisor", None)
+            if supervisor is None:
+                supervisor = HubSupervisor.from_path(hub_root)
+                self._hub_supervisor = supervisor
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.newt.hub_supervisor.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Hub supervisor unavailable. Please try again.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        hub_root_path = Path(hub_root)
+        manifest = load_manifest(
+            hub_root_path / ".codex-autorunner" / "manifest.yml", hub_root_path
+        )
+        repo_entry = manifest.get_by_path(hub_root_path, workspace_root)
+
+        if repo_entry is None:
+            await self._send_message(
+                message.chat_id,
+                "Workspace is not registered in the hub. Bind to a hub repo first.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        if repo_entry.kind == "worktree":
+            base_repo_id = repo_entry.worktree_of
+        else:
+            base_repo_id = repo_entry.id
+
+        if not base_repo_id:
+            await self._send_message(
+                message.chat_id,
+                "Could not determine base repository for worktree creation.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        safe_thread_id = re.sub(r"[^a-zA-Z0-9]+", "-", str(message.thread_id)).strip(
+            "-"
+        )
+        branch_name = f"thread-{safe_thread_id}"
+
+        try:
+            snapshot = await asyncio.to_thread(
+                supervisor.create_worktree,
+                base_repo_id=base_repo_id,
+                branch=branch_name,
+                force=False,
+                start_point=None,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.newt.create_worktree.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                base_repo_id=base_repo_id,
+                branch=branch_name,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                f"Failed to create worktree: {exc}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        new_workspace_path = (hub_root_path / snapshot.path).resolve()
+        workspace_id = self._workspace_id_for_path(str(new_workspace_path))
+
+        def apply(record: "TelegramTopicRecord") -> None:
+            record.workspace_path = str(new_workspace_path)
+            record.repo_id = snapshot.id
+            if workspace_id:
+                record.workspace_id = workspace_id
+            record.active_thread_id = None
+            record.thread_ids = []
+
+        await self._router.update_topic(message.chat_id, message.thread_id, apply)
+
+        agent = self._effective_agent(record)
+        if agent == "opencode":
+            supervisor = getattr(self, "_opencode_supervisor", None)
+            if supervisor is None:
+                await self._send_message(
+                    message.chat_id,
+                    "OpenCode backend unavailable; cannot start session.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            try:
+                client = await supervisor.get_client(new_workspace_path)
+                session = await client.create_session(directory=str(new_workspace_path))
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.newt.opencode.session.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Created worktree but failed to start OpenCode session.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            session_id = extract_session_id(session, allow_fallback_id=True)
+            if not session_id:
+                await self._send_message(
+                    message.chat_id,
+                    "Created worktree but failed to start OpenCode session.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+
+            def apply_session(record: "TelegramTopicRecord") -> None:
+                record.active_thread_id = session_id
+                if session_id in record.thread_ids:
+                    record.thread_ids.remove(session_id)
+                record.thread_ids.insert(0, session_id)
+                if len(record.thread_ids) > MAX_TOPIC_THREAD_HISTORY:
+                    record.thread_ids = record.thread_ids[:MAX_TOPIC_THREAD_HISTORY]
+
+            await self._router.update_topic(
+                message.chat_id, message.thread_id, apply_session
+            )
+            thread_id = session_id
+        else:
+            try:
+                client = await self._client_for_workspace(str(new_workspace_path))
+            except AppServerUnavailableError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Created worktree but app server unavailable. Try sending a message.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            if client is None:
+                await self._send_message(
+                    message.chat_id,
+                    "Created worktree but workspace unavailable.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            try:
+                thread = await client.thread_start(str(new_workspace_path), agent=agent)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.newt.thread_start.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Created worktree but failed to start thread.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            thread_id = _extract_thread_id(thread)
+            if not thread_id:
+                await self._send_message(
+                    message.chat_id,
+                    "Created worktree but failed to start thread.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._apply_thread_result(
+                message.chat_id, message.thread_id, thread, active_thread_id=thread_id
+            )
+
+        effort_label = (
+            record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
+        )
+        await self._send_message(
+            message.chat_id,
+            "\n".join(
+                [
+                    f"Created worktree `{snapshot.id}` from `{base_repo_id}`.",
+                    f"Directory: {new_workspace_path}",
+                    f"Started new thread {thread_id}.",
                     f"Agent: {agent}",
                     f"Model: {record.model or 'default'}",
                     f"Effort: {effort_label}",

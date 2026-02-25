@@ -41,6 +41,11 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
+                    "name": "newt",
+                    "description": "Create a new worktree and start a fresh chat session",
+                },
+                {
+                    "type": SUB_COMMAND,
                     "name": "debug",
                     "description": "Show debug info for troubleshooting",
                 },
