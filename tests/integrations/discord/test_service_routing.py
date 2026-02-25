@@ -32,6 +32,7 @@ class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
         self.followup_messages: list[dict[str, Any]] = []
+        self.channel_messages: list[dict[str, Any]] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
@@ -52,6 +53,12 @@ class _FakeRest:
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        self.channel_messages.append(
+            {
+                "channel_id": channel_id,
+                "payload": payload,
+            }
+        )
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
 
     async def create_followup_message(
@@ -985,9 +992,59 @@ async def test_car_update_starts_worker_with_defaults(
         assert observed["update_target"] == "both"
         assert observed["repo_ref"] == "main"
         assert "codex-autorunner.git" in observed["repo_url"]
+        assert observed["notify_platform"] == "discord"
+        assert observed["notify_context"] == {"chat_id": "channel-1"}
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "update started (both)" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_run_forever_sends_pending_update_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        discord_service_module,
+        "_read_update_status",
+        lambda: {
+            "status": "ok",
+            "message": "Update completed successfully.",
+            "notify_platform": "discord",
+            "notify_context": {"chat_id": "channel-1"},
+            "notify_sent_at": None,
+        },
+    )
+    marked: list[dict[str, Any]] = []
+
+    def _fake_mark_update_status_notified(**kwargs: Any) -> None:
+        marked.append(kwargs)
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "mark_update_status_notified",
+        _fake_mark_update_status_notified,
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.channel_messages) == 1
+        content = rest.channel_messages[0]["payload"]["content"].lower()
+        assert "update status: ok" in content
+        assert marked
     finally:
         await store.close()
 

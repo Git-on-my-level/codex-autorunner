@@ -38,6 +38,7 @@ from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from ..chat.service import ChatBotServiceCore
+from ..chat.update_notifier import ChatUpdateStatusNotifier
 from .adapter import (
     TelegramBotClient,
     TelegramCallbackQuery,
@@ -350,6 +351,16 @@ class TelegramBotService(
         self._last_update_ids: dict[str, int] = {}
         self._last_update_persisted_at: dict[str, float] = {}
         self._spawned_tasks: set[asyncio.Task[Any]] = set()
+        self._update_status_notifier = ChatUpdateStatusNotifier(
+            platform="telegram",
+            logger=self._logger,
+            read_status=self._read_update_status,
+            send_notice=self._send_update_status_notice,
+            spawn_task=self._spawn_task,
+            mark_notified=self._mark_update_notified,
+            format_status=self._format_update_status_message,
+            running_message="Update still running. Use /update status for the latest state.",
+        )
         self._outbox_manager = TelegramOutboxManager(
             self._store,
             send_message=self._send_message,
