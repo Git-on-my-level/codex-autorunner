@@ -1021,3 +1021,139 @@ async def test_car_update_rejects_invalid_target(tmp_path: Path) -> None:
         assert "unsupported update target" in content
     finally:
         await store.close()
+
+
+def _make_failing_orchestrator(workspace_root: Path) -> Any:
+    class FailingOrchestrator:
+        async def run_turn(
+            self,
+            agent: str,
+            messages: list[dict[str, Any]],
+            *,
+            model_override: str | None = None,
+            session_key: str,
+            session_id: str | None = None,
+            workspace_root: Path,
+            reasoning_effort: str | None = None,
+            autorunner_effort_override: str | None = None,
+        ) -> Any:
+            raise RuntimeError("Simulated backend error")
+
+        def get_thread_id(self, session_key: str) -> str | None:
+            return None
+
+        def set_thread_id(self, session_key: str, thread_id: str) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    return FailingOrchestrator()
+
+
+@pytest.mark.anyio
+async def test_car_command_handles_turn_failure(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id=None,
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="new", options=[])])
+
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        backend_orchestrator_factory=_make_failing_orchestrator,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) >= 1
+        last_response = rest.interaction_responses[-1]
+        content = last_response["payload"]["data"]["content"].lower()
+        assert "error" in content or "failed" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_command_raises_on_invalid_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="bind",
+                options=[
+                    {"type": 3, "name": "workspace", "value": "/nonexistent/path"}
+                ],
+            )
+        ]
+    )
+
+    class RaiseErrorBackendOrchestrator:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def run_turn(
+            self,
+            agent: str,
+            messages: list[dict[str, Any]],
+            *,
+            model_override: str | None = None,
+            session_key: str,
+            session_id: str | None = None,
+            workspace_root: Path,
+            reasoning_effort: str | None = None,
+            autorunner_effort_override: str | None = None,
+        ) -> Any:
+            raise RuntimeError("Simulated backend error")
+
+        def get_thread_id(self, session_key: str) -> str | None:
+            return None
+
+        def set_thread_id(self, session_key: str, thread_id: str) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "BackendOrchestrator",
+        RaiseErrorBackendOrchestrator,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) >= 1
+        last_response = rest.interaction_responses[-1]
+        content = last_response["payload"]["data"]["content"].lower()
+        assert "workspace path does not exist" in content
+    finally:
+        await store.close()

@@ -292,6 +292,13 @@ class DiscordBotService:
             return
 
     def _allowlist_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
+        if isinstance(event, ChatInteractionEvent):
+            # Interaction denials should return an ephemeral response rather than
+            # being dropped at dispatcher level.
+            return True
+        return self._allowlist_allows_context(context)
+
+    def _allowlist_allows_context(self, context: DispatchContext) -> bool:
         fake_payload = {
             "channel_id": context.chat_id,
             "guild_id": context.thread_id if context.thread_id else None,
@@ -330,6 +337,14 @@ class DiscordBotService:
             )
             return
 
+        if not self._allowlist_allows_context(context):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This Discord command is not authorized for this channel/user/guild.",
+            )
+            return
+
         if payload_data.get("type") == "component":
             custom_id = payload_data.get("component_id")
             if not custom_id:
@@ -360,8 +375,20 @@ class DiscordBotService:
         command = ingress.command if ingress is not None else ""
         guild_id = payload_data.get("guild_id")
 
+        if ingress is None:
+            self._logger.warning(
+                "handle_normalized_interaction: failed to canonicalize command ingress (payload=%s)",
+                payload_data,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not parse this interaction. Please retry the command.",
+            )
+            return
+
         try:
-            if ingress is not None and ingress.command_path[:1] == ("car",):
+            if ingress.command_path[:1] == ("car",):
                 await self._handle_car_command(
                     interaction_id,
                     interaction_token,
@@ -371,7 +398,7 @@ class DiscordBotService:
                     command_path=ingress.command_path,
                     options=ingress.options,
                 )
-            elif ingress is not None and ingress.command_path[:1] == ("pma",):
+            elif ingress.command_path[:1] == ("pma",):
                 await self._handle_pma_command_from_normalized(
                     interaction_id,
                     interaction_token,
@@ -1073,6 +1100,14 @@ class DiscordBotService:
         guild_id: Optional[str],
         command: str,
     ) -> None:
+        if not self._config.pma_enabled:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+            )
+            return
+
         subcommand = command.split(":")[-1] if ":" in command else "status"
         if subcommand == "on":
             await self._handle_pma_on(
@@ -1287,7 +1322,7 @@ class DiscordBotService:
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
-            event = self._chat_adapter.enqueue_interaction_event(payload)
+            event = self._chat_adapter.parse_interaction_event(payload)
             if event is not None:
                 await self._dispatcher.dispatch(event, self._handle_chat_event)
         elif event_type == "MESSAGE_CREATE":
