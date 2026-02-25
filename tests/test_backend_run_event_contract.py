@@ -123,6 +123,62 @@ async def test_codex_backend_run_turn_events_timeout_emits_failed_terminal(
     assert "timeout" in events[-1].error_message.lower()
 
 
+@pytest.mark.asyncio
+async def test_codex_backend_run_turn_events_keeps_completion_event_when_wait_and_queue_finish_together(
+    tmp_path: Path,
+) -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=tmp_path,
+    )
+    backend._thread_id = "thread-123"
+
+    final_text = "Shipped cleanly."
+
+    async def _wait(*, timeout: object = None) -> object:
+        _ = timeout
+        await backend._handle_notification(
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-123",
+                    "turnId": "turn-123",
+                    "item": {"type": "agentMessage", "text": final_text},
+                },
+            }
+        )
+        return MagicMock(
+            final_message="Intermediary status update",
+            agent_messages=["Intermediary status update"],
+            raw_events=[],
+        )
+
+    with patch.object(
+        backend, "_ensure_client", new_callable=AsyncMock
+    ) as ensure_client:
+        client = MagicMock()
+        handle = MagicMock()
+        handle.turn_id = "turn-123"
+        handle.wait = AsyncMock(side_effect=_wait)
+        client.turn_start = AsyncMock(return_value=handle)
+        ensure_client.return_value = client
+
+        events = [
+            event
+            async for event in backend.run_turn_events("thread-123", "hello codex")
+        ]
+
+    _assert_turn_contract(events)
+    assistant_deltas = [
+        event.content
+        for event in events
+        if isinstance(event, OutputDelta) and event.delta_type == "assistant_stream"
+    ]
+    assert final_text in assistant_deltas
+    assert isinstance(events[-1], Completed)
+    assert events[-1].final_message == final_text
+
+
 def test_codex_notification_parser_golden_transcript() -> None:
     backend = CodexAppServerBackend(
         supervisor=MagicMock(),

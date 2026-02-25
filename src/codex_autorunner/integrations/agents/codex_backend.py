@@ -84,6 +84,27 @@ def _normalize_tool_name(params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     return "", {}
 
 
+def _extract_agent_message_text(item: Dict[str, Any]) -> str:
+    text = item.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+    content = item.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for entry in content:
+            if not isinstance(entry, dict):
+                continue
+            entry_type = entry.get("type")
+            if entry_type not in (None, "output_text", "text", "message"):
+                continue
+            candidate = entry.get("text")
+            if isinstance(candidate, str) and candidate.strip():
+                parts.append(candidate)
+        if parts:
+            return "".join(parts)
+    return ""
+
+
 class CodexAppServerBackend(AgentBackend):
     def __init__(
         self,
@@ -150,6 +171,7 @@ class CodexAppServerBackend(AgentBackend):
 
         self._circuit_breaker = CircuitBreaker("CodexAppServer", logger=_logger)
         self._event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
+        self._latest_completed_agent_message: str = ""
 
     async def _ensure_client(self) -> CodexAppServerClient:
         if self._client is None:
@@ -245,6 +267,7 @@ class CodexAppServerBackend(AgentBackend):
         self, session_id: str, message: str
     ) -> AsyncGenerator[AgentEvent, None]:
         client = await self._ensure_client()
+        self._latest_completed_agent_message = ""
 
         if session_id:
             self._thread_id = session_id
@@ -282,13 +305,7 @@ class CodexAppServerBackend(AgentBackend):
         yield AgentEvent.stream_delta(content=message, delta_type="user_message")
 
         result = await handle.wait(timeout=self._turn_timeout_seconds)
-        final_text = str(getattr(result, "final_message", "") or "")
-        if not final_text.strip():
-            final_text = "\n\n".join(
-                msg.strip()
-                for msg in getattr(result, "agent_messages", [])
-                if isinstance(msg, str) and msg.strip()
-            )
+        final_text = self._final_text_from_result(result)
 
         for event_data in result.raw_events:
             yield self._parse_raw_event(event_data)
@@ -299,6 +316,7 @@ class CodexAppServerBackend(AgentBackend):
         self, session_id: str, message: str
     ) -> AsyncGenerator[RunEvent, None]:
         client = await self._ensure_client()
+        self._latest_completed_agent_message = ""
 
         if session_id:
             self._thread_id = session_id
@@ -364,18 +382,17 @@ class CodexAppServerBackend(AgentBackend):
                 )
 
                 if wait_task in done_set:
-                    if get_task in pending_set:
+                    completion_event: Optional[RunEvent] = None
+                    if get_task in done_set:
+                        completion_event = get_task.result()
+                    elif get_task in pending_set:
                         get_task.cancel()
                     result = wait_task.result()
-                    final_text = str(getattr(result, "final_message", "") or "")
-                    if not final_text.strip():
-                        final_text = "\n\n".join(
-                            msg.strip()
-                            for msg in getattr(result, "agent_messages", [])
-                            if isinstance(msg, str) and msg.strip()
-                        )
+                    final_text = self._final_text_from_result(result)
                     # raw_events already contain the same notifications we streamed
                     # through _event_queue; skipping here avoids double-emitting.
+                    if completion_event:
+                        yield completion_event
                     while not self._event_queue.empty():
                         extra = self._event_queue.get_nowait()
                         if extra:
@@ -396,6 +413,18 @@ class CodexAppServerBackend(AgentBackend):
             if not wait_task.done():
                 wait_task.cancel()
             yield Failed(timestamp=now_iso(), error_message=str(e))
+
+    def _final_text_from_result(self, result: Any) -> str:
+        if self._latest_completed_agent_message.strip():
+            return self._latest_completed_agent_message
+        final_text = str(getattr(result, "final_message", "") or "")
+        if final_text.strip():
+            return final_text
+        return "\n\n".join(
+            msg.strip()
+            for msg in getattr(result, "agent_messages", [])
+            if isinstance(msg, str) and msg.strip()
+        )
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         if False:
@@ -470,6 +499,12 @@ class CodexAppServerBackend(AgentBackend):
         thread_id = params.get("threadId") or params.get("thread_id")
         if self._thread_id and thread_id and thread_id != self._thread_id:
             return
+        if method == "item/completed":
+            item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "agentMessage":
+                latest_text = _extract_agent_message_text(item)
+                if latest_text.strip():
+                    self._latest_completed_agent_message = latest_text
         _logger.debug("Received notification: %s", method)
         run_event = self._map_to_run_event(notification)
         if run_event:
@@ -526,8 +561,8 @@ class CodexAppServerBackend(AgentBackend):
                 self._clear_reasoning_buffers_for_params(params)
                 return None
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
+                text = _extract_agent_message_text(item)
+                if text.strip():
                     return OutputDelta(
                         timestamp=now_iso(),
                         content=text,
@@ -595,8 +630,8 @@ class CodexAppServerBackend(AgentBackend):
         if method == "item/completed":
             item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
+                text = _extract_agent_message_text(item)
+                if text.strip():
                     return AgentEvent.stream_delta(
                         content=text, delta_type="assistant_stream"
                     )
