@@ -39,6 +39,7 @@ from ...core.ports.run_event import (
     OutputDelta,
     RunNotice,
     Started,
+    TokenUsage,
     ToolCall,
 )
 from ...core.state import RunnerState
@@ -84,6 +85,7 @@ from ...integrations.github.service import (
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
+from ..telegram.helpers import _extract_context_usage_percent
 from ..telegram.progress_stream import TurnProgressTracker, render_progress_text
 from .adapter import DiscordChatAdapter
 from .allowlist import DiscordAllowlist, allowlist_allows
@@ -226,6 +228,9 @@ class DiscordBotService:
             allowlist_predicate=lambda event, context: self._allowlist_predicate(
                 event, context
             ),
+            bypass_predicate=lambda event, context: self._bypass_predicate(
+                event, context
+            ),
         )
         self._backend_orchestrators: dict[str, BackendOrchestrator] = {}
         self._backend_lock = asyncio.Lock()
@@ -308,12 +313,24 @@ class DiscordBotService:
             return
 
     def _allowlist_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
+        if isinstance(event, ChatInteractionEvent):
+            # Interaction denials should return an ephemeral response rather than
+            # being dropped at dispatcher level.
+            return True
+        return self._allowlist_allows_context(context)
+
+    def _allowlist_allows_context(self, context: DispatchContext) -> bool:
         fake_payload = {
             "channel_id": context.chat_id,
             "guild_id": context.thread_id if context.thread_id else None,
             "member": {"user": {"id": context.user_id}} if context.user_id else None,
         }
         return allowlist_allows(fake_payload, self._allowlist)
+
+    def _bypass_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
+        if isinstance(event, ChatInteractionEvent):
+            return True
+        return False
 
     async def _handle_normalized_interaction(
         self, event: ChatInteractionEvent, context: DispatchContext
@@ -341,6 +358,37 @@ class DiscordBotService:
             )
             return
 
+        if not self._allowlist_allows_context(context):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This Discord command is not authorized for this channel/user/guild.",
+            )
+            return
+
+        if payload_data.get("type") == "component":
+            custom_id = payload_data.get("component_id")
+            if not custom_id:
+                self._logger.debug(
+                    "handle_normalized_interaction: missing component_id (interaction_id=%s)",
+                    interaction_id,
+                )
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "I could not identify this interaction action. Please retry.",
+                )
+                return
+            await self._handle_component_interaction_normalized(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                channel_id=channel_id,
+                custom_id=custom_id,
+                values=payload_data.get("values"),
+                guild_id=payload_data.get("guild_id"),
+            )
+            return
+
         ingress = canonicalize_command_ingress(
             command=payload_data.get("command"),
             options=payload_data.get("options"),
@@ -348,8 +396,20 @@ class DiscordBotService:
         command = ingress.command if ingress is not None else ""
         guild_id = payload_data.get("guild_id")
 
+        if ingress is None:
+            self._logger.warning(
+                "handle_normalized_interaction: failed to canonicalize command ingress (payload=%s)",
+                payload_data,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not parse this interaction. Please retry the command.",
+            )
+            return
+
         try:
-            if ingress is not None and ingress.command_path[:1] == ("car",):
+            if ingress.command_path[:1] == ("car",):
                 await self._handle_car_command(
                     interaction_id,
                     interaction_token,
@@ -359,7 +419,7 @@ class DiscordBotService:
                     command_path=ingress.command_path,
                     options=ingress.options,
                 )
-            elif ingress is not None and ingress.command_path[:1] == ("pma",):
+            elif ingress.command_path[:1] == ("pma",):
                 await self._handle_pma_command_from_normalized(
                     interaction_id,
                     interaction_token,
@@ -1126,6 +1186,12 @@ class DiscordBotService:
                     else:
                         tracker.add_action("notice", notice, "update")
                     await _edit_progress()
+                elif isinstance(run_event, TokenUsage):
+                    token_usage = run_event.usage
+                    if isinstance(token_usage, dict):
+                        tracker.context_usage_percent = _extract_context_usage_percent(
+                            token_usage
+                        )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
                     tracker.set_label("done")
@@ -1589,6 +1655,14 @@ class DiscordBotService:
         guild_id: Optional[str],
         command: str,
     ) -> None:
+        if not self._config.pma_enabled:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+            )
+            return
+
         subcommand = command.split(":")[-1] if ":" in command else "status"
         if subcommand == "on":
             await self._handle_pma_on(
@@ -1803,7 +1877,9 @@ class DiscordBotService:
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
-            await self._handle_interaction(payload)
+            event = self._chat_adapter.parse_interaction_event(payload)
+            if event is not None:
+                await self._dispatcher.dispatch(event, self._handle_chat_event)
         elif event_type == "MESSAGE_CREATE":
             event = self._chat_adapter.parse_message_event(payload)
             if event is not None:
@@ -3950,6 +4026,90 @@ class DiscordBotService:
                 self._logger,
                 logging.ERROR,
                 "discord.component.unhandled_error",
+                custom_id=custom_id,
+                channel_id=channel_id,
+                exc=exc,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "An unexpected error occurred. Please try again later.",
+            )
+
+    async def _handle_component_interaction_normalized(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        custom_id: str,
+        values: Optional[list[str]] = None,
+        guild_id: Optional[str] = None,
+    ) -> None:
+        try:
+            if custom_id == "bind_select":
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a repository and try again.",
+                    )
+                    return
+                await self._handle_bind_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                    selected_repo_id=values[0],
+                )
+                return
+
+            if custom_id == "flow_runs_select":
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a run and try again.",
+                    )
+                    return
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id, interaction_token, channel_id=channel_id
+                )
+                if workspace_root:
+                    await self._handle_flow_status(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": values[0]},
+                    )
+                return
+
+            if custom_id.startswith("flow:"):
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id, interaction_token, channel_id=channel_id
+                )
+                if workspace_root:
+                    await self._handle_flow_button(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        custom_id=custom_id,
+                    )
+                return
+
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Unknown component: {custom_id}",
+            )
+        except DiscordTransientError as exc:
+            user_msg = exc.user_message or "An error occurred. Please try again later."
+            await self._respond_ephemeral(interaction_id, interaction_token, user_msg)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.component.normalized.unhandled_error",
                 custom_id=custom_id,
                 channel_id=channel_id,
                 exc=exc,

@@ -10,13 +10,18 @@ from typing import Any, Callable, Iterable, Sequence
 from .command_contract import COMMAND_CONTRACT, CommandContractEntry
 
 _DISCORD_SERVICE_PATH = Path("src/codex_autorunner/integrations/discord/service.py")
+_DISCORD_COMMANDS_PATH = Path("src/codex_autorunner/integrations/discord/commands.py")
 _TELEGRAM_TRIGGER_MODE_PATH = Path(
     "src/codex_autorunner/integrations/telegram/trigger_mode.py"
 )
 _TELEGRAM_MESSAGES_PATH = Path(
     "src/codex_autorunner/integrations/telegram/handlers/messages.py"
 )
+_TELEGRAM_COMMANDS_SPEC_PATH = Path(
+    "src/codex_autorunner/integrations/telegram/handlers/commands_spec.py"
+)
 _FUNCTION_NODE_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
+_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -53,12 +58,31 @@ def run_parity_checks(
     discord_service_text = _read_text(source_paths["discord_service"])
     telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
     telegram_messages_text = _read_text(source_paths["telegram_messages"])
+    discord_commands_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_COMMANDS_PATH,
+        )
+    )
+    telegram_commands_spec_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_TELEGRAM_COMMANDS_SPEC_PATH,
+        )
+    )
 
     discord_service_ast = _parse_module(discord_service_text)
     telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
     telegram_messages_ast = _parse_module(telegram_messages_text)
+    discord_commands_ast = _parse_module(discord_commands_text)
+    telegram_commands_spec_ast = _parse_module(telegram_commands_spec_text)
 
     return (
+        _check_contract_registry_entries_cataloged(
+            contract=contract,
+            discord_commands_ast=discord_commands_ast,
+            telegram_commands_spec_ast=telegram_commands_spec_ast,
+        ),
         _check_discord_contract_commands_routed(
             contract=contract,
             discord_service_ast=discord_service_ast,
@@ -135,6 +159,12 @@ def _source_unavailable_results(
     }
     return (
         ParityCheckResult(
+            id="contract.registry_entries_cataloged",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
             id="discord.contract_commands_routed",
             passed=True,
             message=message,
@@ -183,49 +213,178 @@ def _parse_module(source: str) -> ast.Module | None:
         return None
 
 
+def _check_contract_registry_entries_cataloged(
+    *,
+    contract: Sequence[CommandContractEntry],
+    discord_commands_ast: ast.Module | None,
+    telegram_commands_spec_ast: ast.Module | None,
+) -> ParityCheckResult:
+    discord_registered_paths = _extract_discord_registered_command_paths(
+        discord_commands_ast
+    )
+    telegram_registered_commands = _extract_telegram_registered_commands(
+        telegram_commands_spec_ast
+    )
+
+    if discord_registered_paths is None or telegram_registered_commands is None:
+        skipped_sources: list[str] = []
+        if discord_registered_paths is None:
+            skipped_sources.append("discord.commands")
+        if telegram_registered_commands is None:
+            skipped_sources.append("telegram.commands_spec")
+        return ParityCheckResult(
+            id="contract.registry_entries_cataloged",
+            passed=True,
+            message=(
+                "Skipped contract registry coverage check: command registries are "
+                "unavailable for static extraction."
+            ),
+            metadata={
+                "skipped": True,
+                "reason": "registry_sources_unavailable",
+                "missing_sources": skipped_sources,
+            },
+        )
+
+    contract_discord_paths = {
+        path for entry in contract for path in entry.discord_paths if path
+    }
+    contract_telegram_commands = {
+        command
+        for entry in contract
+        for command in entry.telegram_commands
+        if command.strip()
+    }
+
+    missing_discord_paths = sorted(discord_registered_paths - contract_discord_paths)
+    missing_telegram_commands = sorted(
+        telegram_registered_commands - contract_telegram_commands
+    )
+    stable_missing_surface = sorted(
+        entry.id
+        for entry in contract
+        if entry.status == "stable"
+        and (
+            not entry.discord_paths
+            or not any(name.strip() for name in entry.telegram_commands)
+        )
+    )
+
+    passed = (
+        not missing_discord_paths
+        and not missing_telegram_commands
+        and not stable_missing_surface
+    )
+    if passed:
+        message = (
+            "Contract catalogs all registered Telegram/Discord user-facing commands."
+        )
+    else:
+        message = (
+            "Contract is missing one or more registered commands (or stable "
+            "entries are missing per-surface mapping metadata)."
+        )
+
+    return ParityCheckResult(
+        id="contract.registry_entries_cataloged",
+        passed=passed,
+        message=message,
+        metadata={
+            "expected_discord_paths": [
+                _render_command_path(path) for path in sorted(discord_registered_paths)
+            ],
+            "missing_discord_paths": [
+                _render_command_path(path) for path in missing_discord_paths
+            ],
+            "expected_telegram_commands": sorted(telegram_registered_commands),
+            "missing_telegram_commands": missing_telegram_commands,
+            "stable_missing_surface_mapping": stable_missing_surface,
+        },
+    )
+
+
 def _check_discord_contract_commands_routed(
     *,
     contract: Sequence[CommandContractEntry],
     discord_service_ast: ast.Module | None,
 ) -> ParityCheckResult:
+    expected_stable_ids: list[str] = []
     missing_ids: list[str] = []
+    missing_non_stable_ids: list[str] = []
+    missing_non_stable_paths: dict[str, list[str]] = {}
 
     for entry in contract:
-        if _is_command_routed_in_discord_service(entry, discord_service_ast):
+        if not entry.discord_paths:
             continue
-        missing_ids.append(entry.id)
+
+        missing_paths = [
+            path
+            for path in entry.discord_paths
+            if not _is_discord_path_routed_in_service(path, discord_service_ast)
+        ]
+        if not missing_paths:
+            continue
+
+        if entry.status == "stable":
+            expected_stable_ids.append(entry.id)
+            missing_ids.append(entry.id)
+            continue
+
+        missing_non_stable_ids.append(entry.id)
+        missing_non_stable_paths[entry.id] = [
+            _render_command_path(path) for path in missing_paths
+        ]
+
+    for entry in contract:
+        if entry.status == "stable" and entry.discord_paths:
+            expected_stable_ids.append(entry.id)
+    expected_stable_ids = sorted(set(expected_stable_ids))
+    missing_ids = sorted(set(missing_ids))
+    missing_non_stable_ids = sorted(set(missing_non_stable_ids))
 
     passed = not missing_ids
     if passed:
-        message = "All contract commands are routed in Discord command handling."
+        if missing_non_stable_ids:
+            message = (
+                "All stable contract commands are routed in Discord command handling; "
+                "non-stable route gaps are reported as informational metadata."
+            )
+        else:
+            message = (
+                "All stable contract commands are routed in Discord command handling."
+            )
     else:
-        message = "Missing Discord route handling for one or more contract commands."
+        message = (
+            "Missing Discord route handling for one or more stable contract commands."
+        )
 
     return ParityCheckResult(
         id="discord.contract_commands_routed",
         passed=passed,
         message=message,
         metadata={
-            "expected_ids": [entry.id for entry in contract],
+            "expected_ids": expected_stable_ids,
             "missing_ids": missing_ids,
+            "missing_non_stable_ids": missing_non_stable_ids,
+            "missing_non_stable_paths": missing_non_stable_paths,
         },
     )
 
 
-def _is_command_routed_in_discord_service(
-    entry: CommandContractEntry,
+def _is_discord_path_routed_in_service(
+    path: tuple[str, ...],
     discord_service_ast: ast.Module | None,
 ) -> bool:
     if discord_service_ast is None:
         return False
 
-    prefix = entry.path[0] if entry.path else ""
+    prefix = path[0] if path else ""
 
     if prefix == "car":
-        return _module_has_command_path_route(discord_service_ast, entry.path)
+        return _module_has_command_path_route(discord_service_ast, path)
 
     if prefix == "pma":
-        subcommand = entry.path[1] if len(entry.path) > 1 else ""
+        subcommand = path[1] if len(path) > 1 else ""
         return _module_has_pma_subcommand_route(discord_service_ast, subcommand)
 
     return False
@@ -428,13 +587,35 @@ def _check_discord_interaction_component_guard_paths(
     *,
     discord_service_ast: ast.Module | None,
 ) -> ParityCheckResult:
-    interaction_handlers = _find_functions_by_name(
+    normalized_interaction_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_normalized_interaction",
+    )
+    legacy_interaction_handlers = _find_functions_by_name(
         discord_service_ast,
         "_handle_interaction",
     )
-    component_handlers = _find_functions_by_name(
+    interaction_handlers = (
+        normalized_interaction_handlers or legacy_interaction_handlers
+    )
+
+    normalized_component_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_component_interaction_normalized",
+    )
+    legacy_component_handlers = _find_functions_by_name(
         discord_service_ast,
         "_handle_component_interaction",
+    )
+    component_handlers = normalized_component_handlers or legacy_component_handlers
+
+    component_unhandled_error_event = (
+        "discord.component.normalized.unhandled_error"
+        if normalized_component_handlers
+        else "discord.component.unhandled_error"
+    )
+    component_missing_custom_id_functions = (
+        interaction_handlers if normalized_component_handlers else component_handlers
     )
 
     checks = {
@@ -458,7 +639,7 @@ def _check_discord_interaction_component_guard_paths(
             exact="An unexpected error occurred. Please try again later.",
         ),
         "component_missing_custom_id_response": _has_guard_response(
-            component_handlers,
+            component_missing_custom_id_functions,
             guard_predicate=lambda test: _condition_has_name_negation(
                 test, name="custom_id"
             ),
@@ -485,7 +666,7 @@ def _check_discord_interaction_component_guard_paths(
         ),
         "component_unhandled_error_logged": _has_log_event_call(
             component_handlers,
-            event_name="discord.component.unhandled_error",
+            event_name=component_unhandled_error_event,
         ),
         "component_unhandled_error_response": _has_call_with_string_argument(
             component_handlers,
@@ -499,13 +680,14 @@ def _check_discord_interaction_component_guard_paths(
 
     if passed:
         message = (
-            "Discord interaction/component handlers keep observable guards and "
+            "Discord interaction/component handlers on the active routing path keep "
+            "observable guards and "
             "explicit fallback responses."
         )
     else:
         message = (
-            "Discord interaction/component guard coverage is incomplete and may "
-            "allow silent handling regressions."
+            "Discord interaction/component guard coverage on the active routing path "
+            "is incomplete and may allow silent handling regressions."
         )
 
     return ParityCheckResult(
@@ -515,8 +697,161 @@ def _check_discord_interaction_component_guard_paths(
         metadata={
             "failed_predicates": failed_predicates,
             "predicates": checks,
+            "interaction_handler": (
+                "normalized" if normalized_interaction_handlers else "legacy"
+            ),
+            "component_handler": (
+                "normalized" if normalized_component_handlers else "legacy"
+            ),
         },
     )
+
+
+def _extract_discord_registered_command_paths(
+    tree: ast.Module | None,
+) -> set[tuple[str, ...]] | None:
+    if tree is None:
+        return None
+
+    constants = _module_literal_bindings(tree)
+    sub_command_type = constants.get("SUB_COMMAND", 1)
+    sub_command_group_type = constants.get("SUB_COMMAND_GROUP", 2)
+
+    functions = _find_functions_by_name(tree, "build_application_commands")
+    if not functions:
+        return None
+
+    return_value = _first_return_value(functions[0])
+    if return_value is None:
+        return None
+
+    commands = _evaluate_static_expr(return_value, names=constants)
+    if not isinstance(commands, list):
+        return None
+
+    paths: set[tuple[str, ...]] = set()
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        root_name = command.get("name")
+        options = command.get("options")
+        if not isinstance(root_name, str) or not isinstance(options, list):
+            continue
+
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_name = option.get("name")
+            option_type = option.get("type")
+            if not isinstance(option_name, str):
+                continue
+
+            if option_type == sub_command_type:
+                paths.add((root_name, option_name))
+                continue
+
+            if option_type != sub_command_group_type:
+                continue
+            nested_options = option.get("options")
+            if not isinstance(nested_options, list):
+                continue
+            for nested in nested_options:
+                if not isinstance(nested, dict):
+                    continue
+                nested_name = nested.get("name")
+                nested_type = nested.get("type")
+                if isinstance(nested_name, str) and nested_type == sub_command_type:
+                    paths.add((root_name, option_name, nested_name))
+
+    return paths
+
+
+def _extract_telegram_registered_commands(tree: ast.Module | None) -> set[str] | None:
+    if tree is None:
+        return None
+
+    functions = _find_functions_by_name(tree, "build_command_specs")
+    if not functions:
+        return None
+    return_value = _first_return_value(functions[0])
+    if not isinstance(return_value, ast.Dict):
+        return None
+
+    commands: set[str] = set()
+    for key in return_value.keys:
+        if key is None:
+            continue
+        literal = _string_constant_value(key)
+        if literal is not None:
+            commands.add(literal)
+    return commands
+
+
+def _module_literal_bindings(tree: ast.Module) -> dict[str, Any]:
+    names: dict[str, Any] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        value = _evaluate_static_expr(node.value, names=names)
+        if value is not _MISSING:
+            names[target.id] = value
+    return names
+
+
+def _first_return_value(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> ast.expr | None:
+    for statement in function.body:
+        if isinstance(statement, ast.Return) and statement.value is not None:
+            return statement.value
+    return None
+
+
+def _evaluate_static_expr(expr: ast.expr, *, names: dict[str, Any]) -> Any:
+    if isinstance(expr, ast.Constant):
+        return expr.value
+
+    if isinstance(expr, ast.Name):
+        return names.get(expr.id, _MISSING)
+
+    if isinstance(expr, ast.List):
+        values: list[Any] = []
+        for item in expr.elts:
+            value = _evaluate_static_expr(item, names=names)
+            if value is _MISSING:
+                return _MISSING
+            values.append(value)
+        return values
+
+    if isinstance(expr, ast.Tuple):
+        values: list[Any] = []
+        for item in expr.elts:
+            value = _evaluate_static_expr(item, names=names)
+            if value is _MISSING:
+                return _MISSING
+            values.append(value)
+        return tuple(values)
+
+    if isinstance(expr, ast.Dict):
+        result: dict[Any, Any] = {}
+        for key_expr, value_expr in zip(expr.keys, expr.values):
+            if key_expr is None:
+                return _MISSING
+            key = _evaluate_static_expr(key_expr, names=names)
+            value = _evaluate_static_expr(value_expr, names=names)
+            if key is _MISSING or value is _MISSING:
+                return _MISSING
+            result[key] = value
+        return result
+
+    return _MISSING
+
+
+def _render_command_path(path: tuple[str, ...]) -> str:
+    return ":".join(path)
 
 
 def _find_functions_by_name(

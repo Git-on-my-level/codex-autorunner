@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from codex_autorunner.integrations.chat import parity_checker
+from codex_autorunner.integrations.chat.command_contract import (
+    COMMAND_CONTRACT,
+    CommandContractEntry,
+)
 from codex_autorunner.integrations.chat.parity_checker import run_parity_checks
 
 
@@ -11,6 +15,45 @@ def test_parity_checker_passes_on_current_repo_layout() -> None:
     failures = [result for result in results if not result.passed]
 
     assert failures == []
+
+
+def test_parity_checker_fails_when_registry_command_is_uncataloged() -> None:
+    contract = tuple(entry for entry in COMMAND_CONTRACT if entry.id != "car.bind")
+    results_by_id = {
+        result.id: result for result in run_parity_checks(contract=contract)
+    }
+
+    coverage_check = results_by_id["contract.registry_entries_cataloged"]
+    assert not coverage_check.passed
+    assert "car:bind" in coverage_check.metadata["missing_discord_paths"]
+    assert "bind" in coverage_check.metadata["missing_telegram_commands"]
+
+
+def test_parity_checker_reports_non_stable_route_gaps_informationally(
+    tmp_path: Path,
+) -> None:
+    repo_root = _write_fixture_repo(tmp_path)
+    contract = (
+        CommandContractEntry(
+            id="car.future.partial",
+            path=("car", "future"),
+            requires_bound_workspace=False,
+            status="partial",
+            discord_paths=(("car", "future"),),
+            telegram_commands=("future",),
+        ),
+    )
+    results_by_id = {
+        result.id: result
+        for result in run_parity_checks(
+            repo_root=repo_root,
+            contract=contract,
+        )
+    }
+
+    route_check = results_by_id["discord.contract_commands_routed"]
+    assert route_check.passed
+    assert "car.future.partial" in route_check.metadata["missing_non_stable_ids"]
 
 
 def test_parity_checker_fails_when_contract_route_is_missing(tmp_path: Path) -> None:
@@ -337,27 +380,27 @@ def _build_discord_service_fixture(
 
     normalized_prefix_guard = (
         """
-    if ingress is not None and ingress.command_path[:1] == ("car",):
-        return
-    elif ingress is not None and ingress.command_path[:1] == ("pma",):
-        return
+        if ingress is not None and ingress.command_path[:1] == ("car",):
+            return
+        elif ingress is not None and ingress.command_path[:1] == ("pma",):
+            return
 """
         if not use_early_ingress_none_guard_in_normalized
         else """
-    if ingress is None:
-        return
-    if ingress.command_path[:1] == ("car",):
-        return
-    elif ingress.command_path[:1] == ("pma",):
-        return
+        if ingress is None:
+            return
+        if ingress.command_path[:1] == ("car",):
+            return
+        elif ingress.command_path[:1] == ("pma",):
+            return
 """
     )
     if use_truthy_ingress_guard_in_normalized:
         normalized_prefix_guard = """
-    if ingress and ingress.command_path[:1] == ("car",):
-        return
-    elif ingress and ingress.command_path[:1] == ("pma",):
-        return
+        if ingress and ingress.command_path[:1] == ("car",):
+            return
+        elif ingress and ingress.command_path[:1] == ("pma",):
+            return
 """
 
     interaction_pma_guard = (
@@ -431,11 +474,11 @@ def _handle_message_event(text: str) -> None:
     )
     component_missing_custom_id_response = (
         """
-        _respond_ephemeral(
-            "interaction-id",
-            "interaction-token",
-            "I could not identify this interaction action. Please retry.",
-        )
+            _respond_ephemeral(
+                "interaction-id",
+                "interaction-token",
+                "I could not identify this interaction action. Please retry.",
+            )
 """
         if include_component_missing_custom_id_response
         else ""
@@ -469,11 +512,48 @@ def _handle_message_event(text: str) -> None:
         + """
 
 def _handle_normalized_interaction(payload_data: dict[str, object]) -> None:
+    interaction_id = "interaction-id"
+    interaction_token = "interaction-token"
+
+    if payload_data.get("type") == "component":
+        custom_id = payload_data.get("component_id")
+        if not custom_id:
+"""
+        + component_missing_custom_id_response
+        + """
+            return
+        _handle_component_interaction_normalized(custom_id, payload_data.get("values"))
+        return
 """
         + normalized_ingress
+        + """
+    if ingress is None:
+"""
+        + interaction_parse_failure_response
+        + """
+        return
+
+    try:
+"""
         + normalized_prefix_guard
         + """
-    _ = "Command not implemented yet for Discord."
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            "Command not implemented yet for Discord.",
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            40,
+            "discord.interaction.unhandled_error",
+            exc=exc,
+        )
+        _respond_ephemeral(
+            "interaction-id",
+            "interaction-token",
+            "An unexpected error occurred. Please try again later.",
+        )
 
 
 def _handle_interaction(command_path: tuple[str, ...], options: dict[str, object]) -> None:
@@ -511,17 +591,9 @@ def _handle_interaction(command_path: tuple[str, ...], options: dict[str, object
         )
 
 
-def _handle_component_interaction(custom_id: str | None) -> None:
-    if not custom_id:
-        self._logger.debug("missing custom_id")
-"""
-        + component_missing_custom_id_response
-        + """
-        return
-
+def _handle_component_interaction_normalized(custom_id: str, values: list[str] | None) -> None:
     try:
         if custom_id == "bind_select":
-            values = []
             if not values:
 """
         + component_bind_value_response
@@ -545,7 +617,7 @@ def _handle_component_interaction(custom_id: str | None) -> None:
         log_event(
             logger,
             40,
-            "discord.component.unhandled_error",
+            "discord.component.normalized.unhandled_error",
             exc=exc,
         )
         _respond_ephemeral(

@@ -131,6 +131,14 @@ class DiscordChatAdapter(ChatAdapter):
             self._enqueue_event(event)
         return event
 
+    def parse_interaction_event(
+        self, interaction_payload: dict[str, Any]
+    ) -> Optional[ChatInteractionEvent]:
+        event = self._parse_interaction_to_event(interaction_payload)
+        if isinstance(event, ChatInteractionEvent):
+            return event
+        return None
+
     def enqueue_message_event(
         self, message_payload: dict[str, Any]
     ) -> Optional[ChatEvent]:
@@ -317,6 +325,11 @@ class DiscordChatAdapter(ChatAdapter):
         if is_component_interaction(payload):
             custom_id = extract_component_custom_id(payload)
             payload_data["component_id"] = custom_id
+            data = payload.get("data")
+            if isinstance(data, dict):
+                values = data.get("values")
+                if isinstance(values, list):
+                    payload_data["values"] = values
             payload_data["type"] = "component"
         else:
             command_path, options = extract_command_path_and_options(payload)

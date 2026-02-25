@@ -141,6 +141,19 @@ def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):
     [
         (
             ParityCheckResult(
+                id="contract.registry_entries_cataloged",
+                passed=False,
+                message="registry missing",
+                metadata={
+                    "missing_discord_paths": ["car:bind"],
+                    "missing_telegram_commands": ["bind"],
+                },
+            ),
+            "command registry coverage is incomplete",
+            "Update `COMMAND_CONTRACT`",
+        ),
+        (
+            ParityCheckResult(
                 id="discord.contract_commands_routed",
                 passed=False,
                 message="missing route",
