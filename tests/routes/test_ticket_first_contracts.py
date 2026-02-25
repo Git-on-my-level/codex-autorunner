@@ -164,6 +164,34 @@ Body updated
         assert updated_payload.get("chat_key") == first_chat_key
 
 
+def test_create_ticket_appends_after_highest_index_when_gaps_exist(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---\n\nOne\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-003.md").write_text(
+        "---\nagent: codex\ndone: false\n---\n\nThree\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/flows/ticket_flow/tickets",
+            json={"agent": "codex", "title": "Demo", "body": "Body"},
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        assert payload["index"] == 4
+        assert (ticket_dir / "TICKET-004.md").exists()
+        assert not (ticket_dir / "TICKET-002.md").exists()
+
+
 def test_get_ticket_by_index_returns_body_on_invalid_frontmatter(tmp_path, monkeypatch):
     """Single-ticket endpoint should mirror list behavior when frontmatter is broken."""
 

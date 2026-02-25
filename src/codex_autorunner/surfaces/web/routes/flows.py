@@ -1188,15 +1188,14 @@ You are the first ticket in a new ticket_flow run.
 
         # Find next available index
         existing_paths = list_ticket_paths(ticket_dir)
-        existing_indices = set()
+        existing_indices = []
         for p in existing_paths:
             idx = parse_ticket_index(p.name)
             if idx is not None:
-                existing_indices.add(idx)
+                existing_indices.append(idx)
 
-        next_index = 1
-        while next_index in existing_indices:
-            next_index += 1
+        # Always append at the end of the sequence; do not backfill gaps.
+        next_index = (max(existing_indices) + 1) if existing_indices else 1
 
         # Build frontmatter (quote scalars to avoid YAML parse issues with colons, etc.)
         def _quote(val: Optional[str]) -> str:
