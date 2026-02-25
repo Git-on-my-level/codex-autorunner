@@ -121,7 +121,7 @@ async def deliver_pma_output_to_active_sink(
     chat_id, thread_id = target
 
     chunks = chunk_text(
-        assistant_text, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
+        assistant_text, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=False
     )
     if not chunks:
         return False
@@ -175,7 +175,7 @@ async def _deliver_to_discord(
         discord_state_path = hub_root / ".codex-autorunner" / "discord_state.sqlite3"
 
     chunks = chunk_text(
-        assistant_text, max_len=DISCORD_MAX_MESSAGE_LENGTH, with_numbering=True
+        assistant_text, max_len=DISCORD_MAX_MESSAGE_LENGTH, with_numbering=False
     )
     if not chunks:
         return False

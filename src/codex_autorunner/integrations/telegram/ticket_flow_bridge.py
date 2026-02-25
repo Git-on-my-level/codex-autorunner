@@ -401,7 +401,7 @@ class TelegramTicketFlowBridge:
             chunks = chunk_message(
                 full_text,
                 max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
-                with_numbering=True,
+                with_numbering=False,
             )
         else:
             chunks = [full_text]

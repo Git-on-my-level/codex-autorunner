@@ -39,6 +39,32 @@ async def test_pma_delivery_legacy_telegram_sink_still_enqueues_outbox(
 
 
 @pytest.mark.anyio
+async def test_pma_delivery_telegram_chunking_has_no_part_prefix(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    sink_store = PmaActiveSinkStore(hub_root)
+    sink_store.set_telegram(chat_id=123, thread_id=456)
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text=("telegram chunk " * 500),
+        turn_id="turn-1b",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+    )
+    assert delivered is True
+
+    store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
+    try:
+        outbox = await store.list_outbox()
+    finally:
+        await store.close()
+    assert len(outbox) >= 2
+    assert all(not record.text.startswith("Part ") for record in outbox)
+
+
+@pytest.mark.anyio
 async def test_pma_delivery_chat_discord_enqueues_to_discord_outbox(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -74,6 +100,40 @@ async def test_pma_delivery_chat_discord_enqueues_to_discord_outbox(
     assert len(outbox) == 1
     assert outbox[0].channel_id == "123456789012345678"
     assert "discord sink text" in outbox[0].payload_json.get("content", "")
+
+
+@pytest.mark.anyio
+async def test_pma_delivery_discord_chunking_has_no_part_prefix(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    sink_store = PmaActiveSinkStore(hub_root)
+    sink_store.set_chat(
+        "discord",
+        chat_id="123456789012345678",
+    )
+    discord_state_path = hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text=("discord chunk " * 500),
+        turn_id="turn-2b",
+        lifecycle_event={"event_type": "flow_paused"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=discord_state_path,
+    )
+    assert delivered is True
+
+    store = DiscordStateStore(discord_state_path)
+    try:
+        await store.initialize()
+        outbox = await store.list_outbox()
+    finally:
+        await store.close()
+    assert len(outbox) >= 2
+    for record in outbox:
+        content = str(record.payload_json.get("content", ""))
+        assert not content.startswith("Part ")
 
 
 @pytest.mark.anyio

@@ -1260,7 +1260,7 @@ class TelegramBotClient:
         disable_web_page_preview: bool = True,
         max_len: int = TELEGRAM_MAX_MESSAGE_LENGTH,
     ) -> list[dict[str, Any]]:
-        chunks = chunk_message(text, max_len=max_len, with_numbering=True)
+        chunks = chunk_message(text, max_len=max_len, with_numbering=False)
         if not chunks:
             return []
         responses: list[dict[str, Any]] = []

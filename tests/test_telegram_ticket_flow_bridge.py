@@ -85,6 +85,7 @@ async def test_pause_dispatch_sends_text_and_attachments(tmp_path: Path) -> None
 
     # Chunked text should produce more than one message
     assert len(calls) >= 2
+    assert all(not text.startswith("Part ") for _, text, _ in calls)
     assert docs == ["note.txt"]
     assert record.last_ticket_dispatch_seq == "run1:0001"
 
