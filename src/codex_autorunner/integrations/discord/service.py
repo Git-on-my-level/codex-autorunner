@@ -43,6 +43,7 @@ from ...core.ports.run_event import (
     ToolCall,
 )
 from ...core.state import RunnerState
+from ...core.state_roots import resolve_global_state_root
 from ...core.update import (
     UpdateInProgressError,
     _normalize_update_ref,
@@ -57,6 +58,9 @@ from ...core.utils import (
 )
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
+from ...integrations.app_server.client import CodexAppServerClient
+from ...integrations.app_server.env import build_app_server_env
+from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -85,7 +89,11 @@ from ...integrations.github.service import (
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
-from ..telegram.helpers import _extract_context_usage_percent
+from ..telegram.helpers import (
+    _coerce_thread_list,
+    _extract_context_usage_percent,
+    _extract_thread_list_cursor,
+)
 from ..telegram.progress_stream import TurnProgressTracker, render_progress_text
 from .adapter import DiscordChatAdapter
 from .allowlist import DiscordAllowlist, allowlist_allows
@@ -133,6 +141,14 @@ DISCORD_TURN_PROGRESS_MAX_ACTIONS = 8
 DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS = 120
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
+THREAD_LIST_MAX_PAGES = 5
+THREAD_LIST_PAGE_LIMIT = 100
+APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
+APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
+
+
+class AppServerUnavailableError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -234,6 +250,9 @@ class DiscordBotService:
         )
         self._backend_orchestrators: dict[str, BackendOrchestrator] = {}
         self._backend_lock = asyncio.Lock()
+        self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
+        self._app_server_lock = asyncio.Lock()
+        self._app_server_state_root = resolve_global_state_root() / "workspaces"
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
         if generated_hub_config.exists():
@@ -1029,6 +1048,121 @@ class DiscordBotService:
             self._backend_orchestrators[key] = orchestrator
             return orchestrator
 
+    def _build_workspace_env(
+        self, workspace_root: Path, workspace_id: str, state_dir: Path
+    ) -> dict[str, str]:
+        repo_config = load_repo_config(workspace_root, hub_path=self._hub_config_path)
+        command = (
+            repo_config.app_server.command
+            if repo_config and repo_config.app_server and repo_config.app_server.command
+            else ["codex", "app-server"]
+        )
+        return build_app_server_env(
+            command,
+            workspace_root,
+            state_dir,
+            logger=self._logger,
+            event_prefix="discord",
+        )
+
+    async def _app_server_supervisor_for_workspace(
+        self, workspace_root: Path
+    ) -> WorkspaceAppServerSupervisor:
+        key = str(workspace_root)
+        async with self._app_server_lock:
+            existing = self._app_server_supervisors.get(key)
+            if existing is not None:
+                return existing
+            repo_config = load_repo_config(
+                workspace_root,
+                hub_path=self._hub_config_path,
+            )
+            command = (
+                repo_config.app_server.command
+                if repo_config
+                and repo_config.app_server
+                and repo_config.app_server.command
+                else ["codex", "app-server"]
+            )
+            supervisor = WorkspaceAppServerSupervisor(
+                command,
+                state_root=self._app_server_state_root,
+                env_builder=self._build_workspace_env,
+                logger=self._logger,
+            )
+            self._app_server_supervisors[key] = supervisor
+            return supervisor
+
+    async def _client_for_workspace(
+        self, workspace_path: Optional[str]
+    ) -> Optional[CodexAppServerClient]:
+        if not isinstance(workspace_path, str) or not workspace_path.strip():
+            return None
+        try:
+            workspace_root = canonicalize_path(Path(workspace_path))
+        except Exception:
+            return None
+        if not workspace_root.exists() or not workspace_root.is_dir():
+            return None
+        delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
+        timeout = 30.0
+        started_at = time.monotonic()
+        while True:
+            try:
+                supervisor = await self._app_server_supervisor_for_workspace(
+                    workspace_root
+                )
+                return await supervisor.get_client(workspace_root)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.app_server.start_failed",
+                    workspace_path=str(workspace_root),
+                    exc=exc,
+                )
+                elapsed = time.monotonic() - started_at
+                if elapsed >= timeout:
+                    raise AppServerUnavailableError(
+                        f"App-server unavailable after {timeout:.1f}s"
+                    ) from exc
+                sleep_time = min(delay, timeout - elapsed)
+                await asyncio.sleep(sleep_time)
+                delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
+
+    async def _list_threads_paginated(
+        self,
+        client: CodexAppServerClient,
+        *,
+        limit: int,
+        max_pages: int,
+        needed_ids: Optional[set[str]] = None,
+    ) -> tuple[list[dict[str, Any]], set[str]]:
+        entries: list[dict[str, Any]] = []
+        found_ids: set[str] = set()
+        seen_ids: set[str] = set()
+        cursor: Optional[str] = None
+        page_count = max(1, max_pages)
+        for _ in range(page_count):
+            payload = await client.thread_list(cursor=cursor, limit=limit)
+            page_entries = _coerce_thread_list(payload)
+            for entry in page_entries:
+                if not isinstance(entry, dict):
+                    continue
+                thread_id = entry.get("id")
+                if isinstance(thread_id, str):
+                    if thread_id in seen_ids:
+                        continue
+                    seen_ids.add(thread_id)
+                    found_ids.add(thread_id)
+                entries.append(entry)
+            if needed_ids is not None and needed_ids.issubset(found_ids):
+                break
+            cursor = _extract_thread_list_cursor(payload)
+            if not cursor:
+                break
+        return entries, found_ids
+
     async def _run_agent_turn_for_message(
         self,
         *,
@@ -1565,6 +1699,7 @@ class DiscordBotService:
             await self._handle_car_review(
                 interaction_id,
                 interaction_token,
+                channel_id=channel_id,
                 workspace_root=workspace_root,
                 options=options,
             )
@@ -1640,6 +1775,7 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 options=options,
+                channel_id=channel_id,
             )
             return
         if command_path == ("car", "interrupt"):
@@ -1848,6 +1984,12 @@ class DiscordBotService:
         for orchestrator in orchestrators:
             with contextlib.suppress(Exception):
                 await orchestrator.close_all()
+        async with self._app_server_lock:
+            supervisors = list(self._app_server_supervisors.values())
+            self._app_server_supervisors.clear()
+        for supervisor in supervisors:
+            with contextlib.suppress(Exception):
+                await supervisor.close_all()
 
     async def _watch_ticket_flow_pauses(self) -> None:
         while True:
@@ -4539,31 +4681,198 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
         *,
+        channel_id: str,
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Channel binding not found.",
+            )
+            return
+
         target_arg = options.get("target", "")
+        target_type = "uncommittedChanges"
+        target_value: Optional[str] = None
+
         if isinstance(target_arg, str) and target_arg.strip():
             target_text = target_arg.strip()
             if target_text.lower().startswith("base "):
                 branch = target_text[5:].strip()
-                target_desc = f"base branch {branch}"
+                if branch:
+                    target_type = "baseBranch"
+                    target_value = branch
             elif target_text.lower().startswith("commit "):
                 sha = target_text[7:].strip()
-                target_desc = f"commit {sha}"
+                if sha:
+                    target_type = "commit"
+                    target_value = sha
             elif target_text.lower() in ("uncommitted", ""):
-                target_desc = "uncommitted changes"
+                pass
             else:
-                target_desc = f"custom: {target_text}"
-        else:
-            target_desc = "uncommitted changes"
+                target_type = "custom"
+                target_value = target_text
 
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Code review requested for {target_desc}.\n\n"
-            "Note: Full review requires the app server client. "
-            "Send a message with your review request to have the agent perform the review.",
+        await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+
+        prompt_parts: list[str] = ["Please perform a code review."]
+        if target_type == "uncommittedChanges":
+            prompt_parts.append(
+                "Review the uncommitted changes in the working directory. "
+                "Use `git diff` to see what has changed and provide feedback."
+            )
+        elif target_type == "baseBranch" and target_value:
+            prompt_parts.append(
+                f"Review the changes compared to the base branch `{target_value}`. "
+                f"Use `git diff {target_value}...HEAD` to see the diff and provide feedback."
+            )
+        elif target_type == "commit" and target_value:
+            prompt_parts.append(
+                f"Review the commit `{target_value}`. "
+                f"Use `git show {target_value}` to see the changes and provide feedback."
+            )
+        elif target_type == "custom" and target_value:
+            prompt_parts.append(f"Review instructions: {target_value}")
+
+        prompt_parts.append(
+            "\n\nProvide actionable feedback focusing on: bugs, security issues, "
+            "performance problems, and significant code quality issues. "
+            "Include file paths and line numbers where relevant."
+        )
+        prompt_text = "\n".join(prompt_parts)
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+        model_override = binding.get("model_override")
+        if not isinstance(model_override, str) or not model_override.strip():
+            model_override = None
+        reasoning_effort = binding.get("reasoning_effort")
+        if not isinstance(reasoning_effort, str) or not reasoning_effort.strip():
+            reasoning_effort = None
+
+        session_key = self._build_message_session_key(
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            pma_enabled=False,
+            agent=agent,
+        )
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.review.starting",
+            channel_id=channel_id,
+            workspace_root=str(workspace_root),
+            target_type=target_type,
+            target_value=target_value,
+            agent=agent,
+        )
+
+        try:
+            turn_result = await self._run_agent_turn_for_message(
+                workspace_root=workspace_root,
+                prompt_text=prompt_text,
+                agent=agent,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                session_key=session_key,
+                orchestrator_channel_key=channel_id,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.review.failed",
+                channel_id=channel_id,
+                workspace_root=str(workspace_root),
+                target_type=target_type,
+                exc=exc,
+            )
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": f"Review failed: {exc}"},
+            )
+            return
+
+        if isinstance(turn_result, DiscordMessageTurnResult):
+            response_text = turn_result.final_message
+            preview_message_id = turn_result.preview_message_id
+        else:
+            response_text = str(turn_result or "")
+            preview_message_id = None
+
+        if not response_text or not response_text.strip():
+            response_text = "(Review completed with no output.)"
+
+        chunks = chunk_discord_message(
+            response_text,
+            max_len=self._config.max_message_length,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = ["(Review completed with no output.)"]
+
+        if preview_message_id:
+            if len(chunks) == 1:
+                try:
+                    await self._rest.edit_channel_message(
+                        channel_id=channel_id,
+                        message_id=preview_message_id,
+                        payload={"content": chunks[0]},
+                    )
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.review.completed",
+                        channel_id=channel_id,
+                        target_type=target_type,
+                    )
+                    return
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.review.preview_edit_failed",
+                        channel_id=channel_id,
+                        message_id=preview_message_id,
+                        exc=exc,
+                    )
+            try:
+                await self._rest.delete_channel_message(
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.review.preview_delete_failed",
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    exc=exc,
+                )
+
+        for idx, chunk in enumerate(chunks, 1):
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": chunk},
+                record_id=f"review:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
+            )
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.review.completed",
+            channel_id=channel_id,
+            target_type=target_type,
+            chunk_count=len(chunks),
         )
 
     async def _handle_car_approvals(
@@ -4798,6 +5107,11 @@ class DiscordBotService:
             f"Unknown action: {action}. Use list, enable, or disable.",
         )
 
+    COMPACT_SUMMARY_PROMPT = (
+        "Summarize the conversation so far into a concise context block I can paste into "
+        "a new thread. Include goals, constraints, decisions, and current state."
+    )
+
     async def _handle_car_compact(
         self,
         interaction_id: str,
@@ -4814,13 +5128,102 @@ class DiscordBotService:
             )
             return
 
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Compact command received.\n\n"
-            "To compact the conversation, send a message with your summarization request, "
-            "e.g., 'Please summarize our conversation so far.'",
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            candidate = canonicalize_path(Path(workspace_raw))
+            if candidate.exists() and candidate.is_dir():
+                workspace_root = candidate
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        if workspace_root is None and pma_enabled:
+            fallback = canonicalize_path(Path(self._config.root))
+            if fallback.exists() and fallback.is_dir():
+                workspace_root = fallback
+
+        if workspace_root is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Binding is invalid. Run /car bind first.",
+            )
+            return
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+        model_override = binding.get("model_override")
+        if not isinstance(model_override, str) or not model_override.strip():
+            model_override = None
+        reasoning_effort = binding.get("reasoning_effort")
+        if not isinstance(reasoning_effort, str) or not reasoning_effort.strip():
+            reasoning_effort = None
+
+        session_key = self._build_message_session_key(
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            pma_enabled=pma_enabled,
+            agent=agent,
         )
+        orchestrator_channel_key = (
+            channel_id if not pma_enabled else f"pma:{channel_id}"
+        )
+        orchestrator = await self._orchestrator_for_workspace(
+            workspace_root, channel_id=orchestrator_channel_key
+        )
+
+        existing_session = orchestrator.get_thread_id(session_key)
+        if not existing_session:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No active session to compact. Send a message first to start a conversation.",
+            )
+            return
+
+        await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+
+        try:
+            turn_result = await self._run_agent_turn_for_message(
+                workspace_root=workspace_root,
+                prompt_text=self.COMPACT_SUMMARY_PROMPT,
+                agent=agent,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                session_key=session_key,
+                orchestrator_channel_key=orchestrator_channel_key,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.compact.turn_failed",
+                channel_id=channel_id,
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": f"Compact failed: {exc}"},
+            )
+            return
+
+        response_text = (
+            turn_result.final_message.strip() if turn_result.final_message else ""
+        )
+        if not response_text:
+            response_text = "(No summary generated.)"
+
+        chunks = chunk_discord_message(
+            f"**Conversation Summary:**\n\n{response_text}",
+            max_len=self._config.max_message_length,
+            with_numbering=True,
+        )
+        for chunk in chunks:
+            await self._send_channel_message_safe(channel_id, {"content": chunk})
 
     async def _handle_car_rollout(
         self,
@@ -4862,12 +5265,36 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
+        client = await self._client_for_workspace(str(workspace_root))
+        if client is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                format_discord_message(
+                    "Topic not bound. Use `/car bind path:<workspace>` first."
+                ),
+            )
+            return
+        try:
+            await client.request("account/logout", params=None)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.logout.failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                format_discord_message("Logout failed; check logs for details."),
+            )
+            return
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "Logout command received.\n\n"
-            "Note: Logout requires the app server client. "
-            "This command is not fully implemented for Discord yet.",
+            "Logged out.",
         )
 
     async def _handle_car_feedback(
@@ -4877,6 +5304,7 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
     ) -> None:
         reason = options.get("reason", "")
         if not isinstance(reason, str):
@@ -4891,12 +5319,58 @@ class DiscordBotService:
             )
             return
 
+        client = await self._client_for_workspace(str(workspace_root))
+        if client is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                format_discord_message(
+                    "Topic not bound. Use `/car bind path:<workspace>` first."
+                ),
+            )
+            return
+
+        params: dict[str, Any] = {
+            "classification": "bug",
+            "reason": reason,
+            "includeLogs": True,
+        }
+        if channel_id:
+            binding = await self._store.get_binding(channel_id=channel_id)
+            if binding:
+                active_thread_id = binding.get("active_thread_id")
+                if isinstance(active_thread_id, str) and active_thread_id:
+                    params["threadId"] = active_thread_id
+
+        try:
+            result = await client.request("feedback/upload", params)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.feedback.failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                format_discord_message(
+                    "Feedback upload failed; check logs for details."
+                ),
+            )
+            return
+
+        report_id = None
+        if isinstance(result, dict):
+            report_id = result.get("threadId") or result.get("id")
+        message_text = "Feedback sent."
+        if isinstance(report_id, str):
+            message_text = f"Feedback sent (report {report_id})."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Feedback received: {reason}\n\n"
-            "Note: Feedback upload requires the app server client. "
-            "This command is not fully implemented for Discord yet.",
+            message_text,
         )
 
     async def _handle_car_interrupt(
@@ -4906,13 +5380,73 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Interrupt command received.\n\n"
-            "Note: Turn interruption is not yet supported in Discord. "
-            "The current turn will complete normally.",
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<workspace>` first."
+            )
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            return
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            candidate = canonicalize_path(Path(workspace_raw))
+            if candidate.exists() and candidate.is_dir():
+                workspace_root = candidate
+
+        if workspace_root is None and pma_enabled:
+            fallback = canonicalize_path(Path(self._config.root))
+            if fallback.exists() and fallback.is_dir():
+                workspace_root = fallback
+
+        if workspace_root is None:
+            text = format_discord_message(
+                "Binding is invalid. Run `/car bind path:<workspace>` first."
+            )
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            return
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+
+        orchestrator_channel_key = (
+            channel_id if not pma_enabled else f"pma:{channel_id}"
         )
+        orchestrator = await self._orchestrator_for_workspace(
+            workspace_root, channel_id=orchestrator_channel_key
+        )
+
+        context = orchestrator.get_context()
+        if context is None or context.session_id is None:
+            text = format_discord_message("No active turn to interrupt.")
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            return
+
+        state = self._build_runner_state(
+            agent=agent,
+            model_override=None,
+            reasoning_effort=None,
+        )
+
+        try:
+            await orchestrator.interrupt(agent, state)
+            text = format_discord_message("Stopping current turn...")
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.interrupt.failed",
+                channel_id=channel_id,
+                workspace_root=str(workspace_root),
+                agent=agent,
+                exc=exc,
+            )
+            text = format_discord_message("Interrupt failed. Please try again.")
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
 
 
 def create_discord_bot_service(
