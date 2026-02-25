@@ -63,7 +63,7 @@ class DiscordTextRenderer(TextRenderer):
     ) -> tuple[RenderedText, ...]:
         limit = max_length or DISCORD_MAX_MESSAGE_LENGTH
         chunks = chunk_discord_message(
-            rendered.text, max_len=limit, with_numbering=True
+            rendered.text, max_len=limit, with_numbering=False
         )
         return tuple(RenderedText(text=chunk, parse_mode=None) for chunk in chunks)
 

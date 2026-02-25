@@ -308,6 +308,7 @@ class TelegramMessageTransport:
                         text,
                         max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
                         render=split_renderer,
+                        include_indicator=False,
                     )
                     for idx, chunk in enumerate(chunks):
                         await self._bot.send_message(

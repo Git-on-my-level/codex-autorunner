@@ -520,6 +520,10 @@ async def test_send_message_chunks_long_text() -> None:
     second_payload = calls[1]["payload"]
     assert "reply_markup" in first_payload
     assert "reply_markup" not in second_payload
+    assert isinstance(first_payload.get("text"), str)
+    assert isinstance(second_payload.get("text"), str)
+    assert not first_payload["text"].startswith("Part ")
+    assert not second_payload["text"].startswith("Part ")
 
 
 @pytest.mark.anyio

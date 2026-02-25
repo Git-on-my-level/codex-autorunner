@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 
 from codex_autorunner.integrations.chat.models import ChatMessageEvent
-from codex_autorunner.integrations.discord.adapter import DiscordChatAdapter
+from codex_autorunner.integrations.chat.renderer import RenderedText
+from codex_autorunner.integrations.discord.adapter import (
+    DiscordChatAdapter,
+    DiscordTextRenderer,
+)
 
 
 class _UnusedRestClient:
@@ -126,3 +130,13 @@ def test_adapter_parses_attachment_source_url_metadata() -> None:
     assert proxy_attachment.source_url == (
         "https://media.discordapp.net/attachments/alt.png"
     )
+
+
+def test_discord_text_renderer_split_text_has_no_part_prefix() -> None:
+    renderer = DiscordTextRenderer()
+    rendered = RenderedText(text=("alpha " * 500), parse_mode=None)
+
+    chunks = renderer.split_text(rendered, max_length=120)
+
+    assert len(chunks) > 1
+    assert all(not chunk.text.startswith("Part ") for chunk in chunks)

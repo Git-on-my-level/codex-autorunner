@@ -631,7 +631,7 @@ class DiscordBotService:
         chunks = chunk_discord_message(
             response_text or "(No response text returned.)",
             max_len=self._config.max_message_length,
-            with_numbering=True,
+            with_numbering=False,
         )
         if not chunks:
             chunks = ["(No response text returned.)"]
@@ -1703,7 +1703,7 @@ class DiscordBotService:
             chunks = chunk_discord_message(
                 snapshot.dispatch_markdown,
                 max_len=self._config.max_message_length,
-                with_numbering=True,
+                with_numbering=False,
             )
             if not chunks:
                 chunks = ["(pause notification had no content)"]

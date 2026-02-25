@@ -92,7 +92,13 @@ def _workspace(tmp_path: Path) -> Path:
     return workspace
 
 
-def _create_paused_run_with_dispatch(workspace: Path, run_id: str, seq: str) -> None:
+def _create_paused_run_with_dispatch(
+    workspace: Path,
+    run_id: str,
+    seq: str,
+    *,
+    dispatch_text: str = "Paused: need reply",
+) -> None:
     db_path = workspace / ".codex-autorunner" / "flows.db"
     with FlowStore(db_path) as store:
         if store.get_flow_run(run_id) is None:
@@ -103,7 +109,7 @@ def _create_paused_run_with_dispatch(workspace: Path, run_id: str, seq: str) -> 
         workspace / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / seq
     )
     history_dir.mkdir(parents=True, exist_ok=True)
-    (history_dir / "DISPATCH.md").write_text("Paused: need reply", encoding="utf-8")
+    (history_dir / "DISPATCH.md").write_text(dispatch_text, encoding="utf-8")
 
 
 @pytest.mark.anyio
@@ -148,5 +154,48 @@ async def test_pause_bridge_dedupes_by_run_and_dispatch_seq(tmp_path: Path) -> N
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding["last_pause_dispatch_seq"] == "0002"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pause_bridge_chunked_messages_have_no_part_prefix(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    dispatch_text = ("Paused: need reply\n" * 400).strip()
+    _create_paused_run_with_dispatch(
+        workspace,
+        run_id,
+        "0001",
+        dispatch_text=dispatch_text,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) >= 2
+        for record in queued:
+            content = str(record.payload_json.get("content", ""))
+            assert not content.startswith("Part ")
     finally:
         await store.close()
