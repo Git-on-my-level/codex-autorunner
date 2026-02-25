@@ -142,6 +142,18 @@ class DiscordStateStore:
             clear_model,
         )
 
+    async def update_approval_mode(
+        self,
+        *,
+        channel_id: str,
+        mode: str,
+    ) -> None:
+        await self._run(
+            self._update_approval_mode_sync,
+            channel_id,
+            mode,
+        )
+
     async def record_outbox_failure(
         self,
         record_id: str,
@@ -270,6 +282,14 @@ class DiscordStateStore:
             conn.execute(
                 "ALTER TABLE channel_bindings ADD COLUMN reasoning_effort TEXT"
             )
+        if "approval_mode" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN approval_mode TEXT")
+        if "approval_policy" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN approval_policy TEXT")
+        if "sandbox_policy" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN sandbox_policy TEXT")
+        if "rollout_path" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN rollout_path TEXT")
 
     def _upsert_binding_sync(
         self,
@@ -314,6 +334,16 @@ class DiscordStateStore:
         reasoning_effort_raw = (
             row["reasoning_effort"] if "reasoning_effort" in row.keys() else None
         )
+        approval_mode_raw = (
+            row["approval_mode"] if "approval_mode" in row.keys() else None
+        )
+        approval_policy_raw = (
+            row["approval_policy"] if "approval_policy" in row.keys() else None
+        )
+        sandbox_policy_raw = (
+            row["sandbox_policy"] if "sandbox_policy" in row.keys() else None
+        )
+        rollout_path_raw = row["rollout_path"] if "rollout_path" in row.keys() else None
         return {
             "channel_id": str(row["channel_id"]),
             "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
@@ -348,6 +378,18 @@ class DiscordStateStore:
             ),
             "reasoning_effort": (
                 reasoning_effort_raw if isinstance(reasoning_effort_raw, str) else None
+            ),
+            "approval_mode": (
+                approval_mode_raw if isinstance(approval_mode_raw, str) else None
+            ),
+            "approval_policy": (
+                approval_policy_raw if isinstance(approval_policy_raw, str) else None
+            ),
+            "sandbox_policy": (
+                sandbox_policy_raw if isinstance(sandbox_policy_raw, str) else None
+            ),
+            "rollout_path": (
+                rollout_path_raw if isinstance(rollout_path_raw, str) else None
             ),
             "updated_at": str(row["updated_at"]),
         }
@@ -472,6 +514,23 @@ class DiscordStateStore:
                     """,
                     (model_override, reasoning_effort, now_iso(), channel_id),
                 )
+
+    def _update_approval_mode_sync(
+        self,
+        channel_id: str,
+        mode: str,
+    ) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET approval_mode = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (mode, now_iso(), channel_id),
+            )
 
     def _upsert_outbox_sync(self, record: OutboxRecord) -> OutboxRecord:
         conn = self._connection_sync()

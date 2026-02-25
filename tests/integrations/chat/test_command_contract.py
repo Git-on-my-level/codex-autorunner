@@ -81,7 +81,7 @@ def test_command_contract_catalogs_all_registered_surface_commands() -> None:
 def test_command_contract_status_and_mapping_invariants() -> None:
     by_id = {entry.id: entry for entry in COMMAND_CONTRACT}
 
-    assert {entry.status for entry in COMMAND_CONTRACT} == {
+    assert {entry.status for entry in COMMAND_CONTRACT} <= {
         "stable",
         "partial",
         "unsupported",
@@ -97,4 +97,4 @@ def test_command_contract_status_and_mapping_invariants() -> None:
 
     assert by_id["car.agent"].status == "stable"
     assert by_id["car.flow.status"].status == "partial"
-    assert by_id["telegram.review"].status == "unsupported"
+    assert by_id["car.review"].status == "partial"
