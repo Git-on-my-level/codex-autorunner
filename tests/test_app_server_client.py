@@ -272,6 +272,45 @@ async def test_turn_completed_via_resume_when_completion_missing(
 
 
 @pytest.mark.anyio
+async def test_wait_for_turn_times_out_when_resume_stays_non_terminal(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=0.01,
+        turn_stall_poll_interval_seconds=0.05,
+        turn_stall_recovery_min_interval_seconds=0.0,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.last_event_at -= 1.0
+        resume_calls = 0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            nonlocal resume_calls
+            _ = kwargs
+            resume_calls += 1
+            return {
+                "thread": {
+                    "id": thread_id,
+                    "turns": [{"id": "turn-1", "status": "running"}],
+                }
+            }
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        with pytest.raises(asyncio.TimeoutError):
+            await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=0.2)
+
+        assert resume_calls >= 1
+        assert state.status == "running"
+        assert not state.future.done()
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_disconnect_with_autorestart_preserves_active_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

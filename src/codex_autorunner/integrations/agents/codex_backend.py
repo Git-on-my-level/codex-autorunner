@@ -390,8 +390,7 @@ class CodexAppServerBackend(AgentBackend):
                     run_event = get_task.result()
                     if run_event:
                         yield run_event
-                for task in pending_set:
-                    task.cancel()
+                    continue
         except Exception as e:
             _logger.error("Error during turn execution: %s", e)
             if not wait_task.done():
