@@ -15,6 +15,7 @@ from codex_autorunner.core.ports.run_event import (
     Completed,
     OutputDelta,
     Started,
+    TokenUsage,
     ToolCall,
 )
 from codex_autorunner.integrations.app_server.threads import (
@@ -807,6 +808,71 @@ async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sen
             if op.get("op") == "send" and op.get("message_id") != "msg-1"
         ]
         assert len(final_sends) >= 2
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_appends_final_metrics(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "done from streaming turn"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            TokenUsage(
+                timestamp="2026-01-01T00:00:01Z",
+                usage={
+                    "last": {
+                        "totalTokens": 71173,
+                        "inputTokens": 400,
+                        "outputTokens": 245,
+                    },
+                    "modelContextWindow": 203352,
+                },
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        final_content = ""
+        for message in rest.edited_channel_messages:
+            content = str(message.get("payload", {}).get("content", ""))
+            if final_text in content:
+                final_content = content
+                break
+        assert final_content
+        assert "Turn time:" in final_content
+        assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
     finally:
         await store.close()
 

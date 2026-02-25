@@ -90,7 +90,7 @@ from ...integrations.github.service import (
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
-from ..telegram.helpers import _extract_context_usage_percent
+from ..telegram.helpers import _extract_context_usage_percent, _format_turn_metrics
 from ..telegram.progress_stream import TurnProgressTracker, render_progress_text
 from .adapter import DiscordChatAdapter
 from .allowlist import DiscordAllowlist, allowlist_allows
@@ -145,6 +145,8 @@ DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
 class DiscordMessageTurnResult:
     final_message: str
     preview_message_id: Optional[str] = None
+    token_usage: Optional[dict[str, Any]] = None
+    elapsed_seconds: Optional[float] = None
 
 
 class DiscordBotService:
@@ -759,6 +761,15 @@ class DiscordBotService:
         if isinstance(turn_result, DiscordMessageTurnResult):
             response_text = turn_result.final_message
             preview_message_id = turn_result.preview_message_id
+            metrics_text = _format_turn_metrics(
+                turn_result.token_usage,
+                turn_result.elapsed_seconds,
+            )
+            if metrics_text:
+                if response_text.strip():
+                    response_text = f"{response_text}\n\n{metrics_text}"
+                else:
+                    response_text = metrics_text
         else:
             response_text = str(turn_result or "")
 
@@ -1217,6 +1228,7 @@ class DiscordBotService:
         )
         known_session = orchestrator.get_thread_id(session_key)
         final_message = ""
+        token_usage: Optional[dict[str, Any]] = None
         error_message = None
         session_from_events = known_session
         try:
@@ -1261,10 +1273,11 @@ class DiscordBotService:
                         tracker.add_action("notice", notice, "update")
                     await _edit_progress()
                 elif isinstance(run_event, TokenUsage):
-                    token_usage = run_event.usage
-                    if isinstance(token_usage, dict):
+                    usage_payload = run_event.usage
+                    if isinstance(usage_payload, dict):
+                        token_usage = usage_payload
                         tracker.context_usage_percent = _extract_context_usage_percent(
-                            token_usage
+                            usage_payload
                         )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
@@ -1290,9 +1303,12 @@ class DiscordBotService:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
             raise RuntimeError(error_message)
+        elapsed_seconds = max(0.0, time.monotonic() - tracker.started_at)
         return DiscordMessageTurnResult(
             final_message=final_message,
             preview_message_id=progress_message_id,
+            token_usage=token_usage,
+            elapsed_seconds=elapsed_seconds,
         )
 
     @staticmethod
