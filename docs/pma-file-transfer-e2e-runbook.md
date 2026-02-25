@@ -17,10 +17,12 @@ This runbook describes the end-to-end verification steps for PMA (Project Manage
 
 All PMA files live under the hub root:
 ```
-<hub_root>/.codex-autorunner/pma/
+<hub_root>/.codex-autorunner/filebox/
 ├── inbox/    # Files uploaded by users
 └── outbox/   # Files written by agents for users to download
 ```
+
+Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` are still supported but redirect to filebox.
 
 ## PMA Durable Docs (Manual Mode)
 
@@ -57,7 +59,7 @@ In the web UI, switch PMA to manual mode to open the docs editor. Use "Save" to 
 
 **Verify via file system:**
 ```bash
-ls -la <hub_root>/.codex-autorunner/pma/inbox/
+ls -la <hub_root>/.codex-autorunner/filebox/inbox/
 ```
 The uploaded file should be present.
 
@@ -81,7 +83,7 @@ Response should include the file in `inbox` array.
    - Agent reads and processes the file contents
    - Agent responds with file information
 
-**Note:** The agent is instructed that user files are in `.codex-autorunner/pma/inbox/`.
+**Note:** The agent is instructed that user files are in `.codex-autorunner/filebox/inbox/`.
 
 ---
 
@@ -104,8 +106,8 @@ Response should include the file in `inbox` array.
 
 **Verify via file system:**
 ```bash
-ls -la <hub_root>/.codex-autorunner/pma/outbox/
-cat <hub_root>/.codex-autorunner/pma/outbox/response.txt
+ls -la <hub_root>/.codex-autorunner/filebox/outbox/
+cat <hub_root>/.codex-autorunner/filebox/outbox/response.txt
 ```
 
 ---
@@ -153,11 +155,11 @@ curl -X DELETE \
 2. **Expected:**
    - Bot confirms file receipt
    - Bot shows file details (name, size, saved path)
-   - File is saved to `<hub_root>/.codex-autorunner/pma/inbox/`
+   - File is saved to `<hub_root>/.codex-autorunner/filebox/inbox/`
 
 **Verify via file system:**
 ```bash
-ls -la <hub_root>/.codex-autorunner/pma/inbox/
+ls -la <hub_root>/.codex-autorunner/filebox/inbox/
 ```
 
 **Verify via `/files` command:**
@@ -175,7 +177,7 @@ ls -la <hub_root>/.codex-autorunner/pma/inbox/
    Read the file <filename> from the PMA inbox and summarize it.
    ```
 2. **Expected:**
-   - Agent reads the file from `.codex-autorunner/pma/inbox/`
+   - Agent reads the file from `.codex-autorunner/filebox/inbox/`
    - Agent responds with file contents or summary
 
 ---
@@ -200,8 +202,8 @@ ls -la <hub_root>/.codex-autorunner/pma/inbox/
 
 **Verify via file system:**
 ```bash
-ls -la <hub_root>/.codex-autorunner/pma/outbox/
-cat <hub_root>/.codex-autorunner/pma/outbox/telegram-output.txt
+ls -la <hub_root>/.codex-autorunner/filebox/outbox/
+cat <hub_root>/.codex-autorunner/filebox/outbox/telegram-output.txt
 ```
 
 ---
@@ -247,7 +249,7 @@ cat <hub_root>/.codex-autorunner/pma/outbox/telegram-output.txt
 ### 1. File Uploaded via Telegram Visible on Web PMA
 
 1. In Telegram (PMA mode), upload a file named `cross-surface-test.txt`
-2. **Expected:** File lands in `.codex-autorunner/pma/inbox/`
+2. **Expected:** File lands in `.codex-autorunner/filebox/inbox/`
 
 3. Open the web UI and navigate to PMA
 4. Click refresh on the Inbox panel (or wait for auto-refresh)
@@ -448,9 +450,9 @@ When file transfer fails:
 
 2. **Verify directories exist:**
    ```bash
-   ls -la <hub_root>/.codex-autorunner/pma/
-   ls -la <hub_root>/.codex-autorunner/pma/inbox/
-   ls -la <hub_root>/.codex-autorunner/pma/outbox/
+   ls -la <hub_root>/.codex-autorunner/filebox/
+   ls -la <hub_root>/.codex-autorunner/filebox/inbox/
+   ls -la <hub_root>/.codex-autorunner/filebox/outbox/
    ```
 
 3. **Check file sizes:**
@@ -513,7 +515,7 @@ The PMA file transfer E2E verification is successful when:
 This runbook can be automated with:
 - Web: HTTP client tests (see `tests/test_pma_routes.py`)
 - Telegram: Bot integration tests (see `tests/test_telegram_files_pma.py`)
-- File system: Direct checks on `.codex-autorunner/pma/` directories
+- File system: Direct checks on `.codex-autorunner/filebox/` directories
 
 Key test files for reference:
 - `tests/test_pma_routes.py` - Web PMA route tests
