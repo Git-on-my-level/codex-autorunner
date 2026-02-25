@@ -1441,6 +1441,14 @@ class DiscordBotService:
                 channel_id=channel_id,
             )
             return
+        if command_path == ("car", "resume"):
+            await self._handle_car_resume(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                options=options,
+            )
+            return
         if command_path == ("car", "debug"):
             await self._handle_debug(
                 interaction_id,
@@ -1539,6 +1547,106 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 workspace_root=workspace_root,
+            )
+            return
+        if command_path == ("car", "reset"):
+            await self._handle_car_reset(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+            )
+            return
+        if command_path == ("car", "review"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root is None:
+                return
+            await self._handle_car_review(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options=options,
+            )
+            return
+        if command_path == ("car", "approvals"):
+            await self._handle_car_approvals(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                options=options,
+            )
+            return
+        if command_path == ("car", "mention"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root is None:
+                return
+            await self._handle_car_mention(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options=options,
+            )
+            return
+        if command_path == ("car", "experimental"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root is None:
+                return
+            await self._handle_car_experimental(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options=options,
+            )
+            return
+        if command_path == ("car", "compact"):
+            await self._handle_car_compact(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+            )
+            return
+        if command_path == ("car", "rollout"):
+            await self._handle_car_rollout(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+            )
+            return
+        if command_path == ("car", "logout"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root is None:
+                return
+            await self._handle_car_logout(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+            )
+            return
+        if command_path == ("car", "feedback"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root is None:
+                return
+            await self._handle_car_feedback(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options=options,
+            )
+            return
+        if command_path == ("car", "interrupt"):
+            await self._handle_car_interrupt(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
             )
             return
 
@@ -2195,6 +2303,7 @@ class DiscordBotService:
             "/car bind [path] - Bind channel to workspace",
             "/car status - Show binding status",
             "/car new - Start a fresh chat session",
+            "/car reset - Reset PMA thread state",
             "/car debug - Show debug info",
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
@@ -2206,6 +2315,15 @@ class DiscordBotService:
             "/car agent [name] - Set or show agent",
             "/car model [name] - Set or show model",
             "/car update [target] - Start update or check status",
+            "/car review [target] - Run a code review",
+            "/car approvals [mode] - Set approval and sandbox policy",
+            "/car mention <path> [request] - Include a file in a request",
+            "/car experimental [action] [feature] - Toggle experimental features",
+            "/car compact - Compact the conversation",
+            "/car rollout - Show current thread rollout path",
+            "/car logout - Log out of the Codex account",
+            "/car feedback <reason> - Send feedback and logs",
+            "/car interrupt - Stop the active turn",
             "",
             "**Flow Commands:**",
             "/car flow status [run_id] - Show flow status",
@@ -2489,6 +2607,100 @@ class DiscordBotService:
         text = format_discord_message(
             f"Started a fresh {mode_label} session for `{agent}` ({state_label})."
         )
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+
+    async def _handle_car_resume(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        options: dict[str, Any],
+    ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            if not workspace_root.exists() or not workspace_root.is_dir():
+                workspace_root = None
+        if workspace_root is None:
+            if pma_enabled:
+                workspace_root = canonicalize_path(Path(self._config.root))
+            else:
+                text = format_discord_message(
+                    "Binding is invalid. Run `/car bind path:<workspace>`."
+                )
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
+                return
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+
+        session_key = self._build_message_session_key(
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            pma_enabled=pma_enabled,
+            agent=agent,
+        )
+        orchestrator_channel_key = (
+            channel_id if not pma_enabled else f"pma:{channel_id}"
+        )
+        orchestrator = await self._orchestrator_for_workspace(
+            workspace_root, channel_id=orchestrator_channel_key
+        )
+
+        raw_thread_id = options.get("thread_id")
+        thread_id = raw_thread_id.strip() if isinstance(raw_thread_id, str) else None
+
+        if thread_id:
+            orchestrator.set_thread_id(session_key, thread_id)
+            mode_label = "PMA" if pma_enabled else "repo"
+            text = format_discord_message(
+                f"Resumed {mode_label} session for `{agent}` with thread `{thread_id}`."
+            )
+        else:
+            current_thread_id = orchestrator.get_thread_id(session_key)
+            if current_thread_id:
+                text = format_discord_message(
+                    f"Current thread: `{current_thread_id}`\n\n"
+                    "Use `/car resume thread_id:<thread_id>` to resume a specific thread."
+                )
+            else:
+                text = format_discord_message(
+                    "No thread is currently active.\n\n"
+                    "Use `/car resume thread_id:<thread_id>` to resume a specific thread, "
+                    "or start a new conversation to begin."
+                )
+
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
@@ -4260,6 +4472,447 @@ class DiscordBotService:
                 interaction_token,
                 f"Unknown action: {action}",
             )
+
+    async def _handle_car_reset(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Channel not bound. Use /car bind first.",
+            )
+            return
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            if not workspace_root.exists() or not workspace_root.is_dir():
+                workspace_root = None
+
+        if workspace_root is None:
+            if pma_enabled:
+                workspace_root = canonicalize_path(Path(self._config.root))
+            else:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Binding is invalid. Run `/car bind path:<workspace>`.",
+                )
+                return
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+
+        session_key = self._build_message_session_key(
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            pma_enabled=pma_enabled,
+            agent=agent,
+        )
+        orchestrator_channel_key = (
+            channel_id if not pma_enabled else f"pma:{channel_id}"
+        )
+        orchestrator = await self._orchestrator_for_workspace(
+            workspace_root, channel_id=orchestrator_channel_key
+        )
+        had_previous = orchestrator.reset_thread_id(session_key)
+        mode_label = "PMA" if pma_enabled else "repo"
+        state_label = "cleared previous thread" if had_previous else "fresh state"
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Reset {mode_label} thread state ({state_label}) for `{agent}`.",
+        )
+
+    async def _handle_car_review(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        target_arg = options.get("target", "")
+        if isinstance(target_arg, str) and target_arg.strip():
+            target_text = target_arg.strip()
+            if target_text.lower().startswith("base "):
+                branch = target_text[5:].strip()
+                target_desc = f"base branch {branch}"
+            elif target_text.lower().startswith("commit "):
+                sha = target_text[7:].strip()
+                target_desc = f"commit {sha}"
+            elif target_text.lower() in ("uncommitted", ""):
+                target_desc = "uncommitted changes"
+            else:
+                target_desc = f"custom: {target_text}"
+        else:
+            target_desc = "uncommitted changes"
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Code review requested for {target_desc}.\n\n"
+            "Note: Full review requires the app server client. "
+            "Send a message with your review request to have the agent perform the review.",
+        )
+
+    async def _handle_car_approvals(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        options: dict[str, Any],
+    ) -> None:
+        mode = options.get("mode", "")
+        if not isinstance(mode, str):
+            mode = ""
+        mode = mode.strip().lower()
+
+        if not mode:
+            binding = await self._store.get_binding(channel_id=channel_id)
+            if binding is None:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Channel not bound. Use /car bind first.",
+                )
+                return
+
+            current_mode = binding.get("approval_mode", "yolo")
+            approval_policy = binding.get("approval_policy", "default")
+            sandbox_policy = binding.get("sandbox_policy", "default")
+
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "\n".join(
+                    [
+                        f"Approval mode: {current_mode}",
+                        f"Approval policy: {approval_policy}",
+                        f"Sandbox policy: {sandbox_policy}",
+                        "",
+                        "Usage: /car approvals yolo|safe|read-only|auto|full-access",
+                    ]
+                ),
+            )
+            return
+
+        if mode in ("yolo", "off", "disable"):
+            new_mode = "yolo"
+        elif mode in ("safe", "on", "enable"):
+            new_mode = "safe"
+        elif mode in ("read-only", "auto", "full-access"):
+            new_mode = mode
+        else:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Unknown mode: {mode}. Valid options: yolo, safe, read-only, auto, full-access",
+            )
+            return
+
+        await self._store.update_approval_mode(channel_id=channel_id, mode=new_mode)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Approval mode set to {new_mode}.",
+        )
+
+    async def _handle_car_mention(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        path_arg = options.get("path", "")
+        request_arg = options.get("request", "Please review this file.")
+
+        if not isinstance(path_arg, str) or not path_arg.strip():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Usage: /car mention path:<file> [request:<text>]",
+            )
+            return
+
+        path = Path(path_arg.strip())
+        if not path.is_absolute():
+            path = workspace_root / path
+
+        try:
+            path = canonicalize_path(path)
+        except Exception:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Could not resolve path: {path_arg}",
+            )
+            return
+
+        if not path.exists() or not path.is_file():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"File not found: {path}",
+            )
+            return
+
+        try:
+            path.relative_to(workspace_root)
+        except ValueError:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "File must be within the bound workspace.",
+            )
+            return
+
+        max_bytes = 100000
+        try:
+            data = path.read_bytes()
+        except Exception:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Failed to read file.",
+            )
+            return
+
+        if len(data) > max_bytes:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"File too large (max {max_bytes} bytes).",
+            )
+            return
+
+        null_count = data.count(b"\x00")
+        if null_count > 0 and null_count > len(data) * 0.1:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "File appears to be binary; refusing to include it.",
+            )
+            return
+
+        try:
+            display_path = str(path.relative_to(workspace_root))
+        except ValueError:
+            display_path = str(path)
+
+        if not isinstance(request_arg, str) or not request_arg.strip():
+            request_arg = "Please review this file."
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"File `{display_path}` ready for mention.\n\n"
+            f"To include it in a request, send a message starting with:\n"
+            f"```\n"
+            f'<file path="{display_path}">\n'
+            f"...\n"
+            f"</file>\n"
+            f"```\n\n"
+            f"Your request: {request_arg}",
+        )
+
+    async def _handle_car_experimental(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        action = options.get("action", "")
+        feature = options.get("feature", "")
+
+        if not isinstance(action, str):
+            action = ""
+        action = action.strip().lower()
+
+        if not isinstance(feature, str):
+            feature = ""
+        feature = feature.strip()
+
+        if not action or action in ("list", "ls", "all"):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Experimental features listing requires the app server client.\n\n"
+                "To enable/disable features, use:\n"
+                "- `/car experimental list` - list features\n"
+                "- `/car experimental enable <feature>` - enable a feature\n"
+                "- `/car experimental disable <feature>` - disable a feature",
+            )
+            return
+
+        if action in ("enable", "on", "true"):
+            if not feature:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Usage: /car experimental enable <feature>",
+                )
+                return
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Feature `{feature}` enable requested.\n\n"
+                "Note: Feature toggling requires the app server client.",
+            )
+            return
+
+        if action in ("disable", "off", "false"):
+            if not feature:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Usage: /car experimental disable <feature>",
+                )
+                return
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Feature `{feature}` disable requested.\n\n"
+                "Note: Feature toggling requires the app server client.",
+            )
+            return
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Unknown action: {action}. Use list, enable, or disable.",
+        )
+
+    async def _handle_car_compact(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Channel not bound. Use /car bind first.",
+            )
+            return
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Compact command received.\n\n"
+            "To compact the conversation, send a message with your summarization request, "
+            "e.g., 'Please summarize our conversation so far.'",
+        )
+
+    async def _handle_car_rollout(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Channel not bound. Use /car bind first.",
+            )
+            return
+
+        rollout_path = binding.get("rollout_path")
+        workspace_path = binding.get("workspace_path", "unknown")
+
+        if rollout_path:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Rollout path: {rollout_path}\nWorkspace: {workspace_path}",
+            )
+        else:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"No rollout path available.\nWorkspace: {workspace_path}\n\n"
+                "The rollout path is set after a conversation turn completes.",
+            )
+
+    async def _handle_car_logout(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+    ) -> None:
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Logout command received.\n\n"
+            "Note: Logout requires the app server client. "
+            "This command is not fully implemented for Discord yet.",
+        )
+
+    async def _handle_car_feedback(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        reason = options.get("reason", "")
+        if not isinstance(reason, str):
+            reason = ""
+        reason = reason.strip()
+
+        if not reason:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Usage: /car feedback reason:<description>",
+            )
+            return
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Feedback received: {reason}\n\n"
+            "Note: Feedback upload requires the app server client. "
+            "This command is not fully implemented for Discord yet.",
+        )
+
+    async def _handle_car_interrupt(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Interrupt command received.\n\n"
+            "Note: Turn interruption is not yet supported in Discord. "
+            "The current turn will complete normally.",
+        )
 
 
 def create_discord_bot_service(

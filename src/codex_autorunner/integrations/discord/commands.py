@@ -41,6 +41,19 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
+                    "name": "resume",
+                    "description": "Resume a previous chat thread",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "thread_id",
+                            "description": "Thread ID to resume (optional - lists recent threads if omitted)",
+                            "required": False,
+                        }
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
                     "name": "debug",
                     "description": "Show debug info for troubleshooting",
                 },
@@ -131,6 +144,108 @@ def build_application_commands() -> list[dict[str, Any]]:
                     "type": SUB_COMMAND,
                     "name": "repos",
                     "description": "List hub repositories",
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "reset",
+                    "description": "Reset PMA thread state (clear volatile state)",
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "review",
+                    "description": "Run a code review",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "target",
+                            "description": "Review target: uncommitted, base <branch>, commit <sha>, or custom",
+                            "required": False,
+                        }
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "approvals",
+                    "description": "Set approval and sandbox policy",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "mode",
+                            "description": "Mode: yolo, safe, read-only, auto, or full-access",
+                            "required": False,
+                        }
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "mention",
+                    "description": "Include a file in a new request",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "path",
+                            "description": "Path to the file to include",
+                            "required": True,
+                        },
+                        {
+                            "type": STRING,
+                            "name": "request",
+                            "description": "Optional request text",
+                            "required": False,
+                        },
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "experimental",
+                    "description": "Toggle experimental features",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "action",
+                            "description": "list, enable, or disable",
+                            "required": False,
+                        },
+                        {
+                            "type": STRING,
+                            "name": "feature",
+                            "description": "Feature name (for enable/disable)",
+                            "required": False,
+                        },
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "compact",
+                    "description": "Compact the conversation (summary)",
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "rollout",
+                    "description": "Show current thread rollout path",
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "logout",
+                    "description": "Log out of the Codex account",
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "feedback",
+                    "description": "Send feedback and logs",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "reason",
+                            "description": "Feedback reason/description",
+                            "required": True,
+                        }
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "interrupt",
+                    "description": "Stop the active turn",
                 },
                 {
                     "type": SUB_COMMAND_GROUP,
