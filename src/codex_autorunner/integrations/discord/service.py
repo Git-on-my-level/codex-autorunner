@@ -9,9 +9,8 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from ...core.config import load_repo_config
 from ...core.filebox import (
@@ -72,6 +71,7 @@ from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
+    DispatchResult,
 )
 from ...integrations.chat.models import (
     ChatEvent,
@@ -81,6 +81,11 @@ from ...integrations.chat.models import (
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
+)
+from ...integrations.chat.update_notifier import (
+    ChatUpdateStatusNotifier,
+    format_update_status_message,
+    mark_update_status_notified,
 )
 from ...integrations.github.service import (
     GitHubService,
@@ -146,6 +151,7 @@ THREAD_LIST_MAX_PAGES = 5
 THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
+DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
 
 
 class AppServerUnavailableError(Exception):
@@ -221,6 +227,7 @@ class DiscordBotService:
             else DiscordOutboxManager(
                 self._store,
                 send_message=self._send_channel_message,
+                delete_message=self._delete_channel_message,
                 logger=logger,
             )
         )
@@ -276,6 +283,19 @@ class DiscordBotService:
                 hub_root=str(self._config.root),
                 exc=exc,
             )
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._update_status_notifier = ChatUpdateStatusNotifier(
+            platform="discord",
+            logger=self._logger,
+            read_status=_read_update_status,
+            send_notice=self._send_update_status_notice,
+            spawn_task=self._spawn_task,
+            mark_notified=self._mark_update_notified,
+            format_status=self._format_update_status_message,
+            running_message=(
+                "Update still running. Use `/car update target:status` for current state."
+            ),
+        )
 
     async def run_forever(self) -> None:
         await self._store.initialize()
@@ -301,6 +321,15 @@ class DiscordBotService:
                 "discord.bot.starting",
                 state_file=str(self._config.state_file),
             )
+            try:
+                await self._update_status_notifier.maybe_send_notice()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.update.notify_failed",
+                    exc=exc,
+                )
             await self._gateway.run(self._on_dispatch)
         finally:
             with contextlib.suppress(Exception):
@@ -320,7 +349,53 @@ class DiscordBotService:
         while True:
             events = await self._chat_adapter.poll_events(timeout_seconds=30.0)
             for event in events:
-                await self._dispatcher.dispatch(event, self._handle_chat_event)
+                await self._dispatch_chat_event(event)
+
+    async def _dispatch_chat_event(self, event: ChatEvent) -> None:
+        dispatch_result = await self._dispatcher.dispatch(
+            event, self._handle_chat_event
+        )
+        await self._maybe_send_queued_notice(event, dispatch_result)
+
+    @staticmethod
+    def _is_turn_candidate_message_event(event: ChatMessageEvent) -> bool:
+        text = (event.text or "").strip()
+        has_attachments = bool(event.attachments)
+        if not text and not has_attachments:
+            return False
+        if text.startswith("/"):
+            return False
+        if text and not should_trigger_plain_text_turn(
+            mode="always",
+            context=PlainTextTurnContext(text=text),
+        ):
+            return False
+        return True
+
+    async def _maybe_send_queued_notice(
+        self, event: ChatEvent, dispatch_result: DispatchResult
+    ) -> None:
+        if dispatch_result.status != "queued" or not dispatch_result.queued_while_busy:
+            return
+        if not isinstance(event, ChatMessageEvent):
+            return
+        if not self._is_turn_candidate_message_event(event):
+            return
+        channel_id = dispatch_result.context.chat_id
+        await self._send_channel_message_safe(
+            channel_id,
+            {"content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT)},
+            record_id=f"queue-notice:{channel_id}:{dispatch_result.context.update_id}",
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.turn.queued_notice",
+            channel_id=channel_id,
+            conversation_id=dispatch_result.context.conversation_id,
+            update_id=dispatch_result.context.update_id,
+            pending=dispatch_result.queued_pending,
+        )
 
     async def _handle_chat_event(
         self, event: ChatEvent, context: DispatchContext
@@ -715,43 +790,17 @@ class DiscordBotService:
         )
         if not chunks:
             chunks = ["(No response text returned.)"]
-        if preview_message_id:
-            if len(chunks) == 1:
-                try:
-                    await self._rest.edit_channel_message(
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        payload={"content": chunks[0]},
-                    )
-                    return
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.turn.preview.final_edit_failed",
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        exc=exc,
-                    )
-            try:
-                await self._rest.delete_channel_message(
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.turn.preview.delete_failed",
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                    exc=exc,
-                )
         for idx, chunk in enumerate(chunks, 1):
             await self._send_channel_message_safe(
                 channel_id,
                 {"content": chunk},
                 record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
+            )
+        if preview_message_id:
+            await self._delete_channel_message_safe(
+                channel_id,
+                preview_message_id,
+                record_id=f"turn-preview-delete:{session_key}:{uuid.uuid4().hex[:8]}",
             )
 
     async def _with_attachment_context(
@@ -1626,6 +1675,7 @@ class DiscordBotService:
             await self._handle_car_update(
                 interaction_id,
                 interaction_token,
+                channel_id=channel_id,
                 options=options,
             )
             return
@@ -1986,6 +2036,11 @@ class DiscordBotService:
             )
 
     async def _shutdown(self) -> None:
+        if self._background_tasks:
+            for task in list(self._background_tasks):
+                task.cancel()
+            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
+            self._background_tasks.clear()
         if self._owns_gateway:
             with contextlib.suppress(Exception):
                 await self._gateway.stop()
@@ -2100,6 +2155,12 @@ class DiscordBotService:
             channel_id=channel_id, payload=payload
         )
 
+    async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
+        await self._rest.delete_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+        )
+
     async def _send_channel_message_safe(
         self,
         channel_id: str,
@@ -2142,6 +2203,72 @@ class DiscordBotService:
                     exc=enqueue_exc,
                 )
 
+    async def _delete_channel_message_safe(
+        self,
+        channel_id: str,
+        message_id: str,
+        *,
+        record_id: Optional[str] = None,
+    ) -> None:
+        if not isinstance(message_id, str) or not message_id:
+            return
+        try:
+            await self._delete_channel_message(channel_id, message_id)
+            return
+        except Exception as exc:
+            outbox_record_id = (
+                record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_message.delete_failed",
+                channel_id=channel_id,
+                message_id=message_id,
+                record_id=outbox_record_id,
+                exc=exc,
+            )
+            try:
+                await self._store.enqueue_outbox(
+                    OutboxRecord(
+                        record_id=outbox_record_id,
+                        channel_id=channel_id,
+                        message_id=message_id,
+                        operation="delete",
+                        payload_json={},
+                    )
+                )
+            except Exception as enqueue_exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.channel_message.delete_enqueue_failed",
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    record_id=outbox_record_id,
+                    exc=enqueue_exc,
+                )
+
+    def _spawn_task(self, coro: Awaitable[None]) -> asyncio.Task[Any]:
+        task: asyncio.Task[Any] = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+        return task
+
+    def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
+        self._background_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.background_task.failed",
+                exc=exc,
+            )
+
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
             event = self._chat_adapter.parse_interaction_event(payload)
@@ -2150,7 +2277,7 @@ class DiscordBotService:
         elif event_type == "MESSAGE_CREATE":
             event = self._chat_adapter.parse_message_event(payload)
             if event is not None:
-                await self._dispatcher.dispatch(event, self._handle_chat_event)
+                await self._dispatch_chat_event(event)
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
         if is_component_interaction(interaction_payload):
@@ -2875,6 +3002,7 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
         *,
+        channel_id: str,
         options: dict[str, Any],
     ) -> None:
         raw_target = options.get("target")
@@ -2904,6 +3032,9 @@ class DiscordBotService:
             self._update_repo_ref or DEFAULT_UPDATE_REPO_REF
         )
         update_dir = resolve_update_paths().cache_dir
+        notify_metadata = self._update_status_notifier.build_spawn_metadata(
+            chat_id=channel_id
+        )
 
         linux_hub_service_name: Optional[str] = None
         linux_telegram_service_name: Optional[str] = None
@@ -2933,6 +3064,7 @@ class DiscordBotService:
                 linux_hub_service_name=linux_hub_service_name,
                 linux_telegram_service_name=linux_telegram_service_name,
                 linux_discord_service_name=linux_discord_service_name,
+                **notify_metadata,
             )
         except UpdateInProgressError as exc:
             text = format_discord_message(
@@ -2961,12 +3093,56 @@ class DiscordBotService:
 
         text = format_discord_message(
             f"Update started ({update_target}). The selected service(s) will restart. "
+            "I will post completion status in this channel. "
             "Use `/car update target:status` for progress."
         )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
             text,
+        )
+        self._update_status_notifier.schedule_watch({"chat_id": channel_id})
+
+    def _update_status_path(self) -> Path:
+        return resolve_update_paths().status_path
+
+    def _format_update_status_message(self, status: Optional[dict[str, Any]]) -> str:
+        rendered = format_update_status_message(status)
+        if not status:
+            return rendered
+        lines = [rendered]
+        target = status.get("update_target")
+        if isinstance(target, str) and target.strip():
+            lines.append(f"Target: {target.strip()}")
+        repo_ref = status.get("repo_ref")
+        if isinstance(repo_ref, str) and repo_ref.strip():
+            lines.append(f"Ref: {repo_ref.strip()}")
+        log_path = status.get("log_path")
+        if isinstance(log_path, str) and log_path.strip():
+            lines.append(f"Log: {log_path.strip()}")
+        return "\n".join(lines)
+
+    async def _send_update_status_notice(
+        self, notify_context: dict[str, Any], text: str
+    ) -> None:
+        channel_raw = notify_context.get("chat_id")
+        if isinstance(channel_raw, int) and not isinstance(channel_raw, bool):
+            channel_id = str(channel_raw)
+        elif isinstance(channel_raw, str) and channel_raw.strip():
+            channel_id = channel_raw.strip()
+        else:
+            return
+        await self._send_channel_message_safe(
+            channel_id,
+            {"content": format_discord_message(text)},
+        )
+
+    def _mark_update_notified(self, status: dict[str, Any]) -> None:
+        mark_update_status_notified(
+            path=self._update_status_path(),
+            status=status,
+            logger=self._logger,
+            log_event_name="discord.update.notify_write_failed",
         )
 
     async def _handle_car_update_status(
@@ -2977,44 +3153,11 @@ class DiscordBotService:
     ) -> None:
         status = await asyncio.to_thread(_read_update_status)
         if not isinstance(status, dict):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No update status recorded yet.",
-            )
-            return
-
-        state = str(status.get("status", "unknown"))
-        message_raw = status.get("message")
-        message = message_raw if isinstance(message_raw, str) else ""
-
-        lines = [f"Update status: {state}"]
-        if message:
-            lines.append(message)
-
-        target = status.get("update_target")
-        if isinstance(target, str) and target.strip():
-            lines.append(f"Target: {target.strip()}")
-
-        repo_ref = status.get("repo_ref")
-        if isinstance(repo_ref, str) and repo_ref.strip():
-            lines.append(f"Ref: {repo_ref.strip()}")
-
-        at_raw = status.get("at")
-        if isinstance(at_raw, (int, float)):
-            at_text = datetime.fromtimestamp(float(at_raw)).isoformat(
-                timespec="seconds"
-            )
-            lines.append(f"Updated: {at_text}")
-
-        log_path = status.get("log_path")
-        if isinstance(log_path, str) and log_path.strip():
-            lines.append(f"Log: {log_path.strip()}")
-
+            status = None
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "\n".join(lines),
+            self._format_update_status_message(status),
         )
 
     VALID_AGENT_VALUES = ("codex", "opencode")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import subprocess
 from pathlib import Path
@@ -189,6 +190,12 @@ class _EditFailingProgressRest(_FakeRest):
     ) -> dict[str, Any]:
         self.edit_attempts += 1
         raise RuntimeError("simulated progress edit failure")
+
+
+class _DeleteFailingProgressRest(_FakeRest):
+    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
+        _ = (channel_id, message_id)
+        raise RuntimeError("simulated progress delete failure")
 
 
 class _FlakyEditProgressRest(_FakeRest):
@@ -699,7 +706,7 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_completion_edits_preview_for_single_chunk(
+async def test_message_create_streaming_turn_completion_sends_final_and_deletes_preview(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -740,13 +747,9 @@ async def test_message_create_streaming_turn_completion_edits_preview_for_single
 
     try:
         await service.run_forever()
-        assert rest.edited_channel_messages
-        assert rest.deleted_channel_messages == []
+        assert rest.deleted_channel_messages
+        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
         assert any(
-            final_text in msg["payload"].get("content", "")
-            for msg in rest.edited_channel_messages
-        )
-        assert not any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
@@ -971,6 +974,61 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
         assert any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_delete_preview_failure_still_sends_final(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _DeleteFailingProgressRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "final despite preview delete failure"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        pending = await store.list_outbox()
+        assert any(
+            record.operation == "delete" and record.message_id == "msg-1"
+            for record in pending
         )
     finally:
         await store.close()
@@ -1704,6 +1762,87 @@ async def test_message_create_attachment_only_resumes_paused_flow_run(
             for msg in rest.channel_messages
         )
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            ("MESSAGE_CREATE", _message_create("first message", message_id="m-1")),
+            ("MESSAGE_CREATE", _message_create("second message", message_id="m-2")),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    turn_count = 0
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        nonlocal turn_count
+        turn_count += 1
+        if turn_count == 1:
+            first_started.set()
+            await release_first.wait()
+            return "first reply"
+        return "second reply"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    async def _release_later() -> None:
+        await first_started.wait()
+        await asyncio.sleep(0.05)
+        release_first.set()
+
+    release_task = asyncio.create_task(_release_later())
+    try:
+        await asyncio.wait_for(service.run_forever(), timeout=5)
+        contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
+        assert any(
+            "Queued (waiting for available worker...)" in content
+            for content in contents
+        )
+        assert any("first reply" in content for content in contents)
+        assert any("second reply" in content for content in contents)
+    finally:
+        if not release_task.done():
+            release_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await release_task
         await store.close()
 
 
