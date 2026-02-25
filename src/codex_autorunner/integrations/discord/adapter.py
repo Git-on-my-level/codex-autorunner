@@ -256,6 +256,11 @@ class DiscordChatAdapter(ChatAdapter):
             filename = attachment.get("filename")
             content_type = attachment.get("content_type")
             size = attachment.get("size")
+            source_url = attachment.get("url")
+            if not isinstance(source_url, str) or not source_url.strip():
+                source_url = attachment.get("proxy_url")
+            if not isinstance(source_url, str) or not source_url.strip():
+                source_url = None
 
             kind = "document"
             if content_type:
@@ -273,6 +278,7 @@ class DiscordChatAdapter(ChatAdapter):
                     file_name=filename,
                     mime_type=content_type,
                     size_bytes=size if isinstance(size, int) else None,
+                    source_url=source_url,
                 )
             )
 

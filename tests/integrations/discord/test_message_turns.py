@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.core.ports.run_event import Completed, OutputDelta, Started
+from codex_autorunner.core.filebox import inbox_dir, outbox_pending_dir
+from codex_autorunner.core.ports.run_event import (
+    Completed,
+    OutputDelta,
+    Started,
+    ToolCall,
+)
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -17,6 +24,7 @@ from codex_autorunner.integrations.app_server.threads import (
 )
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
@@ -27,8 +35,12 @@ class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
+        self.attachment_messages: list[dict[str, Any]] = []
         self.edited_channel_messages: list[dict[str, Any]] = []
+        self.deleted_channel_messages: list[dict[str, Any]] = []
         self.message_ops: list[dict[str, Any]] = []
+        self.download_requests: list[dict[str, Any]] = []
+        self.attachment_data_by_url: dict[str, bytes] = {}
 
     async def create_interaction_response(
         self,
@@ -62,6 +74,33 @@ class _FakeRest:
         )
         return message
 
+    async def create_channel_message_with_attachment(
+        self,
+        *,
+        channel_id: str,
+        data: bytes,
+        filename: str,
+        caption: Optional[str] = None,
+    ) -> dict[str, Any]:
+        self.attachment_messages.append(
+            {
+                "channel_id": channel_id,
+                "data": data,
+                "filename": filename,
+                "caption": caption,
+            }
+        )
+        message = {"id": f"att-{len(self.attachment_messages)}"}
+        self.message_ops.append(
+            {
+                "op": "send_attachment",
+                "channel_id": channel_id,
+                "filename": filename,
+                "message_id": message["id"],
+            }
+        )
+        return message
+
     async def edit_channel_message(
         self, *, channel_id: str, message_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -81,6 +120,26 @@ class _FakeRest:
             }
         )
         return {"id": message_id}
+
+    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
+        self.deleted_channel_messages.append(
+            {"channel_id": channel_id, "message_id": message_id}
+        )
+        self.message_ops.append(
+            {
+                "op": "delete",
+                "channel_id": channel_id,
+                "message_id": message_id,
+            }
+        )
+
+    async def download_attachment(
+        self, *, url: str, max_size_bytes: Optional[int] = None
+    ) -> bytes:
+        self.download_requests.append({"url": url, "max_size_bytes": max_size_bytes})
+        if url not in self.attachment_data_by_url:
+            raise RuntimeError(f"no attachment fixture for {url}")
+        return self.attachment_data_by_url[url]
 
     async def bulk_overwrite_application_commands(
         self,
@@ -130,6 +189,25 @@ class _EditFailingProgressRest(_FakeRest):
     ) -> dict[str, Any]:
         self.edit_attempts += 1
         raise RuntimeError("simulated progress edit failure")
+
+
+class _FlakyEditProgressRest(_FakeRest):
+    def __init__(self, *, fail_first_edits: int) -> None:
+        super().__init__()
+        self.edit_attempts = 0
+        self.fail_first_edits = max(0, int(fail_first_edits))
+
+    async def edit_channel_message(
+        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.edit_attempts += 1
+        if self.edit_attempts <= self.fail_first_edits:
+            raise RuntimeError("simulated transient progress edit failure")
+        return await super().edit_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+            payload=payload,
+        )
 
 
 class _FakeGateway:
@@ -230,6 +308,10 @@ def _config(
     allowed_channel_ids: frozenset[str] = frozenset({"channel-1"}),
     command_registration_enabled: bool = False,
     pma_enabled: bool = True,
+    shell_enabled: bool = True,
+    shell_timeout_ms: int = 120000,
+    shell_max_output_chars: int = 3800,
+    max_message_length: int = 2000,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -248,9 +330,14 @@ def _config(
         ),
         state_file=root / ".codex-autorunner" / "discord_state.sqlite3",
         intents=1,
-        max_message_length=2000,
+        max_message_length=max_message_length,
         message_overflow="split",
         pma_enabled=pma_enabled,
+        shell=DiscordBotShellConfig(
+            enabled=shell_enabled,
+            timeout_ms=shell_timeout_ms,
+            max_output_chars=shell_max_output_chars,
+        ),
     )
 
 
@@ -289,18 +376,20 @@ def _pma_interaction(subcommand: str) -> dict[str, Any]:
 
 
 def _message_create(
-    content: str,
+    content: str = "",
     *,
+    message_id: str = "m-1",
     guild_id: str = "guild-1",
     channel_id: str = "channel-1",
+    attachments: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     return {
-        "id": "m-1",
+        "id": message_id,
         "channel_id": channel_id,
         "guild_id": guild_id,
         "content": content,
         "author": {"id": "user-1", "bot": False},
-        "attachments": [],
+        "attachments": attachments or [],
     }
 
 
@@ -379,6 +468,182 @@ async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_message_create_attachment_only_downloads_to_inbox_and_runs_turn(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/file-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"attachment-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-1",
+                            "filename": "report.txt",
+                            "content_type": "text/plain",
+                            "size": 16,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done with attachment"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "Inbound Discord attachments:" in prompt
+        assert "Outbox (pending):" in prompt
+        inbox = inbox_dir(workspace.resolve())
+        saved_files = [path for path in inbox.iterdir() if path.is_file()]
+        assert len(saved_files) == 1
+        assert saved_files[0].read_bytes() == b"attachment-bytes"
+        assert str(saved_files[0]) in prompt
+        assert str(outbox_pending_dir(workspace.resolve())) in prompt
+        assert len(rest.download_requests) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_attachment_and_text_keeps_text_and_adds_file_context(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/file-2"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"image-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="Please analyze the screenshot.",
+                    attachments=[
+                        {
+                            "id": "att-2",
+                            "filename": "screen.png",
+                            "content_type": "image/png",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done with text+attachment"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert prompt.startswith("Please analyze the screenshot.")
+        assert "Inbound Discord attachments:" in prompt
+        assert "screen.png" in prompt
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,
 ) -> None:
@@ -434,7 +699,7 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_completion_still_sends_final_response(
+async def test_message_create_streaming_turn_completion_edits_preview_for_single_chunk(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -476,10 +741,71 @@ async def test_message_create_streaming_turn_completion_still_sends_final_respon
     try:
         await service.run_forever()
         assert rest.edited_channel_messages
+        assert rest.deleted_channel_messages == []
         assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.edited_channel_messages
+        )
+        assert not any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sends_chunks(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=80),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "\n".join(
+        [f"line {index} with enough content for chunking" for index in range(1, 20)]
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.deleted_channel_messages
+        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
+        final_sends = [
+            op
+            for op in rest.message_ops
+            if op.get("op") == "send" and op.get("message_id") != "msg-1"
+        ]
+        assert len(final_sends) >= 2
     finally:
         await store.close()
 
@@ -641,10 +967,76 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
     try:
         await service.run_forever()
         assert 1 <= rest.edit_attempts <= 2
+        assert rest.deleted_channel_messages
         assert any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_progress_edit_recovers_after_transient_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FlakyEditProgressRest(fail_first_edits=3)
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=80),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS",
+        0.0,
+    )
+    final_text = "\n".join(
+        [f"line {index} with enough content for chunking" for index in range(1, 20)]
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            ToolCall(
+                timestamp="2026-01-01T00:00:02Z",
+                tool_name="first_tool",
+                tool_input={},
+            ),
+            ToolCall(
+                timestamp="2026-01-01T00:00:03Z",
+                tool_name="second_tool",
+                tool_input={},
+            ),
+            OutputDelta(timestamp="2026-01-01T00:00:04Z", content="still thinking"),
+            Completed(timestamp="2026-01-01T00:00:05Z", final_message=final_text),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.edit_attempts >= 4
+        assert rest.edited_channel_messages
     finally:
         await store.close()
 
@@ -790,6 +1182,168 @@ async def test_message_create_ignores_slash_prefixed_text(
     try:
         await service.run_forever()
         assert rest.channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_bang_shell_executes_in_bound_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!pwd"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    seen: dict[str, Any] = {}
+
+    def _fake_shell_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args[0], 0, "/tmp/workspace\n", "")
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("bang-prefixed messages should bypass agent turn path")
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _fake_shell_run,
+    )
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+
+    try:
+        await service.run_forever()
+        assert seen["args"][0] == ["bash", "-lc", "pwd"]
+        assert seen["kwargs"]["cwd"] == workspace.resolve()
+        assert any(
+            "$ pwd" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert any(
+            "/tmp/workspace" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_bang_shell_honors_shell_disable_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!ls"))])
+    service = DiscordBotService(
+        _config(tmp_path, shell_enabled=False),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("bang-prefixed shell command should not run agent turn")
+
+    def _should_not_run_shell(*args: Any, **kwargs: Any) -> None:  # pragma: no cover
+        raise AssertionError("shell execution should stay disabled")
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _should_not_run_shell,
+    )
+
+    try:
+        await service.run_forever()
+        assert any(
+            "Shell commands are disabled" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_bang_shell_attaches_oversized_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!echo long"))])
+    service = DiscordBotService(
+        _config(tmp_path, shell_max_output_chars=12),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    long_output = "1234567890abcdefghijklmnopqrstuvwxyz\n"
+
+    def _fake_shell_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args[0], 0, long_output, "")
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _fake_shell_run,
+    )
+
+    try:
+        await service.run_forever()
+        assert any(
+            "$ echo long" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert rest.attachment_messages
+        assert rest.attachment_messages[0]["filename"].startswith("shell-output-")
+        assert (
+            long_output.encode("utf-8").rstrip(b"\n")
+            in rest.attachment_messages[0]["data"]
+        )
     finally:
         await store.close()
 
@@ -1045,6 +1599,106 @@ async def test_message_create_resumes_paused_flow_run_in_repo_mode(
 
     try:
         await service.run_forever()
+        assert any(
+            "resumed paused run `run-paused`" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_attachment_only_resumes_paused_flow_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/paused-file-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"paused-attachment"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-paused-1",
+                            "filename": "evidence.pdf",
+                            "content_type": "application/pdf",
+                            "size": 17,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    paused = SimpleNamespace(id="run-paused")
+    reply_path = workspace / ".codex-autorunner" / "runs" / paused.id / "USER_REPLY.md"
+    reply_path.parent.mkdir(parents=True, exist_ok=True)
+    captured: dict[str, str] = {}
+
+    async def _fake_find_paused(_: Path):
+        return paused
+
+    def _fake_write_reply(_: Path, record: Any, text: str) -> Path:
+        assert record is paused
+        captured["text"] = text
+        reply_path.write_text(text, encoding="utf-8")
+        return reply_path
+
+    class _FakeController:
+        async def resume_flow(self, run_id: str):
+            assert run_id == paused.id
+            return SimpleNamespace(
+                id=run_id,
+                status=SimpleNamespace(is_terminal=lambda: False),
+            )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("agent turn should not run while a paused flow is waiting")
+
+    monkeypatch.setattr(service, "_find_paused_flow_run", _fake_find_paused)
+    monkeypatch.setattr(service, "_write_user_reply", _fake_write_reply)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
+        lambda _: _FakeController(),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.ensure_worker",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+
+    try:
+        await service.run_forever()
+        assert "Inbound Discord attachments:" in captured.get("text", "")
+        assert "evidence.pdf" in captured.get("text", "")
+        assert str(inbox_dir(workspace.resolve())) in captured.get("text", "")
+        assert str(outbox_pending_dir(workspace.resolve())) in captured.get("text", "")
+        assert len(rest.download_requests) == 1
         assert any(
             "resumed paused run `run-paused`" in msg["payload"].get("content", "")
             for msg in rest.channel_messages

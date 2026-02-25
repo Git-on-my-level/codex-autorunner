@@ -325,6 +325,20 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
+    discord_shell_passthrough = _contains_all(
+        discord_service_text,
+        "def _handle_bang_shell(",
+        'if text.startswith("!")',
+    )
+    checks.append(
+        ParityCheck(
+            entrypoint="discord",
+            primitive="shell_passthrough",
+            passed=discord_shell_passthrough,
+            details="available via !<shell command> when discord_bot.shell.enabled=true",
+        )
+    )
+
     discord_pma_delivery = "_resolve_discord_target" in Path(
         "src/codex_autorunner/integrations/pma_delivery.py"
     ).read_text(encoding="utf-8")

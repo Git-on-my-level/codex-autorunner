@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,8 +13,10 @@ from codex_autorunner.core.ports.run_event import (
     Completed,
     Failed,
     OutputDelta,
+    RunNotice,
     Started,
     TokenUsage,
+    ToolCall,
     is_terminal_run_event,
 )
 from codex_autorunner.integrations.agents.codex_backend import CodexAppServerBackend
@@ -67,6 +70,59 @@ async def test_codex_backend_run_turn_events_obeys_contract(tmp_path: Path) -> N
     assert events[-1].final_message == "Done"
 
 
+@pytest.mark.asyncio
+async def test_codex_backend_run_turn_events_timeout_emits_failed_terminal(
+    tmp_path: Path,
+) -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=tmp_path,
+        turn_timeout_seconds=0.01,
+    )
+    backend._thread_id = "thread-123"
+
+    observed_timeout: dict[str, object] = {"value": None}
+
+    async def _wait(*, timeout: object = None) -> object:
+        observed_timeout["value"] = timeout
+        await backend._handle_notification(
+            {
+                "method": "item/reasoning/summaryTextDelta",
+                "params": {
+                    "threadId": "thread-123",
+                    "turnId": "turn-123",
+                    "itemId": "reason-1",
+                    "delta": "**Planning",
+                },
+            }
+        )
+        await asyncio.sleep(0.01)
+        raise asyncio.TimeoutError("turn timeout")
+
+    with patch.object(
+        backend, "_ensure_client", new_callable=AsyncMock
+    ) as ensure_client:
+        client = MagicMock()
+        handle = MagicMock()
+        handle.turn_id = "turn-123"
+        handle.wait = AsyncMock(side_effect=_wait)
+        client.turn_start = AsyncMock(return_value=handle)
+        ensure_client.return_value = client
+
+        events = [
+            event
+            async for event in backend.run_turn_events("thread-123", "hello codex")
+        ]
+
+    _assert_turn_contract(events)
+    assert observed_timeout["value"] == 0.01
+    assert any(
+        isinstance(event, RunNotice) and event.kind == "thinking" for event in events
+    )
+    assert isinstance(events[-1], Failed)
+    assert "timeout" in events[-1].error_message.lower()
+
+
 def test_codex_notification_parser_golden_transcript() -> None:
     backend = CodexAppServerBackend(
         supervisor=MagicMock(),
@@ -100,6 +156,133 @@ def test_codex_notification_parser_golden_transcript() -> None:
     assert usage[0].usage["total_tokens"] == 20
     assert isinstance(events[-1], Failed)
     assert "permission denied" in events[-1].error_message
+
+
+def test_codex_notification_parser_supports_outputdelta_reasoning_and_item_completed() -> (
+    None
+):
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=Path("."),
+    )
+    notifications = [
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "delta": "planning next step"},
+        },
+        {
+            "method": "outputDelta",
+            "params": {"turnId": "turn-1", "delta": "hello"},
+        },
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"turnId": "turn-1", "itemId": "msg-1", "delta": " there"},
+        },
+        {
+            "method": "item/commandExecution/outputDelta",
+            "params": {"turnId": "turn-1", "itemId": "cmd-1", "delta": "ls output"},
+        },
+        {
+            "method": "item/fileChange/outputDelta",
+            "params": {"turnId": "turn-1", "itemId": "file-1", "delta": "patch line"},
+        },
+        {
+            "method": "item/completed",
+            "params": {
+                "turnId": "turn-1",
+                "item": {"type": "commandExecution", "command": ["ls", "-la"]},
+            },
+        },
+        {
+            "method": "item/completed",
+            "params": {
+                "turnId": "turn-1",
+                "item": {"type": "agentMessage", "text": "done"},
+            },
+        },
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "turnId": "turn-1",
+                "tokenUsage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+    ]
+    events = [
+        event
+        for event in (
+            backend._map_to_run_event(notification) for notification in notifications
+        )
+        if event is not None
+    ]
+
+    assert isinstance(events[0], RunNotice)
+    assert events[0].kind == "thinking"
+    assert "planning" in events[0].message
+
+    assert isinstance(events[1], OutputDelta)
+    assert events[1].content == "hello"
+    assert events[1].delta_type == "assistant_stream"
+
+    assert isinstance(events[2], OutputDelta)
+    assert events[2].content == " there"
+    assert events[2].delta_type == "assistant_stream"
+
+    assert isinstance(events[3], OutputDelta)
+    assert events[3].content == "ls output"
+    assert events[3].delta_type == "log_line"
+
+    assert isinstance(events[4], OutputDelta)
+    assert events[4].content == "patch line"
+    assert events[4].delta_type == "log_line"
+
+    assert isinstance(events[5], ToolCall)
+    assert events[5].tool_name == "ls -la"
+
+    assert isinstance(events[6], OutputDelta)
+    assert events[6].content == "done"
+
+    assert isinstance(events[7], TokenUsage)
+    assert events[7].usage["input_tokens"] == 10
+
+
+def test_codex_notification_parser_accumulates_reasoning_deltas_per_item() -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=Path("."),
+    )
+    notifications = [
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "itemId": "reason-1", "delta": "plan"},
+        },
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "itemId": "reason-1", "delta": " next"},
+        },
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"turnId": "turn-1", "itemId": "reason-1", "delta": " step"},
+        },
+    ]
+
+    events = [
+        event
+        for event in (
+            backend._map_to_run_event(notification) for notification in notifications
+        )
+        if event is not None
+    ]
+
+    assert [type(event).__name__ for event in events] == [
+        "RunNotice",
+        "RunNotice",
+        "RunNotice",
+    ]
+    assert all(isinstance(event, RunNotice) for event in events)
+    assert events[0].message == "plan"
+    assert events[1].message == "plan next"
+    assert events[2].message == "plan next step"
 
 
 def test_opencode_sse_parser_golden_transcript() -> None:

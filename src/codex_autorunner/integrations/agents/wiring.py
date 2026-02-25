@@ -60,6 +60,7 @@ class AgentBackendFactory:
             default_approval_decision = (
                 self._config.ticket_flow.default_approval_decision
             )
+            turn_timeout_seconds = self._config.app_server.turn_timeout_seconds
 
             cached = self._backend_cache.get(agent_id)
             if cached is None:
@@ -70,7 +71,7 @@ class AgentBackendFactory:
                     sandbox_policy=sandbox_policy,
                     model=model,
                     reasoning_effort=reasoning_effort,
-                    turn_timeout_seconds=None,
+                    turn_timeout_seconds=turn_timeout_seconds,
                     auto_restart=self._config.app_server.auto_restart,
                     request_timeout=self._config.app_server.request_timeout,
                     turn_stall_timeout_seconds=self._config.app_server.turn_stall_timeout_seconds,
@@ -95,7 +96,7 @@ class AgentBackendFactory:
                         sandbox_policy=sandbox_policy,
                         model=model,
                         reasoning_effort=reasoning_effort,
-                        turn_timeout_seconds=None,
+                        turn_timeout_seconds=turn_timeout_seconds,
                         notification_handler=notification_handler,
                         default_approval_decision=default_approval_decision,
                     )

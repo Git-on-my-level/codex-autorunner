@@ -5,8 +5,10 @@ import contextlib
 import hashlib
 import logging
 import sqlite3
+import subprocess
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -25,6 +27,7 @@ from ...core.flows import (
     load_latest_paused_ticket_flow_dispatch,
 )
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
+from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ...core.pma_sink import PmaActiveSinkStore
@@ -48,7 +51,10 @@ from ...core.update import (
     _spawn_update_process,
 )
 from ...core.update_paths import resolve_update_paths
-from ...core.utils import canonicalize_path
+from ...core.utils import (
+    canonicalize_path,
+    find_repo_root,
+)
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.app_server.threads import (
@@ -71,6 +77,11 @@ from ...integrations.chat.models import (
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
+)
+from ...integrations.github.service import (
+    GitHubService,
+    find_github_links,
+    parse_github_url,
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
@@ -102,6 +113,7 @@ from .interactions import (
 from .outbox import DiscordOutboxManager
 from .rendering import (
     chunk_discord_message,
+    format_discord_message,
     truncate_for_discord,
 )
 from .rest import DiscordRestClient
@@ -116,8 +128,17 @@ MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
 DEFAULT_UPDATE_REPO_REF = "main"
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
+DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 8
 DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS = 120
+SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
+DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
+
+
+@dataclass(frozen=True)
+class DiscordMessageTurnResult:
+    final_message: str
+    preview_message_id: Optional[str] = None
 
 
 class DiscordBotService:
@@ -437,11 +458,12 @@ class DiscordBotService:
     ) -> None:
         channel_id = context.chat_id
         text = (event.text or "").strip()
-        if not text:
+        has_attachments = bool(event.attachments)
+        if not text and not has_attachments:
             return
         if text.startswith("/"):
             return
-        if not should_trigger_plain_text_turn(
+        if text and not should_trigger_plain_text_turn(
             mode="always",
             context=PlainTextTurnContext(text=text),
         ):
@@ -449,11 +471,12 @@ class DiscordBotService:
 
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            content = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<workspace>` or `/pma on`."
+            )
             await self._send_channel_message_safe(
                 channel_id,
-                {
-                    "content": "This channel is not bound. Run `/car bind path:<workspace>` or `/pma on`.",
-                },
+                {"content": content},
             )
             return
 
@@ -471,16 +494,52 @@ class DiscordBotService:
                 workspace_root = fallback
 
         if workspace_root is None:
+            content = format_discord_message(
+                "Binding is invalid. Run `/car bind path:<workspace>`."
+            )
             await self._send_channel_message_safe(
                 channel_id,
-                {"content": "Binding is invalid. Run `/car bind path:<workspace>`."},
+                {"content": content},
             )
             return
 
         if not pma_enabled:
             paused = await self._find_paused_flow_run(workspace_root)
             if paused is not None:
-                reply_path = self._write_user_reply(workspace_root, paused, text)
+                reply_text = text
+                if has_attachments:
+                    (
+                        reply_text,
+                        saved_attachments,
+                        failed_attachments,
+                    ) = await self._with_attachment_context(
+                        prompt_text=text,
+                        workspace_root=workspace_root,
+                        attachments=event.attachments,
+                        channel_id=channel_id,
+                    )
+                    if failed_attachments > 0:
+                        warning = (
+                            "Some Discord attachments could not be downloaded. "
+                            "Continuing with available inputs."
+                        )
+                        await self._send_channel_message_safe(
+                            channel_id,
+                            {"content": warning},
+                        )
+                    if not reply_text.strip() and saved_attachments == 0:
+                        await self._send_channel_message_safe(
+                            channel_id,
+                            {
+                                "content": (
+                                    "Failed to download attachments from Discord. "
+                                    "Please retry."
+                                ),
+                            },
+                        )
+                        return
+
+                reply_path = self._write_user_reply(workspace_root, paused, reply_text)
                 controller = build_ticket_flow_controller(workspace_root)
                 try:
                     updated = await controller.resume_flow(paused.id)
@@ -496,15 +555,23 @@ class DiscordBotService:
                     is_terminal=updated.status.is_terminal(),
                 )
                 self._close_worker_handles(ensure_result)
+                content = format_discord_message(
+                    f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
+                )
                 await self._send_channel_message_safe(
                     channel_id,
-                    {
-                        "content": (
-                            f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
-                        )
-                    },
+                    {"content": content},
                 )
                 return
+
+        if text.startswith("!") and not event.attachments:
+            await self._handle_bang_shell(
+                channel_id=channel_id,
+                message_id=event.message.message_id,
+                text=text,
+                workspace_root=workspace_root,
+            )
+            return
 
         prompt_text = text
         if pma_enabled:
@@ -537,6 +604,39 @@ class DiscordBotService:
                 )
                 return
 
+        (
+            prompt_text,
+            saved_attachments,
+            failed_attachments,
+        ) = await self._with_attachment_context(
+            prompt_text=prompt_text,
+            workspace_root=workspace_root,
+            attachments=event.attachments,
+            channel_id=channel_id,
+        )
+        if failed_attachments > 0:
+            warning = (
+                "Some Discord attachments could not be downloaded. "
+                "Continuing with available inputs."
+            )
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": warning},
+            )
+        if not prompt_text.strip():
+            if has_attachments and saved_attachments == 0:
+                await self._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": "Failed to download attachments from Discord. Please retry.",
+                    },
+                )
+            return
+
+        prompt_text, github_injected = await self._maybe_inject_github_context(
+            prompt_text, workspace_root
+        )
+
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
@@ -554,7 +654,7 @@ class DiscordBotService:
             agent=agent,
         )
         try:
-            response_text = await self._run_agent_turn_for_message(
+            turn_result = await self._run_agent_turn_for_message(
                 workspace_root=workspace_root,
                 prompt_text=prompt_text,
                 agent=agent,
@@ -581,6 +681,13 @@ class DiscordBotService:
             )
             return
 
+        preview_message_id: Optional[str] = None
+        if isinstance(turn_result, DiscordMessageTurnResult):
+            response_text = turn_result.final_message
+            preview_message_id = turn_result.preview_message_id
+        else:
+            response_text = str(turn_result or "")
+
         chunks = chunk_discord_message(
             response_text or "(No response text returned.)",
             max_len=self._config.max_message_length,
@@ -588,12 +695,152 @@ class DiscordBotService:
         )
         if not chunks:
             chunks = ["(No response text returned.)"]
+        if preview_message_id:
+            if len(chunks) == 1:
+                try:
+                    await self._rest.edit_channel_message(
+                        channel_id=channel_id,
+                        message_id=preview_message_id,
+                        payload={"content": chunks[0]},
+                    )
+                    return
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.turn.preview.final_edit_failed",
+                        channel_id=channel_id,
+                        message_id=preview_message_id,
+                        exc=exc,
+                    )
+            try:
+                await self._rest.delete_channel_message(
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.turn.preview.delete_failed",
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    exc=exc,
+                )
         for idx, chunk in enumerate(chunks, 1):
             await self._send_channel_message_safe(
                 channel_id,
                 {"content": chunk},
                 record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
             )
+
+    async def _with_attachment_context(
+        self,
+        *,
+        prompt_text: str,
+        workspace_root: Path,
+        attachments: tuple[Any, ...],
+        channel_id: str,
+    ) -> tuple[str, int, int]:
+        if not attachments:
+            return prompt_text, 0, 0
+
+        inbox = inbox_dir(workspace_root)
+        inbox.mkdir(parents=True, exist_ok=True)
+        saved: list[tuple[str, Path, Optional[str], int]] = []
+        failed = 0
+        for index, attachment in enumerate(attachments, start=1):
+            source_url = getattr(attachment, "source_url", None)
+            if not isinstance(source_url, str) or not source_url.strip():
+                failed += 1
+                continue
+            try:
+                size_bytes = getattr(attachment, "size_bytes", None)
+                if (
+                    isinstance(size_bytes, int)
+                    and size_bytes > DISCORD_ATTACHMENT_MAX_BYTES
+                ):
+                    raise RuntimeError(
+                        f"attachment exceeds max size ({size_bytes} > {DISCORD_ATTACHMENT_MAX_BYTES})"
+                    )
+                data = await self._rest.download_attachment(
+                    url=source_url,
+                    max_size_bytes=DISCORD_ATTACHMENT_MAX_BYTES,
+                )
+                file_name = self._build_attachment_filename(attachment, index=index)
+                path = inbox / file_name
+                path.write_bytes(data)
+                original_name = getattr(attachment, "file_name", None) or path.name
+                mime_type = getattr(attachment, "mime_type", None)
+                saved.append((str(original_name), path, mime_type, len(data)))
+            except Exception as exc:
+                failed += 1
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.turn.attachment.download_failed",
+                    channel_id=channel_id,
+                    file_id=getattr(attachment, "file_id", None),
+                    exc=exc,
+                )
+
+        if not saved:
+            return prompt_text, 0, failed
+
+        details: list[str] = ["Inbound Discord attachments:"]
+        for original_name, path, mime_type, size in saved:
+            details.append(f"- Name: {original_name}")
+            details.append(f"  Saved to: {path}")
+            details.append(f"  Size: {size} bytes")
+            if mime_type:
+                details.append(f"  Mime: {mime_type}")
+        details.append("")
+        details.append(
+            wrap_injected_context(
+                "\n".join(
+                    [
+                        f"Inbox: {inbox}",
+                        f"Outbox (pending): {outbox_pending_dir(workspace_root)}",
+                        "Use inbox files as local inputs and place reply files in outbox (pending).",
+                    ]
+                )
+            )
+        )
+        attachment_context = "\n".join(details)
+
+        if prompt_text.strip():
+            separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+            return f"{prompt_text}{separator}{attachment_context}", len(saved), failed
+        return attachment_context, len(saved), failed
+
+    def _build_attachment_filename(self, attachment: Any, *, index: int) -> str:
+        raw_name = getattr(attachment, "file_name", None) or f"attachment-{index}"
+        base_name = Path(str(raw_name)).name.strip()
+        if not base_name or base_name in {".", ".."}:
+            base_name = f"attachment-{index}"
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in base_name
+        ).strip("._")
+        if not safe_name:
+            safe_name = f"attachment-{index}"
+
+        path = Path(safe_name)
+        stem = path.stem or f"attachment-{index}"
+        suffix = path.suffix.lower()
+        if not suffix:
+            mime_type = getattr(attachment, "mime_type", None)
+            if isinstance(mime_type, str):
+                mime_key = mime_type.lower().split(";", 1)[0].strip()
+                suffix = {
+                    "image/png": ".png",
+                    "image/jpeg": ".jpg",
+                    "image/jpg": ".jpg",
+                    "image/gif": ".gif",
+                    "image/webp": ".webp",
+                    "application/pdf": ".pdf",
+                    "text/plain": ".txt",
+                }.get(mime_key, "")
+        return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
 
     async def _find_paused_flow_run(
         self, workspace_root: Path
@@ -612,6 +859,118 @@ class DiscordBotService:
             return None
         finally:
             store.close()
+
+    async def _maybe_inject_github_context(
+        self, prompt_text: str, workspace_root: Path
+    ) -> tuple[str, bool]:
+        if not prompt_text or not workspace_root:
+            return prompt_text, False
+        links = find_github_links(prompt_text)
+        if not links:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.github_context.skip",
+                reason="no_links",
+            )
+            return prompt_text, False
+        repo_root = find_repo_root(workspace_root)
+        if repo_root is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.github_context.skip",
+                reason="repo_not_found",
+                workspace_path=str(workspace_root),
+            )
+            return prompt_text, False
+        try:
+            repo_config = load_repo_config(repo_root)
+            raw_config = repo_config.raw if repo_config else None
+        except Exception:
+            raw_config = None
+        svc = GitHubService(repo_root, raw_config=raw_config)
+        if not svc.gh_available():
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.github_context.skip",
+                reason="gh_unavailable",
+                repo_root=str(repo_root),
+            )
+            return prompt_text, False
+        if not svc.gh_authenticated():
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.github_context.skip",
+                reason="gh_unauthenticated",
+                repo_root=str(repo_root),
+            )
+            return prompt_text, False
+        issue_only_link = self._issue_only_link(prompt_text, links)
+        for link in links:
+            try:
+                result = await asyncio.to_thread(svc.build_context_file_from_url, link)
+            except Exception:
+                result = None
+            if result and result.get("hint"):
+                separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+                hint = str(result["hint"])
+                parsed = parse_github_url(link)
+                if (
+                    issue_only_link
+                    and link == issue_only_link
+                    and parsed
+                    and parsed[1] == "issue"
+                ):
+                    hint = f"{hint}\n\n{self._issue_only_workflow_hint(parsed[2])}"
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.github_context.injected",
+                    repo_root=str(repo_root),
+                    path=result.get("path"),
+                )
+                return f"{prompt_text}{separator}{hint}", True
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.github_context.skip",
+            reason="no_context",
+            repo_root=str(repo_root),
+        )
+        return prompt_text, False
+
+    def _issue_only_link(self, prompt_text: str, links: list[str]) -> Optional[str]:
+        if not prompt_text or not links or len(links) != 1:
+            return None
+        stripped = prompt_text.strip()
+        if not stripped:
+            return None
+        wrappers = (
+            "{link}",
+            "<{link}>",
+            "({link})",
+            "[{link}]",
+            "`{link}`",
+        )
+        link = links[0]
+        for wrapper in wrappers:
+            if stripped == wrapper.format(link=link):
+                return link
+        return None
+
+    def _issue_only_workflow_hint(self, issue_number: int) -> str:
+        return wrap_injected_context(
+            "Issue-only GitHub message detected (no extra context).\n"
+            f"Treat this as a request to implement issue #{issue_number}.\n"
+            "Create a new branch from the latest head branch, "
+            "sync with the current origin default branch first,\n"
+            "implement the fix, and open a PR.\n"
+            f"Ensure the PR description includes `Closes #{issue_number}` "
+            "so GitHub auto-closes the issue when merged."
+        )
 
     def _build_message_session_key(
         self,
@@ -680,7 +1039,7 @@ class DiscordBotService:
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
-    ) -> str:
+    ) -> DiscordMessageTurnResult:
         orchestrator = await self._orchestrator_for_workspace(
             workspace_root, channel_id=orchestrator_channel_key
         )
@@ -701,17 +1060,14 @@ class DiscordBotService:
         progress_rendered: Optional[str] = None
         progress_last_updated = 0.0
         progress_failure_count = 0
-        progress_edit_disabled = False
+        progress_heartbeat_task: Optional[asyncio.Task[None]] = None
         max_progress_len = max(int(self._config.max_message_length), 32)
 
         async def _edit_progress(*, force: bool = False) -> None:
             nonlocal progress_rendered
             nonlocal progress_last_updated
             nonlocal progress_failure_count
-            nonlocal progress_edit_disabled
             if not progress_message_id:
-                return
-            if progress_edit_disabled:
                 return
             now = time.monotonic()
             if (
@@ -744,12 +1100,15 @@ class DiscordBotService:
                 )
                 progress_failure_count += 1
                 progress_last_updated = now
-                if progress_failure_count >= 3:
-                    progress_edit_disabled = True
                 return
             progress_failure_count = 0
             progress_rendered = content
             progress_last_updated = now
+
+        async def _progress_heartbeat() -> None:
+            while True:
+                await asyncio.sleep(DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
+                await _edit_progress()
 
         try:
             initial_rendered = render_progress_text(
@@ -767,6 +1126,7 @@ class DiscordBotService:
                 progress_message_id = message_id
                 progress_rendered = initial_content
                 progress_last_updated = time.monotonic()
+                progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
         except Exception as exc:
             log_event(
                 self._logger,
@@ -821,7 +1181,10 @@ class DiscordBotService:
                     notice = run_event.message.strip() if run_event.message else ""
                     if not notice:
                         notice = run_event.kind.strip() if run_event.kind else "notice"
-                    tracker.add_action("notice", notice, "update")
+                    if run_event.kind in {"thinking", "reasoning"}:
+                        tracker.note_thinking(notice)
+                    else:
+                        tracker.add_action("notice", notice, "update")
                     await _edit_progress()
                 elif isinstance(run_event, TokenUsage):
                     token_usage = run_event.usage
@@ -844,11 +1207,203 @@ class DiscordBotService:
             tracker.set_label("failed")
             await _edit_progress(force=True)
             raise
+        finally:
+            if progress_heartbeat_task is not None:
+                progress_heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await progress_heartbeat_task
         if session_from_events:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
             raise RuntimeError(error_message)
-        return final_message
+        return DiscordMessageTurnResult(
+            final_message=final_message,
+            preview_message_id=progress_message_id,
+        )
+
+    @staticmethod
+    def _extract_command_result(
+        result: subprocess.CompletedProcess[str],
+    ) -> tuple[str, str, Optional[int]]:
+        stdout = result.stdout if isinstance(result.stdout, str) else ""
+        stderr = result.stderr if isinstance(result.stderr, str) else ""
+        exit_code = int(result.returncode) if isinstance(result.returncode, int) else 0
+        return stdout, stderr, exit_code
+
+    @staticmethod
+    def _format_shell_body(
+        command: str, stdout: str, stderr: str, exit_code: Optional[int]
+    ) -> str:
+        lines = [f"$ {command}"]
+        if stdout:
+            lines.append(stdout.rstrip("\n"))
+        if stderr:
+            if stdout:
+                lines.append("")
+            lines.append("[stderr]")
+            lines.append(stderr.rstrip("\n"))
+        if not stdout and not stderr:
+            lines.append("(no output)")
+        if exit_code is not None and exit_code != 0:
+            lines.append(f"(exit {exit_code})")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_shell_message(body: str, *, note: Optional[str]) -> str:
+        if note:
+            return f"{note}\n```text\n{body}\n```"
+        return f"```text\n{body}\n```"
+
+    def _prepare_shell_response(
+        self,
+        full_body: str,
+        *,
+        filename: str,
+    ) -> tuple[str, Optional[bytes]]:
+        max_output_chars = max(1, int(self._config.shell.max_output_chars))
+        max_message_length = max(64, int(self._config.max_message_length))
+
+        message = self._format_shell_message(full_body, note=None)
+        if len(full_body) <= max_output_chars and len(message) <= max_message_length:
+            return message, None
+
+        note = f"Output too long; attached full output as {filename}. Showing head."
+        head = full_body[:max_output_chars].rstrip()
+        if len(head) < len(full_body):
+            head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
+        message = self._format_shell_message(head, note=note)
+        if len(message) > max_message_length:
+            overhead = len(self._format_shell_message("", note=note))
+            allowed = max(
+                0,
+                max_message_length - overhead - len(SHELL_OUTPUT_TRUNCATION_SUFFIX),
+            )
+            head = full_body[:allowed].rstrip()
+            if len(head) < len(full_body):
+                head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
+            message = self._format_shell_message(head, note=note)
+            if len(message) > max_message_length:
+                message = truncate_for_discord(message, max_len=max_message_length)
+
+        return message, full_body.encode("utf-8", errors="replace")
+
+    async def _handle_bang_shell(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+        text: str,
+        workspace_root: Path,
+    ) -> None:
+        if not self._config.shell.enabled:
+            await self._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": (
+                        "Shell commands are disabled. Enable `discord_bot.shell.enabled`."
+                    )
+                },
+                record_id=f"shell:{message_id}:disabled",
+            )
+            return
+
+        command_text = text[1:].strip()
+        if not command_text:
+            await self._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": "Prefix a command with `!` to run it locally. Example: `!ls`"
+                },
+                record_id=f"shell:{message_id}:usage",
+            )
+            return
+
+        timeout_seconds = max(0.1, self._config.shell.timeout_ms / 1000.0)
+        timeout_label = int(timeout_seconds + 0.999)
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["bash", "-lc", command_text],
+                cwd=workspace_root,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.shell.timeout",
+                channel_id=channel_id,
+                command=command_text,
+                timeout_seconds=timeout_seconds,
+            )
+            await self._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": (
+                        f"Shell command timed out after {timeout_label}s: `{command_text}`.\n"
+                        "Interactive commands (top/htop/watch/tail -f) do not exit. "
+                        "Try a one-shot flag like `top -l 1` (macOS) or `top -b -n 1` (Linux)."
+                    )
+                },
+                record_id=f"shell:{message_id}:timeout",
+            )
+            return
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.shell.failed",
+                channel_id=channel_id,
+                command=command_text,
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": "Shell command failed; check logs for details."},
+                record_id=f"shell:{message_id}:failed",
+            )
+            return
+
+        stdout, stderr, exit_code = self._extract_command_result(result)
+        full_body = self._format_shell_body(command_text, stdout, stderr, exit_code)
+        filename = f"shell-output-{uuid.uuid4().hex[:8]}.txt"
+        response_text, attachment = self._prepare_shell_response(
+            full_body,
+            filename=filename,
+        )
+        await self._send_channel_message_safe(
+            channel_id,
+            {"content": response_text},
+            record_id=f"shell:{message_id}:result",
+        )
+        if attachment is None:
+            return
+        try:
+            await self._rest.create_channel_message_with_attachment(
+                channel_id=channel_id,
+                data=attachment,
+                filename=filename,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.shell.attachment_failed",
+                channel_id=channel_id,
+                command=command_text,
+                filename=filename,
+                exc=exc,
+            )
+            await self._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": "Failed to attach full shell output; showing truncated output."
+                },
+                record_id=f"shell:{message_id}:attachment_failed",
+            )
 
     async def _handle_car_command(
         self,
@@ -1669,10 +2224,12 @@ class DiscordBotService:
             "/pma on - Enable PMA mode",
             "/pma off - Disable PMA mode",
             "/pma status - Show PMA status",
+            "",
+            "Direct shell:",
+            "!<cmd> - run a bash command in the bound workspace",
         ]
-        await self._respond_ephemeral(
-            interaction_id, interaction_token, "\n".join(lines)
-        )
+        content = format_discord_message("\n".join(lines))
+        await self._respond_ephemeral(interaction_id, interaction_token, content)
 
     async def _handle_ids(
         self,
@@ -1856,10 +2413,11 @@ class DiscordBotService:
 
         lines.append("\nUse /car bind to select a workspace.")
 
+        content = format_discord_message("\n".join(lines))
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "\n".join(lines),
+            content,
         )
 
     async def _handle_car_new(
@@ -1875,11 +2433,14 @@ class DiscordBotService:
         )
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
-                text="This channel is not bound. Run `/car bind path:<...>` first.",
+                text=text,
             )
             return
 
@@ -1894,11 +2455,14 @@ class DiscordBotService:
             if pma_enabled:
                 workspace_root = canonicalize_path(Path(self._config.root))
             else:
+                text = format_discord_message(
+                    "Binding is invalid. Run `/car bind path:<workspace>`."
+                )
                 await self._send_or_respond_ephemeral(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
-                    text="Binding is invalid. Run `/car bind path:<workspace>`.",
+                    text=text,
                 )
                 return
 
@@ -1922,13 +2486,14 @@ class DiscordBotService:
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
+        text = format_discord_message(
+            f"Started a fresh {mode_label} session for `{agent}` ({state_label})."
+        )
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
-            text=(
-                f"Started a fresh {mode_label} session for `{agent}` ({state_label})."
-            ),
+            text=text,
         )
 
     async def _handle_car_update(
@@ -1991,10 +2556,13 @@ class DiscordBotService:
                 linux_telegram_service_name=linux_telegram_service_name,
             )
         except UpdateInProgressError as exc:
+            text = format_discord_message(
+                f"{exc} Use `/car update target:status` for current state."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"{exc} Use `/car update target:status` for current state.",
+                text,
             )
             return
         except Exception as exc:
@@ -2012,13 +2580,14 @@ class DiscordBotService:
             )
             return
 
+        text = format_discord_message(
+            f"Update started ({update_target}). The selected service(s) will restart. "
+            "Use `/car update target:status` for progress."
+        )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            (
-                f"Update started ({update_target}). The selected service(s) will restart. "
-                "Use `/car update target:status` for progress."
-            ),
+            text,
         )
 
     async def _handle_car_update_status(
@@ -2082,10 +2651,13 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                text,
             )
             return
 
@@ -2102,9 +2674,8 @@ class DiscordBotService:
                 "",
                 "Use `/car agent <name>` to switch.",
             ]
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "\n".join(lines)
-            )
+            text = format_discord_message("\n".join(lines))
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
 
         desired = agent_name.lower().strip()
@@ -2143,10 +2714,13 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                text,
             )
             return
 
@@ -2172,9 +2746,8 @@ class DiscordBotService:
                     f"Valid efforts: {', '.join(self.VALID_REASONING_EFFORTS)}",
                 ]
             )
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "\n".join(lines)
-            )
+            text = format_discord_message("\n".join(lines))
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
 
         model_name = model_name.strip()
@@ -2226,25 +2799,34 @@ class DiscordBotService:
     ) -> Optional[Path]:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "This channel is not bound. Run `/car bind path:<...>` first.",
+                text,
             )
             return None
         if bool(binding.get("pma_enabled", False)):
+            text = format_discord_message(
+                "PMA mode is enabled for this channel. Run `/pma off` before using `/car flow` commands."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "PMA mode is enabled for this channel. Run `/pma off` before using `/car flow` commands.",
+                text,
             )
             return None
         workspace_raw = binding.get("workspace_path")
         if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            text = format_discord_message(
+                "Binding is invalid. Run `/car bind path:<...>` first."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Binding is invalid. Run `/car bind path:<...>` first.",
+                text,
             )
             return None
         return canonicalize_path(Path(workspace_raw))

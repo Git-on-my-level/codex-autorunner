@@ -587,13 +587,35 @@ def _check_discord_interaction_component_guard_paths(
     *,
     discord_service_ast: ast.Module | None,
 ) -> ParityCheckResult:
-    interaction_handlers = _find_functions_by_name(
+    normalized_interaction_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_normalized_interaction",
+    )
+    legacy_interaction_handlers = _find_functions_by_name(
         discord_service_ast,
         "_handle_interaction",
     )
-    component_handlers = _find_functions_by_name(
+    interaction_handlers = (
+        normalized_interaction_handlers or legacy_interaction_handlers
+    )
+
+    normalized_component_handlers = _find_functions_by_name(
+        discord_service_ast,
+        "_handle_component_interaction_normalized",
+    )
+    legacy_component_handlers = _find_functions_by_name(
         discord_service_ast,
         "_handle_component_interaction",
+    )
+    component_handlers = normalized_component_handlers or legacy_component_handlers
+
+    component_unhandled_error_event = (
+        "discord.component.normalized.unhandled_error"
+        if normalized_component_handlers
+        else "discord.component.unhandled_error"
+    )
+    component_missing_custom_id_functions = (
+        interaction_handlers if normalized_component_handlers else component_handlers
     )
 
     checks = {
@@ -617,7 +639,7 @@ def _check_discord_interaction_component_guard_paths(
             exact="An unexpected error occurred. Please try again later.",
         ),
         "component_missing_custom_id_response": _has_guard_response(
-            component_handlers,
+            component_missing_custom_id_functions,
             guard_predicate=lambda test: _condition_has_name_negation(
                 test, name="custom_id"
             ),
@@ -644,7 +666,7 @@ def _check_discord_interaction_component_guard_paths(
         ),
         "component_unhandled_error_logged": _has_log_event_call(
             component_handlers,
-            event_name="discord.component.unhandled_error",
+            event_name=component_unhandled_error_event,
         ),
         "component_unhandled_error_response": _has_call_with_string_argument(
             component_handlers,
@@ -658,13 +680,14 @@ def _check_discord_interaction_component_guard_paths(
 
     if passed:
         message = (
-            "Discord interaction/component handlers keep observable guards and "
+            "Discord interaction/component handlers on the active routing path keep "
+            "observable guards and "
             "explicit fallback responses."
         )
     else:
         message = (
-            "Discord interaction/component guard coverage is incomplete and may "
-            "allow silent handling regressions."
+            "Discord interaction/component guard coverage on the active routing path "
+            "is incomplete and may allow silent handling regressions."
         )
 
     return ParityCheckResult(
@@ -674,6 +697,12 @@ def _check_discord_interaction_component_guard_paths(
         metadata={
             "failed_predicates": failed_predicates,
             "predicates": checks,
+            "interaction_handler": (
+                "normalized" if normalized_interaction_handlers else "legacy"
+            ),
+            "component_handler": (
+                "normalized" if normalized_component_handlers else "legacy"
+            ),
         },
     )
 

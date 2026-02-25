@@ -168,6 +168,7 @@ let eventSourceRetryTimerId: ReturnType<typeof setTimeout> | null = null;
 const lastSeenSeqByRun: Record<string, number> = {};
 let ticketListCache: { ticket_dir?: string; tickets?: TicketFile[] } | null = null;
 let ticketFlowLoaded = false;
+let loadTicketFlowRequestId = 0;
 
 function isFlowActiveStatus(status: string | null): boolean {
   // Mirror backend FlowRunStatus.is_active(): pending | running | stopping
@@ -1796,6 +1797,8 @@ async function loadDispatchHistory(runId: string | null, ctx?: RefreshContext): 
 }
 
 async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
+  const requestId = ++loadTicketFlowRequestId;
+  const isLatestRequest = () => requestId === loadTicketFlowRequestId;
   const {
     status,
     run,
@@ -1843,6 +1846,7 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
   }
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
+    if (!isLatestRequest()) return;
     // Only consider the newest run - if it's terminal, flow is idle.
     // This matches the backend's _active_or_paused_run() logic which only checks runs[0].
     // Using find() would incorrectly pick up older paused runs when a newer run has completed.
@@ -1942,6 +1946,7 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
       stopBtn.disabled = !latest?.id || !stoppable;
     }
     await loadTicketFiles(ctx);
+    if (!isLatestRequest()) return;
     
     // Calculate and display ticket progress (scoped to tickets container only)
     if (progress) {
@@ -2018,13 +2023,17 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
       }
     }
     await loadDispatchHistory(currentRunId, ctx);
+    if (!isLatestRequest()) return;
   } catch (err) {
+    if (!isLatestRequest()) return;
     if (reason) reason.textContent = (err as Error).message || "Ticket flow unavailable";
     flash((err as Error).message || "Failed to load ticket flow state", "error");
   } finally {
     ticketFlowLoaded = true;
     if (showRefreshIndicator) {
-      setButtonLoading(refreshBtn, false);
+      if (isLatestRequest()) {
+        setButtonLoading(refreshBtn, false);
+      }
     }
   }
 }

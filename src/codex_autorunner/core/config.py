@@ -223,6 +223,11 @@ def _default_discord_bot_section() -> Dict[str, Any]:
         "state_file": ".codex-autorunner/discord_state.sqlite3",
         "intents": 33281,
         "max_message_length": 2000,
+        "shell": {
+            "enabled": True,
+            "timeout_ms": 120000,
+            "max_output_chars": 3800,
+        },
     }
 
 

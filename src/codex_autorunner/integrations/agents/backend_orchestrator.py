@@ -163,6 +163,8 @@ class BackendOrchestrator:
 
         backend = self._active_backend
         assert backend is not None, "backend should be initialized before run_turn"
+        app_server_cfg = getattr(self._config, "app_server", None)
+        turn_timeout_seconds = getattr(app_server_cfg, "turn_timeout_seconds", None)
 
         backend.configure(
             approval_policy=state.autorunner_approval_policy,
@@ -172,7 +174,7 @@ class BackendOrchestrator:
             model=model,
             reasoning=reasoning,
             reasoning_effort=reasoning,
-            turn_timeout_seconds=None,
+            turn_timeout_seconds=turn_timeout_seconds,
             notification_handler=self._notification_handler,
             default_approval_decision=self._config.ticket_flow.default_approval_decision,
         )

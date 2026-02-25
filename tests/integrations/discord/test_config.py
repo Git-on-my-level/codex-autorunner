@@ -119,3 +119,49 @@ def test_discord_bot_config_migrates_legacy_intents_to_default(
         },
     )
     assert cfg.intents == DEFAULT_INTENTS
+
+
+def test_discord_bot_config_shell_defaults(tmp_path) -> None:
+    cfg = DiscordBotConfig.from_raw(root=tmp_path, raw={"enabled": False})
+    assert cfg.shell.enabled is True
+    assert cfg.shell.timeout_ms == 120000
+    assert cfg.shell.max_output_chars == 3800
+
+
+def test_discord_bot_config_shell_overrides(tmp_path) -> None:
+    cfg = DiscordBotConfig.from_raw(
+        root=tmp_path,
+        raw={
+            "enabled": False,
+            "shell": {
+                "enabled": False,
+                "timeout_ms": 42000,
+                "max_output_chars": 1234,
+            },
+        },
+    )
+    assert cfg.shell.enabled is False
+    assert cfg.shell.timeout_ms == 42000
+    assert cfg.shell.max_output_chars == 1234
+
+
+def test_discord_bot_config_shell_invalid_timeout_raises(tmp_path) -> None:
+    with pytest.raises(DiscordBotConfigError):
+        DiscordBotConfig.from_raw(
+            root=tmp_path,
+            raw={
+                "enabled": False,
+                "shell": {"timeout_ms": "abc"},
+            },
+        )
+
+
+def test_discord_bot_config_shell_invalid_enabled_raises(tmp_path) -> None:
+    with pytest.raises(DiscordBotConfigError):
+        DiscordBotConfig.from_raw(
+            root=tmp_path,
+            raw={
+                "enabled": False,
+                "shell": {"enabled": "false"},
+            },
+        )

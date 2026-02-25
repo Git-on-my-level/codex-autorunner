@@ -71,6 +71,7 @@ let eventSourceRetryTimerId = null;
 const lastSeenSeqByRun = {};
 let ticketListCache = null;
 let ticketFlowLoaded = false;
+let loadTicketFlowRequestId = 0;
 function isFlowActiveStatus(status) {
     // Mirror backend FlowRunStatus.is_active(): pending | running | stopping
     return status === "pending" || status === "running" || status === "stopping";
@@ -1508,6 +1509,8 @@ async function loadDispatchHistory(runId, ctx) {
     }
 }
 async function loadTicketFlow(ctx) {
+    const requestId = ++loadTicketFlowRequestId;
+    const isLatestRequest = () => requestId === loadTicketFlowRequestId;
     const { status, run, current, turn, elapsed, progress, reason, lastActivity, stalePill, reconnectBtn, workerStatus, workerPill, recoverBtn, resumeBtn, bootstrapBtn, stopBtn, archiveBtn, refreshBtn, } = els();
     if (!isRepoHealthy()) {
         if (status)
@@ -1549,6 +1552,8 @@ async function loadTicketFlow(ctx) {
     }
     try {
         const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
+        if (!isLatestRequest())
+            return;
         // Only consider the newest run - if it's terminal, flow is idle.
         // This matches the backend's _active_or_paused_run() logic which only checks runs[0].
         // Using find() would incorrectly pick up older paused runs when a newer run has completed.
@@ -1639,6 +1644,8 @@ async function loadTicketFlow(ctx) {
             stopBtn.disabled = !latest?.id || !stoppable;
         }
         await loadTicketFiles(ctx);
+        if (!isLatestRequest())
+            return;
         // Calculate and display ticket progress (scoped to tickets container only)
         if (progress) {
             const ticketsContainer = document.getElementById("ticket-flow-tickets");
@@ -1710,8 +1717,12 @@ async function loadTicketFlow(ctx) {
             }
         }
         await loadDispatchHistory(currentRunId, ctx);
+        if (!isLatestRequest())
+            return;
     }
     catch (err) {
+        if (!isLatestRequest())
+            return;
         if (reason)
             reason.textContent = err.message || "Ticket flow unavailable";
         flash(err.message || "Failed to load ticket flow state", "error");
@@ -1719,7 +1730,9 @@ async function loadTicketFlow(ctx) {
     finally {
         ticketFlowLoaded = true;
         if (showRefreshIndicator) {
-            setButtonLoading(refreshBtn, false);
+            if (isLatestRequest()) {
+                setButtonLoading(refreshBtn, false);
+            }
         }
     }
 }
