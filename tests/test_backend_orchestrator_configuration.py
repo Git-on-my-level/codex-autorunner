@@ -84,6 +84,7 @@ async def test_backend_orchestrator_uses_generic_backend_configure(
 
     config = SimpleNamespace(
         autorunner_reuse_session=False,
+        app_server=SimpleNamespace(turn_timeout_seconds=321.0),
         ticket_flow=TicketFlowConfig(
             approval_mode="yolo",
             default_approval_decision="cancel",
@@ -116,6 +117,7 @@ async def test_backend_orchestrator_uses_generic_backend_configure(
     assert configure_call["model"] == "gpt-test"
     assert configure_call["reasoning"] == "high"
     assert configure_call["reasoning_effort"] == "high"
+    assert configure_call["turn_timeout_seconds"] == 321.0
     assert configure_call["default_approval_decision"] == "cancel"
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -67,6 +68,44 @@ async def test_codex_backend_run_turn_events_obeys_contract(tmp_path: Path) -> N
     _assert_turn_contract(events)
     assert isinstance(events[-1], Completed)
     assert events[-1].final_message == "Done"
+
+
+@pytest.mark.asyncio
+async def test_codex_backend_run_turn_events_timeout_emits_failed_terminal(
+    tmp_path: Path,
+) -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=tmp_path,
+        turn_timeout_seconds=0.01,
+    )
+    backend._thread_id = "thread-123"
+
+    observed_timeout: dict[str, object] = {"value": None}
+
+    async def _wait(*, timeout: object = None) -> object:
+        observed_timeout["value"] = timeout
+        raise asyncio.TimeoutError("turn timeout")
+
+    with patch.object(
+        backend, "_ensure_client", new_callable=AsyncMock
+    ) as ensure_client:
+        client = MagicMock()
+        handle = MagicMock()
+        handle.turn_id = "turn-123"
+        handle.wait = AsyncMock(side_effect=_wait)
+        client.turn_start = AsyncMock(return_value=handle)
+        ensure_client.return_value = client
+
+        events = [
+            event
+            async for event in backend.run_turn_events("thread-123", "hello codex")
+        ]
+
+    _assert_turn_contract(events)
+    assert observed_timeout["value"] == 0.01
+    assert isinstance(events[-1], Failed)
+    assert "timeout" in events[-1].error_message.lower()
 
 
 def test_codex_notification_parser_golden_transcript() -> None:
