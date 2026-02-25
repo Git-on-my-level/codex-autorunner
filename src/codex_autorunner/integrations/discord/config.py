@@ -19,6 +19,7 @@ DEFAULT_STATE_FILE = ".codex-autorunner/discord_state.sqlite3"
 DEFAULT_COMMAND_SCOPE = "guild"
 DEFAULT_SHELL_TIMEOUT_MS = 120000
 DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
+DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 DEFAULT_INTENTS = (
     DISCORD_INTENT_GUILDS
     | DISCORD_INTENT_GUILD_MESSAGES
@@ -48,6 +49,13 @@ class DiscordBotShellConfig:
 
 
 @dataclass(frozen=True)
+class DiscordBotMediaConfig:
+    enabled: bool = True
+    voice: bool = True
+    max_voice_bytes: int = DEFAULT_MEDIA_MAX_VOICE_BYTES
+
+
+@dataclass(frozen=True)
 class DiscordBotConfig:
     root: Path
     enabled: bool
@@ -65,6 +73,7 @@ class DiscordBotConfig:
     message_overflow: str
     pma_enabled: bool
     shell: DiscordBotShellConfig = field(default_factory=DiscordBotShellConfig)
+    media: DiscordBotMediaConfig = field(default_factory=DiscordBotMediaConfig)
 
     @classmethod
     def from_raw(
@@ -153,6 +162,29 @@ class DiscordBotConfig:
             max_output_chars=shell_max_output_chars,
         )
 
+        media_raw = cfg.get("media")
+        media_cfg = media_raw if isinstance(media_raw, dict) else {}
+        media_enabled = _parse_bool_or_default(
+            media_cfg.get("enabled"),
+            default=True,
+            key="discord_bot.media.enabled",
+        )
+        media_voice = _parse_bool_or_default(
+            media_cfg.get("voice"),
+            default=True,
+            key="discord_bot.media.voice",
+        )
+        media_max_voice_bytes = _parse_positive_int_or_default(
+            media_cfg.get("max_voice_bytes"),
+            default=DEFAULT_MEDIA_MAX_VOICE_BYTES,
+            key="discord_bot.media.max_voice_bytes",
+        )
+        media = DiscordBotMediaConfig(
+            enabled=media_enabled,
+            voice=media_voice,
+            max_voice_bytes=media_max_voice_bytes,
+        )
+
         if enabled:
             if not bot_token:
                 raise DiscordBotConfigError(
@@ -184,6 +216,7 @@ class DiscordBotConfig:
             message_overflow=message_overflow,
             pma_enabled=pma_enabled,
             shell=shell,
+            media=media,
         )
 
 

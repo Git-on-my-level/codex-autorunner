@@ -165,3 +165,38 @@ def test_discord_bot_config_shell_invalid_enabled_raises(tmp_path) -> None:
                 "shell": {"enabled": "false"},
             },
         )
+
+
+def test_discord_bot_config_media_defaults(tmp_path) -> None:
+    cfg = DiscordBotConfig.from_raw(root=tmp_path, raw={"enabled": False})
+    assert cfg.media.enabled is True
+    assert cfg.media.voice is True
+    assert cfg.media.max_voice_bytes == 10 * 1024 * 1024
+
+
+def test_discord_bot_config_media_overrides(tmp_path) -> None:
+    cfg = DiscordBotConfig.from_raw(
+        root=tmp_path,
+        raw={
+            "enabled": False,
+            "media": {
+                "enabled": False,
+                "voice": False,
+                "max_voice_bytes": 1234,
+            },
+        },
+    )
+    assert cfg.media.enabled is False
+    assert cfg.media.voice is False
+    assert cfg.media.max_voice_bytes == 1234
+
+
+def test_discord_bot_config_media_invalid_voice_raises(tmp_path) -> None:
+    with pytest.raises(DiscordBotConfigError):
+        DiscordBotConfig.from_raw(
+            root=tmp_path,
+            raw={
+                "enabled": False,
+                "media": {"voice": "false"},
+            },
+        )

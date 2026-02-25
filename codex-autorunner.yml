@@ -123,6 +123,7 @@ repo_defaults:
       min_hold_ms: 150
     providers:
       openai_whisper:
+        remote_api: true
         # Environment variable name for the API key (set the key in your shell or launchd).
         api_key_env: OPENAI_API_KEY
         model: whisper-1
@@ -130,6 +131,18 @@ repo_defaults:
         temperature: 0
         language: null
         redact_request: true
+      local_whisper:
+        remote_api: false
+        model: tiny
+        device: auto
+        compute_type: default
+        cpu_threads: 0
+        num_workers: 1
+        download_root: null
+        local_files_only: false
+        beam_size: 1
+        vad_filter: true
+        language: null
 
   log:
     # Path is relative to the repo root.

@@ -6,7 +6,12 @@ from typing import Mapping, Optional
 
 from .config import VoiceConfig
 from .provider import SpeechProvider
-from .providers import OpenAIWhisperProvider, build_speech_provider
+from .providers import (
+    LocalWhisperProvider,
+    OpenAIWhisperProvider,
+    build_local_whisper_provider,
+    build_speech_provider,
+)
 
 
 def resolve_speech_provider(
@@ -30,6 +35,14 @@ def resolve_speech_provider(
             provider_configs.get(provider_name, {}),
             warn_on_remote_api=voice_config.warn_on_remote_api,
             env=env or os.environ,
+            logger=logger,
+        )
+    if provider_name in {LocalWhisperProvider.name, "local"}:
+        provider_cfg = provider_configs.get(provider_name)
+        if not isinstance(provider_cfg, Mapping):
+            provider_cfg = provider_configs.get(LocalWhisperProvider.name, {})
+        return build_local_whisper_provider(
+            provider_cfg if isinstance(provider_cfg, Mapping) else {},
             logger=logger,
         )
 

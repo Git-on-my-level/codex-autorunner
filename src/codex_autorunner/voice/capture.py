@@ -310,6 +310,7 @@ class PushToTalkCapture(VoiceCaptureSession):
             "invalid_audio",
             "audio_too_large",
             "rate_limited",
+            "local_provider_unavailable",
         ):
             self.fail(reason)
             return False

@@ -1168,3 +1168,23 @@ def _validate_discord_bot_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         "discord_bot.command_registration.guild_ids must contain only string/int IDs"
                     )
+
+    media_cfg = discord_cfg.get("media")
+    if media_cfg is not None and not isinstance(media_cfg, dict):
+        raise ConfigError("discord_bot.media must be a mapping")
+    if isinstance(media_cfg, dict):
+        if "enabled" in media_cfg and not isinstance(media_cfg.get("enabled"), bool):
+            raise ConfigError("discord_bot.media.enabled must be boolean")
+        if "voice" in media_cfg and not isinstance(media_cfg.get("voice"), bool):
+            raise ConfigError("discord_bot.media.voice must be boolean")
+        if "max_voice_bytes" in media_cfg and not isinstance(
+            media_cfg.get("max_voice_bytes"), int
+        ):
+            raise ConfigError("discord_bot.media.max_voice_bytes must be an integer")
+        if (
+            isinstance(media_cfg.get("max_voice_bytes"), int)
+            and int(media_cfg["max_voice_bytes"]) <= 0
+        ):
+            raise ConfigError(
+                "discord_bot.media.max_voice_bytes must be greater than 0"
+            )

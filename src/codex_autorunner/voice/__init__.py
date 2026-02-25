@@ -12,7 +12,12 @@ from .provider import (
     TranscriptionEvent,
     TranscriptionStream,
 )
-from .providers import OpenAIWhisperProvider, OpenAIWhisperSettings
+from .providers import (
+    LocalWhisperProvider,
+    LocalWhisperSettings,
+    OpenAIWhisperProvider,
+    OpenAIWhisperSettings,
+)
 from .resolver import resolve_speech_provider
 from .service import VoiceService, VoiceServiceError
 
@@ -24,6 +29,8 @@ __all__ = [
     "LatencyMode",
     "PushToTalkConfig",
     "PushToTalkCapture",
+    "LocalWhisperProvider",
+    "LocalWhisperSettings",
     "OpenAIWhisperProvider",
     "OpenAIWhisperSettings",
     "resolve_speech_provider",

@@ -60,12 +60,15 @@ class VoiceService:
 
     def config_payload(self) -> dict:
         """Expose safe config fields to the UI."""
-        # Check if API key is configured for status display
+        # Providers that do not use remote APIs may not require any API key.
         provider_cfg = self.config.providers.get(
             self.config.provider or "openai_whisper", {}
         )
-        api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
-        has_api_key = bool(self._env.get(api_key_env))
+        api_key_env = provider_cfg.get("api_key_env")
+        requires_api_key = isinstance(api_key_env, str) and bool(api_key_env.strip())
+        has_api_key = (
+            bool(self._env.get(api_key_env.strip())) if requires_api_key else True
+        )
 
         return {
             "enabled": self.config.enabled,
@@ -75,6 +78,7 @@ class VoiceService:
             "sample_rate": self.config.sample_rate,
             "warn_on_remote_api": self.config.warn_on_remote_api,
             "has_api_key": has_api_key,
+            "api_key_env": api_key_env if requires_api_key else None,
             "push_to_talk": {
                 "max_ms": self.config.push_to_talk.max_ms,
                 "silence_auto_stop_ms": self.config.push_to_talk.silence_auto_stop_ms,
@@ -160,6 +164,17 @@ class VoiceService:
                     "OpenAI rate limited the request; wait a moment and try again.",
                     user_message="Voice transcription rate limited. Retrying...",
                 )
+            if buffer.error_reason == "local_provider_unavailable":
+                provider = self.config.provider or "local_whisper"
+                raise VoicePermanentError(
+                    "local_provider_unavailable",
+                    "Local Whisper provider is unavailable. Install optional "
+                    "dependencies with: pip install 'codex-autorunner[voice-local]'",
+                    user_message=(
+                        f"Voice transcription failed: local provider '{provider}' is "
+                        "not installed. Install 'codex-autorunner[voice-local]'."
+                    ),
+                )
             raise VoiceServiceError(
                 buffer.error_reason, buffer.error_reason.replace("_", " ")
             )
@@ -195,10 +210,18 @@ class VoiceService:
         if self._provider is None:
             try:
                 self._provider = self._provider_resolver(
-                    self.config, logger=self._logger
+                    self.config,
+                    logger=self._logger,
+                    env=self._env,
                 )
             except TypeError:
-                self._provider = self._provider_resolver(self.config)
+                try:
+                    self._provider = self._provider_resolver(
+                        self.config,
+                        logger=self._logger,
+                    )
+                except TypeError:
+                    self._provider = self._provider_resolver(self.config)
         return self._provider
 
     def _build_session_metadata(

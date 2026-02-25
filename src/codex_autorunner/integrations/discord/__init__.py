@@ -13,6 +13,7 @@ from .config import (
     DEFAULT_STATE_FILE,
     DiscordBotConfig,
     DiscordBotConfigError,
+    DiscordBotMediaConfig,
     DiscordCommandRegistration,
 )
 from .constants import (
@@ -55,6 +56,7 @@ __all__ = [
     "DISCORD_MAX_MESSAGE_LENGTH",
     "DiscordBotConfigError",
     "DiscordCommandRegistration",
+    "DiscordBotMediaConfig",
     "DiscordBotConfig",
     "discord_doctor_checks",
     "DiscordAllowlist",

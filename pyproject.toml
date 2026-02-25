@@ -49,6 +49,9 @@ voice = [
   "httpx>=0.27",
   "python-multipart>=0.0.9",
 ]
+voice-local = [
+  "faster-whisper>=1.1.0",
+]
 github = []
 discord = [
   "websockets>=12",
