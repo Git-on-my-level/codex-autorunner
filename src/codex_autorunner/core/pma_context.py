@@ -57,7 +57,17 @@ First-turn routine:
      - restart_worker: Worker process died - suggest force resume or diagnose crash.
      - diagnose_or_restart: Run failed or stopped - suggest diagnose or restart.
    - Always include the item.open_url so the user can jump to the repo Inbox tab.
-3) BRANCH B - PMA File Inbox (uploaded files needing processing):
+3) BRANCH B - Managed threads vs ticket flows:
+   - If request is exploratory/review/debug/quick-fix work in one repo, prefer managed threads.
+   - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
+   - If no suitable thread exists, spawn one, run work, and keep it compact:
+     - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
+     - `car pma thread send --id <managed_thread_id> --message "..."`
+     - `car pma thread output --id <managed_thread_id>`
+     - `car pma thread compact --id <id> --summary "..."`
+     - `car pma thread archive --id <id>`
+   - If request is a multi-step deliverable or cross-repo change, prefer tickets/ticket_flow.
+4) BRANCH C - PMA File Inbox (uploaded files needing processing):
    - If PMA File Inbox shows next_action="process_uploaded_file" and hub_snapshot.inbox is empty:
      - Inspect files in `.codex-autorunner/filebox/inbox/` (read their contents).
      - Classify each upload: ticket pack (TICKET-*.md), docs (*.md), code (*.py/*.ts/*.js), assets (images/pdfs).
@@ -70,7 +80,7 @@ First-turn routine:
        - Code: identify target worktree, propose handoff or direct edit
        - Assets: suggest destination (repo docs, archive)
      - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
-4) If the request is new work (not inbox/file processing):
+5) If the request is new work (not inbox/file processing):
    - Identify the target repo(s).
    - Prefer hub-owned worktrees for changes.
    - Prefer one-shot setup/repair commands: `car hub tickets setup-pack`, `car hub tickets fmt`, `car hub tickets doctor --fix`.

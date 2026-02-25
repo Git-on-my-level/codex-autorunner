@@ -285,6 +285,18 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Treat this prompt as code: keep it short and stable.
 - See `.codex-autorunner/pma/docs/ABOUT_CAR.md` for operational how-to.
 
+## Managed Threads vs Ticket Flows
+
+- Use managed threads for exploratory/review/quick-fix/interactive debugging work in one repo.
+- Use ticket flows for structured, multi-step deliverables with acceptance criteria or cross-repo changes.
+- Managed thread state is visible in `hub_snapshot.pma_threads`.
+- CLI primitives:
+  - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
+  - `car pma thread send --id <managed_thread_id> --message "..."`
+  - `car pma thread output --id <managed_thread_id>`
+  - `car pma thread compact --id <id> --summary "..."`
+  - `car pma thread archive --id <id>`
+
 ## Ticket planning constraints
 
 - Ticket flow executes `TICKET-###*.md` in ascending numeric order.

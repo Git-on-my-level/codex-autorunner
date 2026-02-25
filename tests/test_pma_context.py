@@ -314,6 +314,8 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
     assert "<hub_snapshot>" in result
     assert "Run Dispatches (paused runs needing attention):" in result
     assert "Ticket planning constraints (state machine):" in result
+    assert "Managed threads vs ticket flows:" in result
+    assert "car pma thread spawn" in result
     assert "active_context.md" in result
     assert "decisions.md" in result
     assert "spec.md" in result
