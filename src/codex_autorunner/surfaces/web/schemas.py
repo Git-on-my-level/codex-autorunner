@@ -200,6 +200,14 @@ class AppServerThreadArchiveRequest(Payload):
     thread_id: str = Field(validation_alias=AliasChoices("thread_id", "threadId", "id"))
 
 
+class PmaManagedThreadCreateRequest(Payload):
+    agent: Literal["codex", "opencode"]
+    repo_id: Optional[str] = None
+    workspace_root: Optional[str] = None
+    name: Optional[str] = None
+    backend_thread_id: Optional[str] = None
+
+
 class SessionSettingsRequest(Payload):
     autorunner_model_override: Optional[str] = None
     autorunner_effort_override: Optional[str] = None

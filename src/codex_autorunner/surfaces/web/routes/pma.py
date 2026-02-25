@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +54,7 @@ from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_sink import PmaActiveSinkStore
 from ....core.pma_state import PmaStateStore
+from ....core.pma_thread_store import PmaThreadStore
 from ....core.pma_transcripts import PmaTranscriptStore
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
@@ -65,6 +67,7 @@ from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ....integrations.telegram.state import OutboxRecord, TelegramStateStore
+from ..schemas import PmaManagedThreadCreateRequest
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
 
@@ -220,6 +223,41 @@ def build_pma_routes() -> APIRouter:
         if not state_path.is_absolute():
             state_path = (hub_root / state_path).resolve()
         return state_path
+
+    def _is_within_root(path: Path, root: Path) -> bool:
+        resolved_path = path.resolve()
+        resolved_root = root.resolve()
+        return resolved_path == resolved_root or str(resolved_path).startswith(
+            str(resolved_root) + os.sep
+        )
+
+    def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
+        supervisor = getattr(request.app.state, "hub_supervisor", None)
+        if supervisor is None:
+            raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
+        snapshots = supervisor.list_repos()
+        for snapshot in snapshots:
+            if getattr(snapshot, "id", None) == repo_id:
+                repo_path = getattr(snapshot, "path", None)
+                if isinstance(repo_path, str):
+                    repo_path = Path(repo_path)
+                if not isinstance(repo_path, Path):
+                    continue
+                return repo_path.resolve()
+        raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
+
+    def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
+        workspace = Path(workspace_root)
+        if not workspace.is_absolute():
+            workspace = (hub_root / workspace).resolve()
+        else:
+            workspace = workspace.resolve()
+        if not _is_within_root(workspace, hub_root):
+            raise HTTPException(
+                status_code=400,
+                detail=f"workspace_root escapes hub root: {workspace}",
+            )
+        return workspace
 
     async def _deliver_to_active_sink(
         *,
@@ -1016,6 +1054,74 @@ def build_pma_routes() -> APIRouter:
         if not transcript:
             raise HTTPException(status_code=404, detail="Transcript not found")
         return transcript
+
+    @router.post("/threads")
+    def create_managed_thread(
+        request: Request, payload: PmaManagedThreadCreateRequest
+    ) -> dict[str, Any]:
+        hub_root = request.app.state.config.root
+        repo_id = _normalize_optional_text(payload.repo_id)
+        workspace_root = _normalize_optional_text(payload.workspace_root)
+
+        if bool(repo_id) == bool(workspace_root):
+            raise HTTPException(
+                status_code=400,
+                detail="Exactly one of repo_id or workspace_root is required",
+            )
+
+        resolved_repo_id: Optional[str] = None
+        if repo_id:
+            resolved_workspace = _resolve_workspace_from_repo_id(request, repo_id)
+            resolved_repo_id = repo_id
+            if not _is_within_root(resolved_workspace, hub_root):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Resolved repo path escapes hub root: {resolved_workspace}",
+                )
+        else:
+            if workspace_root is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="workspace_root is required when repo_id is omitted",
+                )
+            resolved_workspace = _resolve_workspace_from_input(hub_root, workspace_root)
+
+        store = PmaThreadStore(hub_root)
+        thread = store.create_thread(
+            payload.agent,
+            resolved_workspace,
+            repo_id=resolved_repo_id,
+            name=_normalize_optional_text(payload.name),
+            backend_thread_id=_normalize_optional_text(payload.backend_thread_id),
+        )
+        return {"thread": thread}
+
+    @router.get("/threads")
+    def list_managed_threads(
+        request: Request,
+        agent: Optional[str] = None,
+        status: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        store = PmaThreadStore(request.app.state.config.root)
+        threads = store.list_threads(
+            agent=_normalize_optional_text(agent),
+            status=_normalize_optional_text(status),
+            repo_id=_normalize_optional_text(repo_id),
+            limit=limit,
+        )
+        return {"threads": threads}
+
+    @router.get("/threads/{managed_thread_id}")
+    def get_managed_thread(managed_thread_id: str, request: Request) -> dict[str, Any]:
+        store = PmaThreadStore(request.app.state.config.root)
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        return {"thread": thread}
 
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
