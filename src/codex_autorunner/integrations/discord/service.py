@@ -50,7 +50,10 @@ from ...core.update import (
     _spawn_update_process,
 )
 from ...core.update_paths import resolve_update_paths
-from ...core.utils import canonicalize_path
+from ...core.utils import (
+    canonicalize_path,
+    find_repo_root,
+)
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.app_server.threads import (
@@ -73,6 +76,11 @@ from ...integrations.chat.models import (
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
+)
+from ...integrations.github.service import (
+    GitHubService,
+    find_github_links,
+    parse_github_url,
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
@@ -440,13 +448,15 @@ class DiscordBotService:
             if paused is not None:
                 reply_text = text
                 if has_attachments:
-                    reply_text, saved_attachments, failed_attachments = (
-                        await self._with_attachment_context(
-                            prompt_text=text,
-                            workspace_root=workspace_root,
-                            attachments=event.attachments,
-                            channel_id=channel_id,
-                        )
+                    (
+                        reply_text,
+                        saved_attachments,
+                        failed_attachments,
+                    ) = await self._with_attachment_context(
+                        prompt_text=text,
+                        workspace_root=workspace_root,
+                        attachments=event.attachments,
+                        channel_id=channel_id,
                     )
                     if failed_attachments > 0:
                         warning = (
@@ -534,13 +544,15 @@ class DiscordBotService:
                 )
                 return
 
-        prompt_text, saved_attachments, failed_attachments = (
-            await self._with_attachment_context(
-                prompt_text=prompt_text,
-                workspace_root=workspace_root,
-                attachments=event.attachments,
-                channel_id=channel_id,
-            )
+        (
+            prompt_text,
+            saved_attachments,
+            failed_attachments,
+        ) = await self._with_attachment_context(
+            prompt_text=prompt_text,
+            workspace_root=workspace_root,
+            attachments=event.attachments,
+            channel_id=channel_id,
         )
         if failed_attachments > 0:
             warning = (
@@ -560,6 +572,10 @@ class DiscordBotService:
                     },
                 )
             return
+
+        prompt_text, github_injected = await self._maybe_inject_github_context(
+            prompt_text, workspace_root
+        )
 
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
@@ -783,6 +799,118 @@ class DiscordBotService:
             return None
         finally:
             store.close()
+
+    async def _maybe_inject_github_context(
+        self, prompt_text: str, workspace_root: Path
+    ) -> tuple[str, bool]:
+        if not prompt_text or not workspace_root:
+            return prompt_text, False
+        links = find_github_links(prompt_text)
+        if not links:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.github_context.skip",
+                reason="no_links",
+            )
+            return prompt_text, False
+        repo_root = find_repo_root(workspace_root)
+        if repo_root is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.github_context.skip",
+                reason="repo_not_found",
+                workspace_path=str(workspace_root),
+            )
+            return prompt_text, False
+        try:
+            repo_config = load_repo_config(repo_root)
+            raw_config = repo_config.raw if repo_config else None
+        except Exception:
+            raw_config = None
+        svc = GitHubService(repo_root, raw_config=raw_config)
+        if not svc.gh_available():
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.github_context.skip",
+                reason="gh_unavailable",
+                repo_root=str(repo_root),
+            )
+            return prompt_text, False
+        if not svc.gh_authenticated():
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.github_context.skip",
+                reason="gh_unauthenticated",
+                repo_root=str(repo_root),
+            )
+            return prompt_text, False
+        issue_only_link = self._issue_only_link(prompt_text, links)
+        for link in links:
+            try:
+                result = await asyncio.to_thread(svc.build_context_file_from_url, link)
+            except Exception:
+                result = None
+            if result and result.get("hint"):
+                separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+                hint = str(result["hint"])
+                parsed = parse_github_url(link)
+                if (
+                    issue_only_link
+                    and link == issue_only_link
+                    and parsed
+                    and parsed[1] == "issue"
+                ):
+                    hint = f"{hint}\n\n{self._issue_only_workflow_hint(parsed[2])}"
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.github_context.injected",
+                    repo_root=str(repo_root),
+                    path=result.get("path"),
+                )
+                return f"{prompt_text}{separator}{hint}", True
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.github_context.skip",
+            reason="no_context",
+            repo_root=str(repo_root),
+        )
+        return prompt_text, False
+
+    def _issue_only_link(self, prompt_text: str, links: list[str]) -> Optional[str]:
+        if not prompt_text or not links or len(links) != 1:
+            return None
+        stripped = prompt_text.strip()
+        if not stripped:
+            return None
+        wrappers = (
+            "{link}",
+            "<{link}>",
+            "({link})",
+            "[{link}]",
+            "`{link}`",
+        )
+        link = links[0]
+        for wrapper in wrappers:
+            if stripped == wrapper.format(link=link):
+                return link
+        return None
+
+    def _issue_only_workflow_hint(self, issue_number: int) -> str:
+        return wrap_injected_context(
+            "Issue-only GitHub message detected (no extra context).\n"
+            f"Treat this as a request to implement issue #{issue_number}.\n"
+            "Create a new branch from the latest head branch, "
+            "sync with the current origin default branch first,\n"
+            "implement the fix, and open a PR.\n"
+            f"Ensure the PR description includes `Closes #{issue_number}` "
+            "so GitHub auto-closes the issue when merged."
+        )
 
     def _build_message_session_key(
         self,
