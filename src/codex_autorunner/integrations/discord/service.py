@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Sequence
 
 from ...core.config import load_repo_config, resolve_env_for_root
 from ...core.filebox import (
@@ -162,7 +162,9 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
 )
 
 
-def _resolve_base_repo_id(repo_entry: object) -> Optional[str]:
+def _resolve_base_repo_id(
+    repo_entry: object, *, manifest_repos: Optional[Sequence[object]] = None
+) -> Optional[str]:
     worktree_of = getattr(repo_entry, "worktree_of", None)
     if isinstance(worktree_of, str) and worktree_of.strip():
         return worktree_of.strip()
@@ -172,11 +174,28 @@ def _resolve_base_repo_id(repo_entry: object) -> Optional[str]:
         return None
     repo_id = repo_id.strip()
 
-    if getattr(repo_entry, "kind", None) == "worktree" and "--" in repo_id:
-        base_repo_id, _ = repo_id.split("--", 1)
-        if base_repo_id:
-            return base_repo_id
-        return None
+    if getattr(repo_entry, "kind", None) == "worktree":
+        if manifest_repos:
+            candidates: list[str] = []
+            for candidate in manifest_repos:
+                candidate_id = getattr(candidate, "id", None)
+                if not isinstance(candidate_id, str):
+                    continue
+                candidate_id = candidate_id.strip()
+                if not candidate_id:
+                    continue
+                if getattr(candidate, "kind", None) == "worktree":
+                    continue
+                if repo_id == candidate_id or repo_id.startswith(f"{candidate_id}--"):
+                    candidates.append(candidate_id)
+            if candidates:
+                return max(candidates, key=len)
+
+        if "--" in repo_id:
+            inferred_base, _ = repo_id.rsplit("--", 1)
+            if inferred_base:
+                return inferred_base
+            return None
 
     return repo_id
 
@@ -3245,7 +3264,7 @@ class DiscordBotService:
             )
             return
 
-        base_repo_id = _resolve_base_repo_id(repo_entry)
+        base_repo_id = _resolve_base_repo_id(repo_entry, manifest_repos=manifest.repos)
 
         if not base_repo_id:
             text = format_discord_message(
