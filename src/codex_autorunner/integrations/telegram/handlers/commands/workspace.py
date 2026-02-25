@@ -1309,7 +1309,7 @@ class WorkspaceCommands(SharedHelpers):
             return
 
         try:
-            from ......core.hub import HubSupervisor
+            from .....core.hub import HubSupervisor
 
             supervisor = getattr(self, "_hub_supervisor", None)
             if supervisor is None:
@@ -1361,10 +1361,17 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
 
-        safe_thread_id = re.sub(r"[^a-zA-Z0-9]+", "-", str(message.thread_id)).strip(
-            "-"
-        )
-        branch_name = f"thread-{safe_thread_id}"
+        safe_chat_id = re.sub(r"[^a-zA-Z0-9]+", "-", str(message.chat_id)).strip("-")
+        if not safe_chat_id:
+            safe_chat_id = "chat"
+        if message.thread_id is None:
+            thread_identity = f"msg-{message.message_id}-upd-{message.update_id}"
+        else:
+            thread_identity = f"thread-{message.thread_id}"
+        safe_thread_id = re.sub(r"[^a-zA-Z0-9]+", "-", thread_identity).strip("-")
+        if not safe_thread_id:
+            safe_thread_id = "unscoped"
+        branch_name = f"thread-chat-{safe_chat_id}-{safe_thread_id}"
 
         try:
             snapshot = await asyncio.to_thread(
@@ -1398,11 +1405,16 @@ class WorkspaceCommands(SharedHelpers):
 
         def apply(record: "TelegramTopicRecord") -> None:
             record.workspace_path = str(new_workspace_path)
+            record.workspace_id = None
             record.repo_id = snapshot.id
             if workspace_id:
                 record.workspace_id = workspace_id
             record.active_thread_id = None
             record.thread_ids = []
+            record.thread_summaries = {}
+            record.rollout_path = None
+            record.pending_compact_seed = None
+            record.pending_compact_seed_thread_id = None
 
         await self._router.update_topic(message.chat_id, message.thread_id, apply)
 
