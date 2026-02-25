@@ -91,7 +91,7 @@ from ...integrations.github.service import (
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
-from ..telegram.helpers import _extract_context_usage_percent
+from ..telegram.helpers import _extract_context_usage_percent, _format_turn_metrics
 from ..telegram.progress_stream import TurnProgressTracker, render_progress_text
 from .adapter import DiscordChatAdapter
 from .allowlist import DiscordAllowlist, allowlist_allows
@@ -146,6 +146,8 @@ DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
 class DiscordMessageTurnResult:
     final_message: str
     preview_message_id: Optional[str] = None
+    token_usage: Optional[dict[str, Any]] = None
+    elapsed_seconds: Optional[float] = None
 
 
 class DiscordBotService:
@@ -211,6 +213,7 @@ class DiscordBotService:
             else DiscordOutboxManager(
                 self._store,
                 send_message=self._send_channel_message,
+                delete_message=self._delete_channel_message,
                 logger=logger,
             )
         )
@@ -760,6 +763,15 @@ class DiscordBotService:
         if isinstance(turn_result, DiscordMessageTurnResult):
             response_text = turn_result.final_message
             preview_message_id = turn_result.preview_message_id
+            metrics_text = _format_turn_metrics(
+                turn_result.token_usage,
+                turn_result.elapsed_seconds,
+            )
+            if metrics_text:
+                if response_text.strip():
+                    response_text = f"{response_text}\n\n{metrics_text}"
+                else:
+                    response_text = metrics_text
         else:
             response_text = str(turn_result or "")
 
@@ -770,43 +782,17 @@ class DiscordBotService:
         )
         if not chunks:
             chunks = ["(No response text returned.)"]
-        if preview_message_id:
-            if len(chunks) == 1:
-                try:
-                    await self._rest.edit_channel_message(
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        payload={"content": chunks[0]},
-                    )
-                    return
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.turn.preview.final_edit_failed",
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        exc=exc,
-                    )
-            try:
-                await self._rest.delete_channel_message(
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.turn.preview.delete_failed",
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                    exc=exc,
-                )
         for idx, chunk in enumerate(chunks, 1):
             await self._send_channel_message_safe(
                 channel_id,
                 {"content": chunk},
                 record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
+            )
+        if preview_message_id:
+            await self._delete_channel_message_safe(
+                channel_id,
+                preview_message_id,
+                record_id=f"turn-preview-delete:{session_key}:{uuid.uuid4().hex[:8]}",
             )
 
     async def _with_attachment_context(
@@ -1218,6 +1204,7 @@ class DiscordBotService:
         )
         known_session = orchestrator.get_thread_id(session_key)
         final_message = ""
+        token_usage: Optional[dict[str, Any]] = None
         error_message = None
         session_from_events = known_session
         try:
@@ -1262,10 +1249,11 @@ class DiscordBotService:
                         tracker.add_action("notice", notice, "update")
                     await _edit_progress()
                 elif isinstance(run_event, TokenUsage):
-                    token_usage = run_event.usage
-                    if isinstance(token_usage, dict):
+                    usage_payload = run_event.usage
+                    if isinstance(usage_payload, dict):
+                        token_usage = usage_payload
                         tracker.context_usage_percent = _extract_context_usage_percent(
-                            token_usage
+                            usage_payload
                         )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
@@ -1291,9 +1279,12 @@ class DiscordBotService:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
             raise RuntimeError(error_message)
+        elapsed_seconds = max(0.0, time.monotonic() - tracker.started_at)
         return DiscordMessageTurnResult(
             final_message=final_message,
             preview_message_id=progress_message_id,
+            token_usage=token_usage,
+            elapsed_seconds=elapsed_seconds,
         )
 
     @staticmethod
@@ -1922,6 +1913,12 @@ class DiscordBotService:
             channel_id=channel_id, payload=payload
         )
 
+    async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
+        await self._rest.delete_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+        )
+
     async def _send_channel_message_safe(
         self,
         channel_id: str,
@@ -1960,6 +1957,52 @@ class DiscordBotService:
                     logging.ERROR,
                     "discord.channel_message.enqueue_failed",
                     channel_id=channel_id,
+                    record_id=outbox_record_id,
+                    exc=enqueue_exc,
+                )
+
+    async def _delete_channel_message_safe(
+        self,
+        channel_id: str,
+        message_id: str,
+        *,
+        record_id: Optional[str] = None,
+    ) -> None:
+        if not isinstance(message_id, str) or not message_id:
+            return
+        try:
+            await self._delete_channel_message(channel_id, message_id)
+            return
+        except Exception as exc:
+            outbox_record_id = (
+                record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_message.delete_failed",
+                channel_id=channel_id,
+                message_id=message_id,
+                record_id=outbox_record_id,
+                exc=exc,
+            )
+            try:
+                await self._store.enqueue_outbox(
+                    OutboxRecord(
+                        record_id=outbox_record_id,
+                        channel_id=channel_id,
+                        message_id=message_id,
+                        operation="delete",
+                        payload_json={},
+                    )
+                )
+            except Exception as enqueue_exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.channel_message.delete_enqueue_failed",
+                    channel_id=channel_id,
+                    message_id=message_id,
                     record_id=outbox_record_id,
                     exc=enqueue_exc,
                 )

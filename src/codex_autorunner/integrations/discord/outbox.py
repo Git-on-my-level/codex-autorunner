@@ -14,6 +14,7 @@ OUTBOX_MAX_ATTEMPTS = 5
 OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.0, 1.0, 2.0)
 
 SendMessageFn = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+DeleteMessageFn = Callable[[str, str], Awaitable[None]]
 
 
 def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
@@ -50,6 +51,7 @@ class DiscordOutboxManager:
         store: DiscordStateStore,
         *,
         send_message: SendMessageFn,
+        delete_message: Optional[DeleteMessageFn] = None,
         logger: logging.Logger,
         retry_interval_seconds: float = OUTBOX_RETRY_INTERVAL_SECONDS,
         max_attempts: int = OUTBOX_MAX_ATTEMPTS,
@@ -59,6 +61,7 @@ class DiscordOutboxManager:
     ) -> None:
         self._store = store
         self._send_message = send_message
+        self._delete_message = delete_message
         self._logger = logger
         self._retry_interval_seconds = max(retry_interval_seconds, 0.1)
         self._max_attempts = max(max_attempts, 1)
@@ -135,14 +138,31 @@ class DiscordOutboxManager:
         if not await self._mark_inflight(current.record_id):
             return False
         try:
-            if current.operation != "send":
+            if current.operation == "send":
+                await self._send_message(current.channel_id, current.payload_json)
+            elif current.operation == "delete":
+                if (
+                    self._delete_message is None
+                    or not isinstance(current.message_id, str)
+                    or not current.message_id
+                ):
+                    await self._store.record_outbox_failure(
+                        current.record_id,
+                        error=(
+                            "Unsupported Discord outbox delete operation: "
+                            "missing delete handler or message id"
+                        ),
+                        retry_after_seconds=None,
+                    )
+                    return False
+                await self._delete_message(current.channel_id, current.message_id)
+            else:
                 await self._store.record_outbox_failure(
                     current.record_id,
                     error=f"Unsupported Discord outbox operation: {current.operation}",
                     retry_after_seconds=None,
                 )
                 return False
-            await self._send_message(current.channel_id, current.payload_json)
         except Exception as exc:
             retry_after = _extract_retry_after_seconds(exc)
             await self._store.record_outbox_failure(
