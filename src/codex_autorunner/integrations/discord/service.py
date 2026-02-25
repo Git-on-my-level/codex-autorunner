@@ -573,6 +573,10 @@ class DiscordBotService:
                 )
             return
 
+        prompt_text, github_injected = await self._maybe_inject_github_context(
+            prompt_text, workspace_root
+        )
+
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
@@ -2390,7 +2394,7 @@ class DiscordBotService:
                     deferred=deferred,
                     text=text,
                 )
-            return
+                return
 
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
