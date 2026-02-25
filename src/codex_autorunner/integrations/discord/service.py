@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import re
 import sqlite3
 import subprocess
 import time
@@ -1650,6 +1651,14 @@ class DiscordBotService:
                 channel_id=channel_id,
             )
             return
+        if command_path == ("car", "newt"):
+            await self._handle_car_newt(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                guild_id=guild_id,
+            )
+            return
         if command_path == ("car", "debug"):
             await self._handle_debug(
                 interaction_id,
@@ -2606,6 +2615,7 @@ class DiscordBotService:
             "/car bind [path] - Bind channel to workspace",
             "/car status - Show binding status",
             "/car new - Start a fresh chat session",
+            "/car newt - Create new worktree and start session",
             "/car debug - Show debug info",
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
@@ -2912,6 +2922,182 @@ class DiscordBotService:
 
         text = format_discord_message(
             f"Started a fresh {mode_label} session for `{agent}` ({state_label})."
+        )
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+
+    async def _handle_car_newt(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        guild_id: Optional[str],
+    ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            if not workspace_root.exists() or not workspace_root.is_dir():
+                workspace_root = None
+        if workspace_root is None:
+            if pma_enabled:
+                workspace_root = canonicalize_path(Path(self._config.root))
+            else:
+                text = format_discord_message(
+                    "Binding is invalid. Run `/car bind path:<workspace>`."
+                )
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
+                return
+
+        try:
+            from ...core.hub import HubSupervisor
+
+            supervisor = self._hub_supervisor
+            if supervisor is None:
+                supervisor = HubSupervisor.from_path(self._config.root)
+                self._hub_supervisor = supervisor
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.newt.hub_supervisor.failed",
+                channel_id=channel_id,
+                exc=exc,
+            )
+            text = format_discord_message(
+                "Hub supervisor unavailable. Please try again."
+            )
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+
+        hub_root = Path(self._config.root)
+        manifest = load_manifest(
+            hub_root / ".codex-autorunner" / "manifest.yml", hub_root
+        )
+        repo_entry = manifest.get_by_path(hub_root, workspace_root)
+
+        if repo_entry is None:
+            text = format_discord_message(
+                "Workspace is not registered in the hub. Bind to a hub repo first."
+            )
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+
+        if repo_entry.kind == "worktree":
+            base_repo_id = repo_entry.worktree_of
+        else:
+            base_repo_id = repo_entry.id
+
+        if not base_repo_id:
+            text = format_discord_message(
+                "Could not determine base repository for worktree creation."
+            )
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+
+        safe_channel_id = re.sub(r"[^a-zA-Z0-9]+", "-", channel_id).strip("-")
+        branch_name = f"thread-{safe_channel_id}"
+
+        try:
+            snapshot = await asyncio.to_thread(
+                supervisor.create_worktree,
+                base_repo_id=base_repo_id,
+                branch=branch_name,
+                force=False,
+                start_point=None,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.newt.create_worktree.failed",
+                channel_id=channel_id,
+                base_repo_id=base_repo_id,
+                branch=branch_name,
+                exc=exc,
+            )
+            text = format_discord_message(f"Failed to create worktree: {exc}")
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+
+        new_workspace_path = (hub_root / snapshot.path).resolve()
+        await self._store.upsert_binding(
+            channel_id=channel_id,
+            guild_id=guild_id,
+            workspace_path=str(new_workspace_path),
+            repo_id=snapshot.id,
+        )
+
+        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if agent not in self.VALID_AGENT_VALUES:
+            agent = self.DEFAULT_AGENT
+
+        session_key = self._build_message_session_key(
+            channel_id=channel_id,
+            workspace_root=new_workspace_path,
+            pma_enabled=pma_enabled,
+            agent=agent,
+        )
+        orchestrator_channel_key = (
+            channel_id if not pma_enabled else f"pma:{channel_id}"
+        )
+        orchestrator = await self._orchestrator_for_workspace(
+            new_workspace_path, channel_id=orchestrator_channel_key
+        )
+        had_previous = orchestrator.reset_thread_id(session_key)
+        mode_label = "PMA" if pma_enabled else "repo"
+        state_label = "cleared previous thread" if had_previous else "new thread ready"
+
+        text = format_discord_message(
+            f"Created worktree `{snapshot.id}` from `{base_repo_id}` and started fresh {mode_label} session for `{agent}` ({state_label})."
         )
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,

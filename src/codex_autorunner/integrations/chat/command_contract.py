@@ -46,6 +46,14 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         discord_paths=(("car", "new"),),
     ),
     CommandContractEntry(
+        id="car.newt",
+        path=("car", "newt"),
+        requires_bound_workspace=True,
+        status="stable",
+        telegram_commands=("newt",),
+        discord_paths=(("car", "newt"),),
+    ),
+    CommandContractEntry(
         id="car.debug",
         path=("car", "debug"),
         requires_bound_workspace=False,

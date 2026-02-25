@@ -20,6 +20,9 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramMessage,
     TelegramVoice,
 )
+from codex_autorunner.integrations.telegram.handlers.commands import (
+    workspace as workspace_commands_module,
+)
 from codex_autorunner.integrations.telegram.handlers.commands.execution import (
     ExecutionCommands,
     _TurnRunResult,
@@ -680,6 +683,94 @@ class _PMAWorkspaceHandler(WorkspaceCommands):
         self._sent.append(text)
 
 
+class _NewtRouterStub:
+    def __init__(self, record: TelegramTopicRecord) -> None:
+        self._record = record
+        self.update_snapshots: list[dict[str, object]] = []
+
+    async def get_topic(self, _key: str) -> TelegramTopicRecord:
+        return self._record
+
+    async def update_topic(
+        self, _chat_id: int, _thread_id: Optional[int], apply: object
+    ) -> TelegramTopicRecord:
+        if callable(apply):
+            apply(self._record)
+        self.update_snapshots.append(self._record.to_dict())
+        return self._record
+
+
+class _NewtHubSupervisorStub:
+    def __init__(self) -> None:
+        self.create_calls: list[dict[str, object]] = []
+        self._counter = 0
+
+    def create_worktree(
+        self,
+        *,
+        base_repo_id: str,
+        branch: str,
+        force: bool,
+        start_point: Optional[str],
+    ) -> SimpleNamespace:
+        self._counter += 1
+        self.create_calls.append(
+            {
+                "base_repo_id": base_repo_id,
+                "branch": branch,
+                "force": force,
+                "start_point": start_point,
+            }
+        )
+        return SimpleNamespace(
+            id=f"worktree-{self._counter}",
+            path=f"worktrees/worktree-{self._counter}",
+        )
+
+
+class _NewtClientStub:
+    async def thread_start(self, workspace_path: str, *, agent: str) -> dict[str, str]:
+        return {"thread_id": "new-thread-id", "workspace_path": workspace_path}
+
+
+class _NewtHandler(WorkspaceCommands):
+    def __init__(self, record: TelegramTopicRecord, *, hub_root: Path) -> None:
+        self._logger = logging.getLogger("test")
+        self._config = SimpleNamespace()
+        self._router = _NewtRouterStub(record)
+        self._hub_root = hub_root
+        self._hub_supervisor = _NewtHubSupervisorStub()
+        self._sent: list[str] = []
+
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        return f"{chat_id}:{thread_id}"
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        reply_markup: Optional[object] = None,
+    ) -> None:
+        self._sent.append(text)
+
+    async def _client_for_workspace(self, _workspace_path: str) -> _NewtClientStub:
+        return _NewtClientStub()
+
+    def _canonical_workspace_root(
+        self, workspace_path: Optional[str]
+    ) -> Optional[Path]:
+        if not workspace_path:
+            return None
+        return Path(workspace_path).expanduser().resolve()
+
+    def _workspace_id_for_path(self, _workspace_path: str) -> Optional[str]:
+        # Exercise /newt reset logic when workspace ID lookup fails.
+        return None
+
+
 @pytest.mark.anyio
 async def test_pma_new_resets_session(tmp_path: Path) -> None:
     registry = AppServerThreadRegistry(tmp_path / "threads.json")
@@ -704,6 +795,99 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
 
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
     assert handler._sent and "PMA session reset" in handler._sent[-1]
+
+
+@pytest.mark.anyio
+async def test_newt_branch_name_includes_chat_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = hub_root / "repo"
+    workspace.mkdir(parents=True)
+    record = TelegramTopicRecord(
+        workspace_path=str(workspace),
+        thread_ids=["old-thread"],
+        active_thread_id="old-thread",
+    )
+    handler = _NewtHandler(record, hub_root=hub_root)
+    manifest_stub = SimpleNamespace(
+        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
+            kind="repo", id="base-repo", worktree_of=None
+        )
+    )
+    monkeypatch.setattr(
+        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
+    )
+    message = TelegramMessage(
+        update_id=100,
+        message_id=200,
+        chat_id=-7777,
+        thread_id=333,
+        from_user_id=42,
+        text="/newt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_newt(message)
+
+    calls = handler._hub_supervisor.create_calls
+    assert len(calls) == 1
+    assert calls[0]["branch"] == "thread-chat-7777-thread-333"
+
+
+@pytest.mark.anyio
+async def test_newt_thread_fallback_and_workspace_state_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = hub_root / "repo"
+    workspace.mkdir(parents=True)
+    record = TelegramTopicRecord(
+        workspace_path=str(workspace),
+        workspace_id="stale-workspace-id",
+        active_thread_id="stale-thread",
+        thread_ids=["stale-thread"],
+        thread_summaries={"stale-thread": ThreadSummary(user_preview="stale")},
+        rollout_path="old-rollout",
+        pending_compact_seed="old-seed",
+        pending_compact_seed_thread_id="old-seed-thread",
+    )
+    handler = _NewtHandler(record, hub_root=hub_root)
+    manifest_stub = SimpleNamespace(
+        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
+            kind="repo", id="base-repo", worktree_of=None
+        )
+    )
+    monkeypatch.setattr(
+        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
+    )
+    message = TelegramMessage(
+        update_id=909,
+        message_id=808,
+        chat_id=-123456,
+        thread_id=None,
+        from_user_id=42,
+        text="/newt",
+        date=None,
+        is_topic_message=False,
+    )
+
+    await handler._handle_newt(message)
+
+    calls = handler._hub_supervisor.create_calls
+    assert len(calls) == 1
+    assert calls[0]["branch"] == "thread-chat-123456-msg-808-upd-909"
+
+    # First topic update is /newt workspace switch reset before new thread is attached.
+    reset_snapshot = handler._router.update_snapshots[0]
+    assert reset_snapshot["workspace_id"] is None
+    assert reset_snapshot["active_thread_id"] is None
+    assert reset_snapshot["thread_ids"] == []
+    assert reset_snapshot["thread_summaries"] == {}
+    assert reset_snapshot["rollout_path"] is None
+    assert reset_snapshot["pending_compact_seed"] is None
+    assert reset_snapshot["pending_compact_seed_thread_id"] is None
 
 
 @pytest.mark.anyio

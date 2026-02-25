@@ -32,6 +32,11 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "start a new PMA session",
             lambda message, _args, _runtime: handlers._handle_new(message),
         ),
+        "newt": CommandSpec(
+            "newt",
+            "create a new worktree and start a new session",
+            lambda message, _args, _runtime: handlers._handle_newt(message),
+        ),
         "reset": CommandSpec(
             "reset",
             "reset PMA thread state (clear volatile state)",

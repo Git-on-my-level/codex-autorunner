@@ -24,6 +24,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "bind",
         "status",
         "new",
+        "newt",
         "debug",
         "agent",
         "model",
