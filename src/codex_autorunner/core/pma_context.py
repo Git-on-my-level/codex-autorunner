@@ -25,6 +25,7 @@ from .flows.models import FlowRunRecord, FlowRunStatus
 from .flows.store import FlowStore
 from .flows.worker_process import check_worker_health, read_worker_crash_info
 from .hub import HubSupervisor
+from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_summary import build_ticket_flow_summary
 from .utils import atomic_write
@@ -38,6 +39,7 @@ PMA_MAX_TEMPLATE_REPOS = 25
 PMA_MAX_TEMPLATE_FIELD_CHARS = 120
 PMA_MAX_PMA_FILES = 50
 PMA_MAX_LIFECYCLE_EVENTS = 20
+PMA_MAX_PMA_THREADS = 20
 PMA_ACTIVE_CONTEXT_STATE_FILENAME = ".active_context_state.json"
 
 # Keep this short and stable; see ticket TICKET-001 for rationale.
@@ -359,6 +361,54 @@ def _snapshot_pma_files(
     return pma_files, pma_files_detail
 
 
+def _snapshot_pma_threads(
+    hub_root: Path,
+    *,
+    limit: int = PMA_MAX_PMA_THREADS,
+    max_preview_chars: int = PMA_MAX_TEMPLATE_FIELD_CHARS,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    db_path = default_pma_threads_db_path(hub_root)
+    if not db_path.exists():
+        return []
+
+    try:
+        store = PmaThreadStore(hub_root)
+        threads = store.list_threads(limit=limit)
+    except Exception as exc:
+        _logger.warning("Could not load PMA managed threads: %s", exc)
+        return []
+
+    snapshot_threads: list[dict[str, Any]] = []
+    for thread in threads[:limit]:
+        workspace_raw = str(thread.get("workspace_root") or "").strip()
+        workspace_root = workspace_raw
+        if workspace_raw:
+            try:
+                workspace_root = safe_relpath(Path(workspace_raw).resolve(), hub_root)
+            except Exception:
+                workspace_root = workspace_raw
+        snapshot_threads.append(
+            {
+                "managed_thread_id": thread.get("managed_thread_id"),
+                "agent": thread.get("agent"),
+                "repo_id": thread.get("repo_id"),
+                "workspace_root": workspace_root,
+                "name": thread.get("name"),
+                "status": thread.get("status"),
+                "last_turn_id": thread.get("last_turn_id"),
+                "last_message_preview": _truncate(
+                    str(thread.get("last_message_preview") or ""),
+                    max_preview_chars,
+                ),
+                "updated_at": thread.get("updated_at"),
+            }
+        )
+    return snapshot_threads
+
+
 def _build_templates_snapshot(
     supervisor: HubSupervisor,
     *,
@@ -439,6 +489,7 @@ def _render_hub_snapshot(
     max_field_chars: int = PMA_MAX_TEMPLATE_FIELD_CHARS,
     max_pma_files: int = PMA_MAX_PMA_FILES,
     max_lifecycle_events: int = PMA_MAX_LIFECYCLE_EVENTS,
+    max_pma_threads: int = PMA_MAX_PMA_THREADS,
 ) -> str:
     lines: list[str] = []
 
@@ -582,6 +633,28 @@ def _render_hub_snapshot(
                 for name in list(outbox_files)[: max(0, max_pma_files)]
             ]
             lines.append(f"- outbox: [{', '.join(files)}]")
+        lines.append("")
+
+    pma_threads = snapshot.get("pma_threads") or []
+    if pma_threads:
+        lines.append("PMA Managed Threads:")
+        for thread in list(pma_threads)[: max(0, max_pma_threads)]:
+            managed_thread_id = _truncate(
+                str(thread.get("managed_thread_id", "")),
+                max_field_chars,
+            )
+            repo_id = _truncate(str(thread.get("repo_id") or "-"), max_field_chars)
+            agent = _truncate(str(thread.get("agent") or ""), max_field_chars)
+            status = _truncate(str(thread.get("status") or ""), max_field_chars)
+            name = _truncate(str(thread.get("name") or "-"), max_field_chars)
+            preview = _truncate(
+                str(thread.get("last_message_preview") or "-"),
+                max_field_chars,
+            )
+            lines.append(
+                f"- {managed_thread_id} repo_id={repo_id} agent={agent} "
+                f"status={status} name={name} last={preview}"
+            )
         lines.append("")
 
     lifecycle_events = snapshot.get("lifecycle_events") or []
@@ -1296,6 +1369,7 @@ async def build_hub_snapshot(
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
             "pma_files_detail": {"inbox": [], "outbox": []},
+            "pma_threads": [],
         }
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
@@ -1347,8 +1421,10 @@ async def build_hub_snapshot(
 
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
     pma_files_detail: dict[str, list[dict[str, str]]] = {"inbox": [], "outbox": []}
+    pma_threads: list[dict[str, Any]] = []
     if hub_root:
         pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
+        pma_threads = _snapshot_pma_threads(hub_root)
 
     return {
         "repos": repos,
@@ -1356,6 +1432,7 @@ async def build_hub_snapshot(
         "templates": templates,
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
+        "pma_threads": pma_threads,
         "lifecycle_events": lifecycle_events,
         "limits": {
             "max_repos": max_repos,
