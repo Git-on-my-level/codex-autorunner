@@ -1,13 +1,17 @@
+import pytest
+
 from codex_autorunner.voice import (
     TranscriptionEvent,
     VoiceConfig,
     VoiceService,
+    VoiceServiceError,
 )
 
 
 class DummyStream:
-    def __init__(self, text: str = ""):
+    def __init__(self, text: str = "", error: str = ""):
         self._text = text
+        self._error = error
         self.chunks = []
 
     def send_chunk(self, chunk):
@@ -15,6 +19,8 @@ class DummyStream:
         return []
 
     def flush_final(self):
+        if self._error:
+            return [TranscriptionEvent(text="", is_final=True, error=self._error)]
         final_text = self._text or b"".join(self.chunks).decode(
             "utf-8", errors="ignore"
         )
@@ -73,3 +79,36 @@ def test_voice_service_passes_filename_and_content_type_into_session():
     assert provider.last_session is not None
     assert provider.last_session.filename == "voice.webm"
     assert provider.last_session.content_type == "audio/webm;codecs=opus"
+
+
+def test_voice_service_reports_missing_local_provider():
+    cfg = VoiceConfig.from_raw(
+        {"enabled": True, "provider": "local_whisper", "warn_on_remote_api": False}
+    )
+    provider = DummyProvider(DummyStream(error="local_provider_unavailable"))
+    service = VoiceService(cfg, provider_resolver=lambda _: provider)
+
+    with pytest.raises(VoiceServiceError) as exc:
+        service.transcribe(b"audio")
+    assert "local whisper provider" in str(exc.value).lower()
+
+
+def test_voice_service_passes_env_to_provider_resolver():
+    cfg = VoiceConfig.from_raw({"enabled": True, "warn_on_remote_api": False})
+    provider = DummyProvider(DummyStream("ok"))
+    captured: dict = {}
+
+    def _resolver(config, logger=None, env=None):
+        _ = config, logger
+        captured["env"] = dict(env or {})
+        return provider
+
+    service = VoiceService(
+        cfg,
+        provider_resolver=_resolver,
+        env={"OPENAI_API_KEY": "workspace-key"},
+    )
+
+    result = service.transcribe(b"audio bytes", client="web")
+    assert result["text"] == "ok"
+    assert captured["env"].get("OPENAI_API_KEY") == "workspace-key"

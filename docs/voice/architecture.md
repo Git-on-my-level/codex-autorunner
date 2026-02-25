@@ -17,8 +17,8 @@ This document outlines the shared speech input architecture for Codex Autorunner
 - `voice.chunk_ms` (default `600`) and `voice.sample_rate` (default `16000`) guide capture chunking.
 - `voice.warn_on_remote_api` (bool, default `true`) toggles user-facing warnings when sending audio.
 - Provider-specific block:
-  - `voice.providers.openai_whisper`: `{ api_key_env: "OPENAI_API_KEY", model: "whisper-1", base_url: null, temperature: 0, language: null, redact_request: true }`.
-  - Future providers live under `voice.providers.<name>` with matching keys.
+  - `voice.providers.openai_whisper`: `{ remote_api: true, api_key_env: "OPENAI_API_KEY", model: "whisper-1", base_url: null, temperature: 0, language: null, redact_request: true }`.
+  - `voice.providers.local_whisper`: `{ remote_api: false, model: "tiny", device: "auto", compute_type: "default", cpu_threads: 0, num_workers: 1, local_files_only: false, beam_size: 1, vad_filter: true, language: null }`.
 - Defaults live in config; env vars override for runtime toggles/keys without editing files.
 
 ## Shared Modules and Interfaces

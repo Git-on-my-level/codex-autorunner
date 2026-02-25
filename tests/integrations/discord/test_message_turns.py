@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import pytest
 
+import codex_autorunner.integrations.discord.service as discord_service_module
 from codex_autorunner.core.filebox import inbox_dir, outbox_pending_dir
 from codex_autorunner.core.ports.run_event import (
     Completed,
@@ -26,6 +27,7 @@ from codex_autorunner.integrations.app_server.threads import (
 )
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
+    DiscordBotMediaConfig,
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
@@ -309,6 +311,18 @@ class _RaisingStreamingFakeOrchestrator(_StreamingFakeOrchestrator):
         raise self._exc
 
 
+class _FakeVoiceService:
+    def __init__(self, transcript: str = "transcribed text") -> None:
+        self.transcript = transcript
+        self.calls: list[dict[str, Any]] = []
+
+    async def transcribe_async(
+        self, audio_bytes: bytes, **kwargs: Any
+    ) -> dict[str, Any]:
+        self.calls.append({"audio_bytes": audio_bytes, **kwargs})
+        return {"text": self.transcript}
+
+
 def _config(
     root: Path,
     *,
@@ -320,6 +334,9 @@ def _config(
     shell_timeout_ms: int = 120000,
     shell_max_output_chars: int = 3800,
     max_message_length: int = 2000,
+    media_enabled: bool = True,
+    media_voice: bool = True,
+    media_max_voice_bytes: int = 10 * 1024 * 1024,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -345,6 +362,11 @@ def _config(
             enabled=shell_enabled,
             timeout_ms=shell_timeout_ms,
             max_output_chars=shell_max_output_chars,
+        ),
+        media=DiscordBotMediaConfig(
+            enabled=media_enabled,
+            voice=media_voice,
+            max_voice_bytes=media_max_voice_bytes,
         ),
     )
 
@@ -652,6 +674,326 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
 
 
 @pytest.mark.anyio
+async def test_message_create_audio_attachment_injects_transcript_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/audio-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"voice-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-audio-1",
+                            "filename": "voice-note.ogg",
+                            "content_type": "audio/ogg",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("Do we have whisper support?")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done with audio"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "Inbound Discord attachments:" in prompt
+        assert "Transcript: Do we have whisper support?" in prompt
+        assert fake_voice.calls
+        assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
+        assert fake_voice.calls[0]["client"] == "discord"
+        assert fake_voice.calls[0]["filename"] == "voice-note.ogg"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_audio_attachment_does_not_transcribe_when_voice_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/audio-2"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"voice-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-audio-2",
+                            "filename": "voice-note.ogg",
+                            "content_type": "audio/ogg",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, media_voice=False),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("ignored")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        assert "Transcript:" not in captured_prompts[0]
+        assert fake_voice.calls == []
+    finally:
+        await store.close()
+
+
+def test_voice_service_for_workspace_uses_hub_config_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    hub_config_path = tmp_path / "codex-autorunner.yml"
+    hub_config_path.write_text("mode: hub\nversion: 2\n", encoding="utf-8")
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=SimpleNamespace(),
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._hub_config_path = hub_config_path
+    service._process_env = {"BASE": "1"}
+
+    load_calls: list[tuple[Path, Optional[Path]]] = []
+
+    def _fake_load_repo_config(
+        start: Path, hub_path: Optional[Path] = None
+    ) -> SimpleNamespace:
+        load_calls.append((start, hub_path))
+        return SimpleNamespace(
+            voice={
+                "enabled": True,
+                "provider": "openai_whisper",
+                "warn_on_remote_api": False,
+            }
+        )
+
+    resolve_calls: list[tuple[Path, Optional[dict[str, str]]]] = []
+
+    def _fake_resolve_env_for_root(
+        root: Path, base_env: Optional[dict[str, str]] = None
+    ) -> dict[str, str]:
+        resolve_calls.append((root, base_env))
+        return {"OPENAI_API_KEY": "workspace-key"}
+
+    class _StubVoiceService:
+        def __init__(
+            self, _voice_config: Any, logger: Any = None, env: Optional[dict] = None
+        ) -> None:
+            _ = logger
+            self.env = dict(env or {})
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(
+            discord_service_module, "load_repo_config", _fake_load_repo_config
+        )
+        monkeypatch.setattr(
+            discord_service_module,
+            "resolve_env_for_root",
+            _fake_resolve_env_for_root,
+        )
+        monkeypatch.setattr(discord_service_module, "VoiceService", _StubVoiceService)
+
+        voice_service, voice_config = service._voice_service_for_workspace(workspace)
+    finally:
+        monkeypatch.undo()
+
+    assert voice_service is not None
+    assert voice_config is not None
+    assert load_calls == [(workspace.resolve(), hub_config_path)]
+    assert resolve_calls == [(workspace.resolve(), {"BASE": "1"})]
+    assert voice_service.env.get("OPENAI_API_KEY") == "workspace-key"
+
+
+def test_voice_service_for_workspace_caches_env_by_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=SimpleNamespace(),
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._process_env = {"BASE": "1"}
+
+    def _fake_load_repo_config(
+        start: Path, hub_path: Optional[Path] = None
+    ) -> SimpleNamespace:
+        _ = start, hub_path
+        return SimpleNamespace(
+            voice={
+                "enabled": True,
+                "provider": "openai_whisper",
+                "warn_on_remote_api": False,
+            }
+        )
+
+    def _fake_resolve_env_for_root(
+        root: Path, base_env: Optional[dict[str, str]] = None
+    ) -> dict[str, str]:
+        assert base_env == {"BASE": "1"}
+        if root.resolve() == workspace_a.resolve():
+            return {"OPENAI_API_KEY": "key-a"}
+        return {"OPENAI_API_KEY": "key-b"}
+
+    class _StubVoiceService:
+        def __init__(
+            self, _voice_config: Any, logger: Any = None, env: Optional[dict] = None
+        ) -> None:
+            _ = logger
+            self.env = dict(env or {})
+
+    monkeypatch.setattr(
+        discord_service_module, "load_repo_config", _fake_load_repo_config
+    )
+    monkeypatch.setattr(
+        discord_service_module,
+        "resolve_env_for_root",
+        _fake_resolve_env_for_root,
+    )
+    monkeypatch.setattr(discord_service_module, "VoiceService", _StubVoiceService)
+
+    voice_service_a, _voice_config_a = service._voice_service_for_workspace(workspace_a)
+    voice_service_b, _voice_config_b = service._voice_service_for_workspace(workspace_b)
+    voice_service_a_repeat, _voice_config_a_repeat = (
+        service._voice_service_for_workspace(workspace_a)
+    )
+
+    assert voice_service_a is not None
+    assert voice_service_b is not None
+    assert voice_service_a is voice_service_a_repeat
+    assert voice_service_a.env.get("OPENAI_API_KEY") == "key-a"
+    assert voice_service_b.env.get("OPENAI_API_KEY") == "key-b"
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,
 ) -> None:
@@ -867,7 +1209,8 @@ async def test_message_create_streaming_turn_appends_final_metrics(
     try:
         await service.run_forever()
         final_content = ""
-        for message in rest.channel_messages:
+        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
+        for message in final_candidates:
             content = str(message.get("payload", {}).get("content", ""))
             if final_text in content:
                 final_content = content

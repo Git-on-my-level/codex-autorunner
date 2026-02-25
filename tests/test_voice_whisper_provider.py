@@ -1,5 +1,7 @@
 from codex_autorunner.voice import (
     AudioChunk,
+    LocalWhisperProvider,
+    LocalWhisperSettings,
     OpenAIWhisperProvider,
     OpenAIWhisperSettings,
     SpeechSessionMetadata,
@@ -125,3 +127,45 @@ def test_resolve_speech_provider_builds_openai():
         voice_config=config, env={"OPENAI_API_KEY": "token"}, logger=None
     )
     assert isinstance(provider, OpenAIWhisperProvider)
+
+
+def test_local_whisper_provider_transcribes_with_injected_backend(monkeypatch):
+    provider = LocalWhisperProvider(LocalWhisperSettings())
+    monkeypatch.setattr(
+        provider,
+        "_transcribe",
+        lambda audio_bytes, payload: {
+            "text": "local transcript",
+            "model": payload.get("model"),
+            "size": len(audio_bytes),
+        },
+    )
+    stream = provider.start_stream(
+        SpeechSessionMetadata(
+            session_id="local-1",
+            provider="local_whisper",
+            latency_mode="balanced",
+            filename="voice.ogg",
+            content_type="audio/ogg",
+        )
+    )
+    stream.send_chunk(
+        AudioChunk(
+            data=b"\x00\x01", sample_rate=16_000, start_ms=0, end_ms=100, sequence=0
+        )
+    )
+    events = list(stream.flush_final())
+    assert events and events[0].text == "local transcript"
+
+
+def test_resolve_speech_provider_builds_local():
+    config = VoiceConfig.from_raw(
+        {
+            "enabled": True,
+            "provider": "local_whisper",
+            "providers": {"local_whisper": {"model": "tiny"}},
+            "warn_on_remote_api": False,
+        }
+    )
+    provider = resolve_speech_provider(voice_config=config, logger=None)
+    assert isinstance(provider, LocalWhisperProvider)

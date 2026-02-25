@@ -90,7 +90,13 @@ discord_bot:
     enabled: true
     timeout_ms: 120000
     max_output_chars: 3800
+  media:
+    enabled: true
+    voice: true
+    max_voice_bytes: 10000000
 ```
+
+When `discord_bot.media.voice: true`, inbound Discord audio attachments are transcribed through the configured `voice.provider` and injected into attachment context.
 
 Allowlist behavior:
 - At least one allowlist must be configured.

@@ -90,6 +90,11 @@
     "enabled": false,
     "intents": 33281,
     "max_message_length": 2000,
+    "media": {
+      "enabled": true,
+      "max_voice_bytes": 10000000,
+      "voice": true
+    },
     "shell": {
       "enabled": true,
       "max_output_chars": 3800,
@@ -396,9 +401,9 @@
   "update": {
     "backend": "auto",
     "linux_service_names": {
+      "discord": "car-discord",
       "hub": "car-hub",
-      "telegram": "car-telegram",
-      "discord": "car-discord"
+      "telegram": "car-telegram"
     },
     "skip_checks": false
   },
@@ -414,12 +419,26 @@
     "latency_mode": "balanced",
     "provider": "openai_whisper",
     "providers": {
+      "local_whisper": {
+        "beam_size": 1,
+        "compute_type": "default",
+        "cpu_threads": 0,
+        "device": "auto",
+        "download_root": null,
+        "language": null,
+        "local_files_only": false,
+        "model": "tiny",
+        "num_workers": 1,
+        "remote_api": false,
+        "vad_filter": true
+      },
       "openai_whisper": {
         "api_key_env": "OPENAI_API_KEY",
         "base_url": null,
         "language": null,
         "model": "whisper-1",
         "redact_request": true,
+        "remote_api": true,
         "temperature": 0
       }
     },

@@ -9,13 +9,27 @@ LatencyMode = str  # Alias to keep config typed without importing Literal everyw
 
 DEFAULT_PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
     "openai_whisper": {
+        "remote_api": True,
         "api_key_env": "OPENAI_API_KEY",
         "model": "whisper-1",
         "base_url": None,
         "temperature": 0,
         "language": None,
         "redact_request": True,
-    }
+    },
+    "local_whisper": {
+        "remote_api": False,
+        "model": "tiny",
+        "device": "auto",
+        "compute_type": "default",
+        "cpu_threads": 0,
+        "num_workers": 1,
+        "download_root": None,
+        "local_files_only": False,
+        "beam_size": 1,
+        "vad_filter": True,
+        "language": None,
+    },
 }
 
 
@@ -90,13 +104,18 @@ class VoiceConfig:
             merged["enabled"] = _env_bool(explicit_enabled, merged["enabled"])
         elif not merged.get("enabled"):
             # Auto-enable if the provider's API key is available
-            provider_name = env.get(
+            provider_name_raw = env.get(
                 "CODEX_AUTORUNNER_VOICE_PROVIDER",
                 merged.get("provider", "openai_whisper"),
             )
+            provider_name = (
+                "local_whisper"
+                if str(provider_name_raw).strip().lower() == "local"
+                else provider_name_raw
+            )
             provider_cfg = merged.get("providers", {}).get(provider_name, {})
-            api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
-            if env.get(api_key_env):
+            api_key_env = provider_cfg.get("api_key_env")
+            if isinstance(api_key_env, str) and api_key_env and env.get(api_key_env):
                 merged["enabled"] = True
         merged["provider"] = env.get(
             "CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider")
@@ -115,11 +134,18 @@ class VoiceConfig:
         if explicit_warn is not None:
             merged["warn_on_remote_api"] = _env_bool(explicit_warn, True)
         else:
-            # Auto-disable warning if API key is present (user has intentionally configured it)
-            provider_name = merged.get("provider", "openai_whisper")
+            provider_name_raw = merged.get("provider", "openai_whisper")
+            provider_name = (
+                "local_whisper"
+                if str(provider_name_raw).strip().lower() == "local"
+                else provider_name_raw
+            )
             provider_cfg = merged.get("providers", {}).get(provider_name, {})
-            api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
-            if env.get(api_key_env):
+            is_remote_api = bool(provider_cfg.get("remote_api", True))
+            api_key_env = provider_cfg.get("api_key_env")
+            if not is_remote_api:
+                merged["warn_on_remote_api"] = False
+            elif isinstance(api_key_env, str) and api_key_env and env.get(api_key_env):
                 merged["warn_on_remote_api"] = False
             else:
                 merged["warn_on_remote_api"] = merged.get("warn_on_remote_api", True)

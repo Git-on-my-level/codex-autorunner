@@ -481,6 +481,12 @@ def build_app_context(
             ),
             extra="voice",
         )
+        if voice_config.provider in {"local_whisper", "local"}:
+            require_optional_dependencies(
+                feature="voice (local_whisper)",
+                deps=(("faster_whisper", "faster-whisper"),),
+                extra="voice-local",
+            )
     except ConfigError as exc:
         voice_missing_reason = str(exc)
         voice_config.enabled = False

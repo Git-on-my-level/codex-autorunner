@@ -109,3 +109,25 @@ def test_capture_uses_latency_mode_and_chunk_size():
     assert provider.last_session.latency_mode == "quality"
     assert provider.stream.chunks and provider.stream.chunks[0].start_ms == 0
     assert provider.stream.chunks[0].end_ms == 900
+
+
+def test_voice_config_local_provider_disables_remote_warning_by_default():
+    cfg = VoiceConfig.from_raw(
+        {
+            "enabled": True,
+            "provider": "local_whisper",
+        },
+        env={},
+    )
+    assert cfg.warn_on_remote_api is False
+
+
+def test_voice_config_local_alias_disables_remote_warning_by_default():
+    cfg = VoiceConfig.from_raw(
+        {
+            "enabled": True,
+            "provider": "local",
+        },
+        env={},
+    )
+    assert cfg.warn_on_remote_api is False

@@ -228,6 +228,11 @@ def _default_discord_bot_section() -> Dict[str, Any]:
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
+        "media": {
+            "enabled": True,
+            "voice": True,
+            "max_voice_bytes": 10_000_000,
+        },
     }
 
 
@@ -568,13 +573,27 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         },
         "providers": {
             "openai_whisper": {
+                "remote_api": True,
                 "api_key_env": "OPENAI_API_KEY",
                 "model": "whisper-1",
                 "base_url": None,
                 "temperature": 0,
                 "language": None,
                 "redact_request": True,
-            }
+            },
+            "local_whisper": {
+                "remote_api": False,
+                "model": "tiny",
+                "device": "auto",
+                "compute_type": "default",
+                "cpu_threads": 0,
+                "num_workers": 1,
+                "download_root": None,
+                "local_files_only": False,
+                "beam_size": 1,
+                "vad_filter": True,
+                "language": None,
+            },
         },
     },
     "log": {

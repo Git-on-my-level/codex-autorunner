@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import os
 import re
 import sqlite3
 import subprocess
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from ...core.config import load_repo_config
+from ...core.config import load_repo_config, resolve_env_for_root
 from ...core.filebox import (
     inbox_dir,
     outbox_pending_dir,
@@ -95,6 +96,7 @@ from ...integrations.github.service import (
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
+from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ..telegram.helpers import (
     _coerce_thread_list,
     _extract_context_usage_percent,
@@ -154,6 +156,10 @@ THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
+DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
+    "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
+    "cannot infer the intention please clarify before proceeding."
+)
 
 
 class AppServerUnavailableError(Exception):
@@ -166,6 +172,16 @@ class DiscordMessageTurnResult:
     preview_message_id: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     elapsed_seconds: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class _SavedDiscordAttachment:
+    original_name: str
+    path: Path
+    mime_type: Optional[str]
+    size_bytes: int
+    transcript_text: Optional[str] = None
+    transcript_warning: Optional[str] = None
 
 
 class DiscordBotService:
@@ -189,6 +205,8 @@ class DiscordBotService:
         update_skip_checks: bool = False,
         update_backend: str = "auto",
         update_linux_service_names: Optional[dict[str, str]] = None,
+        voice_config: Optional[VoiceConfig] = None,
+        voice_service: Optional[VoiceService] = None,
     ) -> None:
         self._config = config
         self._logger = logger
@@ -199,6 +217,11 @@ class DiscordBotService:
         self._update_skip_checks = update_skip_checks
         self._update_backend = update_backend
         self._update_linux_service_names = update_linux_service_names or {}
+        self._process_env: dict[str, str] = dict(os.environ)
+        self._voice_config = voice_config
+        self._voice_service = voice_service
+        self._voice_configs_by_workspace: dict[Path, VoiceConfig] = {}
+        self._voice_services_by_workspace: dict[Path, Optional[VoiceService]] = {}
 
         self._rest = (
             rest_client
@@ -816,6 +839,147 @@ class DiscordBotService:
                 record_id=f"turn-preview-delete:{session_key}:{uuid.uuid4().hex[:8]}",
             )
 
+    def _voice_service_for_workspace(
+        self, workspace_root: Path
+    ) -> tuple[Optional[VoiceService], Optional[VoiceConfig]]:
+        if self._voice_service is not None:
+            return self._voice_service, self._voice_config
+
+        resolved_root = workspace_root.resolve()
+        if resolved_root in self._voice_services_by_workspace:
+            return (
+                self._voice_services_by_workspace[resolved_root],
+                self._voice_configs_by_workspace.get(resolved_root),
+            )
+
+        try:
+            repo_config = load_repo_config(
+                resolved_root,
+                hub_path=self._hub_config_path,
+            )
+            voice_config = VoiceConfig.from_raw(repo_config.voice)
+            self._voice_configs_by_workspace[resolved_root] = voice_config
+            workspace_env = resolve_env_for_root(
+                resolved_root,
+                base_env=self._process_env,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.voice.config_load_failed",
+                workspace_root=str(resolved_root),
+                exc=exc,
+            )
+            self._voice_services_by_workspace[resolved_root] = None
+            return None, None
+
+        if not voice_config.enabled:
+            self._voice_services_by_workspace[resolved_root] = None
+            return None, voice_config
+
+        try:
+            service = VoiceService(
+                voice_config,
+                logger=self._logger,
+                env=workspace_env,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.voice.init_failed",
+                workspace_root=str(resolved_root),
+                provider=voice_config.provider,
+                exc=exc,
+            )
+            self._voice_services_by_workspace[resolved_root] = None
+            return None, voice_config
+
+        self._voice_services_by_workspace[resolved_root] = service
+        return service, voice_config
+
+    def _is_audio_attachment(self, attachment: Any, mime_type: Optional[str]) -> bool:
+        kind = getattr(attachment, "kind", None)
+        if isinstance(kind, str) and kind.lower() == "audio":
+            return True
+        if isinstance(mime_type, str) and mime_type.lower().startswith("audio/"):
+            return True
+        return False
+
+    async def _transcribe_voice_attachment(
+        self,
+        *,
+        workspace_root: Path,
+        channel_id: str,
+        attachment: Any,
+        data: bytes,
+        file_name: str,
+        mime_type: Optional[str],
+    ) -> tuple[Optional[str], Optional[str]]:
+        if not self._config.media.enabled or not self._config.media.voice:
+            return None, None
+        if not self._is_audio_attachment(attachment, mime_type):
+            return None, None
+        if len(data) > self._config.media.max_voice_bytes:
+            warning = (
+                "Voice transcript skipped: attachment exceeds max_voice_bytes "
+                f"({len(data)} > {self._config.media.max_voice_bytes})."
+            )
+            return None, warning
+
+        voice_service, _voice_config = self._voice_service_for_workspace(workspace_root)
+        if voice_service is None:
+            return (
+                None,
+                "Voice transcript unavailable: provider is disabled or missing.",
+            )
+
+        try:
+            result = await voice_service.transcribe_async(
+                data,
+                client="discord",
+                filename=file_name,
+                content_type=mime_type,
+            )
+        except VoiceServiceError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.media.voice.transcribe_failed",
+                channel_id=channel_id,
+                file_id=getattr(attachment, "file_id", None),
+                reason=exc.reason,
+            )
+            return None, f"Voice transcript unavailable ({exc.reason})."
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.media.voice.transcribe_failed",
+                channel_id=channel_id,
+                file_id=getattr(attachment, "file_id", None),
+                exc=exc,
+            )
+            return None, "Voice transcript unavailable (provider_error)."
+
+        transcript = ""
+        if isinstance(result, dict):
+            transcript = str(result.get("text") or "")
+        transcript = transcript.strip()
+        if not transcript:
+            return None, "Voice transcript was empty."
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.media.voice.transcribed",
+            channel_id=channel_id,
+            file_id=getattr(attachment, "file_id", None),
+            text_len=len(transcript),
+        )
+        return transcript, None
+
     async def _with_attachment_context(
         self,
         *,
@@ -829,7 +993,7 @@ class DiscordBotService:
 
         inbox = inbox_dir(workspace_root)
         inbox.mkdir(parents=True, exist_ok=True)
-        saved: list[tuple[str, Path, Optional[str], int]] = []
+        saved: list[_SavedDiscordAttachment] = []
         failed = 0
         for index, attachment in enumerate(attachments, start=1):
             source_url = getattr(attachment, "source_url", None)
@@ -854,7 +1018,26 @@ class DiscordBotService:
                 path.write_bytes(data)
                 original_name = getattr(attachment, "file_name", None) or path.name
                 mime_type = getattr(attachment, "mime_type", None)
-                saved.append((str(original_name), path, mime_type, len(data)))
+                transcript_text, transcript_warning = (
+                    await self._transcribe_voice_attachment(
+                        workspace_root=workspace_root,
+                        channel_id=channel_id,
+                        attachment=attachment,
+                        data=data,
+                        file_name=str(original_name),
+                        mime_type=mime_type if isinstance(mime_type, str) else None,
+                    )
+                )
+                saved.append(
+                    _SavedDiscordAttachment(
+                        original_name=str(original_name),
+                        path=path,
+                        mime_type=mime_type if isinstance(mime_type, str) else None,
+                        size_bytes=len(data),
+                        transcript_text=transcript_text,
+                        transcript_warning=transcript_warning,
+                    )
+                )
             except Exception as exc:
                 failed += 1
                 log_event(
@@ -870,12 +1053,28 @@ class DiscordBotService:
             return prompt_text, 0, failed
 
         details: list[str] = ["Inbound Discord attachments:"]
-        for original_name, path, mime_type, size in saved:
-            details.append(f"- Name: {original_name}")
-            details.append(f"  Saved to: {path}")
-            details.append(f"  Size: {size} bytes")
-            if mime_type:
-                details.append(f"  Mime: {mime_type}")
+        for item in saved:
+            details.append(f"- Name: {item.original_name}")
+            details.append(f"  Saved to: {item.path}")
+            details.append(f"  Size: {item.size_bytes} bytes")
+            if item.mime_type:
+                details.append(f"  Mime: {item.mime_type}")
+            if item.transcript_text:
+                details.append(f"  Transcript: {item.transcript_text}")
+            elif item.transcript_warning:
+                details.append(f"  Transcript: {item.transcript_warning}")
+
+        if any(item.transcript_text for item in saved):
+            _voice_service, voice_config = self._voice_service_for_workspace(
+                workspace_root
+            )
+            provider_name = (voice_config.provider if voice_config else "").strip()
+            if provider_name == "openai_whisper":
+                details.append("")
+                details.append(
+                    wrap_injected_context(DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER)
+                )
+
         details.append("")
         details.append(
             wrap_injected_context(

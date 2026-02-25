@@ -89,6 +89,11 @@ Provider credentials:
 
 - `OPENAI_API_KEY` (default for `voice.providers.openai_whisper.api_key_env`)
 
+Local provider:
+
+- `voice.provider: local_whisper` uses on-device transcription via `faster-whisper`.
+- Install local deps with `pip install "codex-autorunner[voice-local]"`.
+
 ## OpenCode server credentials
 
 - `OPENCODE_SERVER_USERNAME`
