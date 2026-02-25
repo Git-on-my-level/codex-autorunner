@@ -1,5 +1,6 @@
 {
   "findings": [
+    "python:class:src/codex_autorunner/core/pma_thread_store.py:115:PmaThreadStore",
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
     "python:class:src/codex_autorunner/integrations/chat/testing.py:93:FakeChatAdapter",
     "python:class:src/codex_autorunner/integrations/discord/errors.py:40:DiscordPermanentError",
