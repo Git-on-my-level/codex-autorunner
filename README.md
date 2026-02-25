@@ -8,7 +8,7 @@ What this looks like in practice:
 - You convert the plan (or ask an AI to convert it for you) into CAR compatible tickets (markdown with some frontmatter). Use the [CAR Ticket Skill](docs/car-ticket-skill.md) with ChatGPT, Claude, Codex, or your preferred assistant.
 - Go off and do something else, no need to babysit the agents, they will notify you if they need your input
 
-![CAR Web Hub Screenshot](docs/screenshots/hub.png)
+![CAR Hub Multiple Projects Screenshot](docs/screenshots/ticket-3-column.png)
 
 ## How it works
 CAR is very simple. At it's core, CAR is a state machine which checks to see if there are any incomplete tickets. If yes, pick the next one and run it against an agent. Tickets can be pre-populated by the user, but agents can also write tickets. _Tickets are the control plane for CAR_.
@@ -83,6 +83,9 @@ CAR currently supports:
 CAR is built to easily integrate any reasonable agent built for Agent Client Protocol (ACP). If you would like to see your agent supported, please reach out or open a PR.
 
 ## Examples
+Work on multiple projects in parallel, or multiple features with git worktrees.
+![CAR Hub Multiple Projects Screenshot](docs/screenshots/ticket-3-column.png)
+
 Build out complex features and products by providing a series of tickets assigned to various agents.
 ![CAR Tickets in Progress Screenshot](docs/screenshots/tickets-in-progress.png)
 
@@ -102,7 +105,8 @@ If you need to do something more custom or granular, you can use your favorite a
 ![CAR Terminal Codex Screenshot](docs/screenshots/terminal-codex.png)
 ![CAR Terminal Opencode Screenshot](docs/screenshots/terminal-opencode.png)
 
-On the go? The web UI is mobile responsive, or if you prefer you can type or voice chat with your agents on Telegram.
+On the go or want to use your favorite chat apps? CAR supports Telegram and Discord.
+![CAR Discord Media Image Screenshot](docs/screenshots/discord-media-image.PNG)
 ![CAR Telegram Media Voice Screenshot](docs/screenshots/telegram-media-voice.PNG)
 ![CAR Telegram Media Image Screenshot](docs/screenshots/telegram-media-image.PNG)
 
