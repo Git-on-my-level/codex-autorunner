@@ -293,6 +293,7 @@ def _default_update_linux_service_names() -> Dict[str, str]:
     return {
         "hub": "car-hub",
         "telegram": "car-telegram",
+        "discord": "car-discord",
     }
 
 
@@ -309,7 +310,7 @@ def _parse_update_linux_service_names(update_cfg: Mapping[str, Any]) -> Dict[str
     raw = update_cfg.get("linux_service_names")
     if not isinstance(raw, dict):
         return merged
-    for key in ("hub", "telegram"):
+    for key in ("hub", "telegram", "discord"):
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = value.strip()

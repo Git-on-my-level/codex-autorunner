@@ -17,7 +17,11 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.logging_utils import log_event
 from ....core.pma_sink import PmaActiveSinkStore
 from ....core.state import now_iso
-from ....core.update import _normalize_update_target, _spawn_update_process
+from ....core.update import (
+    _available_update_target_options,
+    _normalize_update_target,
+    _spawn_update_process,
+)
 from ....core.update_paths import resolve_update_paths
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
@@ -2324,13 +2328,17 @@ Summary applied.""",
         update_services = getattr(self, "_update_linux_service_names", None)
         linux_hub_service_name: Optional[str] = None
         linux_telegram_service_name: Optional[str] = None
+        linux_discord_service_name: Optional[str] = None
         if isinstance(update_services, dict):
             hub_service = update_services.get("hub")
             telegram_service = update_services.get("telegram")
+            discord_service = update_services.get("discord")
             if isinstance(hub_service, str) and hub_service.strip():
                 linux_hub_service_name = hub_service.strip()
             if isinstance(telegram_service, str) and telegram_service.strip():
                 linux_telegram_service_name = telegram_service.strip()
+            if isinstance(discord_service, str) and discord_service.strip():
+                linux_discord_service_name = discord_service.strip()
         notify_reply_to = reply_to
         if notify_reply_to is None and callback is not None:
             notify_reply_to = callback.message_id
@@ -2345,6 +2353,7 @@ Summary applied.""",
                 update_backend=update_backend,
                 linux_hub_service_name=linux_hub_service_name,
                 linux_telegram_service_name=linux_telegram_service_name,
+                linux_discord_service_name=linux_discord_service_name,
                 notify_chat_id=chat_id,
                 notify_thread_id=thread_id,
                 notify_reply_to=notify_reply_to,
@@ -2398,7 +2407,7 @@ Summary applied.""",
         self, message: TelegramMessage, *, prompt: str = UPDATE_PICKER_PROMPT
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
+        state = SelectionState(items=list(self._dynamic_update_target_options()))
         keyboard = self._build_update_keyboard(state)
         self._update_options[key] = state
         self._touch_cache_timestamp("update_options", key)
@@ -2417,11 +2426,41 @@ Summary applied.""",
         *,
         prompt: str = UPDATE_PICKER_PROMPT,
     ) -> None:
-        state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
+        state = SelectionState(items=list(self._dynamic_update_target_options()))
         keyboard = self._build_update_keyboard(state)
         self._update_options[key] = state
         self._touch_cache_timestamp("update_options", key)
         await self._update_selection_message(key, callback, prompt, keyboard)
+
+    def _dynamic_update_target_options(self) -> tuple[tuple[str, str], ...]:
+        update_backend = str(getattr(self, "_update_backend", "auto") or "auto")
+        update_services = getattr(self, "_update_linux_service_names", None)
+        raw_config: Optional[dict[str, Any]] = None
+
+        supervisor = getattr(self, "_hub_supervisor", None)
+        if supervisor and hasattr(supervisor, "hub_config"):
+            hub_config = getattr(supervisor, "hub_config", None)
+            if hub_config is not None:
+                raw = getattr(hub_config, "raw", None)
+                if isinstance(raw, dict):
+                    raw_config = raw
+                backend = getattr(hub_config, "update_backend", None)
+                if isinstance(backend, str) and backend.strip():
+                    update_backend = backend.strip()
+                services = getattr(hub_config, "update_linux_service_names", None)
+                if isinstance(services, dict):
+                    update_services = services
+
+        options = _available_update_target_options(
+            raw_config=raw_config,
+            update_backend=update_backend,
+            linux_service_names=(
+                update_services if isinstance(update_services, dict) else None
+            ),
+        )
+        if options:
+            return options
+        return UPDATE_TARGET_OPTIONS
 
     def _has_active_turns(self) -> bool:
         return bool(self._turn_contexts)

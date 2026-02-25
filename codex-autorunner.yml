@@ -338,6 +338,7 @@ update:
   linux_service_names:
     hub: car-hub
     telegram: car-telegram
+    discord: car-discord
 
 usage:
   # Cache scope for aggregated usage series: global|repo

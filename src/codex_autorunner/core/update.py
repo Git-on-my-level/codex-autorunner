@@ -2,12 +2,13 @@ import importlib.metadata
 import json
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
 from .git_utils import GitError, run_git
@@ -45,9 +46,15 @@ def _normalize_update_target(raw: Optional[str]) -> str:
         return "both"
     if value in ("web", "hub", "server", "ui"):
         return "web"
+    if value in ("chat", "chat-apps", "apps"):
+        return "chat"
     if value in ("telegram", "tg", "bot"):
         return "telegram"
-    raise ValueError("Unsupported update target (use both, web, or telegram).")
+    if value in ("discord", "dc"):
+        return "discord"
+    raise ValueError(
+        "Unsupported update target (use both, web, chat, telegram, or discord)."
+    )
 
 
 def _normalize_update_backend(raw: Optional[str]) -> str:
@@ -79,6 +86,175 @@ def _required_update_commands(backend: str) -> tuple[str, ...]:
     if backend == "systemd-user":
         return (*base, "systemctl")
     raise ValueError(f"Unsupported update backend: {backend}")
+
+
+def _is_systemd_user_service_active(service_name: str) -> bool:
+    if not service_name or shutil.which("systemctl") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", service_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
+def _launchd_domain() -> str:
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return f"gui/{uid}"
+
+
+def _is_launchd_label_active(label: str) -> bool:
+    if not label or shutil.which("launchctl") is None:
+        return False
+    domain = _launchd_domain()
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"{domain}/{label}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    text = result.stdout or ""
+    if "state = running" in text:
+        return True
+    for line in text.splitlines():
+        if "pid =" not in line:
+            continue
+        try:
+            pid = int(line.split("=", 1)[1].strip())
+        except Exception:
+            continue
+        if pid > 0:
+            return True
+    return False
+
+
+def _chat_target_enableable(
+    *,
+    raw_config: Optional[dict[str, Any]],
+    target: str,
+) -> bool:
+    raw = raw_config if isinstance(raw_config, dict) else {}
+    if target == "telegram":
+        cfg = raw.get("telegram_bot")
+        if not isinstance(cfg, dict):
+            return False
+        if not bool(cfg.get("enabled", False)):
+            return False
+        env_name = str(cfg.get("bot_token_env", "CAR_TELEGRAM_BOT_TOKEN")).strip()
+        return bool(env_name and os.environ.get(env_name))
+    if target == "discord":
+        cfg = raw.get("discord_bot")
+        if not isinstance(cfg, dict):
+            return False
+        if not bool(cfg.get("enabled", False)):
+            return False
+        bot_env = str(cfg.get("bot_token_env", "CAR_DISCORD_BOT_TOKEN")).strip()
+        app_env = str(cfg.get("app_id_env", "CAR_DISCORD_APP_ID")).strip()
+        return bool(
+            bot_env and app_env and os.environ.get(bot_env) and os.environ.get(app_env)
+        )
+    return False
+
+
+def _chat_target_active(
+    *,
+    target: str,
+    update_backend: str,
+    linux_service_names: Optional[dict[str, str]],
+) -> bool:
+    try:
+        backend = _resolve_update_backend(update_backend)
+    except ValueError:
+        backend = "launchd" if platform.system().lower() == "darwin" else "systemd-user"
+    if backend == "systemd-user":
+        services = {
+            "telegram": "car-telegram",
+            "discord": "car-discord",
+        }
+        if isinstance(linux_service_names, dict):
+            for key in ("telegram", "discord"):
+                value = linux_service_names.get(key)
+                if isinstance(value, str) and value.strip():
+                    services[key] = value.strip()
+        service_name = services.get(target, "")
+        return _is_systemd_user_service_active(service_name)
+    base_label = str(os.environ.get("LABEL", "com.codex.autorunner")).strip()
+    telegram_label = str(
+        os.environ.get("TELEGRAM_LABEL", f"{base_label}.telegram")
+    ).strip()
+    discord_label = str(
+        os.environ.get("DISCORD_LABEL", f"{base_label}.discord")
+    ).strip()
+    if target == "telegram":
+        return _is_launchd_label_active(telegram_label)
+    if target == "discord":
+        return _is_launchd_label_active(discord_label)
+    return False
+
+
+def _available_update_target_options(
+    *,
+    raw_config: Optional[dict[str, Any]] = None,
+    update_backend: str = "auto",
+    linux_service_names: Optional[dict[str, str]] = None,
+) -> tuple[tuple[str, str], ...]:
+    telegram_available = _chat_target_enableable(
+        raw_config=raw_config, target="telegram"
+    ) or _chat_target_active(
+        target="telegram",
+        update_backend=update_backend,
+        linux_service_names=linux_service_names,
+    )
+    discord_available = _chat_target_enableable(
+        raw_config=raw_config, target="discord"
+    ) or _chat_target_active(
+        target="discord",
+        update_backend=update_backend,
+        linux_service_names=linux_service_names,
+    )
+
+    options: list[tuple[str, str]] = []
+    if telegram_available or discord_available:
+        options.append(("both", "Web + Chat Apps"))
+    options.append(("web", "Web only"))
+    if telegram_available and discord_available:
+        options.append(("chat", "Chat Apps (Telegram + Discord)"))
+    if telegram_available:
+        options.append(("telegram", "Telegram only"))
+    if discord_available:
+        options.append(("discord", "Discord only"))
+    return tuple(options)
+
+
+def _default_update_target(
+    *,
+    raw_config: Optional[dict[str, Any]] = None,
+    update_backend: str = "auto",
+    linux_service_names: Optional[dict[str, str]] = None,
+) -> str:
+    values = {
+        value
+        for value, _label in _available_update_target_options(
+            raw_config=raw_config,
+            update_backend=update_backend,
+            linux_service_names=linux_service_names,
+        )
+    }
+    if "both" in values:
+        return "both"
+    return "web"
 
 
 def _refresh_script(backend: str, update_dir: Path) -> Optional[Path]:
@@ -426,6 +602,7 @@ def _system_update_worker(
     skip_checks: bool = False,
     linux_hub_service_name: Optional[str] = None,
     linux_telegram_service_name: Optional[str] = None,
+    linux_discord_service_name: Optional[str] = None,
 ) -> None:
     status_path = _update_status_path()
     lock_acquired = False
@@ -463,6 +640,9 @@ def _system_update_worker(
             repo_ref=repo_ref,
             update_target=update_target,
             update_backend=resolved_backend,
+            linux_hub_service_name=linux_hub_service_name,
+            linux_telegram_service_name=linux_telegram_service_name,
+            linux_discord_service_name=linux_discord_service_name,
         )
 
         missing = []
@@ -554,6 +734,8 @@ def _system_update_worker(
                 env["UPDATE_HUB_SERVICE_NAME"] = linux_hub_service_name
             if linux_telegram_service_name:
                 env["UPDATE_TELEGRAM_SERVICE_NAME"] = linux_telegram_service_name
+            if linux_discord_service_name:
+                env["UPDATE_DISCORD_SERVICE_NAME"] = linux_discord_service_name
 
         proc = subprocess.Popen(
             [str(refresh_script)],
@@ -607,6 +789,7 @@ def _spawn_update_process(
     notify_reply_to: Optional[int] = None,
     linux_hub_service_name: Optional[str] = None,
     linux_telegram_service_name: Optional[str] = None,
+    linux_discord_service_name: Optional[str] = None,
 ) -> None:
     active = _update_lock_active()
     if active:
@@ -625,6 +808,7 @@ def _spawn_update_process(
         update_backend=update_backend,
         linux_hub_service_name=linux_hub_service_name,
         linux_telegram_service_name=linux_telegram_service_name,
+        linux_discord_service_name=linux_discord_service_name,
         log_path=str(log_path),
         notify_chat_id=notify_chat_id,
         notify_thread_id=notify_thread_id,
@@ -651,6 +835,8 @@ def _spawn_update_process(
         cmd.extend(["--hub-service-name", linux_hub_service_name])
     if linux_telegram_service_name:
         cmd.extend(["--telegram-service-name", linux_telegram_service_name])
+    if linux_discord_service_name:
+        cmd.extend(["--discord-service-name", linux_discord_service_name])
     if skip_checks:
         cmd.append("--skip-checks")
     try:

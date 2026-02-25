@@ -18,7 +18,7 @@ set -euo pipefail
 #   DISCORD_LABEL          launchd label for discord bot (default: ${LABEL}.discord)
 #   DISCORD_PLIST_PATH     discord plist path (default: ~/Library/LaunchAgents/${DISCORD_LABEL}.plist)
 #   DISCORD_LOG            discord stdout/stderr log path (default: <hub_root>/.codex-autorunner/codex-autorunner-discord.log)
-#   UPDATE_TARGET          Which services to restart (both|web|telegram|discord; default: both)
+#   UPDATE_TARGET          Which services to restart (both|web|chat|telegram|discord; default: both)
 #   PIPX_ROOT              pipx root (default: ~/.local/pipx)
 #   PIPX_VENV              existing pipx venv path (default: ${PIPX_ROOT}/venvs/codex-autorunner)
 #   PIPX_PYTHON            python used for new venvs (default: pyenv python3, then Homebrew)
@@ -123,6 +123,9 @@ normalize_update_target() {
     web|hub|server|ui)
       echo "web"
       ;;
+    chat|chat-apps|apps)
+      echo "chat"
+      ;;
     telegram|tg|bot)
       echo "telegram"
       ;;
@@ -130,7 +133,7 @@ normalize_update_target() {
       echo "discord"
       ;;
     *)
-      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, telegram, or discord."
+      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, chat, telegram, or discord."
       ;;
   esac
 }
@@ -335,6 +338,10 @@ case "${UPDATE_TARGET}" in
     ;;
   web)
     should_reload_hub=true
+    ;;
+  chat)
+    should_reload_telegram=true
+    should_reload_discord=true
     ;;
   telegram)
     should_reload_telegram=true

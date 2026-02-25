@@ -170,16 +170,26 @@ export function initRepoSettingsPanel(): void {
 }
 
 const UPDATE_TARGET_LABELS: Record<string, string> = {
-  both: "web + Telegram",
+  both: "Web + Chat Apps",
   web: "web only",
+  chat: "Chat Apps (Telegram + Discord)",
   telegram: "Telegram only",
+  discord: "Discord only",
 };
 
-type UpdateTarget = "both" | "web" | "telegram";
+type UpdateTarget = "both" | "web" | "chat" | "telegram" | "discord";
 
 function normalizeUpdateTarget(value: unknown): UpdateTarget {
   if (!value) return "both";
-  if (value === "both" || value === "web" || value === "telegram") return value as UpdateTarget;
+  if (
+    value === "both" ||
+    value === "web" ||
+    value === "chat" ||
+    value === "telegram" ||
+    value === "discord"
+  ) {
+    return value as UpdateTarget;
+  }
   return "both";
 }
 
@@ -192,6 +202,17 @@ function describeUpdateTarget(target: UpdateTarget): string {
   return UPDATE_TARGET_LABELS[target] || UPDATE_TARGET_LABELS.both;
 }
 
+function includesWebUpdateTarget(target: UpdateTarget): boolean {
+  return target === "both" || target === "web";
+}
+
+function updateRestartNotice(target: UpdateTarget): string {
+  if (target === "chat") return "Telegram and Discord bots will restart.";
+  if (target === "telegram") return "The Telegram bot will restart.";
+  if (target === "discord") return "The Discord bot will restart.";
+  return "The service will restart.";
+}
+
 interface UpdateCheckResponse {
   update_available?: boolean;
   message?: string;
@@ -199,6 +220,65 @@ interface UpdateCheckResponse {
 
 interface UpdateResponse {
   message?: string;
+}
+
+interface UpdateTargetOptionResponse {
+  value?: string;
+  label?: string;
+}
+
+interface UpdateTargetsResponse {
+  targets?: UpdateTargetOptionResponse[];
+  default_target?: string;
+}
+
+async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
+  const select = selectId ? document.getElementById(selectId) as HTMLSelectElement | null : null;
+  if (!select) return;
+  const isInitialized = select.dataset.updateTargetsInitialized === "1";
+  let payload: UpdateTargetsResponse | null = null;
+  try {
+    payload = await api("/system/update/targets", { method: "GET" }) as UpdateTargetsResponse;
+  } catch (_err) {
+    return;
+  }
+  const rawOptions = Array.isArray(payload?.targets) ? payload.targets : [];
+  const options: Array<{ value: UpdateTarget; label: string }> = [];
+  const seen = new Set<string>();
+  rawOptions.forEach((entry) => {
+    const rawValue = typeof entry?.value === "string" ? entry.value : "";
+    if (!["both", "web", "chat", "telegram", "discord"].includes(rawValue)) return;
+    if (!rawValue) return;
+    const value = normalizeUpdateTarget(rawValue);
+    if (seen.has(value)) return;
+    seen.add(value);
+    const label = typeof entry?.label === "string" && entry.label.trim()
+      ? entry.label.trim()
+      : describeUpdateTarget(value);
+    options.push({ value, label });
+  });
+  if (!options.length) return;
+
+  const previous = normalizeUpdateTarget(select.value || "both");
+  const hasPrevious = options.some((item) => item.value === previous);
+  const defaultTarget = normalizeUpdateTarget(payload?.default_target || "both");
+  const fallback = options.some((item) => item.value === defaultTarget)
+    ? defaultTarget
+    : options[0].value;
+
+  select.replaceChildren();
+  options.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    select.appendChild(option);
+  });
+  if (isInitialized) {
+    select.value = hasPrevious ? previous : fallback;
+  } else {
+    select.value = fallback;
+    select.dataset.updateTargetsInitialized = "1";
+  }
 }
 
 async function handleSystemUpdate(btnId: string, targetSelectId: string | null): Promise<void> {
@@ -225,10 +305,7 @@ async function handleSystemUpdate(btnId: string, targetSelectId: string | null):
     return;
   }
 
-  const restartNotice =
-    updateTarget === "telegram"
-      ? "The Telegram bot will restart."
-      : "The service will restart.";
+  const restartNotice = updateRestartNotice(updateTarget);
   const confirmed = await confirmModal(
     `${check?.message || "Update available."} Update Codex Autorunner (${targetLabel})? ${restartNotice}`
   );
@@ -246,7 +323,7 @@ async function handleSystemUpdate(btnId: string, targetSelectId: string | null):
       body: { target: updateTarget },
     }) as UpdateResponse;
     flash(res.message || `Update started (${targetLabel}).`, "success");
-    if (updateTarget === "telegram") {
+    if (!includesWebUpdateTarget(updateTarget)) {
       btn.disabled = false;
       btn.textContent = originalText;
       return;
@@ -278,6 +355,7 @@ export function openRepoSettings(triggerEl?: HTMLElement | null): void {
   const modal = document.getElementById("repo-settings-modal");
   const closeBtn = document.getElementById("repo-settings-close");
   const updateBtn = document.getElementById("repo-update-btn") as HTMLButtonElement | null;
+  const updateTarget = document.getElementById("repo-update-target") as HTMLSelectElement | null;
   if (!modal) return;
 
   hideRepoSettingsModal();
@@ -291,6 +369,7 @@ export function openRepoSettings(triggerEl?: HTMLElement | null): void {
   if (typeof refreshSettings === "function") {
     refreshSettings();
   }
+  void loadUpdateTargetOptions(updateTarget ? updateTarget.id : null);
 }
 
 function initRepoSettingsModal(): void {
@@ -298,6 +377,7 @@ function initRepoSettingsModal(): void {
   const closeBtn = document.getElementById("repo-settings-close");
   const updateBtn = document.getElementById("repo-update-btn") as HTMLButtonElement | null;
   const updateTarget = document.getElementById("repo-update-target") as HTMLSelectElement | null;
+  void loadUpdateTargetOptions(updateTarget ? updateTarget.id : null);
 
   // If the gear button exists in HTML, wire it up (backwards compatibility)
   if (settingsBtn) {

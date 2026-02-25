@@ -11,9 +11,10 @@ set -euo pipefail
 # Overrides:
 #   PACKAGE_SRC                  Path to this repo (default: scripts/..)
 #   UPDATE_STATUS_PATH           JSON status path maintained by update worker
-#   UPDATE_TARGET                both|web|telegram (default: both)
+#   UPDATE_TARGET                both|web|chat|telegram|discord (default: both)
 #   UPDATE_HUB_SERVICE_NAME      systemd user service for hub (default: car-hub)
 #   UPDATE_TELEGRAM_SERVICE_NAME systemd user service for telegram (default: car-telegram)
+#   UPDATE_DISCORD_SERVICE_NAME  systemd user service for discord (default: car-discord)
 #   HEALTH_URL                   web health URL (default: http://127.0.0.1:4173/health)
 #   HEALTH_TIMEOUT_SECONDS       web health timeout (default: 30)
 #   HEALTH_INTERVAL_SECONDS      web health poll interval (default: 0.5)
@@ -25,6 +26,7 @@ UPDATE_STATUS_PATH="${UPDATE_STATUS_PATH:-}"
 UPDATE_TARGET="${UPDATE_TARGET:-both}"
 UPDATE_HUB_SERVICE_NAME="${UPDATE_HUB_SERVICE_NAME:-car-hub}"
 UPDATE_TELEGRAM_SERVICE_NAME="${UPDATE_TELEGRAM_SERVICE_NAME:-car-telegram}"
+UPDATE_DISCORD_SERVICE_NAME="${UPDATE_DISCORD_SERVICE_NAME:-car-discord}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:4173/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
@@ -74,11 +76,17 @@ normalize_update_target() {
     web|hub|server|ui)
       echo "web"
       ;;
+    chat|chat-apps|apps)
+      echo "chat"
+      ;;
     telegram|tg|bot)
       echo "telegram"
       ;;
+    discord|dc)
+      echo "discord"
+      ;;
     *)
-      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, or telegram."
+      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, chat, telegram, or discord."
       ;;
   esac
 }
@@ -160,6 +168,7 @@ systemctl --user daemon-reload
 
 restart_web=false
 restart_telegram=false
+restart_discord=false
 
 if [[ "${target}" == "both" || "${target}" == "web" ]]; then
   if ! service_exists "${UPDATE_HUB_SERVICE_NAME}"; then
@@ -170,7 +179,7 @@ if [[ "${target}" == "both" || "${target}" == "web" ]]; then
   restart_web=true
 fi
 
-if [[ "${target}" == "both" || "${target}" == "telegram" ]]; then
+if [[ "${target}" == "both" || "${target}" == "chat" || "${target}" == "telegram" ]]; then
   if service_exists "${UPDATE_TELEGRAM_SERVICE_NAME}"; then
     echo "Restarting telegram service ${UPDATE_TELEGRAM_SERVICE_NAME}..."
     systemctl --user restart "${UPDATE_TELEGRAM_SERVICE_NAME}"
@@ -179,6 +188,18 @@ if [[ "${target}" == "both" || "${target}" == "telegram" ]]; then
     fail "Telegram service not found: ${UPDATE_TELEGRAM_SERVICE_NAME}"
   else
     echo "Telegram service ${UPDATE_TELEGRAM_SERVICE_NAME} not found; skipping."
+  fi
+fi
+
+if [[ "${target}" == "both" || "${target}" == "chat" || "${target}" == "discord" ]]; then
+  if service_exists "${UPDATE_DISCORD_SERVICE_NAME}"; then
+    echo "Restarting discord service ${UPDATE_DISCORD_SERVICE_NAME}..."
+    systemctl --user restart "${UPDATE_DISCORD_SERVICE_NAME}"
+    restart_discord=true
+  elif [[ "${target}" == "discord" ]]; then
+    fail "Discord service not found: ${UPDATE_DISCORD_SERVICE_NAME}"
+  else
+    echo "Discord service ${UPDATE_DISCORD_SERVICE_NAME} not found; skipping."
   fi
 fi
 
@@ -192,6 +213,12 @@ fi
 if [[ "${restart_telegram}" == "true" ]]; then
   if ! systemctl --user is-active --quiet "${UPDATE_TELEGRAM_SERVICE_NAME}"; then
     fail "Telegram service is not active: ${UPDATE_TELEGRAM_SERVICE_NAME}"
+  fi
+fi
+
+if [[ "${restart_discord}" == "true" ]]; then
+  if ! systemctl --user is-active --quiet "${UPDATE_DISCORD_SERVICE_NAME}"; then
+    fail "Discord service is not active: ${UPDATE_DISCORD_SERVICE_NAME}"
   fi
 fi
 

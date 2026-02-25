@@ -69,7 +69,7 @@ Reference docs in `docs/` (e.g., configuration, operations, debugging).
 ## Safe updates (launchd mac hub)
 - Preferred path: `scripts/safe-refresh-local-mac-hub.sh` (staged venv swap, launchd reload, `/health` + static/telegram checks, rollback on failure).
 - `/system/update` and Telegram `/update` use the safe refresh script when available.
-- Common overrides: `UPDATE_TARGET=web|telegram|both`, `HEALTH_CHECK_STATIC=auto|true|false`, `HEALTH_CHECK_TELEGRAM=auto|true|false`, `HEALTH_PATH`, `HEALTH_STATIC_PATH`.
+- Common overrides: `UPDATE_TARGET=web|chat|telegram|discord|both`, `HEALTH_CHECK_STATIC=auto|true|false`, `HEALTH_CHECK_TELEGRAM=auto|true|false`, `HEALTH_CHECK_DISCORD=auto|true|false`, `HEALTH_PATH`, `HEALTH_STATIC_PATH`.
 - Do not restart launchd services or run refresh scripts yourself; ask the user to perform restarts.
 
 ## Debugging

@@ -151,7 +151,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "update": CommandSpec(
             "update",
-            "update CAR (prompt or both|web|telegram)",
+            "update CAR (prompt or both|web|chat|telegram|discord)",
             handlers._handle_update,
         ),
         "logout": CommandSpec(
