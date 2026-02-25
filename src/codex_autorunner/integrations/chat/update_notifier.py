@@ -69,7 +69,6 @@ def build_update_notify_metadata(
     payload: dict[str, Any] = {
         "notify_platform": platform_key,
         "notify_context": coerced,
-        "notify_sent_at": None,
     }
     if include_legacy_telegram_keys and platform_key == "telegram":
         chat_raw = coerced.get("chat_id")
