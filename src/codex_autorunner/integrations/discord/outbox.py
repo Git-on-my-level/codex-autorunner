@@ -93,6 +93,7 @@ class DiscordOutboxManager:
             if current is None:
                 return False
             if current.attempts >= self._max_attempts:
+                await self._drop_exhausted(current)
                 return False
 
             next_at = _parse_next_attempt_at(current.next_attempt_at)
@@ -108,6 +109,7 @@ class DiscordOutboxManager:
             if current is None:
                 return False
             if current.attempts >= self._max_attempts:
+                await self._drop_exhausted(current)
                 return False
 
             next_at = _parse_next_attempt_at(current.next_attempt_at)
@@ -124,6 +126,9 @@ class DiscordOutboxManager:
     async def _flush(self, records: list[OutboxRecord]) -> None:
         now = self._now()
         for record in records:
+            if record.attempts >= self._max_attempts:
+                await self._drop_exhausted(record)
+                continue
             next_at = _parse_next_attempt_at(record.next_attempt_at)
             if next_at is not None and now < next_at:
                 continue
@@ -134,6 +139,7 @@ class DiscordOutboxManager:
         if current is None:
             return False
         if current.attempts >= self._max_attempts:
+            await self._drop_exhausted(current)
             return False
         if not await self._mark_inflight(current.record_id):
             return False
@@ -184,6 +190,15 @@ class DiscordOutboxManager:
         await self._store.mark_outbox_delivered(current.record_id)
         self._logger.info("discord.outbox.delivered record_id=%s", current.record_id)
         return True
+
+    async def _drop_exhausted(self, record: OutboxRecord) -> None:
+        self._logger.warning(
+            "discord.outbox.gave_up record_id=%s attempts=%s error=%s",
+            record.record_id,
+            record.attempts,
+            record.last_error,
+        )
+        await self._store.mark_outbox_delivered(record.record_id)
 
     async def _mark_inflight(self, key: str) -> bool:
         if self._lock is None:

@@ -153,3 +153,85 @@ async def test_outbox_delete_operation_is_supported(tmp_path: Path) -> None:
         assert await store.get_outbox("del-1") is None
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_outbox_drops_record_after_exhausting_attempts(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    calls = {"count": 0}
+
+    async def send_message(_channel_id: str, _payload: dict) -> dict:
+        calls["count"] += 1
+        raise RuntimeError("boom")
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        max_attempts=2,
+        immediate_retry_delays=(0.0,),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        delivered = await manager.send_with_outbox(
+            OutboxRecord(
+                record_id="drop-1",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "hello"},
+                created_at=now_iso(),
+            )
+        )
+        assert delivered is False
+        assert calls["count"] == 2
+        assert await store.get_outbox("drop-1") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flush_drops_previously_exhausted_record(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    calls = {"count": 0}
+
+    async def send_message(_channel_id: str, _payload: dict) -> dict:
+        calls["count"] += 1
+        return {"id": "msg-1"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        max_attempts=3,
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        manager.start()
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="drop-2",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={"content": "hello"},
+                attempts=3,
+                created_at=now_iso(),
+                last_error="permanent failure",
+            )
+        )
+        records = await store.list_outbox()
+        await manager._flush(records)
+        assert calls["count"] == 0
+        assert await store.get_outbox("drop-2") is None
+    finally:
+        await store.close()
