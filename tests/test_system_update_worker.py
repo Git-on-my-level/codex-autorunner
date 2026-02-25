@@ -17,12 +17,96 @@ import codex_autorunner.routes.system as system
         ("ALL", "both"),
         ("web", "web"),
         ("ui", "web"),
+        ("chat", "chat"),
+        ("chat-apps", "chat"),
         ("telegram", "telegram"),
         ("tg", "telegram"),
+        ("discord", "discord"),
+        ("dc", "discord"),
     ],
 )
 def test_normalize_update_target(raw: str | None, expected: str) -> None:
     assert system._normalize_update_target(raw) == expected
+
+
+def test_available_update_target_options_web_only_when_no_chat_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system.update_core,
+        "_chat_target_active",
+        lambda **_kwargs: False,
+    )
+    options = system._available_update_target_options(
+        raw_config={
+            "telegram_bot": {"enabled": False},
+            "discord_bot": {"enabled": False},
+        },
+        update_backend="systemd-user",
+        linux_service_names={"hub": "car-hub"},
+    )
+    assert options == (("web", "Web only"),)
+    assert (
+        system._default_update_target(
+            raw_config={
+                "telegram_bot": {"enabled": False},
+                "discord_bot": {"enabled": False},
+            },
+            update_backend="systemd-user",
+            linux_service_names={"hub": "car-hub"},
+        )
+        == "web"
+    )
+
+
+def test_available_update_target_options_include_telegram_when_enableable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system.update_core,
+        "_chat_target_active",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setenv("CAR_TELEGRAM_BOT_TOKEN", "token")
+    options = system._available_update_target_options(
+        raw_config={
+            "telegram_bot": {
+                "enabled": True,
+                "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+            },
+            "discord_bot": {"enabled": False},
+        },
+        update_backend="systemd-user",
+        linux_service_names={"hub": "car-hub"},
+    )
+    assert options == (
+        ("both", "Web + Chat Apps"),
+        ("web", "Web only"),
+        ("telegram", "Telegram only"),
+    )
+
+
+def test_available_update_target_options_include_discord_when_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system.update_core,
+        "_chat_target_active",
+        lambda **kwargs: kwargs.get("target") == "discord",
+    )
+    options = system._available_update_target_options(
+        raw_config={
+            "telegram_bot": {"enabled": False},
+            "discord_bot": {"enabled": False},
+        },
+        update_backend="systemd-user",
+        linux_service_names={"hub": "car-hub", "discord": "car-discord"},
+    )
+    assert options == (
+        ("both", "Web + Chat Apps"),
+        ("web", "Web only"),
+        ("discord", "Discord only"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -88,6 +172,7 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
         update_backend="systemd-user",
         linux_hub_service_name="car-hub",
         linux_telegram_service_name="car-telegram",
+        linux_discord_service_name="car-discord",
     )
 
     status_path = system._update_status_path()
@@ -101,6 +186,8 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     assert "systemd-user" in cmd
     assert "--hub-service-name" in cmd
     assert "car-hub" in cmd
+    assert "--discord-service-name" in cmd
+    assert "car-discord" in cmd
 
 
 def test_system_update_worker_rejects_invalid_target(
@@ -240,6 +327,8 @@ def test_system_update_worker_sets_helper_python_for_refresh_script(
         update_target="web",
         update_backend="systemd-user",
         skip_checks=True,
+        linux_discord_service_name="car-discord",
     )
 
     assert captured_env["HELPER_PYTHON"] == "/opt/car/bin/python3"
+    assert captured_env["UPDATE_DISCORD_SERVICE_NAME"] == "car-discord"

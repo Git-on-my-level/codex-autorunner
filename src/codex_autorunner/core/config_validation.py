@@ -252,6 +252,7 @@ def _validate_update_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("update.linux_service_names must be a mapping if provided")
     hub_service = linux_services.get("hub")
     telegram_service = linux_services.get("telegram")
+    discord_service = linux_services.get("discord")
     if hub_service is not None:
         if not isinstance(hub_service, str) or not hub_service.strip():
             raise ConfigError(
@@ -261,6 +262,11 @@ def _validate_update_config(cfg: Dict[str, Any]) -> None:
         if not isinstance(telegram_service, str) or not telegram_service.strip():
             raise ConfigError(
                 "update.linux_service_names.telegram must be a non-empty string"
+            )
+    if discord_service is not None:
+        if not isinstance(discord_service, str) or not discord_service.strip():
+            raise ConfigError(
+                "update.linux_service_names.discord must be a non-empty string"
             )
 
 

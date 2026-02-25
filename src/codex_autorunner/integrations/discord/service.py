@@ -2457,14 +2457,18 @@ class DiscordBotService:
 
         linux_hub_service_name: Optional[str] = None
         linux_telegram_service_name: Optional[str] = None
+        linux_discord_service_name: Optional[str] = None
         update_services = self._update_linux_service_names
         if isinstance(update_services, dict):
             hub_service = update_services.get("hub")
             telegram_service = update_services.get("telegram")
+            discord_service = update_services.get("discord")
             if isinstance(hub_service, str) and hub_service.strip():
                 linux_hub_service_name = hub_service.strip()
             if isinstance(telegram_service, str) and telegram_service.strip():
                 linux_telegram_service_name = telegram_service.strip()
+            if isinstance(discord_service, str) and discord_service.strip():
+                linux_discord_service_name = discord_service.strip()
 
         try:
             await asyncio.to_thread(
@@ -2478,6 +2482,7 @@ class DiscordBotService:
                 update_backend=self._update_backend,
                 linux_hub_service_name=linux_hub_service_name,
                 linux_telegram_service_name=linux_telegram_service_name,
+                linux_discord_service_name=linux_discord_service_name,
             )
         except UpdateInProgressError as exc:
             text = format_discord_message(

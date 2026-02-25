@@ -397,7 +397,8 @@
     "backend": "auto",
     "linux_service_names": {
       "hub": "car-hub",
-      "telegram": "car-telegram"
+      "telegram": "car-telegram",
+      "discord": "car-discord"
     },
     "skip_checks": false
   },

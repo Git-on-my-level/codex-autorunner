@@ -25,6 +25,8 @@ from ..schemas import (
     SystemUpdateRequest,
     SystemUpdateResponse,
     SystemUpdateStatusResponse,
+    SystemUpdateTargetOption,
+    SystemUpdateTargetsResponse,
 )
 from ..static_assets import missing_static_assets
 from ..static_refresh import refresh_static_assets
@@ -37,6 +39,8 @@ _update_status_path = update_core._update_status_path
 _normalize_update_backend = update_core._normalize_update_backend
 _resolve_update_backend = update_core._resolve_update_backend
 _required_update_commands = update_core._required_update_commands
+_available_update_target_options = update_core._available_update_target_options
+_default_update_target = update_core._default_update_target
 shutil = update_core.shutil
 subprocess = update_core.subprocess
 sys = update_core.sys
@@ -148,8 +152,10 @@ def build_system_routes() -> APIRouter:
         repo_ref = "main"
         skip_checks = False
         update_backend = "auto"
+        update_services: Optional[dict[str, str]] = None
         linux_hub_service_name = None
         linux_telegram_service_name = None
+        linux_discord_service_name = None
         if config and isinstance(config, HubConfig):
             configured_url = getattr(config, "update_repo_url", None)
             if configured_url:
@@ -163,6 +169,7 @@ def build_system_routes() -> APIRouter:
             if isinstance(update_services, dict):
                 linux_hub_service_name = update_services.get("hub")
                 linux_telegram_service_name = update_services.get("telegram")
+                linux_discord_service_name = update_services.get("discord")
         elif config is not None:
             skip_checks = bool(getattr(config, "update_skip_checks", False))
             update_backend = getattr(config, "update_backend", update_backend)
@@ -170,6 +177,7 @@ def build_system_routes() -> APIRouter:
             if isinstance(update_services, dict):
                 linux_hub_service_name = update_services.get("hub")
                 linux_telegram_service_name = update_services.get("telegram")
+                linux_discord_service_name = update_services.get("discord")
 
         update_dir = resolve_update_paths(config=config).cache_dir
 
@@ -177,6 +185,14 @@ def build_system_routes() -> APIRouter:
             target_raw = payload.target if payload else None
             if target_raw is None:
                 target_raw = request.query_params.get("target")
+            if target_raw is None:
+                target_raw = _default_update_target(
+                    raw_config=(config.raw if hasattr(config, "raw") else None),
+                    update_backend=str(update_backend),
+                    linux_service_names=(
+                        update_services if isinstance(update_services, dict) else None
+                    ),
+                )
             update_target = _normalize_update_target(target_raw)
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger is None:
@@ -200,6 +216,11 @@ def build_system_routes() -> APIRouter:
                     if isinstance(linux_telegram_service_name, str)
                     else None
                 ),
+                linux_discord_service_name=(
+                    linux_discord_service_name
+                    if isinstance(linux_discord_service_name, str)
+                    else None
+                ),
             )
             return {
                 "status": "ok",
@@ -215,6 +236,40 @@ def build_system_routes() -> APIRouter:
             if logger:
                 logger.error("Update error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @router.get("/system/update/targets", response_model=SystemUpdateTargetsResponse)
+    async def system_update_targets(request: Request):
+        try:
+            config = request.app.state.config
+        except AttributeError:
+            config = None
+
+        update_backend = "auto"
+        update_services: Optional[dict[str, str]] = None
+        raw_config = getattr(config, "raw", None)
+        if config is not None:
+            update_backend = str(getattr(config, "update_backend", update_backend))
+            raw_services = getattr(config, "update_linux_service_names", None)
+            if isinstance(raw_services, dict):
+                update_services = raw_services
+
+        options = _available_update_target_options(
+            raw_config=raw_config if isinstance(raw_config, dict) else None,
+            update_backend=update_backend,
+            linux_service_names=update_services,
+        )
+        default_target = _default_update_target(
+            raw_config=raw_config if isinstance(raw_config, dict) else None,
+            update_backend=update_backend,
+            linux_service_names=update_services,
+        )
+        return {
+            "targets": [
+                SystemUpdateTargetOption(value=value, label=label)
+                for value, label in options
+            ],
+            "default_target": default_target,
+        }
 
     @router.get("/system/update/status", response_model=SystemUpdateStatusResponse)
     async def system_update_status():

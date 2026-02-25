@@ -307,6 +307,16 @@ class SystemUpdateRequest(Payload):
     target: Optional[str] = None
 
 
+class SystemUpdateTargetOption(ResponseModel):
+    value: str
+    label: str
+
+
+class SystemUpdateTargetsResponse(ResponseModel):
+    targets: List[SystemUpdateTargetOption]
+    default_target: str
+
+
 class HubJobResponse(ResponseModel):
     job_id: str
     kind: str

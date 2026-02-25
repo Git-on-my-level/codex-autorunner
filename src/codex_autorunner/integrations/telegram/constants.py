@@ -69,9 +69,11 @@ REVIEW_COMMIT_PICKER_PROMPT = (
 FLOW_RUNS_PICKER_PROMPT = "Select a ticket flow run (buttons below)."
 REVIEW_COMMIT_BUTTON_LABEL_LIMIT = 80
 UPDATE_TARGET_OPTIONS = (
-    ("both", "Both (web + Telegram)"),
+    ("both", "Both (Web + Chat Apps)"),
     ("web", "Web only"),
+    ("chat", "Chat Apps (Telegram + Discord)"),
     ("telegram", "Telegram only"),
+    ("discord", "Discord only"),
 )
 TRACE_MESSAGE_TOKENS = (
     "failed",
