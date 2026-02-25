@@ -41,19 +41,6 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
-                    "name": "resume",
-                    "description": "Resume a previous chat thread",
-                    "options": [
-                        {
-                            "type": STRING,
-                            "name": "thread_id",
-                            "description": "Thread ID to resume (optional - lists recent threads if omitted)",
-                            "required": False,
-                        }
-                    ],
-                },
-                {
-                    "type": SUB_COMMAND,
                     "name": "debug",
                     "description": "Show debug info for troubleshooting",
                 },
@@ -147,11 +134,6 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
-                    "name": "reset",
-                    "description": "Reset PMA thread state (clear volatile state)",
-                },
-                {
-                    "type": SUB_COMMAND,
                     "name": "review",
                     "description": "Run a code review",
                     "options": [
@@ -216,18 +198,8 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
-                    "name": "compact",
-                    "description": "Compact the conversation (summary)",
-                },
-                {
-                    "type": SUB_COMMAND,
                     "name": "rollout",
                     "description": "Show current thread rollout path",
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "logout",
-                    "description": "Log out of the Codex account",
                 },
                 {
                     "type": SUB_COMMAND,
@@ -243,9 +215,44 @@ def build_application_commands() -> list[dict[str, Any]]:
                     ],
                 },
                 {
-                    "type": SUB_COMMAND,
-                    "name": "interrupt",
-                    "description": "Stop the active turn",
+                    "type": SUB_COMMAND_GROUP,
+                    "name": "session",
+                    "description": "Session management commands",
+                    "options": [
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "resume",
+                            "description": "Resume a previous chat thread",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "thread_id",
+                                    "description": "Thread ID to resume (optional - lists recent threads if omitted)",
+                                    "required": False,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "reset",
+                            "description": "Reset PMA thread state (clear volatile state)",
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "compact",
+                            "description": "Compact the conversation (summary)",
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "interrupt",
+                            "description": "Stop the active turn",
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "logout",
+                            "description": "Log out of the Codex account",
+                        },
+                    ],
                 },
                 {
                     "type": SUB_COMMAND_GROUP,

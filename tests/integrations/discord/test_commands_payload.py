@@ -24,7 +24,6 @@ def test_build_application_commands_structure_is_stable() -> None:
         "bind",
         "status",
         "new",
-        "resume",
         "debug",
         "agent",
         "model",
@@ -36,20 +35,27 @@ def test_build_application_commands_structure_is_stable() -> None:
         "mcp",
         "init",
         "repos",
-        "reset",
         "review",
         "approvals",
         "mention",
         "experimental",
-        "compact",
         "rollout",
-        "logout",
         "feedback",
-        "interrupt",
+        "session",
         "files",
         "flow",
     ]
     assert [opt["name"] for opt in options] == expected_subcommands
+
+    session = _find_option(options, "session")
+    session_options = session["options"]
+    assert [opt["name"] for opt in session_options] == [
+        "resume",
+        "reset",
+        "compact",
+        "interrupt",
+        "logout",
+    ]
 
     flow = _find_option(options, "flow")
     flow_options = flow["options"]

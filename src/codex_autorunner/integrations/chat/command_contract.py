@@ -251,7 +251,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("resume",),
-        discord_paths=(("car", "resume"),),
+        discord_paths=(("car", "session", "resume"),),
         required_capabilities=("session_resume",),
     ),
     CommandContractEntry(
@@ -260,7 +260,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("reset",),
-        discord_paths=(("car", "reset"),),
+        discord_paths=(("car", "session", "reset"),),
         required_capabilities=("pma_thread_reset",),
     ),
     CommandContractEntry(
@@ -305,7 +305,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("compact",),
-        discord_paths=(("car", "compact"),),
+        discord_paths=(("car", "session", "compact"),),
         required_capabilities=("conversation_compaction",),
     ),
     CommandContractEntry(
@@ -322,7 +322,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="partial",
         telegram_commands=("logout",),
-        discord_paths=(("car", "logout"),),
+        discord_paths=(("car", "session", "logout"),),
         required_capabilities=("auth_session",),
     ),
     CommandContractEntry(
@@ -340,7 +340,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("interrupt",),
-        discord_paths=(("car", "interrupt"),),
+        discord_paths=(("car", "session", "interrupt"),),
         required_capabilities=("turn_control",),
     ),
 )

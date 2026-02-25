@@ -101,6 +101,7 @@ from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
     build_bind_picker,
+    build_cancel_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
 )
@@ -1197,7 +1198,9 @@ class DiscordBotService:
         progress_heartbeat_task: Optional[asyncio.Task[None]] = None
         max_progress_len = max(int(self._config.max_message_length), 32)
 
-        async def _edit_progress(*, force: bool = False) -> None:
+        async def _edit_progress(
+            *, force: bool = False, remove_components: bool = False
+        ) -> None:
             nonlocal progress_rendered
             nonlocal progress_last_updated
             nonlocal progress_failure_count
@@ -1216,11 +1219,14 @@ class DiscordBotService:
             content = truncate_for_discord(rendered, max_len=max_progress_len)
             if not force and content == progress_rendered:
                 return
+            payload: dict[str, Any] = {"content": content}
+            if not remove_components:
+                payload["components"] = [build_cancel_turn_button()]
             try:
                 await self._rest.edit_channel_message(
                     channel_id=progress_channel_id,
                     message_id=progress_message_id,
-                    payload={"content": content},
+                    payload=payload,
                 )
             except Exception as exc:
                 log_event(
@@ -1253,7 +1259,10 @@ class DiscordBotService:
             )
             response = await self._send_channel_message(
                 progress_channel_id,
-                {"content": initial_content},
+                {
+                    "content": initial_content,
+                    "components": [build_cancel_turn_button()],
+                },
             )
             message_id = response.get("id")
             if isinstance(message_id, str) and message_id:
@@ -1329,17 +1338,17 @@ class DiscordBotService:
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
                     tracker.set_label("done")
-                    await _edit_progress(force=True)
+                    await _edit_progress(force=True, remove_components=True)
                 elif isinstance(run_event, Failed):
                     error_message = run_event.error_message or "Turn failed"
                     tracker.note_error(error_message)
                     tracker.set_label("failed")
-                    await _edit_progress(force=True)
+                    await _edit_progress(force=True, remove_components=True)
         except Exception as exc:
             error_message = str(exc) or "Turn failed"
             tracker.note_error(error_message)
             tracker.set_label("failed")
-            await _edit_progress(force=True)
+            await _edit_progress(force=True, remove_components=True)
             raise
         finally:
             if progress_heartbeat_task is not None:
@@ -1575,14 +1584,6 @@ class DiscordBotService:
                 channel_id=channel_id,
             )
             return
-        if command_path == ("car", "resume"):
-            await self._handle_car_resume(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                options=options,
-            )
-            return
         if command_path == ("car", "debug"):
             await self._handle_debug(
                 interaction_id,
@@ -1683,13 +1684,6 @@ class DiscordBotService:
                 workspace_root=workspace_root,
             )
             return
-        if command_path == ("car", "reset"):
-            await self._handle_car_reset(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-            )
-            return
         if command_path == ("car", "review"):
             workspace_root = await self._require_bound_workspace(
                 interaction_id, interaction_token, channel_id=channel_id
@@ -1738,30 +1732,11 @@ class DiscordBotService:
                 options=options,
             )
             return
-        if command_path == ("car", "compact"):
-            await self._handle_car_compact(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-            )
-            return
         if command_path == ("car", "rollout"):
             await self._handle_car_rollout(
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
-            )
-            return
-        if command_path == ("car", "logout"):
-            workspace_root = await self._require_bound_workspace(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
-            if workspace_root is None:
-                return
-            await self._handle_car_logout(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
             )
             return
         if command_path == ("car", "feedback"):
@@ -1778,11 +1753,53 @@ class DiscordBotService:
                 channel_id=channel_id,
             )
             return
-        if command_path == ("car", "interrupt"):
-            await self._handle_car_interrupt(
+
+        if command_path[:2] == ("car", "session"):
+            if command_path == ("car", "session", "resume"):
+                await self._handle_car_resume(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options=options,
+                )
+                return
+            if command_path == ("car", "session", "reset"):
+                await self._handle_car_reset(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                return
+            if command_path == ("car", "session", "compact"):
+                await self._handle_car_compact(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                return
+            if command_path == ("car", "session", "interrupt"):
+                await self._handle_car_interrupt(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                return
+            if command_path == ("car", "session", "logout"):
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id, interaction_token, channel_id=channel_id
+                )
+                if workspace_root is None:
+                    return
+                await self._handle_car_logout(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                )
+                return
+            await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                channel_id=channel_id,
+                f"Unknown car session subcommand: {primary}",
             )
             return
 
@@ -2445,7 +2462,6 @@ class DiscordBotService:
             "/car bind [path] - Bind channel to workspace",
             "/car status - Show binding status",
             "/car new - Start a fresh chat session",
-            "/car reset - Reset PMA thread state",
             "/car debug - Show debug info",
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
@@ -2461,11 +2477,15 @@ class DiscordBotService:
             "/car approvals [mode] - Set approval and sandbox policy",
             "/car mention <path> [request] - Include a file in a request",
             "/car experimental [action] [feature] - Toggle experimental features",
-            "/car compact - Compact the conversation",
             "/car rollout - Show current thread rollout path",
-            "/car logout - Log out of the Codex account",
             "/car feedback <reason> - Send feedback and logs",
-            "/car interrupt - Stop the active turn",
+            "",
+            "**Session Commands:**",
+            "/car session resume [thread_id] - Resume a previous chat thread",
+            "/car session reset - Reset PMA thread state",
+            "/car session compact - Compact the conversation",
+            "/car session interrupt - Stop the active turn",
+            "/car session logout - Log out of the Codex account",
             "",
             "**Flow Commands:**",
             "/car flow status [run_id] - Show flow status",
@@ -4456,6 +4476,14 @@ class DiscordBotService:
                     )
                 return
 
+            if custom_id == "cancel_turn":
+                await self._handle_cancel_turn_button(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                return
+
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -4888,16 +4916,16 @@ class DiscordBotService:
             mode = ""
         mode = mode.strip().lower()
 
-        if not mode:
-            binding = await self._store.get_binding(channel_id=channel_id)
-            if binding is None:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Channel not bound. Use /car bind first.",
-                )
-                return
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Channel not bound. Use /car bind first.",
+            )
+            return
 
+        if not mode:
             current_mode = binding.get("approval_mode", "yolo")
             approval_policy = binding.get("approval_policy", "default")
             sandbox_policy = binding.get("sandbox_policy", "default")
@@ -5447,6 +5475,19 @@ class DiscordBotService:
             )
             text = format_discord_message("Interrupt failed. Please try again.")
             await self._respond_ephemeral(interaction_id, interaction_token, text)
+
+    async def _handle_cancel_turn_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        await self._handle_car_interrupt(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+        )
 
 
 def create_discord_bot_service(
