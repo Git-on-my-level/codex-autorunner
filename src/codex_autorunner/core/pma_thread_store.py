@@ -319,6 +319,19 @@ class PmaThreadStore:
                     (now_iso(), managed_thread_id),
                 )
 
+    def activate_thread(self, managed_thread_id: str) -> None:
+        with self._write_conn() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE pma_managed_threads
+                       SET status = 'active',
+                           updated_at = ?
+                     WHERE managed_thread_id = ?
+                    """,
+                    (now_iso(), managed_thread_id),
+                )
+
     def create_turn(
         self,
         managed_thread_id: str,

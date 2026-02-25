@@ -564,3 +564,12 @@ class PmaManagedThreadMessageRequest(Payload):
     message: str
     model: Optional[str] = None
     reasoning: Optional[str] = None
+
+
+class PmaManagedThreadCompactRequest(Payload):
+    summary: str
+    reset_backend: bool = True
+
+
+class PmaManagedThreadResumeRequest(Payload):
+    backend_thread_id: str

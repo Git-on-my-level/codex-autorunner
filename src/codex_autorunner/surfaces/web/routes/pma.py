@@ -68,8 +68,10 @@ from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ....integrations.telegram.state import OutboxRecord, TelegramStateStore
 from ..schemas import (
+    PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
     PmaManagedThreadMessageRequest,
+    PmaManagedThreadResumeRequest,
 )
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
@@ -261,6 +263,14 @@ def build_pma_routes() -> APIRouter:
                 detail=f"workspace_root escapes hub root: {workspace}",
             )
         return workspace
+
+    def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
+        return (
+            "Context summary (from compaction):\n"
+            f"{compact_seed}\n\n"
+            "User message:\n"
+            f"{message}"
+        )
 
     async def _deliver_to_active_sink(
         *,
@@ -1126,6 +1136,109 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         return {"thread": thread}
 
+    @router.post("/threads/{managed_thread_id}/compact")
+    def compact_managed_thread(
+        managed_thread_id: str,
+        request: Request,
+        payload: PmaManagedThreadCompactRequest,
+    ) -> dict[str, Any]:
+        summary = (payload.summary or "").strip()
+        if not summary:
+            raise HTTPException(status_code=400, detail="summary is required")
+
+        store = PmaThreadStore(request.app.state.config.root)
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        old_backend_thread_id = _normalize_optional_text(
+            thread.get("backend_thread_id")
+        )
+        reset_backend = bool(payload.reset_backend)
+        store.set_thread_compact_seed(
+            managed_thread_id,
+            summary,
+            reset_backend_id=reset_backend,
+        )
+        store.append_action(
+            "managed_thread_compact",
+            managed_thread_id=managed_thread_id,
+            payload_json=json.dumps(
+                {
+                    "old_backend_thread_id": old_backend_thread_id,
+                    "summary_length": len(summary),
+                    "reset_backend": reset_backend,
+                },
+                ensure_ascii=True,
+            ),
+        )
+        updated = store.get_thread(managed_thread_id)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        return {"thread": updated}
+
+    @router.post("/threads/{managed_thread_id}/resume")
+    def resume_managed_thread(
+        managed_thread_id: str,
+        request: Request,
+        payload: PmaManagedThreadResumeRequest,
+    ) -> dict[str, Any]:
+        backend_thread_id = (payload.backend_thread_id or "").strip()
+        if not backend_thread_id:
+            raise HTTPException(status_code=400, detail="backend_thread_id is required")
+
+        store = PmaThreadStore(request.app.state.config.root)
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        old_backend_thread_id = _normalize_optional_text(
+            thread.get("backend_thread_id")
+        )
+        old_status = _normalize_optional_text(thread.get("status"))
+        store.set_thread_backend_id(managed_thread_id, backend_thread_id)
+        store.activate_thread(managed_thread_id)
+        store.append_action(
+            "managed_thread_resume",
+            managed_thread_id=managed_thread_id,
+            payload_json=json.dumps(
+                {
+                    "old_backend_thread_id": old_backend_thread_id,
+                    "backend_thread_id": backend_thread_id,
+                    "old_status": old_status,
+                },
+                ensure_ascii=True,
+            ),
+        )
+        updated = store.get_thread(managed_thread_id)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        return {"thread": updated}
+
+    @router.post("/threads/{managed_thread_id}/archive")
+    def archive_managed_thread(
+        managed_thread_id: str, request: Request
+    ) -> dict[str, Any]:
+        store = PmaThreadStore(request.app.state.config.root)
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        old_status = _normalize_optional_text(thread.get("status"))
+        store.archive_thread(managed_thread_id)
+        store.append_action(
+            "managed_thread_archive",
+            managed_thread_id=managed_thread_id,
+            payload_json=json.dumps(
+                {"old_status": old_status},
+                ensure_ascii=True,
+            ),
+        )
+        updated = store.get_thread(managed_thread_id)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        return {"thread": updated}
+
     @router.get("/threads/{managed_thread_id}/turns")
     def list_managed_thread_turns(
         managed_thread_id: str,
@@ -1207,6 +1320,10 @@ def build_pma_routes() -> APIRouter:
             "reasoning"
         )
         stored_backend_id = _normalize_optional_text(thread.get("backend_thread_id"))
+        compact_seed = _normalize_optional_text(thread.get("compact_seed"))
+        execution_prompt = message
+        if not stored_backend_id and compact_seed:
+            execution_prompt = _compose_compacted_prompt(compact_seed, message)
         turn = thread_store.create_turn(
             managed_thread_id,
             prompt=message,
@@ -1257,7 +1374,7 @@ def build_pma_routes() -> APIRouter:
                 result = await _execute_opencode(
                     supervisor,
                     workspace_root,
-                    message,
+                    execution_prompt,
                     interrupt_event,
                     model=model,
                     reasoning=reasoning,
@@ -1273,7 +1390,7 @@ def build_pma_routes() -> APIRouter:
                     supervisor,
                     events,
                     workspace_root,
-                    message,
+                    execution_prompt,
                     interrupt_event,
                     model=model,
                     reasoning=reasoning,
