@@ -103,9 +103,9 @@ If you need to do something more custom or granular, you can use your favorite a
 ![CAR Terminal Opencode Screenshot](docs/screenshots/terminal-opencode.png)
 
 On the go or want to use your favorite chat apps? CAR supports Telegram and Discord.
-![CAR Discord Media Image Screenshot](docs/screenshots/discord-media-image.PNG)
-![CAR Telegram Media Voice Screenshot](docs/screenshots/telegram-media-voice.PNG)
-![CAR Telegram Media Image Screenshot](docs/screenshots/telegram-media-image.PNG)
+![CAR Discord Media Image Screenshot](docs/screenshots/discord-media-image.png)
+![CAR Telegram Media Voice Screenshot](docs/screenshots/telegram-media-voice.png)
+![CAR Telegram Media Image Screenshot](docs/screenshots/telegram-media-image.png)
 
 Don't want to use the product directly? Delegate work to the PMA.
 ![CAR Telegram PMA Screenshot](docs/screenshots/telegram-pma.png)
