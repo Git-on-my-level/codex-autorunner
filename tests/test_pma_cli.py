@@ -29,6 +29,53 @@ def test_pma_cli_has_required_commands():
     # PMA docs commands from TICKET-007
     assert "docs" in output, "PMA CLI should have 'docs' command group"
     assert "context" in output, "PMA CLI should have 'context' command group"
+    assert "thread" in output, "PMA CLI should have 'thread' command group"
+
+
+def test_pma_cli_thread_group_has_required_commands():
+    """Verify PMA thread command group includes managed-thread commands."""
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "spawn" in output, "PMA thread should have 'spawn' command"
+    assert "create" in output, "PMA thread should have 'create' alias"
+    assert "list" in output, "PMA thread should have 'list' command"
+    assert "info" in output, "PMA thread should have 'info' command"
+    assert "send" in output, "PMA thread should have 'send' command"
+    assert "turns" in output, "PMA thread should have 'turns' command"
+    assert "output" in output, "PMA thread should have 'output' command"
+    assert "compact" in output, "PMA thread should have 'compact' command"
+    assert "resume" in output, "PMA thread should have 'resume' command"
+    assert "archive" in output, "PMA thread should have 'archive' command"
+    assert "interrupt" in output, "PMA thread should have 'interrupt' command"
+
+
+def test_pma_cli_thread_spawn_help_shows_json_option():
+    """Verify PMA thread spawn command supports JSON output mode."""
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "spawn", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--json" in output, "PMA thread spawn should support --json"
+
+
+def test_pma_cli_thread_list_help_shows_json_option():
+    """Verify PMA thread list command supports JSON output mode."""
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "list", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--json" in output, "PMA thread list should support --json"
+
+
+def test_pma_cli_thread_send_help_shows_json_option():
+    """Verify PMA thread send command supports JSON output mode."""
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "send", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--json" in output, "PMA thread send should support --json"
 
 
 def test_pma_chat_help_shows_json_option():
