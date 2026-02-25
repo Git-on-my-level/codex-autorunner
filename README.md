@@ -1,17 +1,17 @@
 # CAR (codex-autorunner)
 [![PyPI](https://img.shields.io/pypi/v/codex-autorunner.svg)](https://pypi.org/project/codex-autorunner/)
 
-CAR provides a set of low-opinion agent coordination tools for you to run long complex implementations using the agents you already love.
+CAR provides a set of low-opinion agent coordination tools for you to run long complex implementations using the agents you already love. CAR is not a coding agent, it's a meta-harness for coding agents.
 
 What this looks like in practice:
 - You write a plan, or generate a plan by chatting with your favorite AI
 - You convert the plan (or ask an AI to convert it for you) into CAR compatible tickets (markdown with some frontmatter). Use the [CAR Ticket Skill](docs/car-ticket-skill.md) with ChatGPT, Claude, Codex, or your preferred assistant.
-- Go off and do something else, no need to babysit the agents, they will notify you if they need your input
+- Go off and do something else, no need to babysit the agents, they will notify you if they need your input on one of the supported chat platforms (Telegram, Discord, etc...)
 
 ![CAR Hub Multiple Projects Screenshot](docs/screenshots/ticket-3-column.png)
 
 ## How it works
-CAR is very simple. At it's core, CAR is a state machine which checks to see if there are any incomplete tickets. If yes, pick the next one and run it against an agent. Tickets can be pre-populated by the user, but agents can also write tickets. _Tickets are the control plane for CAR_.
+CAR is very simple. At its core, CAR is a state machine which checks to see if there are any incomplete tickets. If yes, pick the next one and run it against an agent. Tickets can be pre-populated by the user, but agents can also write tickets. _Tickets are the control plane for CAR_.
 
 When each agent wakes up, it gets knowledge about CAR and how to operate within CAR, a pre-defined set of context (workspace files), the current ticket, and optionally the final output of the previous agent. This simple loop ensures that agents know enough to use CAR while also focusing them on the task at hand.
 
@@ -20,44 +20,44 @@ The philosophy behind CAR is to let the agents do what they do best, and get out
 
 CAR treats tickets as the control plane and models as the execution layer. This means that we rely on agents to follow the instructions written in the tickets. If you use a sufficiently weak model, CAR may not work well for you. CAR is an amplifier for agent capabilities. Agents who like to scope creep (create too many new tickets) or reward hack (mark a ticket as done despite it being incomplete) are not a good fit for CAR.
 
+## Tickets as code
+Since tickets are the control plane, you should write and treat tickets as a new "software layer" that operates within CAR. For example you can write at ticket which scopes a feature and generates other tickets, a ticket which spawns subagents (if the agent supports them) to do a code review, a ticket which repays tech debt, etc... The tickets can be repo-agnostic or specific to your own repository. I maintain a "blessed" set of ticket templates that can be accessed from any CAR deployment [on github](https://github.com/Git-on-my-level/car-ticket-templates) but you can write and configure your own for your own workflows and projects. If you have a ticket that's well generalized and works well across agents and models feel free to contribute it to the blessed template set.
+
 ## Interaction patterns
-CAR's core is a set of python functions surfaced as a CLI, operating on a file system. There are current 3 UIs built on top of this core.
+CAR's core is a set of python functions surfaced as a CLI, operating on a file system and sqlite database. There are currently 3 ways to interact with this core.
 
 ### Web UI
-The web UI is the main control plane for CAR. From here you can set up new repositories or clone existing ones, chat with agents using their TUI, and run the ticket autorunner. There are many quality-of-life features like Whisper integration, editing documents by chatting with AI (useful for mobile), viewing usage analytics, and much more. The Web UI is the most full featured user-facing interface and a good starting point for trying out CAR.
+The web UI is the main control plane for CAR. From here you can set up new repositories or clone existing ones, chat with agents using their TUI, and run the ticket autorunner. There are many quality-of-life features like Whisper integration, editing documents by chatting with AI (useful for mobile), viewing usage analytics, and much more. The Web UI is the most full-featured user-facing interface and a good starting point for trying out CAR. See the [web UI security posture](docs/web/security.md) for guidance on safe exposure.
 
-I recommend serving the web UI over Tailscale. There is an auth token option but the system is not very battle tested.
+### CLI
+The CLI is the most agent-friendly way to interact with CAR. You can build your own UI on top of the CLI and web server, or you can delegate your agent to use the CLI directly (this is what CAR does in all it's UIs). 
 
-### Telegram
-Telegram is the "on-the-go" and notification hub for CAR. From here you can kick off and monitor existing tickets, set up new tickets, and chat with agents. Your primary UX here is asking the agent to do things for you rather than you doing it yourself like you would on the web UI. This is great for on-the-go work, but it doesn't have full feature parity with the web UI.
+### Chat Apps (Telegram & Discord)
+If you want a persistent chat experience on multiple devices without a shared network or needing to make your CAR service exposed on the public internet, chat apps are a great UX.
 
-### Discord Bot
-CAR also supports a Discord bot surface for ticket-flow and agent interactions.
+You can interact with your configured agents just like you would in the TUI, or you can manage a project management agent (PMA) to use the CAR CLI on your behalf to set up and run tickets.
 
-Install optional Discord dependencies:
-
-```bash
-pip install -e .[discord]
-```
-
-Quickstart:
-
-```bash
-# Set discord_bot.enabled: true and configure command registration first.
-# For development, use scope: guild with at least one guild_id.
-# For production, scope: global is usually preferred.
-car discord register-commands
-car discord start
-```
-
-Access is deny-all by default. Configure at least one allowlist in `discord_bot` (`allowed_guild_ids`, `allowed_channel_ids`, or `allowed_user_ids`) before enabling the bot.
+Today we support Telegram and Discord as first-class platforms, if you want to add another platform please open an issue or pull request to discuss.
 
 ### Project Manager Agent
-The project manager agent (PMA) is a way to use an AI agent to run CAR. For example instead of making/editing tickets in the UI, you can ask the PMA to do it for you. Instead of starting a ticket flow, the PMA can babysit it for you. The PMA can be accessed in the web and in Telegram, and also uses the CAR CLI directly.
+The project manager agent (PMA) can be invoked in both the web UI and chat apps. It allows you to use CAR using a conversational interface instead of using the CLI yourself. The PMA is just an agent with access to special context about how to manage CAR, best practices for using the CAR CLI, and a set of helpers for things like file management, agent notification management, and more. The PMA has a basic memory system to learn from how you like to work and persist best practices and learnings over time.
+
+Example use-cases:
+- Create/edit CAR tickets
+- Set up new repos and manage worktrees
+- Manage a ticket flow
+- Respond to dispatches from ticket flow agents
+- Go from 0 to 1 on a new project and iterate on it with large feature builds
+
+You can also use the PMA to manage your CAR service, or to help you set up and run tickets.
 
 ## Quickstart
 
 The fastest way to get started is to pass [this setup guide](docs/AGENT_SETUP_GUIDE.md) to your favorite AI agent. The agent will walk you through installation and configuration interactively based on your environment.
+
+Want to set up chat apps? Read or ask your agent to read:
+- [Telegram setup guide](docs/AGENT_SETUP_TELEGRAM_GUIDE.md)
+- [Discord setup guide](docs/AGENT_SETUP_DISCORD_GUIDE.md)
 
 ### From source (repo checkout)
 
@@ -75,7 +75,7 @@ The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will 
 - [State roots contract](docs/STATE_ROOTS.md)
 - [Architecture refactor handoff (tickets 200-270)](docs/ARCHITECTURE_REFACTOR_HANDOFF.md)
 
-## Supported models
+## Supported agents
 CAR currently supports:
 - Codex
 - Opencode
@@ -83,9 +83,6 @@ CAR currently supports:
 CAR is built to easily integrate any reasonable agent built for Agent Client Protocol (ACP). If you would like to see your agent supported, please reach out or open a PR.
 
 ## Examples
-Work on multiple projects in parallel, or multiple features with git worktrees.
-![CAR Hub Multiple Projects Screenshot](docs/screenshots/ticket-3-column.png)
-
 Build out complex features and products by providing a series of tickets assigned to various agents.
 ![CAR Tickets in Progress Screenshot](docs/screenshots/tickets-in-progress.png)
 
