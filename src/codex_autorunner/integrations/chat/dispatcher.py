@@ -107,6 +107,8 @@ class DispatchResult:
     status: str
     context: DispatchContext
     bypassed: bool = False
+    queued_pending: int = 0
+    queued_while_busy: bool = False
 
 
 class DispatchPredicate(Protocol):
@@ -237,8 +239,15 @@ class ChatDispatcher:
             await self._run_handler(event, context, handler)
             return DispatchResult(status="dispatched", context=context, bypassed=True)
 
-        await self._enqueue(context.conversation_id, event, context, handler)
-        return DispatchResult(status="queued", context=context)
+        queued_pending, queued_while_busy = await self._enqueue(
+            context.conversation_id, event, context, handler
+        )
+        return DispatchResult(
+            status="queued",
+            context=context,
+            queued_pending=queued_pending,
+            queued_while_busy=queued_while_busy,
+        )
 
     async def wait_idle(self) -> None:
         """Wait until no queued or active handlers remain."""
@@ -251,12 +260,14 @@ class ChatDispatcher:
         event: ChatEvent,
         context: DispatchContext,
         handler: DispatchHandler,
-    ) -> None:
+    ) -> tuple[int, bool]:
         async with self._lock:
             queue = self._queues.get(conversation_id)
             if queue is None:
                 queue = deque()
                 self._queues[conversation_id] = queue
+            had_worker = conversation_id in self._workers
+            had_pending = bool(queue)
             queue.append((event, context, handler))
             self._idle_event.clear()
             if conversation_id not in self._workers:
@@ -264,6 +275,7 @@ class ChatDispatcher:
                     self._drain_conversation(conversation_id)
                 )
             pending = len(queue)
+            queued_while_busy = had_worker or had_pending
         log_event(
             self._logger,
             logging.INFO,
@@ -272,6 +284,7 @@ class ChatDispatcher:
             update_id=context.update_id,
             pending=pending,
         )
+        return pending, queued_while_busy
 
     async def _drain_conversation(self, conversation_id: str) -> None:
         try:

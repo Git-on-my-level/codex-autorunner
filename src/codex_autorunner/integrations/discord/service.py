@@ -68,6 +68,7 @@ from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
+    DispatchResult,
 )
 from ...integrations.chat.models import (
     ChatEvent,
@@ -133,6 +134,7 @@ DISCORD_TURN_PROGRESS_MAX_ACTIONS = 8
 DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS = 120
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
+DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
 
 
 @dataclass(frozen=True)
@@ -300,7 +302,53 @@ class DiscordBotService:
         while True:
             events = await self._chat_adapter.poll_events(timeout_seconds=30.0)
             for event in events:
-                await self._dispatcher.dispatch(event, self._handle_chat_event)
+                await self._dispatch_chat_event(event)
+
+    async def _dispatch_chat_event(self, event: ChatEvent) -> None:
+        dispatch_result = await self._dispatcher.dispatch(
+            event, self._handle_chat_event
+        )
+        await self._maybe_send_queued_notice(event, dispatch_result)
+
+    @staticmethod
+    def _is_turn_candidate_message_event(event: ChatMessageEvent) -> bool:
+        text = (event.text or "").strip()
+        has_attachments = bool(event.attachments)
+        if not text and not has_attachments:
+            return False
+        if text.startswith("/"):
+            return False
+        if text and not should_trigger_plain_text_turn(
+            mode="always",
+            context=PlainTextTurnContext(text=text),
+        ):
+            return False
+        return True
+
+    async def _maybe_send_queued_notice(
+        self, event: ChatEvent, dispatch_result: DispatchResult
+    ) -> None:
+        if dispatch_result.status != "queued" or not dispatch_result.queued_while_busy:
+            return
+        if not isinstance(event, ChatMessageEvent):
+            return
+        if not self._is_turn_candidate_message_event(event):
+            return
+        channel_id = dispatch_result.context.chat_id
+        await self._send_channel_message_safe(
+            channel_id,
+            {"content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT)},
+            record_id=f"queue-notice:{channel_id}:{dispatch_result.context.update_id}",
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.turn.queued_notice",
+            channel_id=channel_id,
+            conversation_id=dispatch_result.context.conversation_id,
+            update_id=dispatch_result.context.update_id,
+            pending=dispatch_result.queued_pending,
+        )
 
     async def _handle_chat_event(
         self, event: ChatEvent, context: DispatchContext
@@ -1883,7 +1931,7 @@ class DiscordBotService:
         elif event_type == "MESSAGE_CREATE":
             event = self._chat_adapter.parse_message_event(payload)
             if event is not None:
-                await self._dispatcher.dispatch(event, self._handle_chat_event)
+                await self._dispatch_chat_event(event)
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
         if is_component_interaction(interaction_payload):
