@@ -582,15 +582,21 @@ class DiscordBotService:
         pma_enabled = bool(binding.get("pma_enabled", False))
         workspace_raw = binding.get("workspace_path")
         workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            candidate = canonicalize_path(Path(workspace_raw))
-            if candidate.exists() and candidate.is_dir():
-                workspace_root = candidate
-
-        if workspace_root is None and pma_enabled:
+        if pma_enabled:
+            # PMA turns are hub-scoped. Prefer the hub root even when this channel
+            # was previously bound to a repo workspace.
             fallback = canonicalize_path(Path(self._config.root))
             if fallback.exists() and fallback.is_dir():
                 workspace_root = fallback
+
+        if (
+            workspace_root is None
+            and isinstance(workspace_raw, str)
+            and workspace_raw.strip()
+        ):
+            candidate = canonicalize_path(Path(workspace_raw))
+            if candidate.exists() and candidate.is_dir():
+                workspace_root = candidate
 
         if workspace_root is None:
             content = format_discord_message(
@@ -673,36 +679,6 @@ class DiscordBotService:
             return
 
         prompt_text = text
-        if pma_enabled:
-            try:
-                snapshot = await build_hub_snapshot(
-                    self._hub_supervisor, hub_root=self._config.root
-                )
-                prompt_base = load_pma_prompt(self._config.root)
-                prompt_text = format_pma_prompt(
-                    prompt_base,
-                    snapshot,
-                    text,
-                    hub_root=self._config.root,
-                )
-                PmaActiveSinkStore(self._config.root).set_chat(
-                    platform="discord",
-                    chat_id=channel_id,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.pma.prompt_build.failed",
-                    channel_id=channel_id,
-                    exc=exc,
-                )
-                await self._send_channel_message_safe(
-                    channel_id,
-                    {"content": "Failed to build PMA context. Please try again."},
-                )
-                return
-
         (
             prompt_text,
             saved_attachments,
@@ -731,6 +707,36 @@ class DiscordBotService:
                     },
                 )
             return
+
+        if pma_enabled:
+            try:
+                snapshot = await build_hub_snapshot(
+                    self._hub_supervisor, hub_root=self._config.root
+                )
+                prompt_base = load_pma_prompt(self._config.root)
+                prompt_text = format_pma_prompt(
+                    prompt_base,
+                    snapshot,
+                    prompt_text,
+                    hub_root=self._config.root,
+                )
+                PmaActiveSinkStore(self._config.root).set_chat(
+                    platform="discord",
+                    chat_id=channel_id,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.pma.prompt_build.failed",
+                    channel_id=channel_id,
+                    exc=exc,
+                )
+                await self._send_channel_message_safe(
+                    channel_id,
+                    {"content": "Failed to build PMA context. Please try again."},
+                )
+                return
 
         prompt_text, github_injected = await self._maybe_inject_github_context(
             prompt_text, workspace_root

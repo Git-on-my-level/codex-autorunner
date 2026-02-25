@@ -1536,6 +1536,112 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
 
 
 @pytest.mark.anyio
+async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapshot(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+    )
+
+    attachment_url = "https://cdn.discordapp.com/attachments/pma-zip-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"zip-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-zip-1",
+                            "filename": "ticket-pack.zip",
+                            "content_type": "application/zip",
+                            "size": 9,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+    captured_workspaces: list[Path] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        captured_workspaces.append(workspace_root)
+        return "PMA zip reply"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        assert captured_workspaces == [tmp_path.resolve()]
+
+        hub_inbox = inbox_dir(tmp_path.resolve())
+        hub_files = [path for path in hub_inbox.iterdir() if path.is_file()]
+        assert len(hub_files) == 1
+        assert hub_files[0].read_bytes() == b"zip-bytes"
+
+        repo_inbox = inbox_dir(workspace.resolve())
+        if repo_inbox.exists():
+            assert [path for path in repo_inbox.iterdir() if path.is_file()] == []
+
+        prompt = captured_prompts[0]
+        assert "PMA File Inbox:" in prompt
+        assert "next_action: process_uploaded_file" in prompt
+        assert "ticket-pack.zip" in prompt
+        assert any(
+            "PMA zip reply" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_in_pma_mode_falls_back_to_hub_root_when_binding_path_invalid(
     tmp_path: Path,
 ) -> None:
