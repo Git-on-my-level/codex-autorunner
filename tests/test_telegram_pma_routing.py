@@ -927,6 +927,20 @@ async def test_newt_infers_base_repo_from_legacy_wt_worktree_id(
 
 
 @pytest.mark.anyio
+async def test_newt_resolver_prefers_modern_separator_before_legacy_marker() -> None:
+    repo_entry = SimpleNamespace(
+        kind="worktree",
+        id="alpha-wt-beta--thread-1",
+        worktree_of=None,
+    )
+
+    assert (
+        workspace_commands_module._resolve_base_repo_id(repo_entry, manifest_repos=[])
+        == "alpha-wt-beta"
+    )
+
+
+@pytest.mark.anyio
 async def test_newt_prefers_longest_manifest_base_match_for_worktree_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

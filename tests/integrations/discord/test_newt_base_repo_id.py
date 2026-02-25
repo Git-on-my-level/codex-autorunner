@@ -56,3 +56,16 @@ def test_resolve_base_repo_id_infers_from_legacy_wt_repo_id() -> None:
         )
         == "codex-autorunner"
     )
+
+
+def test_resolve_base_repo_id_prefers_modern_separator_before_legacy_marker() -> None:
+    repo_entry = SimpleNamespace(
+        kind="worktree",
+        id="alpha-wt-beta--thread-1",
+        worktree_of=None,
+    )
+
+    assert (
+        discord_service_module._resolve_base_repo_id(repo_entry, manifest_repos=[])
+        == "alpha-wt-beta"
+    )

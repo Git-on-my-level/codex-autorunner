@@ -195,14 +195,14 @@ def _resolve_base_repo_id(
             if candidates:
                 return max(candidates, key=len)
 
-        if "-wt-" in repo_id:
-            inferred_base, suffix = repo_id.rsplit("-wt-", 1)
+        if "--" in repo_id:
+            inferred_base, suffix = repo_id.rsplit("--", 1)
             if inferred_base and suffix:
                 return inferred_base
             return None
 
-        if "--" in repo_id:
-            inferred_base, suffix = repo_id.rsplit("--", 1)
+        if "-wt-" in repo_id:
+            inferred_base, suffix = repo_id.rsplit("-wt-", 1)
             if inferred_base and suffix:
                 return inferred_base
             return None
