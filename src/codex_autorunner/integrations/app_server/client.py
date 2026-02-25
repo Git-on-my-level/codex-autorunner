@@ -1558,24 +1558,39 @@ class CodexAppServerClient:
             closed=self._closed,
             stderr_tail=list(self._stderr_tail),
         )
-        if not self._closed:
-            self._fail_pending(CodexAppServerDisconnected("App-server disconnected"))
+        disconnect_error = CodexAppServerDisconnected("App-server disconnected")
+        preserve_turns = self._auto_restart and not self._closed
+        self._fail_pending(
+            disconnect_error,
+            include_turns=not preserve_turns,
+            include_pending_turns=not preserve_turns,
+        )
         if self._auto_restart and not self._closed:
             self._schedule_restart()
 
-    def _fail_pending(self, error: Exception) -> None:
-        for future in list(self._pending.values()):
-            if not future.done():
-                future.set_exception(error)
-        self._pending.clear()
-        for state in list(self._turns.values()):
-            if not state.future.done():
-                state.future.set_exception(error)
-        self._turns.clear()
-        for state in list(self._pending_turns.values()):
-            if not state.future.done():
-                state.future.set_exception(error)
-        self._pending_turns.clear()
+    def _fail_pending(
+        self,
+        error: Exception,
+        *,
+        include_requests: bool = True,
+        include_turns: bool = True,
+        include_pending_turns: bool = True,
+    ) -> None:
+        if include_requests:
+            for future in list(self._pending.values()):
+                if not future.done():
+                    future.set_exception(error)
+            self._pending.clear()
+        if include_turns:
+            for state in list(self._turns.values()):
+                if not state.future.done():
+                    state.future.set_exception(error)
+            self._turns.clear()
+        if include_pending_turns:
+            for state in list(self._pending_turns.values()):
+                if not state.future.done():
+                    state.future.set_exception(error)
+            self._pending_turns.clear()
 
     def _schedule_restart(self) -> None:
         if self._restart_task is not None and not self._restart_task.done():
