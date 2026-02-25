@@ -164,7 +164,9 @@ Body updated
         assert updated_payload.get("chat_key") == first_chat_key
 
 
-def test_create_ticket_appends_after_highest_index_when_gaps_exist(tmp_path, monkeypatch):
+def test_create_ticket_appends_after_highest_index_when_gaps_exist(
+    tmp_path, monkeypatch
+):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
