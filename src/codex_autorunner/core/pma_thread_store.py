@@ -426,7 +426,7 @@ class PmaThreadStore:
                 SELECT *
                   FROM pma_managed_turns
                  WHERE managed_thread_id = ?
-                 ORDER BY started_at DESC, managed_turn_id DESC
+                 ORDER BY started_at DESC, rowid DESC
                  LIMIT ?
                 """,
                 (managed_thread_id, limit),
