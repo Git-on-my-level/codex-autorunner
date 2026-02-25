@@ -330,6 +330,33 @@ async def test_disconnect_when_closed_fails_active_turns(
 
 
 @pytest.mark.anyio
+async def test_disconnect_without_stall_recovery_fails_active_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", raising=False)
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        auto_restart=True,
+        turn_stall_timeout_seconds=None,
+    )
+    scheduled: list[bool] = []
+    client._schedule_restart = lambda: scheduled.append(True)  # type: ignore[method-assign]
+    try:
+        turn_state = client._ensure_turn_state("turn-1", "thread-1")
+
+        await client._handle_disconnect()
+
+        assert scheduled == [True]
+        assert turn_state.future.done()
+        with pytest.raises(CodexAppServerDisconnected):
+            turn_state.future.result()
+        assert not client._turns
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_restart_after_crash(tmp_path: Path) -> None:
     client = CodexAppServerClient(
         fixture_command("crash"), cwd=tmp_path, auto_restart=True

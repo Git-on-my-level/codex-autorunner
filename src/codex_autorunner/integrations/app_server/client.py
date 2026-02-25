@@ -1559,7 +1559,11 @@ class CodexAppServerClient:
             stderr_tail=list(self._stderr_tail),
         )
         disconnect_error = CodexAppServerDisconnected("App-server disconnected")
-        preserve_turns = self._auto_restart and not self._closed
+        preserve_turns = (
+            self._auto_restart
+            and not self._closed
+            and self._turn_stall_timeout_seconds is not None
+        )
         self._fail_pending(
             disconnect_error,
             include_turns=not preserve_turns,
