@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 import pytest
@@ -148,6 +149,55 @@ def test_update_lock_active_clears_stale(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(system, "_pid_is_running", lambda _pid: False)
     assert system._update_lock_active() is None
     assert not lock_path.exists()
+
+
+def test_read_update_status_allows_recent_running_without_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    status_path = system._update_status_path()
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "message": "Update spawned.",
+                "at": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(system.update_core, "_update_lock_active", lambda: None)
+
+    payload = system._read_update_status()
+    assert isinstance(payload, dict)
+    assert payload["status"] == "running"
+
+
+def test_read_update_status_marks_stale_running_without_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    status_path = system._update_status_path()
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "message": "Update started.",
+                "at": time.time() - 60,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(system.update_core, "_update_lock_active", lambda: None)
+
+    payload = system._read_update_status()
+    assert isinstance(payload, dict)
+    assert payload["status"] == "error"
+    assert payload["previous_status"] == "running"
 
 
 def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None:
