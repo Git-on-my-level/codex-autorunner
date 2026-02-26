@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import threading
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.pma_thread_store import (
+    ManagedThreadAlreadyHasRunningTurnError,
     PmaThreadStore,
     default_pma_threads_db_path,
     pma_threads_db_lock_path,
@@ -73,6 +77,56 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     listed = store.list_turns(thread["managed_thread_id"])
     assert len(listed) == 1
     assert listed[0]["managed_turn_id"] == turn["managed_turn_id"]
+
+
+def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    first_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+
+    with pytest.raises(ManagedThreadAlreadyHasRunningTurnError):
+        store.create_turn(thread["managed_thread_id"], prompt="second")
+
+    store.mark_turn_finished(first_turn["managed_turn_id"], status="ok")
+
+    second_turn = store.create_turn(thread["managed_thread_id"], prompt="third")
+    assert second_turn["status"] == "running"
+
+
+def test_concurrent_create_turn_admission_is_atomic(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store_a = PmaThreadStore(hub_root)
+    store_b = PmaThreadStore(hub_root)
+    thread = store_a.create_thread("codex", tmp_path / "workspace")
+    barrier = threading.Barrier(2)
+
+    def _attempt_turn(store: PmaThreadStore, prompt: str) -> tuple[str, str | None]:
+        barrier.wait(timeout=5)
+        try:
+            created = store.create_turn(thread["managed_thread_id"], prompt=prompt)
+            return ("created", str(created["managed_turn_id"]))
+        except ManagedThreadAlreadyHasRunningTurnError:
+            return ("rejected", None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(_attempt_turn, store_a, "a"),
+            executor.submit(_attempt_turn, store_b, "b"),
+        ]
+        results = [future.result(timeout=5) for future in futures]
+
+    outcomes = [result[0] for result in results]
+    assert outcomes.count("created") == 1
+    assert outcomes.count("rejected") == 1
+
+    turns = store_a.list_turns(thread["managed_thread_id"], limit=10)
+    running_turn_ids = [
+        turn["managed_turn_id"] for turn in turns if turn["status"] == "running"
+    ]
+    assert len(running_turn_ids) == 1
+    created_turn_ids = [result[1] for result in results if result[0] == "created"]
+    assert running_turn_ids[0] == created_turn_ids[0]
 
 
 def test_archive_thread_changes_status(tmp_path: Path) -> None:

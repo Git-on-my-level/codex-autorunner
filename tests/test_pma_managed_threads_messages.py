@@ -230,3 +230,138 @@ def test_send_message_rejects_when_running_turn_exists(hub_env) -> None:
 
     assert resp.status_code == 409
     assert "running turn" in (resp.json().get("detail") or "").lower()
+
+
+def test_send_message_finalizes_turn_when_transcript_write_fails(
+    hub_env, monkeypatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    def _raise_transcript_write(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("disk-full-secret")
+
+    monkeypatch.setattr(PmaTranscriptStore, "write_transcript", _raise_transcript_write)
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        first_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "first"},
+        )
+        assert first_resp.status_code == 200
+        first_payload = first_resp.json()
+        assert first_payload["status"] == "ok"
+
+        second_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "second"},
+        )
+        assert second_resp.status_code == 200
+        assert second_resp.json()["status"] == "ok"
+
+    store = PmaThreadStore(hub_env.hub_root)
+    assert not store.has_running_turn(managed_thread_id)
+    first_turn = store.get_turn(managed_thread_id, first_payload["managed_turn_id"])
+    assert first_turn is not None
+    assert first_turn["status"] == "ok"
+    assert first_turn["transcript_turn_id"] is None
+
+
+def test_send_message_sanitizes_unexpected_execution_errors(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            raise RuntimeError("sensitive-backend-message")
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        message_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "trigger failure"},
+        )
+
+    assert message_resp.status_code == 200
+    payload = message_resp.json()
+    assert payload["status"] == "error"
+    assert payload["error"] == "Managed thread execution failed"
+    assert "sensitive-backend-message" not in payload["error"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    turn = store.get_turn(managed_thread_id, payload["managed_turn_id"])
+    assert turn is not None
+    assert turn["status"] == "error"
+    assert turn["error"] == "Managed thread execution failed"

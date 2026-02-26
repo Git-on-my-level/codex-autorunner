@@ -22,6 +22,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Enable pnpm
         run: |
@@ -32,7 +33,18 @@ jobs:
         run: pip install -e .[dev]
 
       - name: Install Node deps
-        run: pnpm install --frozen-lockfile
+        run: |
+          pnpm config set registry https://registry.npmjs.org
+          for attempt in 1 2 3; do
+            if pnpm install --frozen-lockfile; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "pnpm install failed after 3 attempts" >&2
+          exit 1
 
       - name: Check import boundaries
         run: python scripts/check_import_boundaries.py

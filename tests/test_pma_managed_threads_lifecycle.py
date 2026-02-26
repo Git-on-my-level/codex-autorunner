@@ -164,3 +164,80 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
             fake_supervisor.client.turn_start_calls[2]["prompt"]
             == "message after resume"
         )
+
+
+def test_create_managed_thread_validates_workspace_root_boundaries(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    safe_absolute_workspace = str(hub_env.repo_root.resolve())
+    unsafe_absolute_workspace = str((hub_env.hub_root.parent / "escape").resolve())
+
+    with TestClient(app) as client:
+        safe_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "workspace_root": safe_absolute_workspace},
+        )
+        traversal_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "workspace_root": "../escape"},
+        )
+        absolute_escape_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "workspace_root": unsafe_absolute_workspace},
+        )
+        windows_drive_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "workspace_root": "C:\\escape"},
+        )
+
+    assert safe_resp.status_code == 200
+    assert traversal_resp.status_code == 400
+    assert traversal_resp.json().get("detail") == "workspace_root is invalid"
+    assert absolute_escape_resp.status_code == 400
+    assert absolute_escape_resp.json().get("detail") == "workspace_root is invalid"
+    assert windows_drive_resp.status_code == 400
+    assert windows_drive_resp.json().get("detail") == "workspace_root is invalid"
+
+
+def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeClient:
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: str | None = None
+        ) -> None:
+            _ = turn_id, thread_id
+            raise RuntimeError("sensitive-interrupt-error")
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    turn = store.create_turn(managed_thread_id, prompt="running")
+    managed_turn_id = turn["managed_turn_id"]
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
+
+    with TestClient(app) as client:
+        interrupt_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/interrupt",
+        )
+
+    assert interrupt_resp.status_code == 200
+    payload = interrupt_resp.json()
+    assert payload["backend_error"] == "Failed to interrupt backend turn"
+    assert "sensitive-interrupt-error" not in (payload.get("backend_error") or "")

@@ -12,6 +12,14 @@ from .time_utils import now_iso
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
 
 
+class ManagedThreadAlreadyHasRunningTurnError(RuntimeError):
+    def __init__(self, managed_thread_id: str) -> None:
+        super().__init__(
+            f"Managed thread '{managed_thread_id}' already has a running turn"
+        )
+        self.managed_thread_id = managed_thread_id
+
+
 def default_pma_threads_db_path(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / "pma" / PMA_THREADS_DB_FILENAME
 
@@ -147,7 +155,7 @@ class PmaThreadStore:
         now = now_iso()
         workspace = Path(workspace_root).expanduser()
         if not workspace.is_absolute():
-            workspace = workspace.resolve()
+            raise ValueError("workspace_root must be absolute")
 
         with self._write_conn() as conn:
             with conn:
@@ -346,7 +354,7 @@ class PmaThreadStore:
 
         with self._write_conn() as conn:
             with conn:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO pma_managed_turns (
                         managed_turn_id,
@@ -362,7 +370,14 @@ class PmaThreadStore:
                         error,
                         started_at,
                         finished_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    )
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                     WHERE NOT EXISTS (
+                           SELECT 1
+                             FROM pma_managed_turns
+                            WHERE managed_thread_id = ?
+                              AND status = 'running'
+                       )
                     """,
                     (
                         managed_turn_id,
@@ -378,8 +393,11 @@ class PmaThreadStore:
                         None,
                         started_at,
                         None,
+                        managed_thread_id,
                     ),
                 )
+                if cursor.rowcount == 0:
+                    raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
             row = conn.execute(
                 """
                 SELECT *
@@ -548,6 +566,7 @@ class PmaThreadStore:
 
 
 __all__ = [
+    "ManagedThreadAlreadyHasRunningTurnError",
     "PMA_THREADS_DB_FILENAME",
     "PmaThreadStore",
     "default_pma_threads_db_path",

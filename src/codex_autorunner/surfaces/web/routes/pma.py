@@ -8,10 +8,10 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
+import re
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -54,8 +54,12 @@ from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_sink import PmaActiveSinkStore
 from ....core.pma_state import PmaStateStore
-from ....core.pma_thread_store import PmaThreadStore
+from ....core.pma_thread_store import (
+    ManagedThreadAlreadyHasRunningTurnError,
+    PmaThreadStore,
+)
 from ....core.pma_transcripts import PmaTranscriptStore
+from ....core.state_roots import is_within_allowed_root
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
@@ -82,6 +86,9 @@ PMA_TIMEOUT_SECONDS = 28800
 PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
 PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
 PMA_BULK_DELETE_SAMPLE_LIMIT = 10
+MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
+MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 
 def build_pma_routes() -> APIRouter:
@@ -230,11 +237,18 @@ def build_pma_routes() -> APIRouter:
         return state_path
 
     def _is_within_root(path: Path, root: Path) -> bool:
-        resolved_path = path.resolve()
-        resolved_root = root.resolve()
-        return resolved_path == resolved_root or str(resolved_path).startswith(
-            str(resolved_root) + os.sep
-        )
+        return is_within_allowed_root(path, allowed_roots=[root], resolve=True)
+
+    def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
+        cleaned = (workspace_root or "").strip()
+        if not cleaned:
+            raise HTTPException(status_code=400, detail="workspace_root is invalid")
+        if "\\" in cleaned or "\x00" in cleaned or _DRIVE_PREFIX_RE.match(cleaned):
+            raise HTTPException(status_code=400, detail="workspace_root is invalid")
+        normalized = PurePosixPath(cleaned)
+        if ".." in normalized.parts:
+            raise HTTPException(status_code=400, detail="workspace_root is invalid")
+        return normalized
 
     def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
         supervisor = getattr(request.app.state, "hub_supervisor", None)
@@ -248,21 +262,42 @@ def build_pma_routes() -> APIRouter:
                     repo_path = Path(repo_path)
                 if not isinstance(repo_path, Path):
                     continue
-                return repo_path.resolve()
+                return repo_path.absolute()
         raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
 
     def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
-        workspace = Path(workspace_root)
+        normalized = _normalize_workspace_root_input(workspace_root)
+        hub_root_resolved = hub_root.absolute()
+        workspace = Path(normalized)
         if not workspace.is_absolute():
-            workspace = (hub_root / workspace).resolve()
+            workspace = (hub_root_resolved / workspace).absolute()
         else:
-            workspace = workspace.resolve()
+            workspace = workspace.absolute()
         if not _is_within_root(workspace, hub_root):
             raise HTTPException(
                 status_code=400,
-                detail=f"workspace_root escapes hub root: {workspace}",
+                detail="workspace_root is invalid",
             )
         return workspace
+
+    def _resolve_managed_thread_workspace(hub_root: Path, workspace_root: Any) -> Path:
+        raw_workspace = _normalize_optional_text(workspace_root)
+        if raw_workspace is None:
+            raise HTTPException(
+                status_code=500, detail="Managed thread has invalid workspace_root"
+            )
+        resolved_workspace = Path(raw_workspace).absolute()
+        if not _is_within_root(resolved_workspace, hub_root):
+            raise HTTPException(
+                status_code=400, detail="Managed thread workspace_root is invalid"
+            )
+        return resolved_workspace
+
+    def _sanitize_managed_thread_result_error(detail: Any) -> str:
+        sanitized = _normalize_optional_text(detail)
+        if sanitized in {"PMA chat timed out", "PMA chat interrupted"}:
+            return sanitized
+        return MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
 
     def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
         return (
@@ -1089,7 +1124,7 @@ def build_pma_routes() -> APIRouter:
             if not _is_within_root(resolved_workspace, hub_root):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Resolved repo path escapes hub root: {resolved_workspace}",
+                    detail="Resolved repo path is invalid",
                 )
         else:
             if workspace_root is None:
@@ -1308,12 +1343,6 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="Managed thread is archived and read-only"
             )
-        if thread_store.has_running_turn(managed_thread_id):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Managed thread {managed_thread_id} already has a running turn",
-            )
-
         defaults = _get_pma_config(request)
         model = _normalize_optional_text(payload.model) or defaults.get("model")
         reasoning = _normalize_optional_text(payload.reasoning) or defaults.get(
@@ -1325,18 +1354,26 @@ def build_pma_routes() -> APIRouter:
         execution_prompt = message
         if not stored_backend_id and compact_seed:
             execution_prompt = _compose_compacted_prompt(compact_seed, message)
-        turn = thread_store.create_turn(
-            managed_thread_id,
-            prompt=message,
-            model=model,
-            reasoning=reasoning,
-        )
+        try:
+            turn = thread_store.create_turn(
+                managed_thread_id,
+                prompt=message,
+                model=model,
+                reasoning=reasoning,
+            )
+        except ManagedThreadAlreadyHasRunningTurnError:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Managed thread {managed_thread_id} already has a running turn",
+            ) from None
         managed_turn_id = str(turn.get("managed_turn_id") or "")
         if not managed_turn_id:
             raise HTTPException(status_code=500, detail="Failed to create managed turn")
 
         preview = _truncate_text(message, 120)
-        workspace_root = Path(str(thread.get("workspace_root") or "")).resolve()
+        workspace_root = _resolve_managed_thread_workspace(
+            hub_root, thread.get("workspace_root")
+        )
         agent = str(thread.get("agent") or "").strip().lower()
         interrupt_event = asyncio.Event()
 
@@ -1418,19 +1455,24 @@ def build_pma_routes() -> APIRouter:
                 )
             else:
                 return _finalize_error(f"Unknown managed thread agent: {agent}")
-        except HTTPException as exc:
-            detail = (
-                str(exc.detail) if exc.detail else "Managed thread execution failed"
+        except HTTPException:
+            logger.exception(
+                "Managed thread execution failed (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                managed_turn_id,
             )
-            return _finalize_error(detail)
-        except Exception as exc:
-            return _finalize_error(str(exc))
+            return _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
+        except Exception:
+            logger.exception(
+                "Managed thread execution raised unexpected error (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                managed_turn_id,
+            )
+            return _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
 
         result = dict(result or {})
         if str(result.get("status") or "") != "ok":
-            detail = _normalize_optional_text(result.get("detail")) or (
-                "Managed thread execution failed"
-            )
+            detail = _sanitize_managed_thread_result_error(result.get("detail"))
             backend_turn_id = _normalize_optional_text(result.get("turn_id"))
             return _finalize_error(detail, backend_turn_id=backend_turn_id)
 
@@ -1455,11 +1497,20 @@ def build_pma_routes() -> APIRouter:
             "reasoning": reasoning,
             "status": "ok",
         }
-        transcripts.write_transcript(
-            turn_id=managed_turn_id,
-            metadata=transcript_metadata,
-            assistant_text=assistant_text,
-        )
+        transcript_turn_id: Optional[str] = None
+        try:
+            transcripts.write_transcript(
+                turn_id=managed_turn_id,
+                metadata=transcript_metadata,
+                assistant_text=assistant_text,
+            )
+            transcript_turn_id = managed_turn_id
+        except Exception:
+            logger.exception(
+                "Failed to persist managed-thread transcript (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                managed_turn_id,
+            )
 
         thread_store.mark_turn_finished(
             managed_turn_id,
@@ -1467,7 +1518,7 @@ def build_pma_routes() -> APIRouter:
             assistant_text=assistant_text,
             error=None,
             backend_turn_id=backend_turn_id,
-            transcript_turn_id=managed_turn_id,
+            transcript_turn_id=transcript_turn_id,
         )
         thread_store.update_thread_after_turn(
             managed_thread_id,
@@ -1524,8 +1575,13 @@ def build_pma_routes() -> APIRouter:
                     await client.turn_interrupt(
                         backend_turn_id, thread_id=backend_thread_id
                     )
-                except Exception as exc:
-                    backend_error = str(exc)
+                except Exception:
+                    logger.exception(
+                        "Failed to interrupt Codex managed-thread turn (managed_thread_id=%s, managed_turn_id=%s)",
+                        managed_thread_id,
+                        managed_turn_id,
+                    )
+                    backend_error = MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR
         elif agent == "opencode":
             supervisor = getattr(request.app.state, "opencode_supervisor", None)
             if supervisor is None:
@@ -1537,8 +1593,13 @@ def build_pma_routes() -> APIRouter:
                 try:
                     client = await supervisor.get_client(hub_root)
                     await client.abort(backend_thread_id)
-                except Exception as exc:
-                    backend_error = str(exc)
+                except Exception:
+                    logger.exception(
+                        "Failed to interrupt OpenCode managed-thread turn (managed_thread_id=%s, managed_turn_id=%s)",
+                        managed_thread_id,
+                        managed_turn_id,
+                    )
+                    backend_error = MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR
         else:
             backend_error = f"Unknown managed thread agent: {agent}"
 
