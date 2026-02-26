@@ -611,6 +611,9 @@ class CodexAppServerClient:
         status, agent_messages, errors = snapshot
         if agent_messages:
             state.agent_messages = agent_messages
+            # Resume snapshots include full message bodies, so older streaming
+            # deltas from before recovery are stale once we adopt them.
+            state.agent_message_deltas.clear()
         if errors:
             state.errors.extend(errors)
         if status:
@@ -1459,9 +1462,21 @@ class CodexAppServerClient:
 
         if isinstance(item, dict) and item.get("type") == "agentMessage":
             item_id = params.get("itemId") if isinstance(params, dict) else None
+            delta_text: Optional[str] = None
             text = _extract_agent_message_text(item)
-            if not text and isinstance(item_id, str):
-                text = state.agent_message_deltas.pop(item_id, None)
+            if isinstance(item_id, str):
+                # Drop any accumulated deltas once this item completes so
+                # unresolved delta-only items remain distinguishable.
+                delta_text = state.agent_message_deltas.pop(item_id, None)
+            elif text:
+                # Some item/completed payloads omit itemId even after streaming deltas.
+                # In that case, drop an unambiguous matching partial delta so the
+                # completed text remains the final message.
+                _prune_unambiguous_stale_delta(
+                    state.agent_message_deltas, completed_text=text
+                )
+            if not text:
+                text = delta_text
             _append_agent_message(state.agent_messages, text)
         review_text = _extract_review_text(item)
         if review_text and review_text != text:
@@ -1997,10 +2012,39 @@ def _agent_message_deltas_as_list(agent_message_deltas: Dict[str, str]) -> list[
     ]
 
 
+def _prune_unambiguous_stale_delta(
+    agent_message_deltas: Dict[str, str], *, completed_text: str
+) -> None:
+    cleaned_completed = completed_text.strip()
+    if not cleaned_completed:
+        return
+    matching_keys = [
+        item_id
+        for item_id, delta_text in agent_message_deltas.items()
+        if isinstance(delta_text, str)
+        and delta_text.strip()
+        and cleaned_completed.startswith(delta_text.strip())
+    ]
+    if len(matching_keys) == 1:
+        agent_message_deltas.pop(matching_keys[0], None)
+
+
 def _agent_messages_for_result(state: _TurnState) -> list[str]:
-    if state.agent_messages:
-        return list(state.agent_messages)
-    return _agent_message_deltas_as_list(state.agent_message_deltas)
+    messages = list(state.agent_messages)
+    pending_deltas = _agent_message_deltas_as_list(state.agent_message_deltas)
+    if not messages:
+        return pending_deltas
+    for text in pending_deltas:
+        if not isinstance(text, str):
+            continue
+        candidate = text.strip()
+        if not candidate:
+            continue
+        last = messages[-1].strip() if isinstance(messages[-1], str) else ""
+        if last == candidate:
+            continue
+        messages.append(candidate)
+    return messages
 
 
 def _normalize_output_policy(policy: Optional[str]) -> str:
