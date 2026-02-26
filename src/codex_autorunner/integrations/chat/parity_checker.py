@@ -827,13 +827,13 @@ def _evaluate_static_expr(expr: ast.expr, *, names: dict[str, Any]) -> Any:
         return values
 
     if isinstance(expr, ast.Tuple):
-        values: list[Any] = []
+        tuple_values: list[Any] = []
         for item in expr.elts:
             value = _evaluate_static_expr(item, names=names)
             if value is _MISSING:
                 return _MISSING
-            values.append(value)
-        return tuple(values)
+            tuple_values.append(value)
+        return tuple(tuple_values)
 
     if isinstance(expr, ast.Dict):
         result: dict[Any, Any] = {}
@@ -1019,11 +1019,11 @@ def _is_ingress_command_path_prefix_slice(expr: ast.expr) -> bool:
     return _is_first_item_slice(expr.slice)
 
 
-def _is_first_item_slice(slice_node: ast.slice) -> bool:
+def _is_first_item_slice(slice_node: ast.expr | ast.slice) -> bool:
     # ast.Index exists in older Python versions and wraps the real slice node.
     index_type = getattr(ast, "Index", None)
     if index_type is not None and isinstance(slice_node, index_type):
-        slice_node = slice_node.value  # type: ignore[assignment]
+        slice_node = slice_node.value
     if not isinstance(slice_node, ast.Slice):
         return False
     lower_ok = slice_node.lower is None or _is_int_constant(slice_node.lower, 0)

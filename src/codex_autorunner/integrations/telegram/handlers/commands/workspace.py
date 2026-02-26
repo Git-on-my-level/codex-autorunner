@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 from .....agents.opencode.runtime import extract_session_id
 from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
+from .....core.git_utils import GitError, reset_branch_from_origin_main
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
@@ -78,54 +79,6 @@ if TYPE_CHECKING:
 
 # Backward-compatible symbols kept for external tests/importers.
 _model_list_with_agent_compat = _workspace_model_list_with_agent_compat
-
-
-def _resolve_base_repo_id(
-    repo_entry: object, *, manifest_repos: Optional[Sequence[object]] = None
-) -> Optional[str]:
-    worktree_of = getattr(repo_entry, "worktree_of", None)
-    if isinstance(worktree_of, str) and worktree_of.strip():
-        return worktree_of.strip()
-
-    repo_id = getattr(repo_entry, "id", None)
-    if not isinstance(repo_id, str) or not repo_id.strip():
-        return None
-    repo_id = repo_id.strip()
-
-    if getattr(repo_entry, "kind", None) == "worktree":
-        if manifest_repos:
-            candidates: list[str] = []
-            for candidate in manifest_repos:
-                candidate_id = getattr(candidate, "id", None)
-                if not isinstance(candidate_id, str):
-                    continue
-                candidate_id = candidate_id.strip()
-                if not candidate_id:
-                    continue
-                if getattr(candidate, "kind", None) == "worktree":
-                    continue
-                if (
-                    repo_id == candidate_id
-                    or repo_id.startswith(f"{candidate_id}--")
-                    or repo_id.startswith(f"{candidate_id}-wt-")
-                ):
-                    candidates.append(candidate_id)
-            if candidates:
-                return max(candidates, key=len)
-
-        if "--" in repo_id:
-            inferred_base, suffix = repo_id.rsplit("--", 1)
-            if inferred_base and suffix:
-                return inferred_base
-            return None
-
-        if "-wt-" in repo_id:
-            inferred_base, suffix = repo_id.rsplit("-wt-", 1)
-            if inferred_base and suffix:
-                return inferred_base
-            return None
-
-    return repo_id
 
 
 @dataclass
@@ -1346,66 +1299,6 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
 
-        hub_root = getattr(self, "_hub_root", None)
-        if hub_root is None:
-            await self._send_message(
-                message.chat_id,
-                "Hub not configured.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-
-        try:
-            from .....core.hub import HubSupervisor
-
-            supervisor = getattr(self, "_hub_supervisor", None)
-            if supervisor is None:
-                supervisor = HubSupervisor.from_path(hub_root)
-                self._hub_supervisor = supervisor
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.newt.hub_supervisor.failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                "Hub supervisor unavailable. Please try again.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-
-        hub_root_path = Path(hub_root)
-        manifest = load_manifest(
-            hub_root_path / ".codex-autorunner" / "manifest.yml", hub_root_path
-        )
-        repo_entry = manifest.get_by_path(hub_root_path, workspace_root)
-
-        if repo_entry is None:
-            await self._send_message(
-                message.chat_id,
-                "Workspace is not registered in the hub. Bind to a hub repo first.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-
-        base_repo_id = _resolve_base_repo_id(repo_entry, manifest_repos=manifest.repos)
-
-        if not base_repo_id:
-            await self._send_message(
-                message.chat_id,
-                "Could not determine base repository for worktree creation.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-
         safe_chat_id = re.sub(r"[^a-zA-Z0-9]+", "-", str(message.chat_id)).strip("-")
         if not safe_chat_id:
             safe_chat_id = "chat"
@@ -1419,41 +1312,30 @@ class WorkspaceCommands(SharedHelpers):
         branch_name = f"thread-chat-{safe_chat_id}-{safe_thread_id}"
 
         try:
-            snapshot = await asyncio.to_thread(
-                supervisor.create_worktree,
-                base_repo_id=base_repo_id,
-                branch=branch_name,
-                force=False,
-                start_point=None,
+            await asyncio.to_thread(
+                reset_branch_from_origin_main,
+                workspace_root,
+                branch_name,
             )
-        except Exception as exc:
+        except GitError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.newt.create_worktree.failed",
+                "telegram.newt.branch_reset.failed",
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
-                base_repo_id=base_repo_id,
                 branch=branch_name,
                 exc=exc,
             )
             await self._send_message(
                 message.chat_id,
-                f"Failed to create worktree: {exc}",
+                f"Failed to reset branch `{branch_name}` from `origin/main`: {exc}",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
 
-        new_workspace_path = (hub_root_path / snapshot.path).resolve()
-        workspace_id = self._workspace_id_for_path(str(new_workspace_path))
-
         def apply(record: "TelegramTopicRecord") -> None:
-            record.workspace_path = str(new_workspace_path)
-            record.workspace_id = None
-            record.repo_id = snapshot.id
-            if workspace_id:
-                record.workspace_id = workspace_id
             record.active_thread_id = None
             record.thread_ids = []
             record.thread_summaries = {}
@@ -1475,8 +1357,8 @@ class WorkspaceCommands(SharedHelpers):
                 )
                 return
             try:
-                client = await supervisor.get_client(new_workspace_path)
-                session = await client.create_session(directory=str(new_workspace_path))
+                client = await supervisor.get_client(workspace_root)
+                session = await client.create_session(directory=str(workspace_root))
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -1488,7 +1370,7 @@ class WorkspaceCommands(SharedHelpers):
                 )
                 await self._send_message(
                     message.chat_id,
-                    "Created worktree but failed to start OpenCode session.",
+                    "Reset branch but failed to start OpenCode session.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1497,7 +1379,7 @@ class WorkspaceCommands(SharedHelpers):
             if not session_id:
                 await self._send_message(
                     message.chat_id,
-                    "Created worktree but failed to start OpenCode session.",
+                    "Reset branch but failed to start OpenCode session.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1517,7 +1399,7 @@ class WorkspaceCommands(SharedHelpers):
             thread_id = session_id
         else:
             try:
-                client = await self._client_for_workspace(str(new_workspace_path))
+                client = await self._client_for_workspace(str(workspace_root))
             except AppServerUnavailableError as exc:
                 log_event(
                     self._logger,
@@ -1529,7 +1411,7 @@ class WorkspaceCommands(SharedHelpers):
                 )
                 await self._send_message(
                     message.chat_id,
-                    "Created worktree but app server unavailable. Try sending a message.",
+                    "Reset branch but app server unavailable. Try sending a message.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1537,13 +1419,13 @@ class WorkspaceCommands(SharedHelpers):
             if client is None:
                 await self._send_message(
                     message.chat_id,
-                    "Created worktree but workspace unavailable.",
+                    "Reset branch but workspace unavailable.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
                 return
             try:
-                thread = await client.thread_start(str(new_workspace_path), agent=agent)
+                thread = await client.thread_start(str(workspace_root), agent=agent)
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -1555,7 +1437,7 @@ class WorkspaceCommands(SharedHelpers):
                 )
                 await self._send_message(
                     message.chat_id,
-                    "Created worktree but failed to start thread.",
+                    "Reset branch but failed to start thread.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1564,7 +1446,7 @@ class WorkspaceCommands(SharedHelpers):
             if not thread_id:
                 await self._send_message(
                     message.chat_id,
-                    "Created worktree but failed to start thread.",
+                    "Reset branch but failed to start thread.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1580,8 +1462,8 @@ class WorkspaceCommands(SharedHelpers):
             message.chat_id,
             "\n".join(
                 [
-                    f"Created worktree `{snapshot.id}` from `{base_repo_id}`.",
-                    f"Directory: {new_workspace_path}",
+                    f"Reset branch `{branch_name}` to `origin/main`.",
+                    f"Directory: {workspace_root}",
                     f"Started new thread {thread_id}.",
                     f"Agent: {agent}",
                     f"Model: {record.model or 'default'}",

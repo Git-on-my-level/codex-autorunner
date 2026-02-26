@@ -700,34 +700,6 @@ class _NewtRouterStub:
         return self._record
 
 
-class _NewtHubSupervisorStub:
-    def __init__(self) -> None:
-        self.create_calls: list[dict[str, object]] = []
-        self._counter = 0
-
-    def create_worktree(
-        self,
-        *,
-        base_repo_id: str,
-        branch: str,
-        force: bool,
-        start_point: Optional[str],
-    ) -> SimpleNamespace:
-        self._counter += 1
-        self.create_calls.append(
-            {
-                "base_repo_id": base_repo_id,
-                "branch": branch,
-                "force": force,
-                "start_point": start_point,
-            }
-        )
-        return SimpleNamespace(
-            id=f"worktree-{self._counter}",
-            path=f"worktrees/worktree-{self._counter}",
-        )
-
-
 class _NewtClientStub:
     async def thread_start(self, workspace_path: str, *, agent: str) -> dict[str, str]:
         return {"thread_id": "new-thread-id", "workspace_path": workspace_path}
@@ -739,7 +711,6 @@ class _NewtHandler(WorkspaceCommands):
         self._config = SimpleNamespace()
         self._router = _NewtRouterStub(record)
         self._hub_root = hub_root
-        self._hub_supervisor = _NewtHubSupervisorStub()
         self._sent: list[str] = []
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
@@ -767,8 +738,21 @@ class _NewtHandler(WorkspaceCommands):
         return Path(workspace_path).expanduser().resolve()
 
     def _workspace_id_for_path(self, _workspace_path: str) -> Optional[str]:
-        # Exercise /newt reset logic when workspace ID lookup fails.
         return None
+
+
+def _patch_newt_branch_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+
+    def _fake_reset(repo_root: Path, branch_name: str) -> None:
+        calls.append({"repo_root": repo_root, "branch_name": branch_name})
+
+    monkeypatch.setattr(
+        workspace_commands_module, "reset_branch_from_origin_main", _fake_reset
+    )
+    return calls
 
 
 @pytest.mark.anyio
@@ -810,15 +794,7 @@ async def test_newt_branch_name_includes_chat_identity(
         active_thread_id="old-thread",
     )
     handler = _NewtHandler(record, hub_root=hub_root)
-    manifest_stub = SimpleNamespace(
-        repos=[SimpleNamespace(kind="base", id="base-repo")],
-        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
-            kind="repo", id="base-repo", worktree_of=None
-        ),
-    )
-    monkeypatch.setattr(
-        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
-    )
+    branch_calls = _patch_newt_branch_reset(monkeypatch)
     message = TelegramMessage(
         update_id=100,
         message_id=200,
@@ -832,9 +808,9 @@ async def test_newt_branch_name_includes_chat_identity(
 
     await handler._handle_newt(message)
 
-    calls = handler._hub_supervisor.create_calls
-    assert len(calls) == 1
-    assert calls[0]["branch"] == "thread-chat-7777-thread-333"
+    assert len(branch_calls) == 1
+    assert branch_calls[0]["repo_root"] == workspace.resolve()
+    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
 
 
 @pytest.mark.anyio
@@ -850,17 +826,7 @@ async def test_newt_infers_base_repo_from_worktree_id_when_missing_metadata(
         active_thread_id="old-thread",
     )
     handler = _NewtHandler(record, hub_root=hub_root)
-    manifest_stub = SimpleNamespace(
-        repos=[SimpleNamespace(kind="base", id="base-repo")],
-        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
-            kind="worktree",
-            id="base-repo--thread-chat-7777-thread-333",
-            worktree_of=None,
-        ),
-    )
-    monkeypatch.setattr(
-        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
-    )
+    branch_calls = _patch_newt_branch_reset(monkeypatch)
     message = TelegramMessage(
         update_id=100,
         message_id=200,
@@ -874,14 +840,10 @@ async def test_newt_infers_base_repo_from_worktree_id_when_missing_metadata(
 
     await handler._handle_newt(message)
 
-    calls = handler._hub_supervisor.create_calls
-    assert len(calls) == 1
-    assert calls[0]["base_repo_id"] == "base-repo"
-    assert calls[0]["branch"] == "thread-chat-7777-thread-333"
-    assert all(
-        "Could not determine base repository for worktree creation." not in text
-        for text in handler._sent
-    )
+    assert len(branch_calls) == 1
+    assert branch_calls[0]["repo_root"] == workspace.resolve()
+    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
+    assert all("Failed to reset branch" not in text for text in handler._sent)
 
 
 @pytest.mark.anyio
@@ -897,17 +859,7 @@ async def test_newt_infers_base_repo_from_legacy_wt_worktree_id(
         active_thread_id="old-thread",
     )
     handler = _NewtHandler(record, hub_root=hub_root)
-    manifest_stub = SimpleNamespace(
-        repos=[SimpleNamespace(kind="base", id="codex-autorunner")],
-        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
-            kind="worktree",
-            id="codex-autorunner-wt-1",
-            worktree_of=None,
-        ),
-    )
-    monkeypatch.setattr(
-        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
-    )
+    branch_calls = _patch_newt_branch_reset(monkeypatch)
     message = TelegramMessage(
         update_id=100,
         message_id=200,
@@ -921,23 +873,9 @@ async def test_newt_infers_base_repo_from_legacy_wt_worktree_id(
 
     await handler._handle_newt(message)
 
-    calls = handler._hub_supervisor.create_calls
-    assert len(calls) == 1
-    assert calls[0]["base_repo_id"] == "codex-autorunner"
-
-
-@pytest.mark.anyio
-async def test_newt_resolver_prefers_modern_separator_before_legacy_marker() -> None:
-    repo_entry = SimpleNamespace(
-        kind="worktree",
-        id="alpha-wt-beta--thread-1",
-        worktree_of=None,
-    )
-
-    assert (
-        workspace_commands_module._resolve_base_repo_id(repo_entry, manifest_repos=[])
-        == "alpha-wt-beta"
-    )
+    assert len(branch_calls) == 1
+    assert branch_calls[0]["repo_root"] == workspace.resolve()
+    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
 
 
 @pytest.mark.anyio
@@ -953,20 +891,7 @@ async def test_newt_prefers_longest_manifest_base_match_for_worktree_id(
         active_thread_id="old-thread",
     )
     handler = _NewtHandler(record, hub_root=hub_root)
-    manifest_stub = SimpleNamespace(
-        repos=[
-            SimpleNamespace(kind="base", id="ml"),
-            SimpleNamespace(kind="base", id="ml--infra"),
-        ],
-        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
-            kind="worktree",
-            id="ml--infra--thread--chat-7777-thread-333",
-            worktree_of=None,
-        ),
-    )
-    monkeypatch.setattr(
-        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
-    )
+    branch_calls = _patch_newt_branch_reset(monkeypatch)
     message = TelegramMessage(
         update_id=100,
         message_id=200,
@@ -980,9 +905,9 @@ async def test_newt_prefers_longest_manifest_base_match_for_worktree_id(
 
     await handler._handle_newt(message)
 
-    calls = handler._hub_supervisor.create_calls
-    assert len(calls) == 1
-    assert calls[0]["base_repo_id"] == "ml--infra"
+    assert len(branch_calls) == 1
+    assert branch_calls[0]["repo_root"] == workspace.resolve()
+    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
 
 
 @pytest.mark.anyio
@@ -1003,15 +928,7 @@ async def test_newt_thread_fallback_and_workspace_state_reset(
         pending_compact_seed_thread_id="old-seed-thread",
     )
     handler = _NewtHandler(record, hub_root=hub_root)
-    manifest_stub = SimpleNamespace(
-        repos=[SimpleNamespace(kind="base", id="base-repo")],
-        get_by_path=lambda _hub_root, _workspace_root: SimpleNamespace(
-            kind="repo", id="base-repo", worktree_of=None
-        ),
-    )
-    monkeypatch.setattr(
-        workspace_commands_module, "load_manifest", lambda *_: manifest_stub
-    )
+    branch_calls = _patch_newt_branch_reset(monkeypatch)
     message = TelegramMessage(
         update_id=909,
         message_id=808,
@@ -1025,13 +942,13 @@ async def test_newt_thread_fallback_and_workspace_state_reset(
 
     await handler._handle_newt(message)
 
-    calls = handler._hub_supervisor.create_calls
-    assert len(calls) == 1
-    assert calls[0]["branch"] == "thread-chat-123456-msg-808-upd-909"
+    assert len(branch_calls) == 1
+    assert branch_calls[0]["repo_root"] == workspace.resolve()
+    assert branch_calls[0]["branch_name"] == "thread-chat-123456-msg-808-upd-909"
 
-    # First topic update is /newt workspace switch reset before new thread is attached.
+    # First topic update is /newt state reset before new thread is attached.
     reset_snapshot = handler._router.update_snapshots[0]
-    assert reset_snapshot["workspace_id"] is None
+    assert reset_snapshot["workspace_id"] == "stale-workspace-id"
     assert reset_snapshot["active_thread_id"] is None
     assert reset_snapshot["thread_ids"] == []
     assert reset_snapshot["thread_summaries"] == {}

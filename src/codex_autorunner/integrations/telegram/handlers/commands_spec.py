@@ -34,7 +34,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "newt": CommandSpec(
             "newt",
-            "create a new worktree and start a new session",
+            "reset current workspace branch from origin/main and start a new session",
             lambda message, _args, _runtime: handlers._handle_newt(message),
         ),
         "reset": CommandSpec(

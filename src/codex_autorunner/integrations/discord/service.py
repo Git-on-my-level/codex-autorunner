@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional, Sequence
+from typing import Any, Awaitable, Callable, Optional
 
 from ...core.config import load_repo_config, resolve_env_for_root
 from ...core.filebox import (
@@ -28,7 +28,7 @@ from ...core.flows import (
     load_latest_paused_ticket_flow_dispatch,
 )
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
-from ...core.git_utils import GitError, run_git
+from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
@@ -161,148 +161,6 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
-
-
-def _resolve_base_repo_id(
-    repo_entry: object, *, manifest_repos: Optional[Sequence[object]] = None
-) -> Optional[str]:
-    worktree_of = getattr(repo_entry, "worktree_of", None)
-    if isinstance(worktree_of, str) and worktree_of.strip():
-        return worktree_of.strip()
-
-    repo_id = getattr(repo_entry, "id", None)
-    if not isinstance(repo_id, str) or not repo_id.strip():
-        return None
-    repo_id = repo_id.strip()
-
-    if getattr(repo_entry, "kind", None) == "worktree":
-        if manifest_repos:
-            candidates: list[str] = []
-            for candidate in manifest_repos:
-                candidate_id = getattr(candidate, "id", None)
-                if not isinstance(candidate_id, str):
-                    continue
-                candidate_id = candidate_id.strip()
-                if not candidate_id:
-                    continue
-                if getattr(candidate, "kind", None) == "worktree":
-                    continue
-                if (
-                    repo_id == candidate_id
-                    or repo_id.startswith(f"{candidate_id}--")
-                    or repo_id.startswith(f"{candidate_id}-wt-")
-                ):
-                    candidates.append(candidate_id)
-            if candidates:
-                return max(candidates, key=len)
-
-        if "--" in repo_id:
-            inferred_base, suffix = repo_id.rsplit("--", 1)
-            if inferred_base and suffix:
-                return inferred_base
-            return None
-
-        if "-wt-" in repo_id:
-            inferred_base, suffix = repo_id.rsplit("-wt-", 1)
-            if inferred_base and suffix:
-                return inferred_base
-            return None
-
-    return repo_id
-
-
-def _manifest_base_repo_ids(manifest_repos: Optional[Sequence[object]]) -> set[str]:
-    if not manifest_repos:
-        return set()
-    base_repo_ids: set[str] = set()
-    for repo in manifest_repos:
-        if getattr(repo, "kind", None) != "base":
-            continue
-        repo_id = getattr(repo, "id", None)
-        if not isinstance(repo_id, str):
-            continue
-        repo_id = repo_id.strip()
-        if repo_id:
-            base_repo_ids.add(repo_id)
-    return base_repo_ids
-
-
-def _is_manifest_base_repo_id(
-    repo_id: Optional[str], *, manifest_repos: Optional[Sequence[object]]
-) -> bool:
-    if not isinstance(repo_id, str) or not repo_id.strip():
-        return False
-    return repo_id.strip() in _manifest_base_repo_ids(manifest_repos)
-
-
-def _resolve_base_repo_id_from_git_common_dir(
-    *,
-    workspace_root: Path,
-    hub_root: Path,
-    manifest_repos: Optional[Sequence[object]],
-) -> Optional[str]:
-    if not manifest_repos:
-        return None
-    try:
-        proc = run_git(
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            workspace_root,
-            check=False,
-        )
-    except GitError:
-        return None
-    if proc.returncode != 0:
-        return None
-    raw_common_dir = (proc.stdout or "").strip()
-    if not raw_common_dir:
-        return None
-    try:
-        common_git_dir = canonicalize_path(Path(raw_common_dir))
-    except Exception:
-        return None
-
-    for repo in manifest_repos:
-        if getattr(repo, "kind", None) != "base":
-            continue
-        candidate_id = getattr(repo, "id", None)
-        candidate_path = getattr(repo, "path", None)
-        if not isinstance(candidate_id, str):
-            continue
-        candidate_id = candidate_id.strip()
-        if not candidate_id:
-            continue
-        if isinstance(candidate_path, Path):
-            path_value = candidate_path
-        elif isinstance(candidate_path, str):
-            path_value = Path(candidate_path)
-        else:
-            continue
-        candidate_git_dir = canonicalize_path((hub_root / path_value) / ".git")
-        if candidate_git_dir == common_git_dir:
-            return candidate_id
-    return None
-
-
-def _resolve_valid_base_repo_id(
-    repo_entry: object,
-    *,
-    manifest_repos: Optional[Sequence[object]],
-    workspace_root: Path,
-    hub_root: Path,
-) -> Optional[str]:
-    base_repo_id = _resolve_base_repo_id(repo_entry, manifest_repos=manifest_repos)
-    if _is_manifest_base_repo_id(base_repo_id, manifest_repos=manifest_repos):
-        return base_repo_id
-    if getattr(repo_entry, "kind", None) != "worktree":
-        return None
-    fallback_repo_id = _resolve_base_repo_id_from_git_common_dir(
-        workspace_root=workspace_root,
-        hub_root=hub_root,
-        manifest_repos=manifest_repos,
-    )
-    if _is_manifest_base_repo_id(fallback_repo_id, manifest_repos=manifest_repos):
-        return fallback_repo_id
-    return None
 
 
 class AppServerUnavailableError(Exception):
@@ -2969,7 +2827,7 @@ class DiscordBotService:
             "/car bind [path] - Bind channel to workspace",
             "/car status - Show binding status",
             "/car new - Start a fresh chat session",
-            "/car newt - Create new worktree and start session",
+            "/car newt - Reset current workspace branch from origin/main and start session",
             "/car debug - Show debug info",
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
@@ -3310,6 +3168,18 @@ class DiscordBotService:
             return
 
         pma_enabled = bool(binding.get("pma_enabled", False))
+        if pma_enabled:
+            text = format_discord_message(
+                "/car newt is not available in PMA mode. Use `/car new` instead."
+            )
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+            return
+
         workspace_raw = binding.get("workspace_path")
         workspace_root: Optional[Path] = None
         if isinstance(workspace_raw, str) and workspace_raw.strip():
@@ -3317,74 +3187,8 @@ class DiscordBotService:
             if not workspace_root.exists() or not workspace_root.is_dir():
                 workspace_root = None
         if workspace_root is None:
-            if pma_enabled:
-                workspace_root = canonicalize_path(Path(self._config.root))
-            else:
-                text = format_discord_message(
-                    "Binding is invalid. Run `/car bind path:<workspace>`."
-                )
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-                return
-
-        try:
-            from ...core.hub import HubSupervisor
-
-            supervisor = self._hub_supervisor
-            if supervisor is None:
-                supervisor = HubSupervisor.from_path(self._config.root)
-                self._hub_supervisor = supervisor
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.newt.hub_supervisor.failed",
-                channel_id=channel_id,
-                exc=exc,
-            )
             text = format_discord_message(
-                "Hub supervisor unavailable. Please try again."
-            )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-        hub_root = Path(self._config.root)
-        manifest = load_manifest(
-            hub_root / ".codex-autorunner" / "manifest.yml", hub_root
-        )
-        repo_entry = manifest.get_by_path(hub_root, workspace_root)
-
-        if repo_entry is None:
-            text = format_discord_message(
-                "Workspace is not registered in the hub. Bind to a hub repo first."
-            )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-        base_repo_id = _resolve_valid_base_repo_id(
-            repo_entry,
-            manifest_repos=manifest.repos,
-            workspace_root=workspace_root,
-            hub_root=hub_root,
-        )
-
-        if not base_repo_id:
-            text = format_discord_message(
-                "Could not determine base repository for worktree creation."
+                "Binding is invalid. Run `/car bind path:<workspace>`."
             )
             await self._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
@@ -3395,27 +3199,28 @@ class DiscordBotService:
             return
 
         safe_channel_id = re.sub(r"[^a-zA-Z0-9]+", "-", channel_id).strip("-")
+        if not safe_channel_id:
+            safe_channel_id = "channel"
         branch_name = f"thread-{safe_channel_id}"
 
         try:
-            snapshot = await asyncio.to_thread(
-                supervisor.create_worktree,
-                base_repo_id=base_repo_id,
-                branch=branch_name,
-                force=False,
-                start_point=None,
+            await asyncio.to_thread(
+                reset_branch_from_origin_main,
+                workspace_root,
+                branch_name,
             )
-        except Exception as exc:
+        except GitError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "discord.newt.create_worktree.failed",
+                "discord.newt.branch_reset.failed",
                 channel_id=channel_id,
-                base_repo_id=base_repo_id,
                 branch=branch_name,
                 exc=exc,
             )
-            text = format_discord_message(f"Failed to create worktree: {exc}")
+            text = format_discord_message(
+                f"Failed to reset branch `{branch_name}` from `origin/main`: {exc}"
+            )
             await self._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
@@ -3424,21 +3229,13 @@ class DiscordBotService:
             )
             return
 
-        new_workspace_path = (hub_root / snapshot.path).resolve()
-        await self._store.upsert_binding(
-            channel_id=channel_id,
-            guild_id=guild_id,
-            workspace_path=str(new_workspace_path),
-            repo_id=snapshot.id,
-        )
-
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
 
         session_key = self._build_message_session_key(
             channel_id=channel_id,
-            workspace_root=new_workspace_path,
+            workspace_root=workspace_root,
             pma_enabled=pma_enabled,
             agent=agent,
         )
@@ -3446,14 +3243,14 @@ class DiscordBotService:
             channel_id if not pma_enabled else f"pma:{channel_id}"
         )
         orchestrator = await self._orchestrator_for_workspace(
-            new_workspace_path, channel_id=orchestrator_channel_key
+            workspace_root, channel_id=orchestrator_channel_key
         )
         had_previous = orchestrator.reset_thread_id(session_key)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
         text = format_discord_message(
-            f"Created worktree `{snapshot.id}` from `{base_repo_id}` and started fresh {mode_label} session for `{agent}` ({state_label})."
+            f"Reset branch `{branch_name}` to `origin/main` in current workspace and started fresh {mode_label} session for `{agent}` ({state_label})."
         )
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,

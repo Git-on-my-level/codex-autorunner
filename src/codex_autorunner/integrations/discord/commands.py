@@ -42,7 +42,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                 {
                     "type": SUB_COMMAND,
                     "name": "newt",
-                    "description": "Create a new worktree and start a fresh chat session",
+                    "description": "Reset branch from origin/main and start a fresh chat session",
                 },
                 {
                     "type": SUB_COMMAND,
