@@ -114,6 +114,128 @@ def _sqlite_repo_has_binding(
     return row is not None
 
 
+def _normalize_scope(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    scope = value.strip()
+    return scope or None
+
+
+def _normalize_chat_identity(
+    *, chat_id: Any, thread_id: Any
+) -> tuple[int, int | None] | None:
+    if isinstance(chat_id, bool) or not isinstance(chat_id, int):
+        return None
+    if thread_id is None:
+        return chat_id, None
+    if isinstance(thread_id, bool) or not isinstance(thread_id, int):
+        return None
+    return chat_id, thread_id
+
+
+def _read_telegram_current_scope_map(
+    conn: Any,
+) -> dict[tuple[int, int | None], str | None] | None:
+    try:
+        rows = conn.execute(
+            "SELECT chat_id, thread_id, scope FROM telegram_topic_scopes"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return None
+        raise
+
+    scope_map: dict[tuple[int, int | None], str | None] = {}
+    for row in rows:
+        identity = _normalize_chat_identity(
+            chat_id=row["chat_id"], thread_id=row["thread_id"]
+        )
+        if identity is None:
+            continue
+        scope_map[identity] = _normalize_scope(row["scope"])
+    return scope_map
+
+
+def _is_current_telegram_topic_row(
+    *,
+    row: Any,
+    scope_map: dict[tuple[int, int | None], str | None] | None,
+) -> bool:
+    if scope_map is None:
+        return True
+    identity = _normalize_chat_identity(
+        chat_id=row["chat_id"], thread_id=row["thread_id"]
+    )
+    if identity is None:
+        return True
+    current_scope = scope_map.get(identity)
+    row_scope = _normalize_scope(row["scope"])
+    if current_scope is None:
+        return row_scope is None
+    return row_scope == current_scope
+
+
+def _read_current_telegram_repo_counts(*, db_path: Path) -> dict[str, int]:
+    if not db_path.exists():
+        return {}
+    try:
+        with open_sqlite(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT topic_key, chat_id, thread_id, scope, repo_id
+                  FROM telegram_topics
+                 WHERE repo_id IS NOT NULL AND TRIM(repo_id) != ''
+                """
+            ).fetchall()
+            scope_map = _read_telegram_current_scope_map(conn)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return {}
+        raise RuntimeError(
+            f"Failed reading chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    counts: Counter[str] = Counter()
+    for row in rows:
+        if not _is_current_telegram_topic_row(row=row, scope_map=scope_map):
+            continue
+        repo_id = _normalize_repo_id(row["repo_id"])
+        if repo_id is None:
+            continue
+        counts[repo_id] += 1
+    return dict(counts)
+
+
+def _telegram_repo_has_current_binding(*, db_path: Path, repo_id: str) -> bool:
+    normalized_repo_id = _normalize_repo_id(repo_id)
+    if normalized_repo_id is None or not db_path.exists():
+        return False
+    try:
+        with open_sqlite(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT topic_key, chat_id, thread_id, scope, repo_id
+                  FROM telegram_topics
+                 WHERE repo_id = ?
+                """,
+                (normalized_repo_id,),
+            ).fetchall()
+            if not rows:
+                return False
+            scope_map = _read_telegram_current_scope_map(conn)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return False
+        raise RuntimeError(
+            f"Failed reading chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    for row in rows:
+        if _is_current_telegram_topic_row(row=row, scope_map=scope_map):
+            return True
+    return False
+
+
 def _active_pma_thread_counts(hub_root: Path) -> dict[str, int]:
     db_path = default_pma_threads_db_path(hub_root)
     if not db_path.exists():
@@ -182,10 +304,8 @@ def active_chat_binding_counts(
         counts[repo_id] += count
 
     telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
-    for repo_id, count in _read_sqlite_repo_counts(
-        db_path=telegram_state_path,
-        table_name="telegram_topics",
-        repo_column="repo_id",
+    for repo_id, count in _read_current_telegram_repo_counts(
+        db_path=telegram_state_path
     ).items():
         counts[repo_id] += count
 
@@ -214,11 +334,8 @@ def repo_has_active_chat_binding(
         return True
 
     telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
-    if _sqlite_repo_has_binding(
-        db_path=telegram_state_path,
-        table_name="telegram_topics",
-        repo_column="repo_id",
-        repo_id=normalized_repo_id,
+    if _telegram_repo_has_current_binding(
+        db_path=telegram_state_path, repo_id=normalized_repo_id
     ):
         return True
 

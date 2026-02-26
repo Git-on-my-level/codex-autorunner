@@ -39,6 +39,16 @@ def _write_discord_binding(db_path: Path, *, channel_id: str, repo_id: str) -> N
 
 
 def _write_telegram_binding(db_path: Path, *, topic_key: str, repo_id: str) -> None:
+    if ":" not in topic_key:
+        raise ValueError(
+            "topic_key must be in '<chat_id>:<thread_or_root>[:scope]' form"
+        )
+    parts = topic_key.split(":", 2)
+    chat_id = int(parts[0])
+    thread_raw = parts[1]
+    thread_id = None if thread_raw == "root" else int(thread_raw)
+    scope = parts[2] if len(parts) == 3 else None
+
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
@@ -47,17 +57,63 @@ def _write_telegram_binding(db_path: Path, *, topic_key: str, repo_id: str) -> N
                 """
                 CREATE TABLE IF NOT EXISTS telegram_topics (
                     topic_key TEXT PRIMARY KEY,
+                    chat_id INTEGER NOT NULL,
+                    thread_id INTEGER,
+                    scope TEXT,
                     repo_id TEXT
                 )
                 """
             )
             conn.execute(
                 """
-                INSERT INTO telegram_topics (topic_key, repo_id)
-                VALUES (?, ?)
-                ON CONFLICT(topic_key) DO UPDATE SET repo_id=excluded.repo_id
+                CREATE TABLE IF NOT EXISTS telegram_topic_scopes (
+                    chat_id INTEGER NOT NULL,
+                    thread_id INTEGER,
+                    scope TEXT,
+                    PRIMARY KEY (chat_id, thread_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO telegram_topics (topic_key, chat_id, thread_id, scope, repo_id)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(topic_key) DO UPDATE SET
+                    chat_id=excluded.chat_id,
+                    thread_id=excluded.thread_id,
+                    scope=excluded.scope,
+                    repo_id=excluded.repo_id
                 """,
-                (topic_key, repo_id),
+                (topic_key, chat_id, thread_id, scope, repo_id),
+            )
+    finally:
+        conn.close()
+
+
+def _write_telegram_topic_scope(
+    db_path: Path, *, chat_id: int, thread_id: int | None, scope: str | None
+) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_topic_scopes (
+                    chat_id INTEGER NOT NULL,
+                    thread_id INTEGER,
+                    scope TEXT,
+                    PRIMARY KEY (chat_id, thread_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO telegram_topic_scopes (chat_id, thread_id, scope)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id, thread_id) DO UPDATE SET scope=excluded.scope
+                """,
+                (chat_id, thread_id, scope),
             )
     finally:
         conn.close()
@@ -134,4 +190,48 @@ def test_repo_has_active_chat_binding_uses_configured_state_files(
             hub_root=hub_root, raw_config=cfg, repo_id="repo-z"
         )
         is False
+    )
+
+
+def test_telegram_binding_lookup_ignores_non_current_scoped_topics(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    telegram_db = hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    _write_telegram_topic_scope(
+        telegram_db, chat_id=200, thread_id=17, scope="scope-current"
+    )
+    _write_telegram_binding(
+        telegram_db,
+        topic_key="200:17:scope-old",
+        repo_id="repo-stale",
+    )
+    _write_telegram_binding(
+        telegram_db,
+        topic_key="200:17:scope-current",
+        repo_id="repo-current",
+    )
+
+    counts = active_chat_binding_counts(hub_root=hub_root, raw_config=cfg)
+    assert counts.get("repo-stale") is None
+    assert counts.get("repo-current") == 1
+
+    assert (
+        repo_has_active_chat_binding(
+            hub_root=hub_root,
+            raw_config=cfg,
+            repo_id="repo-stale",
+        )
+        is False
+    )
+    assert (
+        repo_has_active_chat_binding(
+            hub_root=hub_root,
+            raw_config=cfg,
+            repo_id="repo-current",
+        )
+        is True
     )

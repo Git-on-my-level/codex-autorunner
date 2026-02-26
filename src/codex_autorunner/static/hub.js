@@ -1490,7 +1490,6 @@ async function handleRepoAction(repoId, action) {
                 body: {
                     worktree_repo_id: repoId,
                     archive: true,
-                    force: true,
                     force_archive: false,
                     archive_note: null,
                 },

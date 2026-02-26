@@ -1872,7 +1872,6 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         body: {
           worktree_repo_id: repoId,
           archive: true,
-          force: true,
           force_archive: false,
           archive_note: null,
         },
