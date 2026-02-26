@@ -853,6 +853,67 @@ class HubSupervisor:
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_repo(repo_id)
 
+    def run_setup_commands_for_workspace(
+        self,
+        workspace_path: Path,
+        *,
+        repo_id_hint: Optional[str] = None,
+    ) -> int:
+        """Run configured setup commands for a hub-tracked workspace.
+
+        Returns the number of setup commands executed. If the workspace is not
+        tracked by the hub manifest or no setup commands are configured, returns 0.
+        """
+        workspace_root = workspace_path.expanduser().resolve()
+        snapshots = self.list_repos(use_cache=False)
+        snapshots_by_id = {snapshot.id: snapshot for snapshot in snapshots}
+        target: Optional[RepoSnapshot] = None
+
+        for snapshot in snapshots:
+            try:
+                if snapshot.path.expanduser().resolve() == workspace_root:
+                    target = snapshot
+                    break
+            except Exception:
+                continue
+
+        if target is None:
+            hint = (repo_id_hint or "").strip()
+            if hint:
+                target = snapshots_by_id.get(hint)
+
+        if target is None:
+            return 0
+
+        try:
+            execution_root = target.path.expanduser().resolve()
+        except Exception:
+            return 0
+
+        base_snapshot: Optional[RepoSnapshot] = target
+        if target.kind == "worktree":
+            base_id = (target.worktree_of or "").strip()
+            if not base_id:
+                return 0
+            base_snapshot = snapshots_by_id.get(base_id)
+        if base_snapshot is None or base_snapshot.kind != "base":
+            return 0
+
+        commands = [
+            str(cmd).strip()
+            for cmd in (base_snapshot.worktree_setup_commands or [])
+            if str(cmd).strip()
+        ]
+        if not commands:
+            return 0
+
+        self._run_worktree_setup_commands(
+            execution_root,
+            commands,
+            base_repo_id=base_snapshot.id,
+        )
+        return len(commands)
+
     def _archive_worktree_snapshot(
         self,
         *,

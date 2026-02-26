@@ -1335,6 +1335,38 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
 
+        setup_command_count = 0
+        hub_supervisor = getattr(self, "_hub_supervisor", None)
+        if hub_supervisor is not None:
+            repo_id_hint = (
+                record.repo_id.strip()
+                if isinstance(record.repo_id, str) and record.repo_id.strip()
+                else None
+            )
+            try:
+                setup_command_count = await asyncio.to_thread(
+                    hub_supervisor.run_setup_commands_for_workspace,
+                    workspace_root,
+                    repo_id_hint=repo_id_hint,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.newt.setup.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    workspace_path=str(workspace_root),
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+
         def apply(record: "TelegramTopicRecord") -> None:
             record.active_thread_id = None
             record.thread_ids = []
@@ -1458,18 +1490,19 @@ class WorkspaceCommands(SharedHelpers):
         effort_label = (
             record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
         )
+        message_lines = [
+            f"Reset branch `{branch_name}` to `origin/{default_branch}`.",
+            f"Directory: {workspace_root}",
+            f"Started new thread {thread_id}.",
+            f"Agent: {agent}",
+            f"Model: {record.model or 'default'}",
+            f"Effort: {effort_label}",
+        ]
+        if setup_command_count:
+            message_lines.insert(2, f"Setup commands run: {setup_command_count}")
         await self._send_message(
             message.chat_id,
-            "\n".join(
-                [
-                    f"Reset branch `{branch_name}` to `origin/{default_branch}`.",
-                    f"Directory: {workspace_root}",
-                    f"Started new thread {thread_id}.",
-                    f"Agent: {agent}",
-                    f"Model: {record.model or 'default'}",
-                    f"Effort: {effort_label}",
-                ]
-            ),
+            "\n".join(message_lines),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

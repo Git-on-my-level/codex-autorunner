@@ -363,3 +363,56 @@ def test_cli_hub_worktree_archive_surfaces_failure_reason_cleanly(
         in result.output
     )
     assert "Traceback" not in result.output
+
+
+def test_cli_hub_worktree_setup_posts_commands_payload(tmp_path, monkeypatch) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+        url = "http://127.0.0.1:4517/hub/repos/base/worktree-setup"
+        text = ""
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {}
+
+    def _fake_request(
+        method, url, json=None, timeout=None, headers=None, follow_redirects=None
+    ):
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        captured["headers"] = headers
+        captured["follow_redirects"] = follow_redirects
+        return _Response()
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.utils.httpx.request",
+        _fake_request,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "worktree",
+            "setup",
+            "base",
+            "make setup",
+            "--path",
+            str(hub_root),
+        ],
+    )
+    assert result.exit_code == 0
+    assert captured["method"] == "POST"
+    assert str(captured["url"]).endswith("/hub/repos/base/worktree-setup")
+    assert captured["json"] == {"commands": ["make setup"]}

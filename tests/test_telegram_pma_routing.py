@@ -815,6 +815,56 @@ async def test_newt_branch_name_includes_chat_identity(
 
 
 @pytest.mark.anyio
+async def test_newt_runs_hub_setup_commands_for_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = hub_root / "repo"
+    workspace.mkdir(parents=True)
+    record = TelegramTopicRecord(
+        repo_id="base-repo",
+        workspace_path=str(workspace),
+        thread_ids=["old-thread"],
+        active_thread_id="old-thread",
+    )
+    handler = _NewtHandler(record, hub_root=hub_root)
+    branch_calls = _patch_newt_branch_reset(monkeypatch)
+
+    class _HubSupervisorStub:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def run_setup_commands_for_workspace(
+            self, workspace_path: Path, *, repo_id_hint: Optional[str] = None
+        ) -> int:
+            self.calls.append(
+                {"workspace_path": workspace_path, "repo_id_hint": repo_id_hint}
+            )
+            return 2
+
+    hub_supervisor = _HubSupervisorStub()
+    handler._hub_supervisor = hub_supervisor  # type: ignore[attr-defined]
+    message = TelegramMessage(
+        update_id=100,
+        message_id=200,
+        chat_id=-7777,
+        thread_id=333,
+        from_user_id=42,
+        text="/newt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_newt(message)
+
+    assert len(branch_calls) == 1
+    assert hub_supervisor.calls == [
+        {"workspace_path": workspace.resolve(), "repo_id_hint": "base-repo"}
+    ]
+    assert any("Setup commands run: 2" in text for text in handler._sent)
+
+
+@pytest.mark.anyio
 async def test_newt_infers_base_repo_from_worktree_id_when_missing_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
