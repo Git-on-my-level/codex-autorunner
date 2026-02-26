@@ -5,7 +5,7 @@
 import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
-import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
+import { getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
 import { extractContextRemainingPercent } from "./streamUtils.js";
 import { initNotificationBell } from "./notificationBell.js";
@@ -1135,7 +1135,6 @@ function attachHandlers() {
                     flash("Failed to start new session", "error");
                     return;
                 }
-                clearAgentSelectionStorage();
                 await refreshAgentControls({ force: true, reason: "manual" });
                 resetThread();
             })();

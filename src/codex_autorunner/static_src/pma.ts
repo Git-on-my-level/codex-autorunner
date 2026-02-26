@@ -10,7 +10,6 @@ import {
 } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import {
-  clearAgentSelectionStorage,
   getSelectedAgent,
   getSelectedModel,
   getSelectedReasoning,
@@ -1264,7 +1263,6 @@ function attachHandlers(): void {
           flash("Failed to start new session", "error");
           return;
         }
-        clearAgentSelectionStorage();
         await refreshAgentControls({ force: true, reason: "manual" });
         resetThread();
       })();
