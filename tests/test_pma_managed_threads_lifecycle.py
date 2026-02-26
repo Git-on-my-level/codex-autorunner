@@ -11,10 +11,12 @@ from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
 
-def _enable_pma(hub_root: Path) -> None:
+def _enable_pma(hub_root: Path, *, max_text_chars: int | None = None) -> None:
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg.setdefault("pma", {})
     cfg["pma"]["enabled"] = True
+    if max_text_chars is not None:
+        cfg["pma"]["max_text_chars"] = max_text_chars
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
@@ -198,6 +200,31 @@ def test_create_managed_thread_validates_workspace_root_boundaries(hub_env) -> N
     assert absolute_escape_resp.json().get("detail") == "workspace_root is invalid"
     assert windows_drive_resp.status_code == 400
     assert windows_drive_resp.json().get("detail") == "workspace_root is invalid"
+
+
+def test_compact_rejects_oversize_summary(hub_env) -> None:
+    _enable_pma(hub_env.hub_root, max_text_chars=5)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        compact_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/compact",
+            json={"summary": "toolong", "reset_backend": True},
+        )
+    assert compact_resp.status_code == 400
+    assert "max_text_chars" in (compact_resp.json().get("detail") or "")
+
+    store = PmaThreadStore(hub_env.hub_root)
+    thread = store.get_thread(managed_thread_id)
+    assert thread is not None
+    assert thread["compact_seed"] is None
 
 
 def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:

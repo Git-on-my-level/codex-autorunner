@@ -56,6 +56,7 @@ from ....core.pma_sink import PmaActiveSinkStore
 from ....core.pma_state import PmaStateStore
 from ....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
+    ManagedThreadNotActiveError,
     PmaThreadStore,
 )
 from ....core.pma_transcripts import PmaTranscriptStore
@@ -1180,6 +1181,15 @@ def build_pma_routes() -> APIRouter:
         summary = (payload.summary or "").strip()
         if not summary:
             raise HTTPException(status_code=400, detail="summary is required")
+        pma_config = _get_pma_config(request)
+        max_text_chars = int(pma_config.get("max_text_chars", 0) or 0)
+        if max_text_chars > 0 and len(summary) > max_text_chars:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"summary exceeds max_text_chars ({max_text_chars} characters)"
+                ),
+            )
 
         store = PmaThreadStore(request.app.state.config.root)
         thread = store.get_thread(managed_thread_id)
@@ -1332,6 +1342,15 @@ def build_pma_routes() -> APIRouter:
         message = (payload.message or "").strip()
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
+        defaults = _get_pma_config(request)
+        max_text_chars = int(defaults.get("max_text_chars", 0) or 0)
+        if max_text_chars > 0 and len(message) > max_text_chars:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"message exceeds max_text_chars ({max_text_chars} characters)"
+                ),
+            )
 
         hub_root = request.app.state.config.root
         thread_store = PmaThreadStore(hub_root)
@@ -1343,7 +1362,6 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="Managed thread is archived and read-only"
             )
-        defaults = _get_pma_config(request)
         model = _normalize_optional_text(payload.model) or defaults.get("model")
         reasoning = _normalize_optional_text(payload.reasoning) or defaults.get(
             "reasoning"
@@ -1361,6 +1379,12 @@ def build_pma_routes() -> APIRouter:
                 model=model,
                 reasoning=reasoning,
             )
+        except ManagedThreadNotActiveError as exc:
+            if exc.status == "archived":
+                detail = "Managed thread is archived and read-only"
+            else:
+                detail = "Managed thread is not active"
+            raise HTTPException(status_code=409, detail=detail) from None
         except ManagedThreadAlreadyHasRunningTurnError:
             raise HTTPException(
                 status_code=409,
@@ -1520,6 +1544,26 @@ def build_pma_routes() -> APIRouter:
             backend_turn_id=backend_turn_id,
             transcript_turn_id=transcript_turn_id,
         )
+        finalized_turn = thread_store.get_turn(managed_thread_id, managed_turn_id)
+        finalized_status = str((finalized_turn or {}).get("status") or "").strip()
+        if finalized_status != "ok":
+            detail = MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
+            response_status = "error"
+            if finalized_status == "interrupted":
+                detail = "PMA chat interrupted"
+                response_status = "interrupted"
+            elif finalized_status == "error":
+                detail = _sanitize_managed_thread_result_error(
+                    (finalized_turn or {}).get("error")
+                )
+            return {
+                "status": response_status,
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": managed_turn_id,
+                "backend_thread_id": backend_thread_id or "",
+                "assistant_text": "",
+                "error": detail,
+            }
         thread_store.update_thread_after_turn(
             managed_thread_id,
             last_turn_id=managed_turn_id,

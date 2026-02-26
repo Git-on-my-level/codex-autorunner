@@ -8,6 +8,7 @@ import pytest
 
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
+    ManagedThreadNotActiveError,
     PmaThreadStore,
     default_pma_threads_db_path,
     pma_threads_db_lock_path,
@@ -94,6 +95,37 @@ def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
     assert second_turn["status"] == "running"
 
 
+def test_mark_turn_finished_does_not_override_interrupted_status(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    turn = store.create_turn(thread["managed_thread_id"], prompt="hello")
+
+    store.mark_turn_interrupted(turn["managed_turn_id"])
+    interrupted = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
+    assert interrupted is not None
+    interrupted_finished_at = interrupted["finished_at"]
+    assert interrupted["status"] == "interrupted"
+    assert interrupted_finished_at
+
+    store.mark_turn_finished(
+        turn["managed_turn_id"],
+        status="ok",
+        assistant_text="should-not-overwrite",
+        backend_turn_id="backend-turn-overwrite",
+        transcript_turn_id="transcript-overwrite",
+    )
+
+    final = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
+    assert final is not None
+    assert final["status"] == "interrupted"
+    assert final["assistant_text"] is None
+    assert final["backend_turn_id"] is None
+    assert final["transcript_turn_id"] is None
+    assert final["finished_at"] == interrupted_finished_at
+
+
 def test_concurrent_create_turn_admission_is_atomic(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     store_a = PmaThreadStore(hub_root)
@@ -138,6 +170,17 @@ def test_archive_thread_changes_status(tmp_path: Path) -> None:
     archived = store.get_thread(thread["managed_thread_id"])
     assert archived is not None
     assert archived["status"] == "archived"
+
+
+def test_create_turn_rejects_archived_thread(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    store.archive_thread(thread["managed_thread_id"])
+
+    with pytest.raises(ManagedThreadNotActiveError):
+        store.create_turn(thread["managed_thread_id"], prompt="should reject")
+
+    assert store.list_turns(thread["managed_thread_id"]) == []
 
 
 def test_set_compact_seed_and_reset_backend_id(tmp_path: Path) -> None:

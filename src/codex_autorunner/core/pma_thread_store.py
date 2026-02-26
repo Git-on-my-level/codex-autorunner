@@ -20,6 +20,18 @@ class ManagedThreadAlreadyHasRunningTurnError(RuntimeError):
         self.managed_thread_id = managed_thread_id
 
 
+class ManagedThreadNotActiveError(RuntimeError):
+    def __init__(self, managed_thread_id: str, status: Optional[str]) -> None:
+        detail = (
+            f"Managed thread '{managed_thread_id}' is not active"
+            if not status
+            else f"Managed thread '{managed_thread_id}' is not active (status={status})"
+        )
+        super().__init__(detail)
+        self.managed_thread_id = managed_thread_id
+        self.status = status
+
+
 def default_pma_threads_db_path(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / "pma" / PMA_THREADS_DB_FILENAME
 
@@ -372,7 +384,10 @@ class PmaThreadStore:
                         finished_at
                     )
                     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                     WHERE NOT EXISTS (
+                      FROM pma_managed_threads
+                     WHERE managed_thread_id = ?
+                       AND status = 'active'
+                       AND NOT EXISTS (
                            SELECT 1
                              FROM pma_managed_turns
                             WHERE managed_thread_id = ?
@@ -394,9 +409,27 @@ class PmaThreadStore:
                         started_at,
                         None,
                         managed_thread_id,
+                        managed_thread_id,
                     ),
                 )
                 if cursor.rowcount == 0:
+                    status_row = conn.execute(
+                        """
+                        SELECT status
+                          FROM pma_managed_threads
+                         WHERE managed_thread_id = ?
+                        """,
+                        (managed_thread_id,),
+                    ).fetchone()
+                    thread_status = (
+                        str(status_row["status"])
+                        if status_row is not None and status_row["status"] is not None
+                        else None
+                    )
+                    if thread_status != "active":
+                        raise ManagedThreadNotActiveError(
+                            managed_thread_id, thread_status
+                        )
                     raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
             row = conn.execute(
                 """
@@ -433,6 +466,7 @@ class PmaThreadStore:
                            transcript_turn_id = ?,
                            finished_at = ?
                      WHERE managed_turn_id = ?
+                       AND status = 'running'
                     """,
                     (
                         status,
