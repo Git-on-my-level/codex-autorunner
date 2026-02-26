@@ -1138,7 +1138,7 @@ function renderRepos(repos) {
             .join("");
         const isPinnedParent = !isWorktreeRow && repo.kind === "base" && pinnedParentRepoIds.has(repo.id);
         const pinAction = !isWorktreeRow && repo.kind === "base"
-            ? `<button class="ghost sm hub-pin-btn${isPinnedParent ? " active" : ""}" data-action="${isPinnedParent ? "unpin_parent" : "pin_parent"}" data-repo="${escapeHtml(repo.id)}" title="${isPinnedParent ? "Unpin parent repo" : "Pin parent repo"}">${isPinnedParent ? "Unpin" : "Pin"}</button>`
+            ? `<button class="ghost sm hub-pin-btn${isPinnedParent ? " active" : ""}" data-action="${isPinnedParent ? "unpin_parent" : "pin_parent"}" data-repo="${escapeHtml(repo.id)}" title="${isPinnedParent ? "Unpin parent repo" : "Pin parent repo"}" aria-label="${isPinnedParent ? "Unpin parent repo" : "Pin parent repo"}"><span class="hub-pin-icon" aria-hidden="true">&#128204;</span></button>`
             : "";
         const mountBadge = buildMountBadge(repo);
         const lockBadge = repo.lock_status && repo.lock_status !== "unlocked"
@@ -1212,6 +1212,7 @@ function renderRepos(repos) {
         card.innerHTML = `
       <div class="hub-repo-row">
         <div class="hub-repo-left">
+            ${pinAction}
             <span class="pill pill-small hub-status-pill">${escapeHtml(statusText)}</span>
             ${mountBadge}
             ${lockBadge}
@@ -1227,7 +1228,6 @@ function renderRepos(repos) {
           ${ticketFlowLine}
         </div>
         <div class="hub-repo-right">
-          ${pinAction}
           ${actions || ""}
           ${openIndicator}
         </div>
@@ -1431,7 +1431,7 @@ function initHubRepoListControls() {
 async function setParentRepoPinned(repoId, pinned) {
     const response = await api(`/hub/repos/${encodeURIComponent(repoId)}/pin`, {
         method: "POST",
-        body: JSON.stringify({ pinned }),
+        body: { pinned },
     });
     pinnedParentRepoIds = new Set(normalizePinnedParentRepoIds(response?.pinned_parent_repo_ids));
     hubData.pinned_parent_repo_ids = Array.from(pinnedParentRepoIds);
