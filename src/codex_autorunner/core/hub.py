@@ -961,8 +961,24 @@ class HubSupervisor:
 
         base_path = (self.hub_config.root / base.path).resolve()
         worktree_path = (self.hub_config.root / entry.path).resolve()
-        if self._has_active_chat_binding(worktree_repo_id) and not force:
-            branch_name = entry.branch or "unknown"
+        branch_name = entry.branch or "unknown"
+        try:
+            has_active_chat_binding = self._has_active_chat_binding(worktree_repo_id)
+        except Exception as exc:
+            if not force:
+                raise ValueError(
+                    "Unable to verify active chat bindings for "
+                    f"{worktree_repo_id} (branch={branch_name}); refusing cleanup. "
+                    "Re-run with --force to proceed."
+                ) from exc
+            logger.warning(
+                "Proceeding with forced worktree cleanup despite chat-binding "
+                "lookup failure for repo %s",
+                worktree_repo_id,
+                exc_info=exc,
+            )
+            has_active_chat_binding = False
+        if has_active_chat_binding and not force:
             raise ValueError(
                 f"Refusing to clean up chat-bound worktree {worktree_repo_id} "
                 f"(branch={branch_name}). This worktree is bound to an active "
@@ -1040,14 +1056,8 @@ class HubSupervisor:
         db_path = default_pma_threads_db_path(self.hub_config.root)
         if not db_path.exists():
             return False
-        try:
-            store = PmaThreadStore(self.hub_config.root)
-            return bool(store.list_threads(status="active", repo_id=repo_id, limit=1))
-        except Exception:
-            logger.exception(
-                "Failed to inspect managed thread bindings for repo %s", repo_id
-            )
-            return False
+        store = PmaThreadStore(self.hub_config.root)
+        return bool(store.list_threads(status="active", repo_id=repo_id, limit=1))
 
     def archive_worktree(
         self,

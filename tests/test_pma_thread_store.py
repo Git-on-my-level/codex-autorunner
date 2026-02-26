@@ -215,6 +215,24 @@ def test_schema_creation_is_idempotent(tmp_path: Path) -> None:
     assert thread["managed_thread_id"]
 
 
+def test_count_threads_by_repo_filters_empty_values(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    store.create_thread("codex", workspace, repo_id="repo-a")
+    store.create_thread("codex", workspace, repo_id="repo-a")
+    store.create_thread("codex", workspace, repo_id="repo-b")
+    store.create_thread("codex", workspace, repo_id="  repo-b ")
+    store.create_thread("codex", workspace, repo_id="   ")
+    store.create_thread("codex", workspace, repo_id=None)
+
+    counts = store.count_threads_by_repo(status="active")
+    assert counts["repo-a"] == 2
+    assert counts["repo-b"] == 2
+    assert "" not in counts
+
+
 def test_concurrentish_writes_smoke(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "workspace"

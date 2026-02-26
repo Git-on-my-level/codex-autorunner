@@ -264,6 +264,34 @@ class PmaThreadStore:
             rows = conn.execute(query, params).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def count_threads_by_repo(
+        self, *, agent: Optional[str] = None, status: Optional[str] = None
+    ) -> dict[str, int]:
+        query = """
+            SELECT TRIM(repo_id) AS repo_id, COUNT(*) AS thread_count
+              FROM pma_managed_threads
+             WHERE repo_id IS NOT NULL
+               AND TRIM(repo_id) != ''
+        """
+        params: list[Any] = []
+        if agent is not None:
+            query += " AND agent = ?"
+            params.append(agent)
+        if status is not None:
+            query += " AND status = ?"
+            params.append(status)
+        query += " GROUP BY TRIM(repo_id)"
+
+        with open_sqlite(self._path, durable=self._durable) as conn:
+            rows = conn.execute(query, params).fetchall()
+        counts: dict[str, int] = {}
+        for row in rows:
+            repo_id = row["repo_id"]
+            if not isinstance(repo_id, str) or not repo_id:
+                continue
+            counts[repo_id] = int(row["thread_count"] or 0)
+        return counts
+
     def set_thread_backend_id(
         self, managed_thread_id: str, backend_thread_id: Optional[str]
     ) -> None:

@@ -190,6 +190,52 @@ def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
     assert worktree_payload["chat_bound_thread_count"] == 1
 
 
+def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
+    tmp_path: Path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-bound-uncapped",
+        start_point="HEAD",
+    )
+
+    def _fail_list_threads(self, **_kwargs):
+        raise AssertionError("list_threads should not be used for chat-bound counts")
+
+    def _fake_count_threads_by_repo(self, *, agent=None, status=None):
+        assert agent is None
+        assert status == "active"
+        return {worktree.id: 1, "noise-repo": 9001}
+
+    monkeypatch.setattr(PmaThreadStore, "list_threads", _fail_list_threads)
+    monkeypatch.setattr(
+        PmaThreadStore, "count_threads_by_repo", _fake_count_threads_by_repo
+    )
+    PmaThreadStore(hub_root)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    data = resp.json()
+    worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
+    assert worktree_payload["chat_bound"] is True
+    assert worktree_payload["chat_bound_thread_count"] == 1
+
+
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -801,6 +847,71 @@ def test_cleanup_worktree_allows_chat_bound_with_force(tmp_path: Path):
     )
     store = PmaThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True, force=True)
+    assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_rejects_when_binding_lookup_fails_without_force(
+    tmp_path: Path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-binding-error",
+        start_point="HEAD",
+    )
+
+    def _raise_lookup_error(_repo_id: str) -> bool:
+        raise RuntimeError("db temporarily unavailable")
+
+    monkeypatch.setattr(supervisor, "_has_active_chat_binding", _raise_lookup_error)
+
+    with pytest.raises(
+        ValueError,
+        match="Unable to verify active chat bindings",
+    ):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+
+    assert worktree.path.exists()
+
+
+def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
+    tmp_path: Path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-binding-error-force",
+        start_point="HEAD",
+    )
+
+    def _raise_lookup_error(_repo_id: str) -> bool:
+        raise RuntimeError("db temporarily unavailable")
+
+    monkeypatch.setattr(supervisor, "_has_active_chat_binding", _raise_lookup_error)
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True, force=True)
     assert not worktree.path.exists()

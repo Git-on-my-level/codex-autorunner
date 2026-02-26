@@ -269,7 +269,7 @@ def build_hub_repo_routes(
             return {}
         try:
             store = PmaThreadStore(context.config.root)
-            threads = store.list_threads(status="active", limit=2000)
+            return store.count_threads_by_repo(status="active")
         except Exception as exc:
             safe_log(
                 context.logger,
@@ -278,16 +278,6 @@ def build_hub_repo_routes(
                 exc=exc,
             )
             return {}
-        counts: dict[str, int] = {}
-        for thread in threads:
-            repo_id = thread.get("repo_id")
-            if not isinstance(repo_id, str):
-                continue
-            key = repo_id.strip()
-            if not key:
-                continue
-            counts[key] = counts.get(key, 0) + 1
-        return counts
 
     def _enrich_repo(
         snapshot, chat_binding_counts: Optional[dict[str, int]] = None
