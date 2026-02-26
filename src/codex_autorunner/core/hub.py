@@ -880,6 +880,11 @@ class HubSupervisor:
         if target is None:
             return 0
 
+        try:
+            execution_root = target.path.expanduser().resolve()
+        except Exception:
+            return 0
+
         base_snapshot: Optional[RepoSnapshot] = target
         if target.kind == "worktree":
             base_id = (target.worktree_of or "").strip()
@@ -898,7 +903,7 @@ class HubSupervisor:
             return 0
 
         self._run_worktree_setup_commands(
-            workspace_root,
+            execution_root,
             commands,
             base_repo_id=base_snapshot.id,
         )
