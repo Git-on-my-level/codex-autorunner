@@ -145,7 +145,7 @@ class PmaThreadStore:
     def create_thread(
         self,
         agent: str,
-        workspace_root: str | Path,
+        workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
         name: Optional[str] = None,
@@ -153,7 +153,7 @@ class PmaThreadStore:
     ) -> dict[str, Any]:
         managed_thread_id = str(uuid.uuid4())
         now = now_iso()
-        workspace = Path(workspace_root).expanduser()
+        workspace = workspace_root
         if not workspace.is_absolute():
             raise ValueError("workspace_root must be absolute")
 
