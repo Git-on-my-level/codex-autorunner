@@ -55,6 +55,8 @@ interface HubRepo {
   runner_pid: number | null;
   mounted: boolean;
   mount_error?: string | null;
+  chat_bound?: boolean;
+  chat_bound_thread_count?: number | null;
   ticket_flow?: HubTicketFlow | null;
   ticket_flow_display?: HubTicketFlowDisplay | null;
 }
@@ -152,6 +154,12 @@ interface HubRepoGroup {
   pinned: boolean;
   lastActivityMs: number;
   flowProgress: number;
+}
+
+function isChatBoundWorktree(repo: HubRepo): boolean {
+  if ((repo.kind || "base") !== "worktree") return false;
+  const boundCount = Number(repo.chat_bound_thread_count || 0);
+  return repo.chat_bound === true || boundCount > 0;
 }
 
 const HUB_VIEW_PREFS_KEY = `car:hub-view-prefs:${HUB_BASE || "/"}`;
@@ -1314,9 +1322,19 @@ function compareReposForSort(a: HubRepo, b: HubRepo, sortOrder: HubSortOrder): n
 function buildRepoGroups(repos: HubRepo[]): {
   groups: HubRepoGroup[];
   orphanWorktrees: HubRepo[];
+  chatBoundWorktrees: HubRepo[];
 } {
   const bases = repos.filter((r) => (r.kind || "base") === "base");
-  const worktrees = repos.filter((r) => (r.kind || "base") === "worktree");
+  const allWorktrees = repos.filter((r) => (r.kind || "base") === "worktree");
+  const chatBoundWorktrees: HubRepo[] = [];
+  const worktrees: HubRepo[] = [];
+  allWorktrees.forEach((repo) => {
+    if (isChatBoundWorktree(repo)) {
+      chatBoundWorktrees.push(repo);
+      return;
+    }
+    worktrees.push(repo);
+  });
   const byBase = new Map<string, { base: HubRepo; worktrees: HubRepo[] }>();
   bases.forEach((b) => byBase.set(b.id, { base: b, worktrees: [] }));
 
@@ -1358,7 +1376,7 @@ function buildRepoGroups(repos: HubRepo[]): {
     };
   });
 
-  return { groups, orphanWorktrees };
+  return { groups, orphanWorktrees, chatBoundWorktrees };
 }
 
 function renderRepos(repos: HubRepo[]): void {
@@ -1370,7 +1388,7 @@ function renderRepos(repos: HubRepo[]): void {
     return;
   }
 
-  const { groups, orphanWorktrees } = buildRepoGroups(repos);
+  const { groups, orphanWorktrees, chatBoundWorktrees } = buildRepoGroups(repos);
   const orderedGroups = groups
     .filter((group) => group.matchesFilter)
     .sort((a, b) => {
@@ -1404,8 +1422,17 @@ function renderRepos(repos: HubRepo[]): void {
           repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter)
         );
   filteredOrphans.sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
+  const filteredChatBound =
+    hubViewPrefs.flowFilter === "all"
+      ? [...chatBoundWorktrees]
+      : chatBoundWorktrees.filter((repo) =>
+          repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter)
+        );
+  filteredChatBound.sort((a, b) =>
+    compareReposForSort(a, b, hubViewPrefs.sortOrder)
+  );
 
-  if (!orderedGroups.length && !filteredOrphans.length) {
+  if (!orderedGroups.length && !filteredOrphans.length && !filteredChatBound.length) {
     repoListEl.innerHTML =
       '<div class="hub-empty muted">No repos match the selected flow filter.</div>';
     return;
@@ -1607,6 +1634,15 @@ function renderRepos(repos: HubRepo[]): void {
     header.textContent = "Orphan worktrees";
     repoListEl.appendChild(header);
     filteredOrphans.forEach((wt) => renderRepoCard(wt, { isWorktreeRow: true }));
+  }
+  if (filteredChatBound.length) {
+    const header = document.createElement("div");
+    header.className = "hub-worktree-orphans muted small";
+    header.textContent = "Chat bound worktrees";
+    repoListEl.appendChild(header);
+    filteredChatBound.forEach((wt) =>
+      renderRepoCard(wt, { isWorktreeRow: true })
+    );
   }
 
   if (hubUsageUnmatched && hubUsageUnmatched.events) {
@@ -1834,6 +1870,7 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         body: {
           worktree_repo_id: repoId,
           archive: true,
+          force: true,
           force_archive: false,
           archive_note: null,
         },

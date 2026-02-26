@@ -145,6 +145,7 @@ def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> Non
         archive=True,
         force_archive=False,
         archive_note=None,
+        force=False,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["delete_branch"] = delete_branch
@@ -152,6 +153,7 @@ def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> Non
         calls["archive"] = archive
         calls["force_archive"] = force_archive
         calls["archive_note"] = archive_note
+        calls["force"] = force
 
     monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
 
@@ -171,6 +173,7 @@ def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> Non
     assert result.exit_code == 0
     assert calls["worktree_repo_id"] == "wt-1"
     assert calls["archive"] is False
+    assert calls["force"] is False
 
 
 def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> None:
@@ -189,9 +192,11 @@ def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> 
         archive=True,
         force_archive=False,
         archive_note=None,
+        force=False,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["archive"] = archive
+        calls["force"] = force
 
     monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
 
@@ -210,6 +215,48 @@ def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> 
     assert result.exit_code == 0
     assert calls["worktree_repo_id"] == "wt-1"
     assert calls["archive"] is True
+    assert calls["force"] is False
+
+
+def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    calls = {}
+
+    def _fake_cleanup(
+        self,
+        *,
+        worktree_repo_id,
+        delete_branch=False,
+        delete_remote=False,
+        archive=True,
+        force_archive=False,
+        archive_note=None,
+        force=False,
+    ):
+        calls["worktree_repo_id"] = worktree_repo_id
+        calls["force"] = force
+
+    monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "worktree",
+            "cleanup",
+            "wt-1",
+            "--path",
+            str(hub_root),
+            "--force",
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls["worktree_repo_id"] == "wt-1"
+    assert calls["force"] is True
 
 
 def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
@@ -230,6 +277,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
         archive=True,
         force_archive=False,
         archive_note=None,
+        force=False,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["delete_branch"] = delete_branch
@@ -237,6 +285,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
         calls["archive"] = archive
         calls["force_archive"] = force_archive
         calls["archive_note"] = archive_note
+        calls["force"] = force
         calls["has_backend_orchestrator_builder"] = (
             self._backend_orchestrator_builder is not None
         )
@@ -255,6 +304,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
             str(hub_root),
             "--delete-branch",
             "--delete-remote",
+            "--force",
             "--force-archive",
             "--archive-note",
             "save state",
@@ -267,6 +317,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
     assert calls["archive"] is True
     assert calls["force_archive"] is True
     assert calls["archive_note"] == "save state"
+    assert calls["force"] is True
     assert calls["has_backend_orchestrator_builder"] is True
 
 
@@ -286,6 +337,7 @@ def test_cli_hub_worktree_archive_surfaces_failure_reason_cleanly(
         archive=True,
         force_archive=False,
         archive_note=None,
+        force=False,
     ):
         raise ValueError(
             f"Worktree {worktree_repo_id} has uncommitted changes; commit or stash before archiving"

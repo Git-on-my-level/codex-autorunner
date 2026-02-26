@@ -4,6 +4,12 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";
 import { preserveScroll } from "./preserve.js";
 import { initNotificationBell } from "./notificationBell.js";
+function isChatBoundWorktree(repo) {
+    if ((repo.kind || "base") !== "worktree")
+        return false;
+    const boundCount = Number(repo.chat_bound_thread_count || 0);
+    return repo.chat_bound === true || boundCount > 0;
+}
 const HUB_VIEW_PREFS_KEY = `car:hub-view-prefs:${HUB_BASE || "/"}`;
 const HUB_DEFAULT_VIEW_PREFS = {
     flowFilter: "all",
@@ -1024,7 +1030,16 @@ function compareReposForSort(a, b, sortOrder) {
 }
 function buildRepoGroups(repos) {
     const bases = repos.filter((r) => (r.kind || "base") === "base");
-    const worktrees = repos.filter((r) => (r.kind || "base") === "worktree");
+    const allWorktrees = repos.filter((r) => (r.kind || "base") === "worktree");
+    const chatBoundWorktrees = [];
+    const worktrees = [];
+    allWorktrees.forEach((repo) => {
+        if (isChatBoundWorktree(repo)) {
+            chatBoundWorktrees.push(repo);
+            return;
+        }
+        worktrees.push(repo);
+    });
     const byBase = new Map();
     bases.forEach((b) => byBase.set(b.id, { base: b, worktrees: [] }));
     const orphanWorktrees = [];
@@ -1060,7 +1075,7 @@ function buildRepoGroups(repos) {
             flowProgress,
         };
     });
-    return { groups, orphanWorktrees };
+    return { groups, orphanWorktrees, chatBoundWorktrees };
 }
 function renderRepos(repos) {
     if (!repoListEl)
@@ -1071,7 +1086,7 @@ function renderRepos(repos) {
             '<div class="hub-empty muted">No repos discovered yet. Run a scan or create a new repo.</div>';
         return;
     }
-    const { groups, orphanWorktrees } = buildRepoGroups(repos);
+    const { groups, orphanWorktrees, chatBoundWorktrees } = buildRepoGroups(repos);
     const orderedGroups = groups
         .filter((group) => group.matchesFilter)
         .sort((a, b) => {
@@ -1096,7 +1111,11 @@ function renderRepos(repos) {
         ? [...orphanWorktrees]
         : orphanWorktrees.filter((repo) => repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter));
     filteredOrphans.sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
-    if (!orderedGroups.length && !filteredOrphans.length) {
+    const filteredChatBound = hubViewPrefs.flowFilter === "all"
+        ? [...chatBoundWorktrees]
+        : chatBoundWorktrees.filter((repo) => repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter));
+    filteredChatBound.sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
+    if (!orderedGroups.length && !filteredOrphans.length && !filteredChatBound.length) {
         repoListEl.innerHTML =
             '<div class="hub-empty muted">No repos match the selected flow filter.</div>';
         return;
@@ -1251,6 +1270,13 @@ function renderRepos(repos) {
         header.textContent = "Orphan worktrees";
         repoListEl.appendChild(header);
         filteredOrphans.forEach((wt) => renderRepoCard(wt, { isWorktreeRow: true }));
+    }
+    if (filteredChatBound.length) {
+        const header = document.createElement("div");
+        header.className = "hub-worktree-orphans muted small";
+        header.textContent = "Chat bound worktrees";
+        repoListEl.appendChild(header);
+        filteredChatBound.forEach((wt) => renderRepoCard(wt, { isWorktreeRow: true }));
     }
     if (hubUsageUnmatched && hubUsageUnmatched.events) {
         const note = document.createElement("div");
@@ -1464,6 +1490,7 @@ async function handleRepoAction(repoId, action) {
                 body: {
                     worktree_repo_id: repoId,
                     archive: true,
+                    force: true,
                     force_archive: false,
                     archive_note: null,
                 },

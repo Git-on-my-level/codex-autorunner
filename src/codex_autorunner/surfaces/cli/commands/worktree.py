@@ -132,6 +132,11 @@ def register_worktree_commands(
         force_archive: bool = typer.Option(
             False, "--force-archive", help="Continue cleanup if archive fails"
         ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Allow cleanup of a worktree bound to an active chat thread",
+        ),
         archive_note: Optional[str] = typer.Option(
             None, "--archive-note", help="Optional archive note"
         ),
@@ -146,6 +151,7 @@ def register_worktree_commands(
                 archive=archive,
                 force_archive=force_archive,
                 archive_note=archive_note,
+                force=force,
             )
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
@@ -166,6 +172,11 @@ def register_worktree_commands(
         force_archive: bool = typer.Option(
             False, "--force-archive", help="Continue cleanup if archive fails"
         ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Allow archive+cleanup of a worktree bound to an active chat thread",
+        ),
         archive_note: Optional[str] = typer.Option(
             None, "--archive-note", help="Optional archive note"
         ),
@@ -180,6 +191,7 @@ def register_worktree_commands(
                 archive=True,
                 force_archive=force_archive,
                 archive_note=archive_note,
+                force=force,
             )
         except Exception as exc:
             raise_exit(str(exc), cause=exc)

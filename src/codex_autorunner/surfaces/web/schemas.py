@@ -161,6 +161,7 @@ class HubCleanupWorktreeRequest(Payload):
     )
     delete_branch: bool = False
     delete_remote: bool = False
+    force: bool = False
     archive: bool = True
     force_archive: bool = Field(
         default=False, validation_alias=AliasChoices("force_archive", "forceArchive")

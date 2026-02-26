@@ -13,6 +13,7 @@ from starlette.types import ASGIApp
 from ....core.config import ConfigError
 from ....core.logging_utils import safe_log
 from ....core.pma_context import get_latest_ticket_flow_run_state
+from ....core.pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from ....core.request_context import get_request_id
 from ....core.runtime import LockError
 from ....core.ticket_flow_summary import (
@@ -262,9 +263,30 @@ def build_hub_repo_routes(
 ) -> APIRouter:
     router = APIRouter()
 
-    def _enrich_repo(snapshot) -> dict:
+    def _active_chat_binding_counts() -> dict[str, int]:
+        db_path = default_pma_threads_db_path(context.config.root)
+        if not db_path.exists():
+            return {}
+        try:
+            store = PmaThreadStore(context.config.root)
+            return store.count_threads_by_repo(status="active")
+        except Exception as exc:
+            safe_log(
+                context.logger,
+                logging.WARNING,
+                "Hub active chat-bound worktree lookup failed",
+                exc=exc,
+            )
+            return {}
+
+    def _enrich_repo(
+        snapshot, chat_binding_counts: Optional[dict[str, int]] = None
+    ) -> dict:
         repo_dict = snapshot.to_dict(context.config.root)
         repo_dict = mount_manager.add_mount_info(repo_dict)
+        binding_count = int((chat_binding_counts or {}).get(snapshot.id, 0))
+        repo_dict["chat_bound"] = binding_count > 0
+        repo_dict["chat_bound_thread_count"] = binding_count
         if snapshot.initialized and snapshot.exists_on_disk:
             ticket_flow = _get_ticket_flow_summary(snapshot.path)
             repo_dict["ticket_flow"] = ticket_flow
@@ -306,23 +328,25 @@ def build_hub_repo_routes(
     async def list_repos():
         safe_log(context.logger, logging.INFO, "Hub list_repos")
         snapshots = await asyncio.to_thread(context.supervisor.list_repos)
+        chat_binding_counts = await asyncio.to_thread(_active_chat_binding_counts)
         await mount_manager.refresh_mounts(snapshots)
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [_enrich_repo(snap) for snap in snapshots],
+            "repos": [_enrich_repo(snap, chat_binding_counts) for snap in snapshots],
         }
 
     @router.post("/hub/repos/scan")
     async def scan_repos():
         safe_log(context.logger, logging.INFO, "Hub scan_repos")
         snapshots = await asyncio.to_thread(context.supervisor.scan)
+        chat_binding_counts = await asyncio.to_thread(_active_chat_binding_counts)
         await mount_manager.refresh_mounts(snapshots)
 
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [_enrich_repo(snap) for snap in snapshots],
+            "repos": [_enrich_repo(snap, chat_binding_counts) for snap in snapshots],
         }
 
     @router.post("/hub/jobs/scan", response_model=HubJobResponse)
@@ -579,17 +603,19 @@ def build_hub_repo_routes(
         delete_branch = payload.delete_branch
         delete_remote = payload.delete_remote
         archive = payload.archive
+        force = payload.force
         force_archive = payload.force_archive
         archive_note = payload.archive_note
         safe_log(
             context.logger,
             logging.INFO,
-            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s archive=%s force_archive=%s"
+            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s archive=%s force=%s force_archive=%s"
             % (
                 worktree_repo_id,
                 delete_branch,
                 delete_remote,
                 archive,
+                force,
                 force_archive,
             ),
         )
@@ -600,6 +626,7 @@ def build_hub_repo_routes(
                 delete_branch=delete_branch,
                 delete_remote=delete_remote,
                 archive=archive,
+                force=force,
                 force_archive=force_archive,
                 archive_note=archive_note,
             )
@@ -615,6 +642,7 @@ def build_hub_repo_routes(
                 delete_branch=payload.delete_branch,
                 delete_remote=payload.delete_remote,
                 archive=payload.archive,
+                force=payload.force,
                 force_archive=payload.force_archive,
                 archive_note=payload.archive_note,
             )
