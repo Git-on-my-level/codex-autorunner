@@ -18,6 +18,7 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.integrations.agents.backend_orchestrator import (
     build_backend_orchestrator,
@@ -155,6 +156,38 @@ def test_hub_api_lists_repos(tmp_path: Path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["repos"][0]["id"] == "demo"
+
+
+def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-bound",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    store.create_thread("codex", worktree.path, repo_id=worktree.id)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    data = resp.json()
+    worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
+    assert worktree_payload["chat_bound"] is True
+    assert worktree_payload["chat_bound_thread_count"] == 1
 
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
@@ -715,6 +748,61 @@ def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
     (worktree.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_rejects_chat_bound_without_force(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-guard",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    store.create_thread("codex", worktree.path, repo_id=worktree.id)
+
+    with pytest.raises(
+        ValueError,
+        match="Refusing to clean up chat-bound worktree",
+    ):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+
+    assert worktree.path.exists()
+
+
+def test_cleanup_worktree_allows_chat_bound_with_force(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-guard-force",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    store.create_thread("codex", worktree.path, repo_id=worktree.id)
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True, force=True)
     assert not worktree.path.exists()
 
 
