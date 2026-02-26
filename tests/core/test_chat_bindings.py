@@ -10,10 +10,40 @@ from codex_autorunner.core.chat_bindings import (
 )
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.manifest import (
+    MANIFEST_VERSION,
+    Manifest,
+    ManifestRepo,
+    save_manifest,
+)
 from tests.conftest import write_test_config
 
 
-def _write_discord_binding(db_path: Path, *, channel_id: str, repo_id: str) -> None:
+def _write_manifest_repo(hub_root: Path, *, repo_id: str, relative_path: str) -> Path:
+    workspace_path = (hub_root / relative_path).resolve()
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = Manifest(
+        version=MANIFEST_VERSION,
+        repos=[
+            ManifestRepo(
+                id=repo_id,
+                path=Path(relative_path),
+                kind="worktree",
+            )
+        ],
+    )
+    save_manifest(manifest_path, manifest, hub_root)
+    return workspace_path
+
+
+def _write_discord_binding(
+    db_path: Path,
+    *,
+    channel_id: str,
+    repo_id: str | None,
+    workspace_path: str | None = None,
+) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
@@ -22,23 +52,32 @@ def _write_discord_binding(db_path: Path, *, channel_id: str, repo_id: str) -> N
                 """
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
+                    workspace_path TEXT,
                     repo_id TEXT
                 )
                 """
             )
             conn.execute(
                 """
-                INSERT INTO channel_bindings (channel_id, repo_id)
-                VALUES (?, ?)
-                ON CONFLICT(channel_id) DO UPDATE SET repo_id=excluded.repo_id
+                INSERT INTO channel_bindings (channel_id, workspace_path, repo_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    workspace_path=excluded.workspace_path,
+                    repo_id=excluded.repo_id
                 """,
-                (channel_id, repo_id),
+                (channel_id, workspace_path, repo_id),
             )
     finally:
         conn.close()
 
 
-def _write_telegram_binding(db_path: Path, *, topic_key: str, repo_id: str) -> None:
+def _write_telegram_binding(
+    db_path: Path,
+    *,
+    topic_key: str,
+    repo_id: str | None,
+    workspace_path: str | None = None,
+) -> None:
     if ":" not in topic_key:
         raise ValueError(
             "topic_key must be in '<chat_id>:<thread_or_root>[:scope]' form"
@@ -60,6 +99,7 @@ def _write_telegram_binding(db_path: Path, *, topic_key: str, repo_id: str) -> N
                     chat_id INTEGER NOT NULL,
                     thread_id INTEGER,
                     scope TEXT,
+                    workspace_path TEXT,
                     repo_id TEXT
                 )
                 """
@@ -76,15 +116,18 @@ def _write_telegram_binding(db_path: Path, *, topic_key: str, repo_id: str) -> N
             )
             conn.execute(
                 """
-                INSERT INTO telegram_topics (topic_key, chat_id, thread_id, scope, repo_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO telegram_topics (
+                    topic_key, chat_id, thread_id, scope, workspace_path, repo_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(topic_key) DO UPDATE SET
                     chat_id=excluded.chat_id,
                     thread_id=excluded.thread_id,
                     scope=excluded.scope,
+                    workspace_path=excluded.workspace_path,
                     repo_id=excluded.repo_id
                 """,
-                (topic_key, chat_id, thread_id, scope, repo_id),
+                (topic_key, chat_id, thread_id, scope, workspace_path, repo_id),
             )
     finally:
         conn.close()
@@ -232,6 +275,53 @@ def test_telegram_binding_lookup_ignores_non_current_scoped_topics(
             hub_root=hub_root,
             raw_config=cfg,
             repo_id="repo-current",
+        )
+        is True
+    )
+
+
+def test_chat_binding_lookup_resolves_repo_from_workspace_paths(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    workspace = _write_manifest_repo(
+        hub_root,
+        repo_id="repo-chat-managed",
+        relative_path="worktrees/chat-app-managed/discord/discord-1",
+    )
+    workspace_str = str(workspace)
+
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-chan-1",
+        repo_id=None,
+        workspace_path=workspace_str,
+    )
+    _write_telegram_topic_scope(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        chat_id=100,
+        thread_id=1,
+        scope=workspace_str,
+    )
+    _write_telegram_binding(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        topic_key=f"100:1:{workspace_str}",
+        repo_id=None,
+        workspace_path=workspace_str,
+    )
+    thread_store = PmaThreadStore(hub_root)
+    thread_store.create_thread("codex", workspace, repo_id=None)
+
+    counts = active_chat_binding_counts(hub_root=hub_root, raw_config=cfg)
+    assert counts.get("repo-chat-managed") == 3
+    assert (
+        repo_has_active_chat_binding(
+            hub_root=hub_root,
+            raw_config=cfg,
+            repo_id="repo-chat-managed",
         )
         is True
     )

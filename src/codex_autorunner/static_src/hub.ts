@@ -1467,13 +1467,13 @@ function renderRepos(repos: HubRepo[]): void {
       .join("");
     const isPinnedParent = !isWorktreeRow && repo.kind === "base" && pinnedParentRepoIds.has(repo.id);
     const pinAction = !isWorktreeRow && repo.kind === "base"
-      ? `<button class="ghost sm hub-pin-btn${isPinnedParent ? " active" : ""}" data-action="${
+      ? `<button class="ghost sm icon-btn hub-pin-btn${isPinnedParent ? " active" : ""}" data-action="${
           isPinnedParent ? "unpin_parent" : "pin_parent"
         }" data-repo="${escapeHtml(repo.id)}" title="${
           isPinnedParent ? "Unpin parent repo" : "Pin parent repo"
         }" aria-label="${
           isPinnedParent ? "Unpin parent repo" : "Pin parent repo"
-        }"><span class="hub-pin-icon" aria-hidden="true">&#128204;</span></button>`
+        }"><span class="hub-pin-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6"></path><path d="M12 14v7"></path></svg></span></button>`
       : "";
 
     const mountBadge = buildMountBadge(repo);
