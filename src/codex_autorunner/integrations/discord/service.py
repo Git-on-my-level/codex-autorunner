@@ -28,6 +28,7 @@ from ...core.flows import (
     load_latest_paused_ticket_flow_dispatch,
 )
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
+from ...core.git_utils import GitError, run_git
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
@@ -208,6 +209,100 @@ def _resolve_base_repo_id(
             return None
 
     return repo_id
+
+
+def _manifest_base_repo_ids(manifest_repos: Optional[Sequence[object]]) -> set[str]:
+    if not manifest_repos:
+        return set()
+    base_repo_ids: set[str] = set()
+    for repo in manifest_repos:
+        if getattr(repo, "kind", None) != "base":
+            continue
+        repo_id = getattr(repo, "id", None)
+        if not isinstance(repo_id, str):
+            continue
+        repo_id = repo_id.strip()
+        if repo_id:
+            base_repo_ids.add(repo_id)
+    return base_repo_ids
+
+
+def _is_manifest_base_repo_id(
+    repo_id: Optional[str], *, manifest_repos: Optional[Sequence[object]]
+) -> bool:
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        return False
+    return repo_id.strip() in _manifest_base_repo_ids(manifest_repos)
+
+
+def _resolve_base_repo_id_from_git_common_dir(
+    *,
+    workspace_root: Path,
+    hub_root: Path,
+    manifest_repos: Optional[Sequence[object]],
+) -> Optional[str]:
+    if not manifest_repos:
+        return None
+    try:
+        proc = run_git(
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            workspace_root,
+            check=False,
+        )
+    except GitError:
+        return None
+    if proc.returncode != 0:
+        return None
+    raw_common_dir = (proc.stdout or "").strip()
+    if not raw_common_dir:
+        return None
+    try:
+        common_git_dir = canonicalize_path(Path(raw_common_dir))
+    except Exception:
+        return None
+
+    for repo in manifest_repos:
+        if getattr(repo, "kind", None) != "base":
+            continue
+        candidate_id = getattr(repo, "id", None)
+        candidate_path = getattr(repo, "path", None)
+        if not isinstance(candidate_id, str):
+            continue
+        candidate_id = candidate_id.strip()
+        if not candidate_id:
+            continue
+        if isinstance(candidate_path, Path):
+            path_value = candidate_path
+        elif isinstance(candidate_path, str):
+            path_value = Path(candidate_path)
+        else:
+            continue
+        candidate_git_dir = canonicalize_path((hub_root / path_value) / ".git")
+        if candidate_git_dir == common_git_dir:
+            return candidate_id
+    return None
+
+
+def _resolve_valid_base_repo_id(
+    repo_entry: object,
+    *,
+    manifest_repos: Optional[Sequence[object]],
+    workspace_root: Path,
+    hub_root: Path,
+) -> Optional[str]:
+    base_repo_id = _resolve_base_repo_id(repo_entry, manifest_repos=manifest_repos)
+    if _is_manifest_base_repo_id(base_repo_id, manifest_repos=manifest_repos):
+        return base_repo_id
+    if getattr(repo_entry, "kind", None) != "worktree":
+        return None
+    fallback_repo_id = _resolve_base_repo_id_from_git_common_dir(
+        workspace_root=workspace_root,
+        hub_root=hub_root,
+        manifest_repos=manifest_repos,
+    )
+    if _is_manifest_base_repo_id(fallback_repo_id, manifest_repos=manifest_repos):
+        return fallback_repo_id
+    return None
 
 
 class AppServerUnavailableError(Exception):
@@ -3280,7 +3375,12 @@ class DiscordBotService:
             )
             return
 
-        base_repo_id = _resolve_base_repo_id(repo_entry, manifest_repos=manifest.repos)
+        base_repo_id = _resolve_valid_base_repo_id(
+            repo_entry,
+            manifest_repos=manifest.repos,
+            workspace_root=workspace_root,
+            hub_root=hub_root,
+        )
 
         if not base_repo_id:
             text = format_discord_message(
