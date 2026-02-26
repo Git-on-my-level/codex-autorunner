@@ -6,7 +6,9 @@ from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
+from ..manifest import load_manifest
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .sqlite_utils import open_sqlite
 
@@ -55,63 +57,89 @@ def _resolve_state_path(
     return state_path
 
 
-def _read_sqlite_repo_counts(
-    *,
-    db_path: Path,
-    table_name: str,
-    repo_column: str,
-) -> dict[str, int]:
-    if not db_path.exists():
+def _repo_id_by_workspace_path(hub_root: Path) -> dict[str, str]:
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    if not manifest_path.exists():
         return {}
-    query = (
-        f"SELECT {repo_column} AS repo_id, COUNT(*) AS count "
-        f"FROM {table_name} "
-        f"WHERE {repo_column} IS NOT NULL AND TRIM({repo_column}) != '' "
-        f"GROUP BY {repo_column}"
-    )
     try:
-        with open_sqlite(db_path) as conn:
-            rows = conn.execute(query).fetchall()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return {}
-        raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
-        ) from exc
-
-    counts: dict[str, int] = {}
-    for row in rows:
-        repo_id = _normalize_repo_id(row["repo_id"])
-        if repo_id is None:
+        manifest = load_manifest(manifest_path, hub_root)
+    except Exception as exc:
+        logger.warning("Failed loading manifest for chat binding lookup: %s", exc)
+        return {}
+    mapping: dict[str, str] = {}
+    for repo in manifest.repos:
+        try:
+            workspace_path = (hub_root / repo.path).resolve()
+        except Exception:
             continue
-        count = _coerce_count(row["count"])
-        if count <= 0:
+        mapping[str(workspace_path)] = repo.id
+    return mapping
+
+
+def _workspace_path_candidates(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    raw = value.strip()
+    if not raw:
+        return []
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for token in (raw, unquote(raw)):
+        normalized = token.strip()
+        if not normalized or normalized in seen:
             continue
-        counts[repo_id] = count
-    return counts
+        seen.add(normalized)
+        candidates.append(normalized)
+        if "@" in normalized:
+            suffix = normalized.rsplit("@", 1)[1].strip()
+            if suffix and suffix not in seen:
+                seen.add(suffix)
+                candidates.append(suffix)
+    return candidates
 
 
-def _sqlite_repo_has_binding(
+def _resolve_workspace_path(value: Any) -> str | None:
+    for candidate in _workspace_path_candidates(value):
+        path = Path(candidate).expanduser()
+        if not path.is_absolute():
+            continue
+        try:
+            return str(path.resolve())
+        except Exception:
+            return str(path)
+    return None
+
+
+def _resolve_bound_repo_id(
     *,
-    db_path: Path,
-    table_name: str,
-    repo_column: str,
-    repo_id: str,
-) -> bool:
+    repo_id: Any,
+    repo_id_by_workspace: Mapping[str, str],
+    workspace_values: tuple[Any, ...] = (),
+) -> str | None:
     normalized_repo_id = _normalize_repo_id(repo_id)
-    if normalized_repo_id is None or not db_path.exists():
-        return False
-    query = f"SELECT 1 FROM {table_name} " f"WHERE {repo_column} = ? " "LIMIT 1"
+    if normalized_repo_id is not None:
+        return normalized_repo_id
+    for workspace_value in workspace_values:
+        workspace_path = _resolve_workspace_path(workspace_value)
+        if workspace_path is None:
+            continue
+        mapped_repo_id = _normalize_repo_id(repo_id_by_workspace.get(workspace_path))
+        if mapped_repo_id is not None:
+            return mapped_repo_id
+    return None
+
+
+def _table_columns(conn: Any, table_name: str) -> set[str]:
     try:
-        with open_sqlite(db_path) as conn:
-            row = conn.execute(query, (normalized_repo_id,)).fetchone()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return False
-        raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
-        ) from exc
-    return row is not None
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    cols: set[str] = set()
+    for row in rows:
+        name = row["name"] if isinstance(row, sqlite3.Row) else None
+        if isinstance(name, str) and name:
+            cols.add(name)
+    return cols
 
 
 def _normalize_scope(value: Any) -> str | None:
@@ -175,16 +203,17 @@ def _is_current_telegram_topic_row(
     return row_scope == current_scope
 
 
-def _read_current_telegram_repo_counts(*, db_path: Path) -> dict[str, int]:
+def _read_current_telegram_repo_counts(
+    *, db_path: Path, repo_id_by_workspace: Mapping[str, str]
+) -> dict[str, int]:
     if not db_path.exists():
         return {}
     try:
         with open_sqlite(db_path) as conn:
             rows = conn.execute(
                 """
-                SELECT topic_key, chat_id, thread_id, scope, repo_id
+                SELECT topic_key, chat_id, thread_id, scope, workspace_path, repo_id
                   FROM telegram_topics
-                 WHERE repo_id IS NOT NULL AND TRIM(repo_id) != ''
                 """
             ).fetchall()
             scope_map = _read_telegram_current_scope_map(conn)
@@ -199,14 +228,20 @@ def _read_current_telegram_repo_counts(*, db_path: Path) -> dict[str, int]:
     for row in rows:
         if not _is_current_telegram_topic_row(row=row, scope_map=scope_map):
             continue
-        repo_id = _normalize_repo_id(row["repo_id"])
+        repo_id = _resolve_bound_repo_id(
+            repo_id=row["repo_id"],
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=(row["workspace_path"], row["scope"]),
+        )
         if repo_id is None:
             continue
         counts[repo_id] += 1
     return dict(counts)
 
 
-def _telegram_repo_has_current_binding(*, db_path: Path, repo_id: str) -> bool:
+def _telegram_repo_has_current_binding(
+    *, db_path: Path, repo_id: str, repo_id_by_workspace: Mapping[str, str]
+) -> bool:
     normalized_repo_id = _normalize_repo_id(repo_id)
     if normalized_repo_id is None or not db_path.exists():
         return False
@@ -214,11 +249,9 @@ def _telegram_repo_has_current_binding(*, db_path: Path, repo_id: str) -> bool:
         with open_sqlite(db_path) as conn:
             rows = conn.execute(
                 """
-                SELECT topic_key, chat_id, thread_id, scope, repo_id
+                SELECT topic_key, chat_id, thread_id, scope, workspace_path, repo_id
                   FROM telegram_topics
-                 WHERE repo_id = ?
-                """,
-                (normalized_repo_id,),
+                """
             ).fetchall()
             if not rows:
                 return False
@@ -231,18 +264,98 @@ def _telegram_repo_has_current_binding(*, db_path: Path, repo_id: str) -> bool:
         ) from exc
 
     for row in rows:
-        if _is_current_telegram_topic_row(row=row, scope_map=scope_map):
+        if not _is_current_telegram_topic_row(row=row, scope_map=scope_map):
+            continue
+        resolved_repo_id = _resolve_bound_repo_id(
+            repo_id=row["repo_id"],
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=(row["workspace_path"], row["scope"]),
+        )
+        if resolved_repo_id == normalized_repo_id:
             return True
     return False
 
 
-def _active_pma_thread_counts(hub_root: Path) -> dict[str, int]:
+def _read_discord_repo_counts(
+    *, db_path: Path, repo_id_by_workspace: Mapping[str, str]
+) -> dict[str, int]:
+    if not db_path.exists():
+        return {}
+    try:
+        with open_sqlite(db_path) as conn:
+            columns = _table_columns(conn, "channel_bindings")
+            if not columns:
+                return {}
+            has_workspace_path = "workspace_path" in columns
+            rows = conn.execute(
+                "SELECT repo_id"
+                + (", workspace_path" if has_workspace_path else "")
+                + " FROM channel_bindings"
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return {}
+        raise RuntimeError(
+            f"Failed reading chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    counts: Counter[str] = Counter()
+    for row in rows:
+        repo_id = _resolve_bound_repo_id(
+            repo_id=row["repo_id"],
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=((row["workspace_path"],) if has_workspace_path else ()),
+        )
+        if repo_id is None:
+            continue
+        counts[repo_id] += 1
+    return dict(counts)
+
+
+def _discord_repo_has_binding(
+    *, db_path: Path, repo_id: str, repo_id_by_workspace: Mapping[str, str]
+) -> bool:
+    normalized_repo_id = _normalize_repo_id(repo_id)
+    if normalized_repo_id is None or not db_path.exists():
+        return False
+    try:
+        with open_sqlite(db_path) as conn:
+            columns = _table_columns(conn, "channel_bindings")
+            if not columns:
+                return False
+            has_workspace_path = "workspace_path" in columns
+            rows = conn.execute(
+                "SELECT repo_id"
+                + (", workspace_path" if has_workspace_path else "")
+                + " FROM channel_bindings"
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return False
+        raise RuntimeError(
+            f"Failed reading chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    for row in rows:
+        resolved_repo_id = _resolve_bound_repo_id(
+            repo_id=row["repo_id"],
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=((row["workspace_path"],) if has_workspace_path else ()),
+        )
+        if resolved_repo_id == normalized_repo_id:
+            return True
+    return False
+
+
+def _active_pma_thread_counts(
+    hub_root: Path, repo_id_by_workspace: Mapping[str, str]
+) -> dict[str, int]:
     db_path = default_pma_threads_db_path(hub_root)
     if not db_path.exists():
         return {}
     store = PmaThreadStore(hub_root)
     raw_counts = store.count_threads_by_repo(status="active")
-    counts: dict[str, int] = {}
+    counts: Counter[str] = Counter()
     for raw_repo_id, raw_count in raw_counts.items():
         repo_id = _normalize_repo_id(raw_repo_id)
         if repo_id is None:
@@ -250,11 +363,39 @@ def _active_pma_thread_counts(hub_root: Path) -> dict[str, int]:
         count = _coerce_count(raw_count)
         if count <= 0:
             continue
-        counts[repo_id] = count
-    return counts
+        counts[repo_id] += count
+    try:
+        with open_sqlite(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT workspace_root
+                  FROM pma_managed_threads
+                 WHERE status = 'active'
+                   AND (repo_id IS NULL OR TRIM(repo_id) = '')
+                """
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return dict(counts)
+        raise RuntimeError(
+            f"Failed reading chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    for row in rows:
+        repo_id = _resolve_bound_repo_id(
+            repo_id=None,
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=(row["workspace_root"],),
+        )
+        if repo_id is None:
+            continue
+        counts[repo_id] += 1
+    return dict(counts)
 
 
-def _has_active_pma_thread(hub_root: Path, repo_id: str) -> bool:
+def _has_active_pma_thread(
+    hub_root: Path, repo_id: str, repo_id_by_workspace: Mapping[str, str]
+) -> bool:
     normalized_repo_id = _normalize_repo_id(repo_id)
     if normalized_repo_id is None:
         return False
@@ -262,9 +403,33 @@ def _has_active_pma_thread(hub_root: Path, repo_id: str) -> bool:
     if not db_path.exists():
         return False
     store = PmaThreadStore(hub_root)
-    return bool(
-        store.list_threads(status="active", repo_id=normalized_repo_id, limit=1)
-    )
+    if store.list_threads(status="active", repo_id=normalized_repo_id, limit=1):
+        return True
+    try:
+        with open_sqlite(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT workspace_root
+                  FROM pma_managed_threads
+                 WHERE status = 'active'
+                   AND (repo_id IS NULL OR TRIM(repo_id) = '')
+                """
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return False
+        raise RuntimeError(
+            f"Failed reading chat bindings from {db_path}: {exc}"
+        ) from exc
+    for row in rows:
+        resolved_repo_id = _resolve_bound_repo_id(
+            repo_id=None,
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=(row["workspace_root"],),
+        )
+        if resolved_repo_id == normalized_repo_id:
+            return True
+    return False
 
 
 def _resolve_discord_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
@@ -290,22 +455,25 @@ def active_chat_binding_counts(
 ) -> dict[str, int]:
     """Return repo-id keyed counts of active chat bindings from persisted stores."""
 
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
     counts: Counter[str] = Counter()
 
-    for repo_id, count in _active_pma_thread_counts(hub_root).items():
+    for repo_id, count in _active_pma_thread_counts(
+        hub_root, repo_id_by_workspace
+    ).items():
         counts[repo_id] += count
 
     discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
-    for repo_id, count in _read_sqlite_repo_counts(
+    for repo_id, count in _read_discord_repo_counts(
         db_path=discord_state_path,
-        table_name="channel_bindings",
-        repo_column="repo_id",
+        repo_id_by_workspace=repo_id_by_workspace,
     ).items():
         counts[repo_id] += count
 
     telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
     for repo_id, count in _read_current_telegram_repo_counts(
-        db_path=telegram_state_path
+        db_path=telegram_state_path,
+        repo_id_by_workspace=repo_id_by_workspace,
     ).items():
         counts[repo_id] += count
 
@@ -321,21 +489,24 @@ def repo_has_active_chat_binding(
     if normalized_repo_id is None:
         return False
 
-    if _has_active_pma_thread(hub_root, normalized_repo_id):
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
+
+    if _has_active_pma_thread(hub_root, normalized_repo_id, repo_id_by_workspace):
         return True
 
     discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
-    if _sqlite_repo_has_binding(
+    if _discord_repo_has_binding(
         db_path=discord_state_path,
-        table_name="channel_bindings",
-        repo_column="repo_id",
         repo_id=normalized_repo_id,
+        repo_id_by_workspace=repo_id_by_workspace,
     ):
         return True
 
     telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
     if _telegram_repo_has_current_binding(
-        db_path=telegram_state_path, repo_id=normalized_repo_id
+        db_path=telegram_state_path,
+        repo_id=normalized_repo_id,
+        repo_id_by_workspace=repo_id_by_workspace,
     ):
         return True
 

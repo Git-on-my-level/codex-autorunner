@@ -1529,12 +1529,26 @@ a.hub-pr-pill:hover {
   min-width: 22px;
   padding: 2px 6px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .hub-pin-icon {
-  display: inline-block;
-  font-size: 12px;
-  opacity: 0.6;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  opacity: 0.7;
+}
+
+.hub-pin-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .hub-pin-btn.active .hub-pin-icon {
