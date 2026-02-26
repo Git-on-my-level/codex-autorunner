@@ -1,6 +1,7 @@
 import concurrent.futures
 import json
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 from typing import Optional
@@ -92,6 +93,32 @@ def _get_mounted_app(app: FastAPI, mount_path: str):
         if isinstance(route, Mount) and route.path == mount_path:
             return route.app
     return None
+
+
+def _write_discord_binding(hub_root: Path, *, channel_id: str, repo_id: str) -> None:
+    db_path = hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_bindings (
+                    channel_id TEXT PRIMARY KEY,
+                    repo_id TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO channel_bindings (channel_id, repo_id)
+                VALUES (?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET repo_id=excluded.repo_id
+                """,
+                (channel_id, repo_id),
+            )
+    finally:
+        conn.close()
 
 
 def test_scan_writes_hub_state(tmp_path: Path):
@@ -984,6 +1011,67 @@ def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True, force=True)
     assert not worktree.path.exists()
+
+
+def test_hub_api_marks_chat_bound_worktrees_from_discord_binding_db(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/discord-bound",
+        start_point="HEAD",
+    )
+    _write_discord_binding(hub_root, channel_id="discord-chan-1", repo_id=worktree.id)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    data = resp.json()
+    worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
+    assert worktree_payload["chat_bound"] is True
+    assert worktree_payload["chat_bound_thread_count"] == 1
+
+
+def test_cleanup_worktree_rejects_discord_bound_worktree_without_force(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/discord-bound-cleanup-guard",
+        start_point="HEAD",
+    )
+    _write_discord_binding(hub_root, channel_id="discord-chan-2", repo_id=worktree.id)
+
+    with pytest.raises(
+        ValueError,
+        match="Refusing to clean up chat-bound worktree",
+    ):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+
+    assert worktree.path.exists()
 
 
 def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):

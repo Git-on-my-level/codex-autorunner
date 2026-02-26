@@ -1525,6 +1525,22 @@ a.hub-pr-pill:hover {
   background: rgba(108, 245, 216, 0.08);
 }
 
+.hub-pin-btn {
+  min-width: 22px;
+  padding: 2px 6px;
+  line-height: 1;
+}
+
+.hub-pin-icon {
+  display: inline-block;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.hub-pin-btn.active .hub-pin-icon {
+  opacity: 1;
+}
+
 .hub-empty {
   border: 1px dashed var(--border);
   border-radius: var(--radius);

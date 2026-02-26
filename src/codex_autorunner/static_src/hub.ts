@@ -1471,7 +1471,9 @@ function renderRepos(repos: HubRepo[]): void {
           isPinnedParent ? "unpin_parent" : "pin_parent"
         }" data-repo="${escapeHtml(repo.id)}" title="${
           isPinnedParent ? "Unpin parent repo" : "Pin parent repo"
-        }">${isPinnedParent ? "Unpin" : "Pin"}</button>`
+        }" aria-label="${
+          isPinnedParent ? "Unpin parent repo" : "Pin parent repo"
+        }"><span class="hub-pin-icon" aria-hidden="true">&#128204;</span></button>`
       : "";
 
     const mountBadge = buildMountBadge(repo);
@@ -1566,6 +1568,7 @@ function renderRepos(repos: HubRepo[]): void {
     card.innerHTML = `
       <div class="hub-repo-row">
         <div class="hub-repo-left">
+            ${pinAction}
             <span class="pill pill-small hub-status-pill">${escapeHtml(
               statusText
             )}</span>
@@ -1585,7 +1588,6 @@ function renderRepos(repos: HubRepo[]): void {
           ${ticketFlowLine}
         </div>
         <div class="hub-repo-right">
-          ${pinAction}
           ${actions || ""}
           ${openIndicator}
         </div>
@@ -1804,7 +1806,7 @@ function initHubRepoListControls(): void {
 async function setParentRepoPinned(repoId: string, pinned: boolean): Promise<void> {
   const response = await api(`/hub/repos/${encodeURIComponent(repoId)}/pin`, {
     method: "POST",
-    body: JSON.stringify({ pinned }),
+    body: { pinned },
   }) as { pinned_parent_repo_ids?: unknown };
   pinnedParentRepoIds = new Set(
     normalizePinnedParentRepoIds(response?.pinned_parent_repo_ids)
@@ -1870,7 +1872,6 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         body: {
           worktree_repo_id: repoId,
           archive: true,
-          force: true,
           force_archive: false,
           archive_note: null,
         },

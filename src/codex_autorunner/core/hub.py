@@ -22,6 +22,7 @@ from ..manifest import (
 )
 from ..tickets.outbox import set_lifecycle_emitter
 from .archive import archive_worktree_snapshot, build_snapshot_id
+from .chat_bindings import repo_has_active_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .git_utils import (
     GitError,
@@ -44,7 +45,6 @@ from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
 from .pma_reactive import PmaReactiveStore
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
-from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
@@ -1042,8 +1042,8 @@ class HubSupervisor:
         if has_active_chat_binding and not force:
             raise ValueError(
                 f"Refusing to clean up chat-bound worktree {worktree_repo_id} "
-                f"(branch={branch_name}). This worktree is bound to an active "
-                "chat thread. Re-run with --force to proceed."
+                f"(branch={branch_name}). This worktree is bound to a chat. "
+                "Re-run with --force to proceed."
             )
 
         runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
@@ -1114,11 +1114,11 @@ class HubSupervisor:
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
 
     def _has_active_chat_binding(self, repo_id: str) -> bool:
-        db_path = default_pma_threads_db_path(self.hub_config.root)
-        if not db_path.exists():
-            return False
-        store = PmaThreadStore(self.hub_config.root)
-        return bool(store.list_threads(status="active", repo_id=repo_id, limit=1))
+        return repo_has_active_chat_binding(
+            hub_root=self.hub_config.root,
+            raw_config=self.hub_config.raw,
+            repo_id=repo_id,
+        )
 
     def archive_worktree(
         self,
