@@ -1463,11 +1463,18 @@ class CodexAppServerClient:
         if isinstance(item, dict) and item.get("type") == "agentMessage":
             item_id = params.get("itemId") if isinstance(params, dict) else None
             delta_text: Optional[str] = None
+            text = _extract_agent_message_text(item)
             if isinstance(item_id, str):
                 # Drop any accumulated deltas once this item completes so
                 # unresolved delta-only items remain distinguishable.
                 delta_text = state.agent_message_deltas.pop(item_id, None)
-            text = _extract_agent_message_text(item)
+            elif text:
+                # Some item/completed payloads omit itemId even after streaming deltas.
+                # In that case, drop an unambiguous matching partial delta so the
+                # completed text remains the final message.
+                _prune_unambiguous_stale_delta(
+                    state.agent_message_deltas, completed_text=text
+                )
             if not text:
                 text = delta_text
             _append_agent_message(state.agent_messages, text)
@@ -2003,6 +2010,23 @@ def _agent_message_deltas_as_list(agent_message_deltas: Dict[str, str]) -> list[
     return [
         text for text in agent_message_deltas.values() if isinstance(text, str) and text
     ]
+
+
+def _prune_unambiguous_stale_delta(
+    agent_message_deltas: Dict[str, str], *, completed_text: str
+) -> None:
+    cleaned_completed = completed_text.strip()
+    if not cleaned_completed:
+        return
+    matching_keys = [
+        item_id
+        for item_id, delta_text in agent_message_deltas.items()
+        if isinstance(delta_text, str)
+        and delta_text.strip()
+        and cleaned_completed.startswith(delta_text.strip())
+    ]
+    if len(matching_keys) == 1:
+        agent_message_deltas.pop(matching_keys[0], None)
 
 
 def _agent_messages_for_result(state: _TurnState) -> list[str]:

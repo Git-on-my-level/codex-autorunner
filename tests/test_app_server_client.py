@@ -280,6 +280,48 @@ async def test_pending_delta_matching_last_message_is_deduped(tmp_path: Path) ->
 
 
 @pytest.mark.anyio
+async def test_item_completed_without_item_id_prunes_matching_stale_delta(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        partial_delta = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-1",
+            "delta": "final",
+        }
+        completed_item_without_id = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "item": {"type": "agentMessage", "text": "final reply"},
+        }
+        completed = {"turnId": "turn-1", "threadId": "thread-1", "status": "completed"}
+
+        await client._handle_notification_agent_message_delta(
+            {"method": "item/agentMessage/delta", "params": partial_delta},
+            partial_delta,
+        )
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": completed_item_without_id},
+            completed_item_without_id,
+        )
+        await client._handle_notification_turn_completed(
+            {"method": "turn/completed", "params": completed},
+            completed,
+        )
+
+        result = state.future.result()
+        assert result.status == "completed"
+        assert result.agent_messages == ["final reply"]
+        assert result.final_message == "final reply"
+        assert state.agent_message_deltas == {}
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_turn_result_can_include_all_agent_messages(tmp_path: Path) -> None:
     client = CodexAppServerClient(
         fixture_command("multi_agent_messages"),
