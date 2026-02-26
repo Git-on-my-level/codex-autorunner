@@ -12,6 +12,7 @@ from codex_autorunner.core.pma_context import (
     format_pma_prompt,
     get_active_context_auto_prune_meta,
 )
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
@@ -313,6 +314,8 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
     assert "<hub_snapshot>" in result
     assert "Run Dispatches (paused runs needing attention):" in result
     assert "Ticket planning constraints (state machine):" in result
+    assert "Managed threads vs ticket flows:" in result
+    assert "car pma thread spawn" in result
     assert "active_context.md" in result
     assert "decisions.md" in result
     assert "spec.md" in result
@@ -499,6 +502,53 @@ def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None
     assert "unreadable dispatch metadata" in (item.get("reason") or "").lower()
     run_state = item.get("run_state") or {}
     assert run_state.get("state") == "blocked"
+
+
+def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    store = PmaThreadStore(hub_env.hub_root)
+    thread = store.create_thread(
+        "codex",
+        workspace_root=hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="ad-hoc-refactor",
+    )
+    managed_thread_id = str(thread.get("managed_thread_id") or "")
+    assert managed_thread_id
+    store.update_thread_after_turn(
+        managed_thread_id,
+        last_turn_id="turn-001",
+        last_message_preview=(
+            "This is a long preview that should still be visible in rendered "
+            "snapshot output for PMA managed threads."
+        ),
+    )
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    pma_threads = snapshot.get("pma_threads")
+    assert isinstance(pma_threads, list)
+    assert pma_threads
+    first = pma_threads[0]
+    assert first["managed_thread_id"] == managed_thread_id
+    assert first["agent"] == "codex"
+    assert first["repo_id"] == hub_env.repo_id
+    assert first["status"] == "active"
+    assert "last_message_preview" in first
+
+    rendered = _render_hub_snapshot(snapshot)
+    assert "PMA Managed Threads:" in rendered
+    assert managed_thread_id in rendered
+    assert f"repo_id={hub_env.repo_id}" in rendered
+    assert "agent=codex" in rendered
+    assert "status=active" in rendered
 
 
 def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(

@@ -17,8 +17,10 @@ logger = logging.getLogger(__name__)
 pma_app = typer.Typer(add_completion=False, rich_markup_mode=None)
 docs_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="docs")
 context_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="context")
+thread_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="thread")
 pma_app.add_typer(docs_app)
 pma_app.add_typer(context_app)
+pma_app.add_typer(thread_app, name="thread")
 
 
 def _pma_docs_path(hub_root: Path, doc_name: str) -> Path:
@@ -49,6 +51,7 @@ def _request_json(
     url: str,
     payload: Optional[dict] = None,
     token_env: Optional[str] = None,
+    params: Optional[dict[str, Any]] = None,
 ) -> dict:
     import os
 
@@ -57,7 +60,14 @@ def _request_json(
         token = os.environ.get(token_env)
         if token and token.strip():
             headers = {"Authorization": f"Bearer {token.strip()}"}
-    response = httpx.request(method, url, json=payload, timeout=30.0, headers=headers)
+    response = httpx.request(
+        method,
+        url,
+        json=payload,
+        params=params,
+        timeout=30.0,
+        headers=headers,
+    )
     response.raise_for_status()
     data = response.json()
     return data if isinstance(data, dict) else {}
@@ -530,6 +540,442 @@ def pma_models(
             model_id = model.get("id", "")
             model_name = model.get("name", model_id)
             typer.echo(f"  - {model_name} ({model_id})")
+
+
+@thread_app.command("spawn")
+@thread_app.command("create")
+def pma_thread_spawn(
+    agent: str = typer.Option(
+        ..., "--agent", help="Thread agent to use (codex|opencode)"
+    ),
+    repo_id: Optional[str] = typer.Option(
+        None, "--repo", help="Hub repo id for the target workspace"
+    ),
+    workspace_root: Optional[str] = typer.Option(
+        None, "--workspace-root", help="Absolute or hub-relative workspace path"
+    ),
+    name: Optional[str] = typer.Option(None, "--name", help="Optional thread label"),
+    backend_id: Optional[str] = typer.Option(
+        None, "--backend-id", help="Optional existing backend thread/session id"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Create a managed PMA thread."""
+    if agent not in {"codex", "opencode"}:
+        typer.echo("--agent must be one of: codex, opencode", err=True)
+        raise typer.Exit(code=1) from None
+    if bool(repo_id) == bool(workspace_root):
+        typer.echo("Exactly one of --repo or --workspace-root is required", err=True)
+        raise typer.Exit(code=1) from None
+
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, "/threads"),
+            {
+                "agent": agent,
+                "repo_id": repo_id,
+                "workspace_root": workspace_root,
+                "name": name,
+                "backend_thread_id": backend_id,
+            },
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    thread = data.get("thread", {}) if isinstance(data, dict) else {}
+    if not isinstance(thread, dict) or not thread.get("managed_thread_id"):
+        typer.echo("Failed to create managed thread", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(str(thread.get("managed_thread_id")))
+
+
+@thread_app.command("list")
+def pma_thread_list(
+    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
+    status: Optional[str] = typer.Option(None, "--status", help="Filter by status"),
+    repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
+    limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """List managed PMA threads."""
+    hub_root = _resolve_hub_path(path)
+    params = {
+        key: value
+        for key, value in {
+            "agent": agent,
+            "status": status,
+            "repo_id": repo_id,
+            "limit": limit,
+        }.items()
+        if value is not None
+    }
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(config, "/threads"),
+            token_env=config.server_auth_token_env,
+            params=params,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    threads = data.get("threads", []) if isinstance(data, dict) else []
+    if not isinstance(threads, list) or not threads:
+        typer.echo("No managed threads found")
+        return
+    for thread in threads:
+        if not isinstance(thread, dict):
+            continue
+        typer.echo(
+            " ".join(
+                [
+                    str(thread.get("managed_thread_id") or ""),
+                    f"agent={thread.get('agent') or ''}",
+                    f"status={thread.get('status') or ''}",
+                    f"repo={thread.get('repo_id') or '-'}",
+                ]
+            ).strip()
+        )
+
+
+@thread_app.command("info")
+def pma_thread_info(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Show managed PMA thread details."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(config, f"/threads/{managed_thread_id}"),
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    thread = data.get("thread", {}) if isinstance(data, dict) else {}
+    if not isinstance(thread, dict):
+        typer.echo("Thread not found", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(json.dumps(thread, indent=2))
+
+
+@thread_app.command("send")
+def pma_thread_send(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    message: str = typer.Option(
+        ..., "--message", help="User message to send", show_default=False
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="Model override"),
+    reasoning: Optional[str] = typer.Option(
+        None, "--reasoning", help="Reasoning override"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Send a message to a managed PMA thread."""
+    payload: dict[str, Any] = {"message": message}
+    if model:
+        payload["model"] = model
+    if reasoning:
+        payload["reasoning"] = reasoning
+
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/messages"),
+            payload,
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    status = (data.get("status") if isinstance(data, dict) else "") or ""
+    if status != "ok":
+        if output_json:
+            typer.echo(json.dumps(data, indent=2))
+        else:
+            detail = (
+                data.get("error")
+                if isinstance(data, dict)
+                else "Managed thread send failed"
+            ) or "Managed thread send failed"
+            typer.echo(str(detail), err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+    else:
+        typer.echo(str(data.get("assistant_text") or ""))
+
+
+@thread_app.command("turns")
+def pma_thread_turns(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    limit: int = typer.Option(50, "--limit", min=1, help="Maximum rows to return"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """List managed PMA thread turns."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/turns"),
+            token_env=config.server_auth_token_env,
+            params={"limit": limit},
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    turns = data.get("turns", []) if isinstance(data, dict) else []
+    if not isinstance(turns, list) or not turns:
+        typer.echo("No turns found")
+        return
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        typer.echo(
+            " ".join(
+                [
+                    str(turn.get("managed_turn_id") or ""),
+                    f"status={turn.get('status') or ''}",
+                    f"started={turn.get('started_at') or ''}",
+                    f"finished={turn.get('finished_at') or ''}",
+                ]
+            ).strip()
+        )
+
+
+@thread_app.command("output")
+def pma_thread_output(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Print assistant_text for the latest turn of a managed PMA thread."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        turns_data = _request_json(
+            "GET",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/turns"),
+            token_env=config.server_auth_token_env,
+            params={"limit": 1},
+        )
+        turns = turns_data.get("turns", []) if isinstance(turns_data, dict) else []
+        if not isinstance(turns, list) or not turns:
+            typer.echo("No turns found", err=True)
+            raise typer.Exit(code=1) from None
+        latest_turn = turns[0] if isinstance(turns[0], dict) else {}
+        latest_turn_id = latest_turn.get("managed_turn_id") if latest_turn else None
+        if not isinstance(latest_turn_id, str) or not latest_turn_id:
+            typer.echo("Failed to resolve latest turn id", err=True)
+            raise typer.Exit(code=1) from None
+        turn_data = _request_json(
+            "GET",
+            _build_pma_url(
+                config, f"/threads/{managed_thread_id}/turns/{latest_turn_id}"
+            ),
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    turn = turn_data.get("turn", {}) if isinstance(turn_data, dict) else {}
+    assistant_text = turn.get("assistant_text") if isinstance(turn, dict) else ""
+    typer.echo(str(assistant_text or ""))
+
+
+@thread_app.command("compact")
+def pma_thread_compact(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    summary: str = typer.Option(..., "--summary", help="Compaction summary"),
+    no_reset_backend: bool = typer.Option(
+        False, "--no-reset-backend", help="Preserve backend thread/session id"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Store a compaction seed on a managed PMA thread."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/compact"),
+            {"summary": summary, "reset_backend": (not no_reset_backend)},
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+    else:
+        typer.echo(f"Compacted {managed_thread_id}")
+
+
+@thread_app.command("resume")
+def pma_thread_resume(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    backend_id: str = typer.Option(
+        ..., "--backend-id", help="Backend thread/session id to bind"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Bind a backend thread/session id and set managed thread active."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/resume"),
+            {"backend_thread_id": backend_id},
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+    else:
+        typer.echo(f"Resumed {managed_thread_id}")
+
+
+@thread_app.command("archive")
+def pma_thread_archive(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Archive a managed PMA thread."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/archive"),
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+    else:
+        typer.echo(f"Archived {managed_thread_id}")
+
+
+@thread_app.command("interrupt")
+def pma_thread_interrupt(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Interrupt a running managed PMA thread turn."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/interrupt"),
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+    else:
+        typer.echo(f"Interrupted {managed_thread_id}")
 
 
 @pma_app.command("files")

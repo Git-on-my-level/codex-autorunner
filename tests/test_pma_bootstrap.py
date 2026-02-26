@@ -23,6 +23,7 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "active_context.md" in prompt_content
     assert "decisions.md" in prompt_content
     assert "spec.md" in prompt_content
+    assert "car pma thread" in prompt_content
 
     about_path = docs_dir / "ABOUT_CAR.md"
     assert about_path.exists()
