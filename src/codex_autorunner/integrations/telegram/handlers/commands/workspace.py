@@ -1312,7 +1312,7 @@ class WorkspaceCommands(SharedHelpers):
         branch_name = f"thread-chat-{safe_chat_id}-{safe_thread_id}"
 
         try:
-            await asyncio.to_thread(
+            default_branch = await asyncio.to_thread(
                 reset_branch_from_origin_main,
                 workspace_root,
                 branch_name,
@@ -1329,7 +1329,7 @@ class WorkspaceCommands(SharedHelpers):
             )
             await self._send_message(
                 message.chat_id,
-                f"Failed to reset branch `{branch_name}` from `origin/main`: {exc}",
+                f"Failed to reset branch `{branch_name}` from origin default branch: {exc}",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1462,7 +1462,7 @@ class WorkspaceCommands(SharedHelpers):
             message.chat_id,
             "\n".join(
                 [
-                    f"Reset branch `{branch_name}` to `origin/main`.",
+                    f"Reset branch `{branch_name}` to `origin/{default_branch}`.",
                     f"Directory: {workspace_root}",
                     f"Started new thread {thread_id}.",
                     f"Agent: {agent}",
