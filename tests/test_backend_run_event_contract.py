@@ -179,6 +179,53 @@ async def test_codex_backend_run_turn_events_keeps_completion_event_when_wait_an
     assert events[-1].final_message == final_text
 
 
+@pytest.mark.asyncio
+async def test_codex_backend_run_turn_events_ignores_stale_completed_cache_from_other_turn(
+    tmp_path: Path,
+) -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=tmp_path,
+    )
+    backend._thread_id = "thread-123"
+
+    async def _wait(*, timeout: object = None) -> object:
+        _ = timeout
+        await backend._handle_notification(
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-123",
+                    "turnId": "old-turn",
+                    "item": {"type": "agentMessage", "text": "stale final"},
+                },
+            }
+        )
+        return MagicMock(
+            final_message="current final",
+            agent_messages=["current final"],
+            raw_events=[],
+        )
+
+    with patch.object(
+        backend, "_ensure_client", new_callable=AsyncMock
+    ) as ensure_client:
+        client = MagicMock()
+        handle = MagicMock()
+        handle.turn_id = "turn-123"
+        handle.wait = AsyncMock(side_effect=_wait)
+        client.turn_start = AsyncMock(return_value=handle)
+        ensure_client.return_value = client
+
+        events = [
+            event
+            async for event in backend.run_turn_events("thread-123", "hello codex")
+        ]
+
+    assert isinstance(events[-1], Completed)
+    assert events[-1].final_message == "current final"
+
+
 def test_codex_notification_parser_golden_transcript() -> None:
     backend = CodexAppServerBackend(
         supervisor=MagicMock(),

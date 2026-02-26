@@ -497,14 +497,25 @@ class CodexAppServerBackend(AgentBackend):
         method = notification.get("method", "")
         params = notification.get("params", {}) or {}
         thread_id = params.get("threadId") or params.get("thread_id")
+        turn_id = params.get("turnId") or params.get("turn_id")
         if self._thread_id and thread_id and thread_id != self._thread_id:
             return
         if method == "item/completed":
             item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                latest_text = _extract_agent_message_text(item)
-                if latest_text.strip():
-                    self._latest_completed_agent_message = latest_text
+                if (
+                    isinstance(self._turn_id, str)
+                    and self._turn_id
+                    and isinstance(turn_id, str)
+                    and turn_id
+                    and turn_id != self._turn_id
+                ):
+                    # Ignore delayed completions from other turns on this thread.
+                    pass
+                else:
+                    latest_text = _extract_agent_message_text(item)
+                    if latest_text.strip():
+                        self._latest_completed_agent_message = latest_text
         _logger.debug("Received notification: %s", method)
         run_event = self._map_to_run_event(notification)
         if run_event:
