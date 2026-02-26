@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from codex_autorunner.integrations.discord import service as discord_service_module
@@ -68,4 +69,74 @@ def test_resolve_base_repo_id_prefers_modern_separator_before_legacy_marker() ->
     assert (
         discord_service_module._resolve_base_repo_id(repo_entry, manifest_repos=[])
         == "alpha-wt-beta"
+    )
+
+
+def test_resolve_valid_base_repo_id_uses_git_common_dir_fallback(
+    tmp_path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = hub_root / "worktrees" / "discord-car-wt-2"
+    workspace_root.mkdir(parents=True)
+    base_repo_root = hub_root / "repos" / "codex-autorunner"
+    (base_repo_root / ".git").mkdir(parents=True)
+    common_git_dir = str((base_repo_root / ".git").resolve())
+
+    def _fake_run_git(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=f"{common_git_dir}\n")
+
+    monkeypatch.setattr(discord_service_module, "run_git", _fake_run_git)
+
+    repo_entry = SimpleNamespace(
+        kind="worktree",
+        id="discord-car-wt-2",
+        worktree_of=None,
+    )
+    manifest_repos = [
+        SimpleNamespace(
+            kind="base",
+            id="codex-autorunner",
+            path=Path("repos/codex-autorunner"),
+        ),
+        SimpleNamespace(
+            kind="worktree",
+            id="discord-car-wt-2",
+            path=Path("worktrees/discord-car-wt-2"),
+        ),
+    ]
+
+    assert (
+        discord_service_module._resolve_valid_base_repo_id(
+            repo_entry,
+            manifest_repos=manifest_repos,
+            workspace_root=workspace_root,
+            hub_root=hub_root,
+        )
+        == "codex-autorunner"
+    )
+
+
+def test_resolve_valid_base_repo_id_keeps_valid_inferred_base(monkeypatch) -> None:
+    repo_entry = SimpleNamespace(
+        kind="worktree",
+        id="base-repo--thread-chat-123",
+        worktree_of=None,
+    )
+    manifest_repos = [
+        SimpleNamespace(kind="base", id="base-repo", path=Path("repos/base-repo"))
+    ]
+
+    def _fail_run_git(*_args, **_kwargs):
+        raise AssertionError("run_git should not be called when inferred base is valid")
+
+    monkeypatch.setattr(discord_service_module, "run_git", _fail_run_git)
+
+    assert (
+        discord_service_module._resolve_valid_base_repo_id(
+            repo_entry,
+            manifest_repos=manifest_repos,
+            workspace_root=Path("/tmp/worktree"),
+            hub_root=Path("/tmp/hub"),
+        )
+        == "base-repo"
     )
