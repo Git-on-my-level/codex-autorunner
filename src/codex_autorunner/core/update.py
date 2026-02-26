@@ -19,6 +19,9 @@ class UpdateInProgressError(RuntimeError):
     """Raised when an update is already running."""
 
 
+_UPDATE_LOCK_STARTUP_GRACE_SECONDS = 10.0
+
+
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
     """Run a subprocess command, raising on failure."""
     try:
@@ -344,6 +347,12 @@ def _read_update_status() -> Optional[dict[str, object]]:
         return None
     status = payload.get("status")
     if status in ("running", "spawned") and _update_lock_active() is None:
+        started_at = payload.get("at")
+        if (
+            isinstance(started_at, (int, float))
+            and (time.time() - float(started_at)) < _UPDATE_LOCK_STARTUP_GRACE_SECONDS
+        ):
+            return payload
         _write_update_status(
             "error",
             "Update not running; last update may have crashed.",
