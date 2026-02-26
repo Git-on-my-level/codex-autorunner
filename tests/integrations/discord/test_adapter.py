@@ -4,6 +4,7 @@ import asyncio
 
 from codex_autorunner.integrations.chat.models import ChatMessageEvent
 from codex_autorunner.integrations.chat.renderer import RenderedText
+from codex_autorunner.integrations.discord import adapter as discord_adapter_module
 from codex_autorunner.integrations.discord.adapter import (
     DiscordChatAdapter,
     DiscordTextRenderer,
@@ -12,6 +13,22 @@ from codex_autorunner.integrations.discord.adapter import (
 
 class _UnusedRestClient:
     pass
+
+
+class _FollowupRestClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def create_followup_message(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        _ = (application_id, interaction_token, payload)
+        self.calls += 1
+        return {"id": f"message-{self.calls}", "channel_id": "channel-1"}
 
 
 def _message_payload(
@@ -140,3 +157,53 @@ def test_discord_text_renderer_split_text_has_no_part_prefix() -> None:
 
     assert len(chunks) > 1
     assert all(not chunk.text.startswith("Part ") for chunk in chunks)
+
+
+def test_adapter_prunes_interaction_token_cache(monkeypatch) -> None:
+    monkeypatch.setattr(discord_adapter_module, "_MAX_INTERACTION_TOKEN_CACHE", 2)
+    adapter = DiscordChatAdapter(
+        rest_client=_UnusedRestClient(),  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+
+    for idx in range(3):
+        payload = {
+            "id": f"interaction-{idx}",
+            "token": f"token-{idx}",
+            "channel_id": "channel-1",
+            "guild_id": "guild-1",
+            "member": {"user": {"id": "user-1"}},
+            "data": {"name": "car", "options": []},
+        }
+        adapter.parse_interaction_event(payload)
+
+    assert len(adapter._interaction_tokens) == 2
+    assert "interaction-0" not in adapter._interaction_tokens
+    assert adapter._interaction_tokens["interaction-1"] == "token-1"
+    assert adapter._interaction_tokens["interaction-2"] == "token-2"
+
+
+def test_adapter_prunes_message_interaction_token_cache(monkeypatch) -> None:
+    monkeypatch.setattr(
+        discord_adapter_module, "_MAX_MESSAGE_INTERACTION_TOKEN_CACHE", 2
+    )
+    rest = _FollowupRestClient()
+    adapter = DiscordChatAdapter(
+        rest_client=rest,  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+    adapter._interaction_tokens["interaction-1"] = "token-1"
+
+    async def _send_followups() -> None:
+        for idx in range(3):
+            result = await adapter.send_interaction_followup(
+                "interaction-1", f"message {idx}"
+            )
+            assert result is not None
+
+    asyncio.run(_send_followups())
+
+    assert len(adapter._message_interaction_tokens) == 2
+    assert "message-1" not in adapter._message_interaction_tokens
+    assert adapter._message_interaction_tokens["message-2"] == "token-1"
+    assert adapter._message_interaction_tokens["message-3"] == "token-1"

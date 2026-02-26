@@ -135,6 +135,46 @@ def test_parity_checker_fails_when_parse_error_response_is_missing(
     )
 
 
+def test_parity_checker_fails_when_bind_component_value_guard_missing(
+    tmp_path: Path,
+) -> None:
+    repo_root = _write_fixture_repo(
+        tmp_path,
+        include_component_bind_value_response=False,
+    )
+
+    results_by_id = {
+        result.id: result for result in run_parity_checks(repo_root=repo_root)
+    }
+
+    guard_check = results_by_id["discord.interaction_component_guard_paths"]
+    assert not guard_check.passed
+    assert (
+        "component_bind_selection_requires_value"
+        in guard_check.metadata["failed_predicates"]
+    )
+
+
+def test_parity_checker_fails_when_flow_runs_component_value_guard_missing(
+    tmp_path: Path,
+) -> None:
+    repo_root = _write_fixture_repo(
+        tmp_path,
+        include_component_flow_runs_value_response=False,
+    )
+
+    results_by_id = {
+        result.id: result for result in run_parity_checks(repo_root=repo_root)
+    }
+
+    guard_check = results_by_id["discord.interaction_component_guard_paths"]
+    assert not guard_check.passed
+    assert (
+        "component_flow_runs_selection_requires_value"
+        in guard_check.metadata["failed_predicates"]
+    )
+
+
 def test_parity_checker_fails_when_shared_helper_usage_is_missing(
     tmp_path: Path,
 ) -> None:

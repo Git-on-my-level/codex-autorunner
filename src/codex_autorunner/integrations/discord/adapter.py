@@ -44,6 +44,8 @@ from .rendering import (
 from .rest import DiscordRestClient
 
 DISCORD_EPHEMERAL_FLAG = 64
+_MAX_INTERACTION_TOKEN_CACHE = 4096
+_MAX_MESSAGE_INTERACTION_TOKEN_CACHE = 4096
 
 
 class DiscordTextRenderer(TextRenderer):
@@ -298,7 +300,12 @@ class DiscordChatAdapter(ChatAdapter):
         if not channel_id or not interaction_id or not interaction_token:
             return None
 
-        self._interaction_tokens[interaction_id] = interaction_token
+        _remember_token(
+            self._interaction_tokens,
+            key=interaction_id,
+            token=interaction_token,
+            max_size=_MAX_INTERACTION_TOKEN_CACHE,
+        )
 
         thread = ChatThreadRef(
             platform="discord",
@@ -492,7 +499,12 @@ class DiscordChatAdapter(ChatAdapter):
 
         message_id = response.get("id")
         if message_id:
-            self._message_interaction_tokens[message_id] = token
+            _remember_token(
+                self._message_interaction_tokens,
+                key=message_id,
+                token=token,
+                max_size=_MAX_MESSAGE_INTERACTION_TOKEN_CACHE,
+            )
             thread = ChatThreadRef(
                 platform="discord",
                 chat_id=response.get("channel_id", ""),
@@ -598,3 +610,17 @@ class DiscordChatAdapter(ChatAdapter):
         if current_row:
             rows.append(current_row)
         return [{"type": 1, "components": row} for row in rows]
+
+
+def _remember_token(
+    cache: dict[str, str],
+    *,
+    key: str,
+    token: str,
+    max_size: int,
+) -> None:
+    if key in cache:
+        cache.pop(key, None)
+    cache[key] = token
+    while len(cache) > max_size:
+        cache.pop(next(iter(cache)), None)
