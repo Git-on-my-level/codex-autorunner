@@ -65,9 +65,10 @@ class VoiceService:
             self.config.provider or "openai_whisper", {}
         )
         api_key_env = provider_cfg.get("api_key_env")
-        requires_api_key = isinstance(api_key_env, str) and bool(api_key_env.strip())
+        api_key_env_name = api_key_env.strip() if isinstance(api_key_env, str) else ""
+        requires_api_key = bool(api_key_env_name)
         has_api_key = (
-            bool(self._env.get(api_key_env.strip())) if requires_api_key else True
+            bool(self._env.get(api_key_env_name)) if requires_api_key else True
         )
 
         return {
@@ -78,7 +79,7 @@ class VoiceService:
             "sample_rate": self.config.sample_rate,
             "warn_on_remote_api": self.config.warn_on_remote_api,
             "has_api_key": has_api_key,
-            "api_key_env": api_key_env if requires_api_key else None,
+            "api_key_env": api_key_env_name if requires_api_key else None,
             "push_to_talk": {
                 "max_ms": self.config.push_to_talk.max_ms,
                 "silence_auto_stop_ms": self.config.push_to_talk.silence_auto_stop_ms,

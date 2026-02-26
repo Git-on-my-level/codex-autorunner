@@ -866,6 +866,124 @@ async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_car_newt_resets_current_workspace_branch_and_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    branch_calls: list[dict[str, Any]] = []
+
+    def _fake_reset_branch(repo_root: Path, branch_name: str) -> None:
+        branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
+    )
+
+    class _FakeOrchestrator:
+        def __init__(self) -> None:
+            self.reset_keys: list[str] = []
+
+        def reset_thread_id(self, session_key: str) -> bool:
+            self.reset_keys.append(session_key)
+            return True
+
+    fake_orchestrator = _FakeOrchestrator()
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return fake_orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert branch_calls == [
+            {
+                "repo_root": workspace.resolve(),
+                "branch_name": "thread-channel-1",
+            }
+        ]
+        assert fake_orchestrator.reset_keys
+        assert fake_orchestrator.reset_keys[0].startswith(FILE_CHAT_PREFIX)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "reset branch" in content
+        assert "origin/main" in content
+        assert "fresh repo session" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_newt_reports_branch_reset_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _fail_reset_branch(_repo_root: Path, _branch_name: str) -> None:
+        raise discord_service_module.GitError("simulated failure")
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _fail_reset_branch
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "failed to reset branch" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_new_resets_pma_session_key_for_current_agent(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

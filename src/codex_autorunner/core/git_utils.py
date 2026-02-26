@@ -234,6 +234,35 @@ def git_default_branch(repo_root: Path) -> Optional[str]:
     return raw
 
 
+def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> None:
+    """
+    Reset/create a local branch from origin/main in the current worktree.
+
+    This is intended for chat /newt flows that should stay in-place rather than
+    creating a new worktree.
+    """
+    branch = branch_name.strip()
+    if not branch:
+        raise GitError("branch name cannot be empty", returncode=2)
+
+    status = run_git(
+        ["status", "--porcelain"], repo_root, timeout_seconds=30, check=True
+    )
+    if (status.stdout or "").strip():
+        raise GitError(
+            "working tree has uncommitted changes; commit or stash before /newt",
+            returncode=1,
+        )
+
+    run_git(["fetch", "origin", "main"], repo_root, timeout_seconds=60, check=True)
+    run_git(
+        ["checkout", "-B", branch, "origin/main"],
+        repo_root,
+        timeout_seconds=60,
+        check=True,
+    )
+
+
 def git_diff_stats(
     repo_root: Path, from_ref: Optional[str] = None, *, include_staged: bool = True
 ) -> Optional[dict]:

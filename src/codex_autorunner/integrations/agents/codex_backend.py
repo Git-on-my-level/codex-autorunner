@@ -78,9 +78,10 @@ def _normalize_tool_name(params: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
 
     name = params.get("name")
     if isinstance(name, str) and name:
-        return name, (
-            params.get("input") if isinstance(params.get("input"), dict) else {}
-        )
+        input_payload = params.get("input")
+        if isinstance(input_payload, dict):
+            return name, input_payload
+        return name, {}
     return "", {}
 
 
