@@ -104,14 +104,24 @@ def _resolve_base_repo_id(
                     continue
                 if getattr(candidate, "kind", None) == "worktree":
                     continue
-                if repo_id == candidate_id or repo_id.startswith(f"{candidate_id}--"):
+                if (
+                    repo_id == candidate_id
+                    or repo_id.startswith(f"{candidate_id}--")
+                    or repo_id.startswith(f"{candidate_id}-wt-")
+                ):
                     candidates.append(candidate_id)
             if candidates:
                 return max(candidates, key=len)
 
         if "--" in repo_id:
-            inferred_base, _ = repo_id.rsplit("--", 1)
-            if inferred_base:
+            inferred_base, suffix = repo_id.rsplit("--", 1)
+            if inferred_base and suffix:
+                return inferred_base
+            return None
+
+        if "-wt-" in repo_id:
+            inferred_base, suffix = repo_id.rsplit("-wt-", 1)
+            if inferred_base and suffix:
                 return inferred_base
             return None
 

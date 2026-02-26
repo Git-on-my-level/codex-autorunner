@@ -7,6 +7,18 @@ from pathlib import Path
 from codex_autorunner.core.flows import worker_process
 
 
+def _disable_proc_cmdline_probe(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    original_exists = worker_process.Path.exists
+
+    def fake_exists(path_obj: Path) -> bool:
+        path_text = str(path_obj)
+        if path_text.startswith("/proc/") and path_text.endswith("/cmdline"):
+            return False
+        return original_exists(path_obj)
+
+    monkeypatch.setattr(worker_process.Path, "exists", fake_exists)
+
+
 def test_check_worker_health_prefers_metadata_cmdline(monkeypatch, tmp_path):
     """Worker health should trust stored cmdline, not the current interpreter."""
 
@@ -69,6 +81,7 @@ def test_cmdline_matches_when_executable_resolves_differently(tmp_path: Path) ->
 
 
 def test_read_process_cmdline_uses_wide_ps(monkeypatch) -> None:
+    _disable_proc_cmdline_probe(monkeypatch)
     seen: list[list[str]] = []
 
     def fake_check_output(cmd: list[str], stderr=None):  # type: ignore[no-untyped-def]
@@ -85,6 +98,7 @@ def test_read_process_cmdline_uses_wide_ps(monkeypatch) -> None:
 
 
 def test_read_process_cmdline_falls_back_without_wide_flag(monkeypatch) -> None:
+    _disable_proc_cmdline_probe(monkeypatch)
     seen: list[list[str]] = []
 
     def fake_check_output(cmd: list[str], stderr=None):  # type: ignore[no-untyped-def]
