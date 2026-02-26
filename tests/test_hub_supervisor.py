@@ -663,6 +663,75 @@ def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
     assert not worktree_path.exists()
 
 
+def test_run_setup_commands_for_workspace_runs_base_commands_for_worktree(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    supervisor.set_worktree_setup_commands("base", ["echo setup >> NEWT_SETUP.txt"])
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/newt-setup",
+        start_point="HEAD",
+    )
+
+    count = supervisor.run_setup_commands_for_workspace(
+        worktree.path,
+        repo_id_hint=worktree.id,
+    )
+
+    assert count == 1
+    setup_file = worktree.path / "NEWT_SETUP.txt"
+    assert setup_file.read_text(encoding="utf-8") == "setup\nsetup\n"
+
+
+def test_run_setup_commands_for_workspace_uses_resolved_repo_path_with_hint(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    supervisor.set_worktree_setup_commands("base", ["echo target >> HINT_TARGET.txt"])
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/newt-setup-hint",
+        start_point="HEAD",
+    )
+
+    stale_workspace = tmp_path / "stale-workspace"
+    stale_workspace.mkdir(parents=True)
+
+    count = supervisor.run_setup_commands_for_workspace(
+        stale_workspace,
+        repo_id_hint=worktree.id,
+    )
+
+    assert count == 1
+    assert (worktree.path / "HINT_TARGET.txt").read_text(encoding="utf-8") == (
+        "target\ntarget\n"
+    )
+    assert not (stale_workspace / "HINT_TARGET.txt").exists()
+
+
 def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -745,3 +814,27 @@ def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
     entry = manifest.get("base")
     assert entry is not None
     assert entry.worktree_setup_commands == ["make setup", "pre-commit install"]
+
+
+def test_set_worktree_setup_commands_route_accepts_legacy_array_payload(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/hub/repos/base/worktree-setup",
+        json=["make setup", "  ", "pre-commit install"],
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["worktree_setup_commands"] == ["make setup", "pre-commit install"]

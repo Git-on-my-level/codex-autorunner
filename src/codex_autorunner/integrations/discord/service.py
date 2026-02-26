@@ -3229,6 +3229,41 @@ class DiscordBotService:
             )
             return
 
+        setup_command_count = 0
+        hub_supervisor = getattr(self, "_hub_supervisor", None)
+        if hub_supervisor is not None:
+            repo_id_raw = binding.get("repo_id")
+            repo_id_hint = (
+                repo_id_raw.strip()
+                if isinstance(repo_id_raw, str) and repo_id_raw
+                else None
+            )
+            try:
+                setup_command_count = await asyncio.to_thread(
+                    hub_supervisor.run_setup_commands_for_workspace,
+                    workspace_root,
+                    repo_id_hint=repo_id_hint,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.newt.setup.failed",
+                    channel_id=channel_id,
+                    workspace_path=str(workspace_root),
+                    exc=exc,
+                )
+                text = format_discord_message(
+                    f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}"
+                )
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
+                return
+
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
@@ -3248,9 +3283,14 @@ class DiscordBotService:
         had_previous = orchestrator.reset_thread_id(session_key)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
+        setup_note = (
+            f" Ran {setup_command_count} setup command(s)."
+            if setup_command_count
+            else ""
+        )
 
         text = format_discord_message(
-            f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{agent}` ({state_label})."
+            f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{agent}` ({state_label}).{setup_note}"
         )
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,

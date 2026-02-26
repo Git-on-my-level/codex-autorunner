@@ -4,9 +4,9 @@ import asyncio
 import logging
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, Body, FastAPI, HTTPException
 from starlette.routing import Mount
 from starlette.types import ASGIApp
 
@@ -411,8 +411,19 @@ def build_hub_repo_routes(
         return job.to_dict()
 
     @router.post("/hub/repos/{repo_id}/worktree-setup")
-    async def set_worktree_setup(repo_id: str, payload: dict[str, Any]):
-        commands_raw = payload.get("commands") if isinstance(payload, dict) else []
+    async def set_worktree_setup(repo_id: str, payload: Annotated[Any, Body()] = None):
+        if isinstance(payload, dict):
+            commands_raw = payload.get("commands", [])
+        elif isinstance(payload, list):
+            # Backward compatibility for older clients that posted a raw array.
+            commands_raw = payload
+        elif payload is None:
+            commands_raw = []
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="body must be an object with commands or a commands array",
+            )
         if not isinstance(commands_raw, list):
             raise HTTPException(status_code=400, detail="commands must be a list")
         commands = [str(item) for item in commands_raw if str(item).strip()]

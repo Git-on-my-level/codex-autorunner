@@ -940,6 +940,77 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
 
 
 @pytest.mark.anyio
+async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="newt", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _fake_reset_branch(_repo_root: Path, _branch_name: str) -> str:
+        return "master"
+
+    monkeypatch.setattr(
+        discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
+    )
+
+    class _HubSupervisorStub:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def run_setup_commands_for_workspace(
+            self, workspace_path: Path, *, repo_id_hint: str | None = None
+        ) -> int:
+            self.calls.append(
+                {"workspace_path": workspace_path, "repo_id_hint": repo_id_hint}
+            )
+            return 1
+
+    hub_supervisor = _HubSupervisorStub()
+    service._hub_supervisor = hub_supervisor  # type: ignore[assignment]
+
+    class _FakeOrchestrator:
+        def reset_thread_id(self, _session_key: str) -> bool:
+            return True
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return _FakeOrchestrator()
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert hub_supervisor.calls == [
+            {"workspace_path": workspace.resolve(), "repo_id_hint": "repo-1"}
+        ]
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "ran 1 setup command" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_newt_reports_branch_reset_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
