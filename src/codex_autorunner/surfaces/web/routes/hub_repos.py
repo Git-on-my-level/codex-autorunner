@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from starlette.routing import Mount
 from starlette.types import ASGIApp
 
+from ....core.chat_bound_worktrees import is_chat_bound_worktree_identity
 from ....core.config import ConfigError
 from ....core.logging_utils import safe_log
 from ....core.pma_context import get_latest_ticket_flow_run_state
@@ -285,7 +286,12 @@ def build_hub_repo_routes(
         repo_dict = snapshot.to_dict(context.config.root)
         repo_dict = mount_manager.add_mount_info(repo_dict)
         binding_count = int((chat_binding_counts or {}).get(snapshot.id, 0))
-        repo_dict["chat_bound"] = binding_count > 0
+        identity_chat_bound = is_chat_bound_worktree_identity(
+            branch=snapshot.branch,
+            repo_id=snapshot.id,
+            source_path=snapshot.path,
+        )
+        repo_dict["chat_bound"] = binding_count > 0 or identity_chat_bound
         repo_dict["chat_bound_thread_count"] = binding_count
         if snapshot.initialized and snapshot.exists_on_disk:
             ticket_flow = _get_ticket_flow_summary(snapshot.path)

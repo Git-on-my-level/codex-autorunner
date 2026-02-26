@@ -917,6 +917,66 @@ def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
     assert not worktree.path.exists()
 
 
+def test_hub_api_marks_chat_bound_worktrees_from_chat_managed_path(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    cfg["hub"]["worktrees_root"] = "worktrees/chat-app-managed/discord"
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="discord-1",
+        start_point="HEAD",
+    )
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    data = resp.json()
+    worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
+    assert worktree_payload["chat_bound"] is True
+
+
+def test_cleanup_worktree_rejects_chat_managed_worktree_without_force(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    cfg["hub"]["worktrees_root"] = "worktrees/chat-app-managed/discord"
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="discord-1",
+        start_point="HEAD",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Refusing to clean up chat-bound worktree",
+    ):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+
+    assert worktree.path.exists()
+
+
 def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

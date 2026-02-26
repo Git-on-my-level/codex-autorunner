@@ -22,6 +22,7 @@ from ..manifest import (
 )
 from ..tickets.outbox import set_lifecycle_emitter
 from .archive import archive_worktree_snapshot, build_snapshot_id
+from .chat_bound_worktrees import is_chat_bound_worktree_identity
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .git_utils import (
     GitError,
@@ -961,24 +962,32 @@ class HubSupervisor:
 
         base_path = (self.hub_config.root / base.path).resolve()
         worktree_path = (self.hub_config.root / entry.path).resolve()
+        chat_bound_by_identity = is_chat_bound_worktree_identity(
+            branch=entry.branch,
+            repo_id=worktree_repo_id,
+            source_path=entry.path,
+        )
         branch_name = entry.branch or "unknown"
-        try:
-            has_active_chat_binding = self._has_active_chat_binding(worktree_repo_id)
-        except Exception as exc:
-            if not force:
-                raise ValueError(
-                    "Unable to verify active chat bindings for "
-                    f"{worktree_repo_id} (branch={branch_name}); refusing cleanup. "
-                    "Re-run with --force to proceed."
-                ) from exc
-            logger.warning(
-                "Proceeding with forced worktree cleanup despite chat-binding "
-                "lookup failure for repo %s",
-                worktree_repo_id,
-                exc_info=exc,
-            )
-            has_active_chat_binding = False
-        if has_active_chat_binding and not force:
+        has_active_chat_binding = False
+        if not chat_bound_by_identity:
+            try:
+                has_active_chat_binding = self._has_active_chat_binding(
+                    worktree_repo_id
+                )
+            except Exception as exc:
+                if not force:
+                    raise ValueError(
+                        "Unable to verify active chat bindings for "
+                        f"{worktree_repo_id} (branch={branch_name}); refusing cleanup. "
+                        "Re-run with --force to proceed."
+                    ) from exc
+                logger.warning(
+                    "Proceeding with forced worktree cleanup despite chat-binding "
+                    "lookup failure for repo %s",
+                    worktree_repo_id,
+                    exc_info=exc,
+                )
+        if (chat_bound_by_identity or has_active_chat_binding) and not force:
             raise ValueError(
                 f"Refusing to clean up chat-bound worktree {worktree_repo_id} "
                 f"(branch={branch_name}). This worktree is bound to an active "
