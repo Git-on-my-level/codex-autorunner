@@ -2827,7 +2827,7 @@ class DiscordBotService:
             "/car bind [path] - Bind channel to workspace",
             "/car status - Show binding status",
             "/car new - Start a fresh chat session",
-            "/car newt - Reset current workspace branch from origin/main and start session",
+            "/car newt - Reset current workspace branch from origin default branch and start session",
             "/car debug - Show debug info",
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
@@ -3204,7 +3204,7 @@ class DiscordBotService:
         branch_name = f"thread-{safe_channel_id}"
 
         try:
-            await asyncio.to_thread(
+            default_branch = await asyncio.to_thread(
                 reset_branch_from_origin_main,
                 workspace_root,
                 branch_name,
@@ -3219,7 +3219,7 @@ class DiscordBotService:
                 exc=exc,
             )
             text = format_discord_message(
-                f"Failed to reset branch `{branch_name}` from `origin/main`: {exc}"
+                f"Failed to reset branch `{branch_name}` from origin default branch: {exc}"
             )
             await self._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
@@ -3250,7 +3250,7 @@ class DiscordBotService:
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
         text = format_discord_message(
-            f"Reset branch `{branch_name}` to `origin/main` in current workspace and started fresh {mode_label} session for `{agent}` ({state_label})."
+            f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{agent}` ({state_label})."
         )
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,

@@ -234,12 +234,15 @@ def git_default_branch(repo_root: Path) -> Optional[str]:
     return raw
 
 
-def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> None:
+def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> str:
     """
-    Reset/create a local branch from origin/main in the current worktree.
+    Reset/create a local branch from the origin default branch in-place.
 
     This is intended for chat /newt flows that should stay in-place rather than
     creating a new worktree.
+
+    Returns:
+        The resolved origin default branch name.
     """
     branch = branch_name.strip()
     if not branch:
@@ -254,13 +257,19 @@ def reset_branch_from_origin_main(repo_root: Path, branch_name: str) -> None:
             returncode=1,
         )
 
-    run_git(["fetch", "origin", "main"], repo_root, timeout_seconds=60, check=True)
+    run_git(["fetch", "--prune", "origin"], repo_root, timeout_seconds=120, check=True)
+
+    default_branch = git_default_branch(repo_root)
+    if not default_branch:
+        raise GitError("unable to resolve origin default branch", returncode=1)
+
     run_git(
-        ["checkout", "-B", branch, "origin/main"],
+        ["checkout", "-B", branch, f"origin/{default_branch}"],
         repo_root,
         timeout_seconds=60,
         check=True,
     )
+    return default_branch
 
 
 def git_diff_stats(

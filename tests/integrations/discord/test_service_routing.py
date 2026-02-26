@@ -894,8 +894,9 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
 
     branch_calls: list[dict[str, Any]] = []
 
-    def _fake_reset_branch(repo_root: Path, branch_name: str) -> None:
+    def _fake_reset_branch(repo_root: Path, branch_name: str) -> str:
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
+        return "master"
 
     monkeypatch.setattr(
         discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
@@ -932,7 +933,7 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "reset branch" in content
-        assert "origin/main" in content
+        assert "origin/master" in content
         assert "fresh repo session" in content
     finally:
         await store.close()

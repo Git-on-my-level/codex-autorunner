@@ -746,8 +746,9 @@ def _patch_newt_branch_reset(
 ) -> list[dict[str, object]]:
     calls: list[dict[str, object]] = []
 
-    def _fake_reset(repo_root: Path, branch_name: str) -> None:
+    def _fake_reset(repo_root: Path, branch_name: str) -> str:
         calls.append({"repo_root": repo_root, "branch_name": branch_name})
+        return "master"
 
     monkeypatch.setattr(
         workspace_commands_module, "reset_branch_from_origin_main", _fake_reset
