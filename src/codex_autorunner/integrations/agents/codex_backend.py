@@ -305,11 +305,11 @@ class CodexAppServerBackend(AgentBackend):
         yield AgentEvent.stream_delta(content=message, delta_type="user_message")
 
         result = await handle.wait(timeout=self._turn_timeout_seconds)
-        final_text = self._final_text_from_result(result)
 
         for event_data in result.raw_events:
             yield self._parse_raw_event(event_data)
 
+        final_text = self._final_text_from_result(result)
         yield AgentEvent.message_complete(final_message=final_text)
 
     async def run_turn_events(
@@ -388,7 +388,6 @@ class CodexAppServerBackend(AgentBackend):
                     elif get_task in pending_set:
                         get_task.cancel()
                     result = wait_task.result()
-                    final_text = self._final_text_from_result(result)
                     # raw_events already contain the same notifications we streamed
                     # through _event_queue; skipping here avoids double-emitting.
                     if completion_event:
@@ -397,6 +396,7 @@ class CodexAppServerBackend(AgentBackend):
                         extra = self._event_queue.get_nowait()
                         if extra:
                             yield extra
+                    final_text = self._final_text_from_result(result)
                     yield Completed(
                         timestamp=now_iso(),
                         final_message=final_text,
@@ -415,16 +415,19 @@ class CodexAppServerBackend(AgentBackend):
             yield Failed(timestamp=now_iso(), error_message=str(e))
 
     def _final_text_from_result(self, result: Any) -> str:
-        if self._latest_completed_agent_message.strip():
-            return self._latest_completed_agent_message
         final_text = str(getattr(result, "final_message", "") or "")
         if final_text.strip():
             return final_text
-        return "\n\n".join(
+        aggregated_messages = "\n\n".join(
             msg.strip()
             for msg in getattr(result, "agent_messages", [])
             if isinstance(msg, str) and msg.strip()
         )
+        if aggregated_messages.strip():
+            return aggregated_messages
+        if self._latest_completed_agent_message.strip():
+            return self._latest_completed_agent_message
+        return ""
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         if False:

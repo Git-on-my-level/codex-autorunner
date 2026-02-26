@@ -133,7 +133,8 @@ async def test_codex_backend_run_turn_events_keeps_completion_event_when_wait_an
     )
     backend._thread_id = "thread-123"
 
-    final_text = "Shipped cleanly."
+    streamed_completion_text = "Shipped cleanly."
+    authoritative_final = "Final response body"
 
     async def _wait(*, timeout: object = None) -> object:
         _ = timeout
@@ -143,13 +144,13 @@ async def test_codex_backend_run_turn_events_keeps_completion_event_when_wait_an
                 "params": {
                     "threadId": "thread-123",
                     "turnId": "turn-123",
-                    "item": {"type": "agentMessage", "text": final_text},
+                    "item": {"type": "agentMessage", "text": streamed_completion_text},
                 },
             }
         )
         return MagicMock(
-            final_message="Intermediary status update",
-            agent_messages=["Intermediary status update"],
+            final_message=authoritative_final,
+            agent_messages=[authoritative_final],
             raw_events=[],
         )
 
@@ -174,9 +175,56 @@ async def test_codex_backend_run_turn_events_keeps_completion_event_when_wait_an
         for event in events
         if isinstance(event, OutputDelta) and event.delta_type == "assistant_stream"
     ]
-    assert final_text in assistant_deltas
+    assert streamed_completion_text in assistant_deltas
     assert isinstance(events[-1], Completed)
-    assert events[-1].final_message == final_text
+    assert events[-1].final_message == authoritative_final
+
+
+@pytest.mark.asyncio
+async def test_codex_backend_run_turn_events_prefers_authoritative_turn_result_over_cache(
+    tmp_path: Path,
+) -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=tmp_path,
+    )
+    backend._thread_id = "thread-123"
+
+    async def _wait(*, timeout: object = None) -> object:
+        _ = timeout
+        await backend._handle_notification(
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-123",
+                    "turnId": "turn-123",
+                    "item": {"type": "agentMessage", "text": "intermediate status"},
+                },
+            }
+        )
+        return MagicMock(
+            final_message="final answer",
+            agent_messages=["final answer"],
+            raw_events=[],
+        )
+
+    with patch.object(
+        backend, "_ensure_client", new_callable=AsyncMock
+    ) as ensure_client:
+        client = MagicMock()
+        handle = MagicMock()
+        handle.turn_id = "turn-123"
+        handle.wait = AsyncMock(side_effect=_wait)
+        client.turn_start = AsyncMock(return_value=handle)
+        ensure_client.return_value = client
+
+        events = [
+            event
+            async for event in backend.run_turn_events("thread-123", "hello codex")
+        ]
+
+    assert isinstance(events[-1], Completed)
+    assert events[-1].final_message == "final answer"
 
 
 @pytest.mark.asyncio
