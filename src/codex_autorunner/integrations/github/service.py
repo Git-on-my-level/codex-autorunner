@@ -297,9 +297,16 @@ def find_github_links(text: str) -> list[str]:
 
 
 def _repo_slug_dirname(slug: str) -> str:
-    normalized = (slug or "").strip().lower().replace("/", "--")
-    safe = re.sub(r"[^a-z0-9._-]+", "-", normalized).strip(".-")
-    return safe or "unknown-repo"
+    import hashlib
+
+    normalized = (slug or "").strip().lower()
+    safe_base = re.sub(r"[^a-z0-9._-]+", "-", normalized.replace("/", "--")).strip(".-")
+    if not safe_base:
+        safe_base = "unknown-repo"
+    # Preserve readability while making collisions across different slugs
+    # practically impossible.
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
+    return f"{safe_base[:80]}-{digest}"
 
 
 class GitHubService:
