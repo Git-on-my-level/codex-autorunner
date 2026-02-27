@@ -174,7 +174,17 @@ In an allowed Discord channel:
 
 1. Run `/car status`.
 2. Bind workspace with `/car bind path:<workspace-path>`.
-3. Run `/car flow runs` or `/car flow status`.
+3. Run flow commands:
+   - `/car flow status [run_id]`
+   - `/car flow runs [limit]`
+   - `/car flow issue issue_ref:<issue#|url>`
+   - `/car flow plan text:<plan>`
+   - `/car flow resume [run_id]`
+   - `/car flow stop [run_id]`
+   - `/car flow recover [run_id]`
+   - `/car flow archive [run_id]`
+   - `/car flow reply text:<message> [run_id]`
+4. In PMA mode (or unbound channel), `/car flow status` and `/car flow runs` show a hub-wide flow overview.
 
 Note: `/car` and `/pma` responses are ephemeral (visible only to the invoking user).
 
@@ -229,6 +239,7 @@ For PMA mode:
 
 Notes:
 - Slash command responses remain ephemeral.
+- In PMA mode, `/car flow status` and `/car flow runs` report hub-wide flow status (manifest-driven) without requiring `/pma off`.
 - If a ticket flow run is paused in repo mode, the next free-text message is treated as the flow reply and resumes that run.
 - `/car ...` and `/pma ...` slash commands are normalized through CAR's shared command-ingress parser before dispatch.
 - Direct-chat turns use the shared plain-text turn policy in `always` mode, so non-command messages trigger turns while slash commands stay command-only.

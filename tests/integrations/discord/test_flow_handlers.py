@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -145,6 +146,27 @@ def _create_run(workspace: Path, run_id: str, *, status: FlowRunStatus) -> None:
         store.update_flow_run_status(run_id, status)
 
 
+def _write_manifest(root: Path, *, repo_id: str, repo_path: str) -> Path:
+    manifest_path = root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                f"  - id: {repo_id}",
+                f"    path: {repo_path}",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
 @pytest.mark.anyio
 async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
@@ -194,6 +216,140 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert "Recent ticket_flow runs (limit=2)" in runs_payload
         assert paused_run_id in runs_payload
         assert completed_run_id in runs_payload
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_issue_seeds_issue_md(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.seed_issue_from_github",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            content="# Issue 123\n\nDetails",
+            issue_number=123,
+            repo_slug="org/repo",
+        ),
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="issue",
+                options=[{"type": 3, "name": "issue_ref", "value": "123"}],
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        await service.run_forever()
+        issue_path = workspace / ".codex-autorunner" / "ISSUE.md"
+        assert issue_path.exists()
+        assert "Issue 123" in issue_path.read_text(encoding="utf-8")
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Seeded ISSUE.md from GitHub issue 123." in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_plan_seeds_issue_md(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="plan",
+                options=[{"type": 3, "name": "text", "value": "Ship MVP in 3 steps"}],
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        await service.run_forever()
+        issue_path = workspace / ".codex-autorunner" / "ISSUE.md"
+        assert issue_path.exists()
+        assert "Ship MVP in 3 steps" in issue_path.read_text(encoding="utf-8")
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Seeded ISSUE.md from your plan." in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_recover_reconciles_active_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    running_run_id = str(uuid.uuid4())
+    _create_run(workspace, running_run_id, status=FlowRunStatus.RUNNING)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    def _fake_reconcile(_repo_root, record, _store):
+        return record, True, False
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.reconcile_flow_run",
+        _fake_reconcile,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="recover", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        await service.run_forever()
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert f"Recovered for run {running_run_id}" in content
     finally:
         await store.close()
 
@@ -274,7 +430,9 @@ async def test_flow_reply_writes_user_reply_and_resumes(
 
 
 @pytest.mark.anyio
-async def test_flow_commands_blocked_while_pma_enabled(tmp_path: Path) -> None:
+async def test_flow_status_in_pma_mode_without_manifest_reports_missing_manifest(
+    tmp_path: Path,
+) -> None:
     workspace = _workspace(tmp_path)
 
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -307,7 +465,266 @@ async def test_flow_commands_blocked_while_pma_enabled(tmp_path: Path) -> None:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
-        assert "PMA mode is enabled" in content
-        assert "/pma off" in content
+        assert "Hub manifest not configured." in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_in_pma_mode_shows_hub_overview(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+    manifest_path = _write_manifest(
+        tmp_path, repo_id="workspace", repo_path="workspace"
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Hub Flow Overview:" in content
+        assert "workspace:" in content
+        assert paused_run_id in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_runs_in_pma_mode_shows_hub_overview(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+    manifest_path = _write_manifest(
+        tmp_path, repo_id="workspace", repo_path="workspace"
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="runs", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Hub Flow Overview:" in content
+        assert paused_run_id in content
+        assert "Recent ticket_flow runs" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_with_run_id_in_pma_mode_still_shows_hub_overview(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+    manifest_path = _write_manifest(
+        tmp_path, repo_id="workspace", repo_path="workspace"
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": paused_run_id}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Hub Flow Overview:" in content
+        assert "Run: " not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_runs_with_large_limit_in_pma_mode_still_shows_hub_overview(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+    manifest_path = _write_manifest(
+        tmp_path, repo_id="workspace", repo_path="workspace"
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="runs",
+                options=[{"type": 4, "name": "limit", "value": 999}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Hub Flow Overview:" in content
+        assert "Recent ticket_flow runs" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_recover_uses_explicit_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    target_run_id = str(uuid.uuid4())
+    other_run_id = str(uuid.uuid4())
+    _create_run(workspace, other_run_id, status=FlowRunStatus.RUNNING)
+    _create_run(workspace, target_run_id, status=FlowRunStatus.RUNNING)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    seen: list[str] = []
+
+    def _fake_reconcile(_repo_root, record, _store):
+        seen.append(record.id)
+        return record, True, False
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.reconcile_flow_run",
+        _fake_reconcile,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="recover",
+                options=[{"type": 3, "name": "run_id", "value": target_run_id}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        await service.run_forever()
+        assert seen == [target_run_id]
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert f"Recovered for run {target_run_id}" in content
     finally:
         await store.close()

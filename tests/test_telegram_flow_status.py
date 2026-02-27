@@ -582,6 +582,47 @@ async def test_flow_default_unbound_topic_uses_hub_overview() -> None:
 
 
 @pytest.mark.anyio
+async def test_flow_runs_in_pma_topic_uses_hub_overview() -> None:
+    record = SimpleNamespace(pma_enabled=True, workspace_path=None)
+    handler = _PMAFlowStatusHandler(record)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow runs",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow(message, "runs")
+
+    assert handler.hub_calls == 1
+    assert not handler.sent
+
+
+@pytest.mark.anyio
+async def test_flow_runs_unbound_topic_uses_hub_overview() -> None:
+    handler = _PMAFlowStatusHandler(None)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow runs",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow(message, "runs")
+
+    assert handler.hub_calls == 1
+    assert not handler.sent
+
+
+@pytest.mark.anyio
 async def test_flow_repo_and_worktree_default_to_status_when_both_resolve(
     tmp_path: Path,
 ) -> None:
