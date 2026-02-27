@@ -122,6 +122,7 @@ from .allowlist import DiscordAllowlist, allowlist_allows
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
+    DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_bind_picker,
     build_cancel_turn_button,
     build_flow_runs_picker,
@@ -153,7 +154,7 @@ from .state import DiscordStateStore, OutboxRecord
 DISCORD_EPHEMERAL_FLAG = 64
 PAUSE_SCAN_INTERVAL_SECONDS = 5.0
 FLOW_RUNS_DEFAULT_LIMIT = 5
-FLOW_RUNS_MAX_LIMIT = 50
+FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 MESSAGE_TURN_APPROVAL_POLICY = "never"
 MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"

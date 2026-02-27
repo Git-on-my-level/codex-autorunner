@@ -7,6 +7,7 @@ DISCORD_BUTTON_STYLE_SECONDARY = 2
 DISCORD_BUTTON_STYLE_SUCCESS = 3
 DISCORD_BUTTON_STYLE_DANGER = 4
 DISCORD_BUTTON_STYLE_LINK = 5
+DISCORD_SELECT_OPTION_MAX_OPTIONS = 25
 
 
 def build_action_row(components: list[dict[str, Any]]) -> dict[str, Any]:
@@ -48,9 +49,9 @@ def build_select_menu(
     select: dict[str, Any] = {
         "type": 3,
         "custom_id": custom_id,
-        "options": options[:25],
+        "options": options[:DISCORD_SELECT_OPTION_MAX_OPTIONS],
         "min_values": min_values,
-        "max_values": min(max_values, 25),
+        "max_values": min(max_values, DISCORD_SELECT_OPTION_MAX_OPTIONS),
         "disabled": disabled,
     }
     if placeholder:
@@ -90,7 +91,7 @@ def build_bind_picker(
             value=repo_id,
             description=path[:100] if path else None,
         )
-        for repo_id, path in repos[:25]
+        for repo_id, path in repos[:DISCORD_SELECT_OPTION_MAX_OPTIONS]
     ]
     if not options:
         options = [build_select_option("No repos available", "none", default=True)]
@@ -176,7 +177,7 @@ def build_flow_runs_picker(
             value=run_id,
             description=f"Status: {status}",
         )
-        for run_id, status in runs[:25]
+        for run_id, status in runs[:DISCORD_SELECT_OPTION_MAX_OPTIONS]
     ]
     if not options:
         options = [build_select_option("No runs available", "none", default=True)]
