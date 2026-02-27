@@ -10,6 +10,7 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.runtime import (
     DoctorCheck,
+    hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
     pma_doctor_checks,
 )
@@ -113,6 +114,86 @@ def test_hub_worktree_doctor_checks_detects_orphans(tmp_path: Path):
     assert str(hub_config.worktrees_root) in check.message
     assert f"car hub scan --path {hub_root}" in check.fix
     assert "car hub worktree cleanup" in check.fix
+
+
+def test_hub_destination_doctor_checks_reports_effective_destination(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: base",
+                "    path: workspace/base",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+                "    destination:",
+                "      kind: docker",
+                "      image: ghcr.io/acme/base:latest",
+                "  - id: wt",
+                "    path: worktrees/wt",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: worktree",
+                "    worktree_of: base",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    checks = hub_destination_doctor_checks(hub_config)
+    assert any(
+        "base: effective destination 'docker'" in check.message for check in checks
+    )
+    assert any(
+        "wt: effective destination 'docker' (source=base)" in check.message
+        for check in checks
+    )
+    assert all(check.passed for check in checks)
+
+
+def test_hub_destination_doctor_checks_reports_invalid_destination(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: bad",
+                "    path: workspace/bad",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+                "    destination:",
+                "      kind: docker",
+                "      image: 123",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    checks = hub_destination_doctor_checks(hub_config)
+    assert any(
+        "bad: effective destination 'local' (source=default)" in check.message
+        for check in checks
+    )
+    assert any(
+        (not check.passed) and "requires non-empty 'image'" in check.message
+        for check in checks
+    )
 
 
 def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):

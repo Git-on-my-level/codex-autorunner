@@ -12,6 +12,10 @@ from typing import Any, Optional, Union
 
 from ..manifest import load_manifest
 from .config import HubConfig, RepoConfig, load_repo_config
+from .destinations import (
+    resolve_effective_repo_destination,
+    validate_manifest_destinations,
+)
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock
 from .notifications import NotificationManager
 from .runner_state import LockError, RunnerStateManager
@@ -451,6 +455,96 @@ def hub_worktree_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     return checks
 
 
+def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
+    """Report effective destination status and validation issues for hub repos."""
+    checks: list[DoctorCheck] = []
+
+    try:
+        manifest = load_manifest(hub_config.manifest_path, hub_config.root)
+    except Exception as exc:
+        checks.append(
+            DoctorCheck(
+                name="Hub destination configuration",
+                passed=False,
+                message=f"Failed to load hub manifest for destination checks: {exc}",
+                severity="warning",
+                check_id="hub.destination",
+                fix=f"Validate manifest at {hub_config.manifest_path}",
+            )
+        )
+        return checks
+
+    repos_by_id = {repo.id: repo for repo in manifest.repos}
+    known_repo_ids = set(repos_by_id.keys())
+    validation_issues = validate_manifest_destinations(hub_config.manifest_path)
+    issues_by_repo: dict[str, list[str]] = {}
+    for issue in validation_issues:
+        issues_by_repo.setdefault(issue.repo_id, []).append(issue.message)
+
+    if not manifest.repos:
+        checks.append(
+            DoctorCheck(
+                name="Hub destination configuration",
+                passed=True,
+                message="No repos in hub manifest.",
+                severity="info",
+                check_id="hub.destination",
+            )
+        )
+        return checks
+
+    for repo in manifest.repos:
+        resolution = resolve_effective_repo_destination(repo, repos_by_id)
+        kind = resolution.destination.kind
+        source = resolution.source
+        checks.append(
+            DoctorCheck(
+                name=f"Hub destination ({repo.id})",
+                passed=True,
+                message=f"{repo.id}: effective destination '{kind}' (source={source})",
+                severity="info",
+                check_id="hub.destination",
+            )
+        )
+
+        issue_messages: list[str] = []
+        issue_messages.extend(list(resolution.issues))
+        issue_messages.extend(issues_by_repo.get(repo.id, []))
+        # preserve order while de-duping repeated issue strings
+        deduped_messages = list(dict.fromkeys(issue_messages))
+        for message in deduped_messages:
+            checks.append(
+                DoctorCheck(
+                    name=f"Hub destination ({repo.id})",
+                    passed=False,
+                    message=f"{repo.id}: {message}",
+                    severity="warning",
+                    check_id="hub.destination",
+                    fix=(
+                        "Update destination config for this repo in "
+                        f"{hub_config.manifest_path}"
+                    ),
+                )
+            )
+
+    for repo_id, messages in sorted(issues_by_repo.items()):
+        if repo_id in known_repo_ids:
+            continue
+        for message in list(dict.fromkeys(messages)):
+            checks.append(
+                DoctorCheck(
+                    name=f"Hub destination ({repo_id})",
+                    passed=False,
+                    message=f"{repo_id}: {message}",
+                    severity="warning",
+                    check_id="hub.destination",
+                    fix=f"Update malformed manifest repo entry in {hub_config.manifest_path}",
+                )
+            )
+
+    return checks
+
+
 def _check_pma_state_file(checks: list[DoctorCheck], repo_root: Path) -> None:
     """Check PMA state file."""
     state_path = repo_root / PMA_STATE_FILE
@@ -818,6 +912,7 @@ __all__ = [
     "DoctorCheck",
     "DoctorReport",
     "clear_stale_lock",
+    "hub_destination_doctor_checks",
     "hub_worktree_doctor_checks",
     "pma_doctor_checks",
 ]

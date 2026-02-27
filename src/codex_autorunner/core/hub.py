@@ -26,6 +26,10 @@ from ..tickets.outbox import set_lifecycle_emitter
 from .archive import archive_worktree_snapshot, build_snapshot_id
 from .chat_bindings import repo_has_active_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
+from .destinations import (
+    default_local_destination,
+    resolve_effective_repo_destination,
+)
 from .git_utils import (
     GitError,
     git_available,
@@ -49,10 +53,6 @@ from .pma_reactive import PmaReactiveStore
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
-)
-from .repo_destinations import (
-    default_local_destination,
-    resolve_effective_repo_destination,
 )
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
@@ -1711,7 +1711,7 @@ class HubSupervisor:
         repo_index = repos_by_id or {record.repo.id: record.repo}
         effective_destination = resolve_effective_repo_destination(
             record.repo, repo_index
-        )
+        ).to_dict()
         return RepoSnapshot(
             id=record.repo.id,
             path=repo_path,
