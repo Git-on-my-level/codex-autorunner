@@ -27,6 +27,14 @@ from .callbacks import (
     encode_logical_callback,
 )
 from .capabilities import ChatCapabilities
+from .channel_directory import (
+    CHANNEL_DIRECTORY_FILENAME,
+    ChannelDirectoryStore,
+    channel_entry_key,
+    default_channel_directory_path,
+    default_channel_directory_state,
+    normalize_channel_entry,
+)
 from .command_contract import COMMAND_CONTRACT, CommandContractEntry, CommandStatus
 from .commands import ChatCommand, parse_chat_command
 from .dispatcher import (
@@ -134,6 +142,8 @@ __all__ = [
     "CALLBACK_REVIEW_COMMIT",
     "CALLBACK_UPDATE",
     "CALLBACK_UPDATE_CONFIRM",
+    "CHANNEL_DIRECTORY_FILENAME",
+    "ChannelDirectoryStore",
     "SendAttachmentRequest",
     "SendTextRequest",
     "TextRenderer",
@@ -149,7 +159,11 @@ __all__ = [
     "parse_chat_command",
     "chunk_text",
     "chat_doctor_checks",
+    "channel_entry_key",
+    "default_channel_directory_path",
+    "default_channel_directory_state",
     "PlainTextTurnContext",
+    "normalize_channel_entry",
     "run_parity_checks",
     "TurnTriggerMode",
     "run_chat_bootstrap_steps",
