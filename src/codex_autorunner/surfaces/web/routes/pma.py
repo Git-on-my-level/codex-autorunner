@@ -68,6 +68,7 @@ from ....integrations.chat.text_chunking import chunk_text
 from ....integrations.discord.config import (
     DEFAULT_STATE_FILE as DISCORD_DEFAULT_STATE_FILE,
 )
+from ....integrations.github.context_injection import maybe_inject_github_context
 from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
@@ -893,6 +894,14 @@ def build_pma_routes() -> APIRouter:
             snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
             prompt = format_pma_prompt(
                 prompt_base, snapshot, message, hub_root=hub_root
+            )
+            prompt, _ = await maybe_inject_github_context(
+                prompt_text=prompt,
+                link_source_text=message,
+                workspace_root=hub_root,
+                logger=logger,
+                event_prefix="web.pma.github_context",
+                allow_cross_repo=True,
             )
         except Exception as exc:
             error_result = {

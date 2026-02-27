@@ -56,7 +56,6 @@ from ...core.update import (
 from ...core.update_paths import resolve_update_paths
 from ...core.utils import (
     canonicalize_path,
-    find_repo_root,
 )
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
@@ -90,11 +89,7 @@ from ...integrations.chat.update_notifier import (
     format_update_status_message,
     mark_update_status_notified,
 )
-from ...integrations.github.service import (
-    GitHubService,
-    find_github_links,
-    parse_github_url,
-)
+from ...integrations.github.context_injection import maybe_inject_github_context
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
@@ -763,7 +758,10 @@ class DiscordBotService:
                 return
 
         prompt_text, github_injected = await self._maybe_inject_github_context(
-            prompt_text, workspace_root
+            prompt_text,
+            workspace_root,
+            link_source_text=text if pma_enabled else None,
+            allow_cross_repo=pma_enabled,
         )
 
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
@@ -1155,115 +1153,20 @@ class DiscordBotService:
             store.close()
 
     async def _maybe_inject_github_context(
-        self, prompt_text: str, workspace_root: Path
+        self,
+        prompt_text: str,
+        workspace_root: Path,
+        *,
+        link_source_text: Optional[str] = None,
+        allow_cross_repo: bool = False,
     ) -> tuple[str, bool]:
-        if not prompt_text or not workspace_root:
-            return prompt_text, False
-        links = find_github_links(prompt_text)
-        if not links:
-            log_event(
-                self._logger,
-                logging.DEBUG,
-                "discord.github_context.skip",
-                reason="no_links",
-            )
-            return prompt_text, False
-        repo_root = find_repo_root(workspace_root)
-        if repo_root is None:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.github_context.skip",
-                reason="repo_not_found",
-                workspace_path=str(workspace_root),
-            )
-            return prompt_text, False
-        try:
-            repo_config = load_repo_config(repo_root)
-            raw_config = repo_config.raw if repo_config else None
-        except Exception:
-            raw_config = None
-        svc = GitHubService(repo_root, raw_config=raw_config)
-        if not svc.gh_available():
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.github_context.skip",
-                reason="gh_unavailable",
-                repo_root=str(repo_root),
-            )
-            return prompt_text, False
-        if not svc.gh_authenticated():
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.github_context.skip",
-                reason="gh_unauthenticated",
-                repo_root=str(repo_root),
-            )
-            return prompt_text, False
-        issue_only_link = self._issue_only_link(prompt_text, links)
-        for link in links:
-            try:
-                result = await asyncio.to_thread(svc.build_context_file_from_url, link)
-            except Exception:
-                result = None
-            if result and result.get("hint"):
-                separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-                hint = str(result["hint"])
-                parsed = parse_github_url(link)
-                if (
-                    issue_only_link
-                    and link == issue_only_link
-                    and parsed
-                    and parsed[1] == "issue"
-                ):
-                    hint = f"{hint}\n\n{self._issue_only_workflow_hint(parsed[2])}"
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.github_context.injected",
-                    repo_root=str(repo_root),
-                    path=result.get("path"),
-                )
-                return f"{prompt_text}{separator}{hint}", True
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.github_context.skip",
-            reason="no_context",
-            repo_root=str(repo_root),
-        )
-        return prompt_text, False
-
-    def _issue_only_link(self, prompt_text: str, links: list[str]) -> Optional[str]:
-        if not prompt_text or not links or len(links) != 1:
-            return None
-        stripped = prompt_text.strip()
-        if not stripped:
-            return None
-        wrappers = (
-            "{link}",
-            "<{link}>",
-            "({link})",
-            "[{link}]",
-            "`{link}`",
-        )
-        link = links[0]
-        for wrapper in wrappers:
-            if stripped == wrapper.format(link=link):
-                return link
-        return None
-
-    def _issue_only_workflow_hint(self, issue_number: int) -> str:
-        return wrap_injected_context(
-            "Issue-only GitHub message detected (no extra context).\n"
-            f"Treat this as a request to implement issue #{issue_number}.\n"
-            "Create a new branch from the latest head branch, "
-            "sync with the current origin default branch first,\n"
-            "implement the fix, and open a PR.\n"
-            f"Ensure the PR description includes `Closes #{issue_number}` "
-            "so GitHub auto-closes the issue when merged."
+        return await maybe_inject_github_context(
+            prompt_text=prompt_text,
+            link_source_text=link_source_text or prompt_text,
+            workspace_root=workspace_root,
+            logger=self._logger,
+            event_prefix="discord.github_context",
+            allow_cross_repo=allow_cross_repo,
         )
 
     def _build_message_session_key(

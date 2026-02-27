@@ -495,8 +495,14 @@ class _PMAHandler(TelegramCommandHandlers):
         return prompt_text
 
     async def _maybe_inject_github_context(
-        self, prompt_text: str, _record: object
+        self,
+        prompt_text: str,
+        _record: object,
+        *,
+        link_source_text: Optional[str] = None,
+        allow_cross_repo: bool = False,
     ) -> tuple[str, bool]:
+        _ = link_source_text, allow_cross_repo
         return prompt_text, False
 
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
