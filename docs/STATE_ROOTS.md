@@ -41,7 +41,7 @@ All durable artifacts must live under one of these roots:
 **Purpose**: Hub-level state for multi-repo management.
 
 **Contents**:
-- `manifest.yml` - Managed repositories list
+- `manifest.yml` - Managed repositories list (including repo/worktree `destination` config)
 - `hub_state.json` - Hub state
 - `config.yml` - Hub config
 - `codex-autorunner-hub.log` - Hub logs
