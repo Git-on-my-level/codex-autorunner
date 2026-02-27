@@ -37,6 +37,7 @@ from ...manifest import load_manifest
 from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
+from ..chat.channel_directory import ChannelDirectoryStore
 from ..chat.service import ChatBotServiceCore
 from ..chat.update_notifier import ChatUpdateStatusNotifier
 from .adapter import (
@@ -268,6 +269,8 @@ class TelegramBotService(
         )
         self._chat_transport = TelegramChatTransport(self)
         self._chat_state_store = TelegramChatStateStore(self._store)
+        channel_directory_root = self._hub_root or self._config.root
+        self._channel_directory_store = ChannelDirectoryStore(channel_directory_root)
         self._chat_core = ChatBotServiceCore(
             owner=self,
             runtime_services=self._runtime_services,
@@ -1190,10 +1193,56 @@ class TelegramBotService(
             runtime.interrupt_requested = False
 
     async def _handle_message(self, message: TelegramMessage) -> None:
+        self._record_channel_directory_seen_from_telegram_message(message)
         await message_handlers.handle_message(self, message)
 
     def _should_bypass_topic_queue(self, message: TelegramMessage) -> bool:
         return message_handlers.should_bypass_topic_queue(self, message)
+
+    def _record_channel_directory_seen_from_telegram_message(
+        self, message: TelegramMessage
+    ) -> None:
+        thread_id = (
+            str(message.thread_id) if isinstance(message.thread_id, int) else None
+        )
+        chat_label = (
+            message.chat_title.strip()
+            if isinstance(message.chat_title, str) and message.chat_title.strip()
+            else str(message.chat_id)
+        )
+        if thread_id is None:
+            display = chat_label
+        else:
+            topic_label = (
+                message.thread_title.strip()
+                if isinstance(message.thread_title, str)
+                and message.thread_title.strip()
+                else thread_id
+            )
+            display = f"{chat_label} / {topic_label}"
+
+        meta: dict[str, Any] = {}
+        if isinstance(message.chat_type, str) and message.chat_type.strip():
+            meta["chat_type"] = message.chat_type.strip()
+
+        try:
+            self._channel_directory_store.record_seen(
+                "telegram",
+                str(message.chat_id),
+                thread_id,
+                display,
+                meta,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.channel_directory.record_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
 
     async def _handle_edited_message(self, message: TelegramMessage) -> None:
         await message_handlers.handle_edited_message(self, message)

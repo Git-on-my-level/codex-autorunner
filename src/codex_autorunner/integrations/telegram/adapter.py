@@ -144,6 +144,8 @@ class TelegramMessage:
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot: bool = False
     reply_to_username: Optional[str] = None
+    chat_title: Optional[str] = None
+    thread_title: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -336,6 +338,8 @@ def _parse_message(
     chat_type = schema.chat.get("type") if isinstance(schema.chat, dict) else None
     if chat_type is not None and not isinstance(chat_type, str):
         chat_type = None
+    chat_title = _extract_chat_title(schema.chat)
+    thread_title = _extract_thread_title(payload, schema.reply_to_message)
 
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot = False
@@ -388,6 +392,8 @@ def _parse_message(
         reply_to_message_id=reply_to_message_id,
         reply_to_is_bot=reply_to_is_bot,
         reply_to_username=reply_to_username,
+        chat_title=chat_title,
+        thread_title=thread_title,
     )
 
 
@@ -428,6 +434,46 @@ def _parse_callback(update_id: int, payload: Any) -> Optional[TelegramCallbackQu
         chat_id=chat_id,
         thread_id=thread_id,
     )
+
+
+def _extract_chat_title(chat_payload: Any) -> Optional[str]:
+    if not isinstance(chat_payload, dict):
+        return None
+    for key in ("title", "username"):
+        raw = chat_payload.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    first_name = chat_payload.get("first_name")
+    last_name = chat_payload.get("last_name")
+    parts: list[str] = []
+    if isinstance(first_name, str) and first_name.strip():
+        parts.append(first_name.strip())
+    if isinstance(last_name, str) and last_name.strip():
+        parts.append(last_name.strip())
+    if parts:
+        return " ".join(parts)
+    return None
+
+
+def _extract_thread_title(message_payload: Any, reply_to_payload: Any) -> Optional[str]:
+    for candidate in (message_payload, reply_to_payload):
+        title = _extract_forum_topic_name(candidate)
+        if title is not None:
+            return title
+    return None
+
+
+def _extract_forum_topic_name(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("forum_topic_created", "forum_topic_edited"):
+        raw = payload.get(key)
+        if not isinstance(raw, dict):
+            continue
+        name = raw.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return None
 
 
 def _parse_photo_sizes(payload: Any) -> tuple[TelegramPhotoSize, ...]:

@@ -70,6 +70,7 @@ from ...integrations.app_server.threads import (
     PMA_OPENCODE_KEY,
 )
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
+from ...integrations.chat.channel_directory import ChannelDirectoryStore
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
@@ -289,6 +290,7 @@ class DiscordBotService:
         self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
         self._app_server_lock = asyncio.Lock()
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
+        self._channel_directory_store = ChannelDirectoryStore(self._config.root)
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
         if generated_hub_config.exists():
@@ -2510,9 +2512,87 @@ class DiscordBotService:
             if event is not None:
                 await self._dispatcher.dispatch(event, self._handle_chat_event)
         elif event_type == "MESSAGE_CREATE":
+            self._record_channel_directory_seen_from_message_payload(payload)
             event = self._chat_adapter.parse_message_event(payload)
             if event is not None:
                 await self._dispatch_chat_event(event)
+
+    def _record_channel_directory_seen_from_message_payload(
+        self, payload: dict[str, Any]
+    ) -> None:
+        channel_id = self._coerce_id(payload.get("channel_id"))
+        if channel_id is None:
+            return
+        guild_id = self._coerce_id(payload.get("guild_id"))
+
+        guild_label = self._first_non_empty_text(
+            payload.get("guild_name"),
+            self._nested_text(payload, "guild", "name"),
+        )
+        channel_label_raw = self._first_non_empty_text(
+            payload.get("channel_name"),
+            self._nested_text(payload, "channel", "name"),
+        )
+        channel_label = (
+            f"#{channel_label_raw.lstrip('#')}"
+            if channel_label_raw is not None
+            else f"#{channel_id}"
+        )
+
+        if guild_id is not None:
+            display = f"{guild_label or f'guild:{guild_id}'} / {channel_label}"
+        else:
+            display = channel_label if channel_label_raw is not None else channel_id
+
+        meta: dict[str, Any] = {}
+        if guild_id is not None:
+            meta["guild_id"] = guild_id
+
+        try:
+            self._channel_directory_store.record_seen(
+                "discord",
+                channel_id,
+                guild_id,
+                display,
+                meta,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_directory.record_failed",
+                channel_id=channel_id,
+                guild_id=guild_id,
+                exc=exc,
+            )
+
+    @staticmethod
+    def _nested_text(payload: dict[str, Any], key: str, field: str) -> Optional[str]:
+        candidate = payload.get(key)
+        if not isinstance(candidate, dict):
+            return None
+        return DiscordBotService._first_non_empty_text(candidate.get(field))
+
+    @staticmethod
+    def _first_non_empty_text(*values: Any) -> Optional[str]:
+        for value in values:
+            if isinstance(value, str):
+                normalized = value.strip()
+                if normalized:
+                    return normalized
+        return None
+
+    @staticmethod
+    def _coerce_id(value: Any) -> Optional[str]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                return normalized
+        return None
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
         if is_component_interaction(interaction_payload):
