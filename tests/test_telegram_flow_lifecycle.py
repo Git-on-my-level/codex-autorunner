@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,62 @@ async def test_flow_stop_defaults_latest_active(
 
     assert controller.stop_calls == [run_running]
     assert any(f"Stopped run `{run_running}`" in text for text in handler.sent)
+
+
+@pytest.mark.anyio
+async def test_flow_resume_mirrors_chat_inbound_and_outbound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _init_store(tmp_path, monkeypatch)
+    run_id = str(uuid.uuid4())
+    _create_run(store, run_id, FlowRunStatus.PAUSED)
+    store.close()
+
+    controller = _ControllerStub()
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        flows_module, "_get_ticket_controller", lambda _root: controller
+    )
+    monkeypatch.setattr(
+        flows_module, "_spawn_flow_worker", lambda _root, run: spawned.append(run)
+    )
+
+    handler = _FlowLifecycleHandler()
+    await handler._handle_flow_resume(_message(), tmp_path, argv=[])
+
+    assert controller.resume_calls == [run_id]
+    assert spawned == [run_id]
+
+    inbound_path = (
+        tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "inbound.jsonl"
+    )
+    outbound_path = (
+        tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "outbound.jsonl"
+    )
+    assert inbound_path.exists()
+    assert outbound_path.exists()
+
+    inbound_records = [
+        json.loads(line)
+        for line in inbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    outbound_records = [
+        json.loads(line)
+        for line in outbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(inbound_records) == 1
+    assert len(outbound_records) == 1
+    assert inbound_records[0]["event_type"] == "flow_resume_command"
+    assert outbound_records[0]["event_type"] == "flow_resume_notice"
+
+    with FlowStore(tmp_path / ".codex-autorunner" / "flows.db") as verify_store:
+        artifact_kinds = {
+            artifact.kind for artifact in verify_store.get_artifacts(run_id)
+        }
+    assert "chat_inbound" in artifact_kinds
+    assert "chat_outbound" in artifact_kinds
 
 
 @pytest.mark.anyio

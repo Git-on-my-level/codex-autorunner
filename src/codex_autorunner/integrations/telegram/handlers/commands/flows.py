@@ -37,6 +37,7 @@ from .....flows.ticket_flow.runtime_helpers import (
 from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
 from .....tickets.outbox import resolve_outbox_paths
+from ....chat.run_mirror import ChatRunMirror
 from ....github.service import GitHubError, GitHubService
 from ...adapter import (
     FlowCallback,
@@ -1608,6 +1609,16 @@ You are the first ticket in a new ticket_flow run.
             store.close()
 
         force = self._has_flag(argv, "--force")
+        run_mirror = ChatRunMirror(repo_root, logger_=_logger)
+        run_mirror.mirror_inbound(
+            run_id=record.id,
+            platform="telegram",
+            event_type="flow_resume_command",
+            text=(message.text or "").strip(),
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            meta={"force": force},
+        )
         controller = self._ticket_controller_for(repo_root)
         try:
             updated = await controller.resume_flow(record.id, force=force)
@@ -1620,12 +1631,21 @@ You are the first ticket in a new ticket_flow run.
             )
             return
         _spawn_flow_worker(repo_root, updated.id)
+        outbound_text = f"Resumed run {_code(updated.id)}."
         await self._send_message(
             message.chat_id,
-            f"Resumed run {_code(updated.id)}.",
+            outbound_text,
             thread_id=message.thread_id,
             reply_to=message.message_id,
             parse_mode="Markdown",
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="telegram",
+            event_type="flow_resume_notice",
+            text=outbound_text,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
         )
 
     def _stop_flow_worker(self, repo_root: Path, run_id: str) -> None:
