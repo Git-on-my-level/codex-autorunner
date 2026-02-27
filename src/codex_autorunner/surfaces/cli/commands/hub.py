@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import typer
 import uvicorn
 
 from ....core.config import HubConfig
+from ....core.destinations import resolve_effective_repo_destination
 from ....core.hub import HubSupervisor
+from ....manifest import load_manifest, normalize_manifest_destination, save_manifest
 from ...web.app import create_hub_app
 
 
@@ -21,6 +23,142 @@ def register_hub_commands(
     request_json: Callable,
     normalize_base_path: Callable,
 ) -> None:
+    destination_app = typer.Typer(add_completion=False)
+    hub_app.add_typer(destination_app, name="destination")
+
+    def _resolve_repo_entry(config: HubConfig, repo_id: str):
+        manifest = load_manifest(config.manifest_path, config.root)
+        repos_by_id = {entry.id: entry for entry in manifest.repos}
+        repo = repos_by_id.get(repo_id)
+        if repo is None:
+            raise_exit(f"Repo id not found in hub manifest: {repo_id}")
+        return manifest, repos_by_id, repo
+
+    def _parse_mount_ref(value: str) -> dict[str, str]:
+        source, sep, target = value.partition(":")
+        source = source.strip()
+        target = target.strip()
+        if sep != ":" or not source or not target:
+            raise_exit(
+                f"Invalid --mount value: {value!r}. Expected format source:target"
+            )
+        return {"source": source, "target": target}
+
+    @destination_app.command("show")
+    def hub_destination_show(
+        repo_id: str = typer.Argument(..., help="Repo id from hub manifest"),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ):
+        config = require_hub_config(path)
+        _, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
+        resolution = resolve_effective_repo_destination(repo, repos_by_id)
+        payload = {
+            "repo_id": repo.id,
+            "kind": repo.kind,
+            "worktree_of": repo.worktree_of,
+            "configured_destination": repo.destination,
+            "effective_destination": resolution.to_dict(),
+            "source": resolution.source,
+            "issues": list(resolution.issues),
+        }
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        typer.echo(f"Repo: {repo.id}")
+        typer.echo(f"Kind: {repo.kind}")
+        if repo.worktree_of:
+            typer.echo(f"Worktree of: {repo.worktree_of}")
+        configured = (
+            json.dumps(repo.destination, sort_keys=True)
+            if isinstance(repo.destination, dict)
+            else "<none>"
+        )
+        typer.echo(f"Configured destination: {configured}")
+        typer.echo(f"Effective destination (source={resolution.source}):")
+        typer.echo(
+            json.dumps(payload["effective_destination"], indent=2, sort_keys=True)
+        )
+        if resolution.issues:
+            typer.echo("Validation issues:")
+            for issue in resolution.issues:
+                typer.echo(f"- {issue}")
+
+    @destination_app.command("set")
+    def hub_destination_set(
+        repo_id: str = typer.Argument(..., help="Repo id from hub manifest"),
+        kind: str = typer.Argument(..., help="Destination kind (local|docker)"),
+        image: Optional[str] = typer.Option(
+            None, "--image", help="Docker image (required for docker kind)"
+        ),
+        name: Optional[str] = typer.Option(
+            None, "--name", help="Docker container name override"
+        ),
+        env: Optional[list[str]] = typer.Option(
+            None,
+            "--env",
+            help="Repeat to add env passthrough patterns (example: CAR_*)",
+        ),
+        mount: Optional[list[str]] = typer.Option(
+            None,
+            "--mount",
+            help="Repeat bind mount entries using source:target format",
+        ),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ):
+        config = require_hub_config(path)
+        manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
+
+        normalized_kind = kind.strip().lower()
+        destination: dict[str, Any]
+        if normalized_kind == "local":
+            destination = {"kind": "local"}
+        elif normalized_kind == "docker":
+            if not isinstance(image, str) or not image.strip():
+                raise_exit("--image is required for docker destination")
+            destination = {"kind": "docker", "image": image.strip()}
+            if isinstance(name, str) and name.strip():
+                destination["container_name"] = name.strip()
+            env_passthrough = [item.strip() for item in (env or []) if item.strip()]
+            if env_passthrough:
+                destination["env_passthrough"] = env_passthrough
+            mounts = [_parse_mount_ref(item) for item in (mount or [])]
+            if mounts:
+                destination["mounts"] = mounts
+        else:
+            raise_exit(
+                f"Unsupported destination kind: {kind!r}. Use 'local' or 'docker'."
+            )
+
+        normalized_destination = normalize_manifest_destination(destination)
+        if normalized_destination is None:
+            raise_exit(f"Invalid destination payload: {destination!r}")
+        repo.destination = normalized_destination
+        save_manifest(config.manifest_path, manifest, config.root)
+
+        resolution = resolve_effective_repo_destination(repo, repos_by_id)
+        payload = {
+            "repo_id": repo.id,
+            "configured_destination": repo.destination,
+            "effective_destination": resolution.to_dict(),
+            "source": resolution.source,
+            "issues": list(resolution.issues),
+        }
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        typer.echo(
+            f"Updated destination for {repo.id} to "
+            f"{resolution.destination.kind} (source={resolution.source})"
+        )
+
     @hub_app.command("create")
     def hub_create(
         repo_id: str = typer.Argument(
