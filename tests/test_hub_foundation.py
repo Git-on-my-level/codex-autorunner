@@ -31,6 +31,70 @@ def test_manifest_creation_and_normalization(tmp_path: Path):
     assert data["repos"][0]["kind"] == "base"
 
 
+def test_manifest_roundtrip_preserves_destination(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    repo_dir = hub_root / "projects" / "demo-repo"
+    repo_dir.mkdir(parents=True)
+    repo = manifest.ensure_repo(hub_root, repo_dir)
+    repo.destination = {"kind": "docker", "image": "ghcr.io/acme/demo:latest"}
+    save_manifest(manifest_path, manifest, hub_root)
+
+    loaded = load_manifest(manifest_path, hub_root)
+    loaded_repo = loaded.get(repo.id)
+    assert loaded_repo is not None
+    assert loaded_repo.destination == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/demo:latest",
+    }
+
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert data["version"] == 2
+    assert data["repos"][0]["destination"] == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/demo:latest",
+    }
+
+
+def test_load_manifest_ignores_invalid_destination_shapes(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: base",
+                "    path: workspace/base",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+                "    destination: not-a-dict",
+                "  - id: wt",
+                "    path: worktrees/wt",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: worktree",
+                "    worktree_of: base",
+                "    destination:",
+                "      image: missing-kind",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = load_manifest(manifest_path, hub_root)
+    base = manifest.get("base")
+    worktree = manifest.get("wt")
+    assert base is not None
+    assert worktree is not None
+    assert base.destination is None
+    assert worktree.destination is None
+
+
 def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     hub_root = tmp_path / "hub"
     config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

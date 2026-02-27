@@ -53,6 +53,7 @@ interface HubRepo {
   last_run_started_at: string | null;
   last_run_finished_at: string | null;
   runner_pid: number | null;
+  effective_destination: Record<string, unknown>;
   mounted: boolean;
   mount_error?: string | null;
   chat_bound?: boolean;
