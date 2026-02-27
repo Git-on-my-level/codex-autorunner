@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from ..core.locks import file_lock
 from ..core.logging_utils import log_event
 from ..core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
 from ..core.time_utils import now_iso
@@ -22,6 +24,15 @@ from ..integrations.telegram.state import OutboxRecord, TelegramStateStore
 
 logger = logging.getLogger(__name__)
 LOCAL_PREVIEW_MAX_CHARS = 200
+PMA_DELIVERY_MIRROR_REL_PATH = Path(".codex-autorunner/pma/deliveries.jsonl")
+PMA_DELIVERY_MIRROR_MAX_BYTES = 25 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class _TargetDeliveryOutcome:
+    success: bool
+    chunk_count: int
+    error: Optional[str] = None
 
 
 def _parse_int(value: Any) -> Optional[int]:
@@ -70,10 +81,31 @@ def _resolve_discord_target(
     return None
 
 
-def _write_local_jsonl(path: Path, payload: dict[str, Any]) -> None:
+def _resolve_mirror_path(hub_root: Path) -> Path:
+    return (hub_root / PMA_DELIVERY_MIRROR_REL_PATH).resolve()
+
+
+def _rotate_jsonl_if_needed(path: Path, *, max_bytes: int) -> None:
+    if max_bytes <= 0:
+        return
+    if not path.exists():
+        return
+    if path.stat().st_size < max_bytes:
+        return
+    rotated_path = path.with_suffix(path.suffix + ".1")
+    rotated_path.parent.mkdir(parents=True, exist_ok=True)
+    if rotated_path.exists():
+        rotated_path.unlink()
+    path.replace(rotated_path)
+
+
+def _append_jsonl(path: Path, payload: Mapping[str, Any], *, max_bytes: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload) + "\n")
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with file_lock(lock_path):
+        _rotate_jsonl_if_needed(path, max_bytes=max_bytes)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(dict(payload)) + "\n")
 
 
 def _resolve_local_target(
@@ -106,10 +138,14 @@ async def _deliver_to_local(
     assistant_text: str,
     turn_id: str,
     event_type: Optional[str] = None,
-) -> bool:
+) -> _TargetDeliveryOutcome:
     path = _resolve_local_target(target, hub_root=hub_root)
     if path is None:
-        return False
+        return _TargetDeliveryOutcome(
+            success=False,
+            chunk_count=0,
+            error="invalid_local_target_path",
+        )
 
     payload = {
         "ts": now_iso(),
@@ -118,8 +154,33 @@ async def _deliver_to_local(
         "text_preview": assistant_text[:LOCAL_PREVIEW_MAX_CHARS],
         "text_bytes": len(assistant_text.encode("utf-8")),
     }
-    _write_local_jsonl(path, payload)
-    return True
+    _append_jsonl(path, payload, max_bytes=PMA_DELIVERY_MIRROR_MAX_BYTES)
+    return _TargetDeliveryOutcome(success=True, chunk_count=1)
+
+
+def _write_delivery_mirror_record(
+    *,
+    hub_root: Path,
+    turn_id: str,
+    event_type: Optional[str],
+    delivery_targets: list[str],
+    chunk_count_by_target: dict[str, int],
+    errors: list[dict[str, Any]],
+    delivered_targets: list[str],
+    skipped_duplicates: list[str],
+) -> None:
+    mirror_path = _resolve_mirror_path(hub_root)
+    payload = {
+        "ts": now_iso(),
+        "turn_id": turn_id,
+        "event_type": event_type,
+        "delivery_targets": delivery_targets,
+        "delivered_targets": delivered_targets,
+        "skipped_duplicates": skipped_duplicates,
+        "chunk_count_by_target": chunk_count_by_target,
+        "errors": errors,
+    }
+    _append_jsonl(mirror_path, payload, max_bytes=PMA_DELIVERY_MIRROR_MAX_BYTES)
 
 
 async def deliver_pma_output_to_active_sink(
@@ -161,6 +222,11 @@ async def deliver_pma_output_to_active_sink(
     target_count = 0
     failed_targets = 0
     skipped_duplicates = 0
+    delivery_target_keys: list[str] = []
+    delivered_target_keys: list[str] = []
+    skipped_duplicate_keys: list[str] = []
+    chunk_count_by_target: dict[str, int] = {}
+    errors: list[dict[str, Any]] = []
 
     for target in targets:
         if not isinstance(target, dict):
@@ -169,36 +235,49 @@ async def deliver_pma_output_to_active_sink(
         if not isinstance(key, str):
             continue
         target_count += 1
+        delivery_target_keys.append(key)
+        chunk_count_by_target.setdefault(key, 0)
 
         if str(last_delivery_by_target.get(key) or "") == turn_id:
             skipped_duplicates += 1
+            skipped_duplicate_keys.append(key)
             continue
 
+        outcome: _TargetDeliveryOutcome
         if target.get("kind") == "web":
             if target_store.mark_delivered(key, turn_id):
                 delivered_targets += 1
                 delivered_any = True
+                delivered_target_keys.append(key)
             continue
 
         if target.get("kind") == "local":
-            success = await _deliver_to_local(
+            outcome = await _deliver_to_local(
                 target=target,
                 hub_root=hub_root,
                 assistant_text=assistant_text,
                 turn_id=turn_id,
                 event_type=event_type,
             )
-            if success:
+            chunk_count_by_target[key] = max(outcome.chunk_count, 0)
+            if outcome.success:
                 delivered_any = True
                 if target_store.mark_delivered(key, turn_id):
                     delivered_targets += 1
+                    delivered_target_keys.append(key)
             else:
                 failed_targets += 1
+                errors.append(
+                    {
+                        "target": key,
+                        "error": outcome.error or "delivery_failed",
+                    }
+                )
             continue
 
         discord_channel_id = _resolve_discord_target(target)
         if discord_channel_id:
-            success = await _deliver_to_discord(
+            outcome = await _deliver_to_discord(
                 hub_root=hub_root,
                 channel_id=discord_channel_id,
                 assistant_text=assistant_text,
@@ -206,19 +285,34 @@ async def deliver_pma_output_to_active_sink(
                 discord_state_path=discord_state_path,
                 event_type=event_type,
             )
-            if success:
+            chunk_count_by_target[key] = max(outcome.chunk_count, 0)
+            if outcome.success:
                 delivered_any = True
                 if target_store.mark_delivered(key, turn_id):
                     delivered_targets += 1
+                    delivered_target_keys.append(key)
             else:
                 failed_targets += 1
+                errors.append(
+                    {
+                        "target": key,
+                        "error": outcome.error or "delivery_failed",
+                    }
+                )
             continue
 
         target_info = _resolve_telegram_target(target)
         if target_info is None:
+            failed_targets += 1
+            errors.append(
+                {
+                    "target": key,
+                    "error": "unsupported_target",
+                }
+            )
             continue
         chat_id, thread_id = target_info
-        success = await _deliver_to_telegram(
+        outcome = await _deliver_to_telegram(
             hub_root=hub_root,
             chat_id=chat_id,
             thread_id=thread_id,
@@ -227,12 +321,32 @@ async def deliver_pma_output_to_active_sink(
             event_type=event_type,
             telegram_state_path=telegram_state_path,
         )
-        if success:
+        chunk_count_by_target[key] = max(outcome.chunk_count, 0)
+        if outcome.success:
             delivered_any = True
             if target_store.mark_delivered(key, turn_id):
                 delivered_targets += 1
+                delivered_target_keys.append(key)
         else:
             failed_targets += 1
+            errors.append(
+                {
+                    "target": key,
+                    "error": outcome.error or "delivery_failed",
+                }
+            )
+
+    if target_count > 0:
+        _write_delivery_mirror_record(
+            hub_root=hub_root,
+            turn_id=turn_id,
+            event_type=event_type,
+            delivery_targets=delivery_target_keys,
+            chunk_count_by_target=chunk_count_by_target,
+            errors=errors,
+            delivered_targets=delivered_target_keys,
+            skipped_duplicates=skipped_duplicate_keys,
+        )
 
     if target_count > 0 and skipped_duplicates == target_count:
         log_event(
@@ -267,12 +381,16 @@ async def _deliver_to_telegram(
     turn_id: str,
     event_type: Optional[str] = None,
     telegram_state_path: Optional[Path] = None,
-) -> bool:
+) -> _TargetDeliveryOutcome:
     chunks = chunk_text(
         assistant_text, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=False
     )
     if not chunks:
-        return False
+        return _TargetDeliveryOutcome(
+            success=False,
+            chunk_count=0,
+            error="empty_chunks",
+        )
 
     resolved_state_path = telegram_state_path or (hub_root / "telegram_state.sqlite3")
     store = TelegramStateStore(resolved_state_path)
@@ -291,9 +409,13 @@ async def _deliver_to_telegram(
                 outbox_key=record_id,
             )
             await store.enqueue_outbox(record)
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to enqueue PMA output to Telegram outbox")
-        return False
+        return _TargetDeliveryOutcome(
+            success=False,
+            chunk_count=len(chunks),
+            error=str(exc),
+        )
     finally:
         await store.close()
 
@@ -307,7 +429,7 @@ async def _deliver_to_telegram(
         chunk_count=len(chunks),
         event_type=event_type,
     )
-    return True
+    return _TargetDeliveryOutcome(success=True, chunk_count=len(chunks))
 
 
 async def _deliver_to_discord(
@@ -318,7 +440,7 @@ async def _deliver_to_discord(
     turn_id: str,
     discord_state_path: Optional[Path] = None,
     event_type: Optional[str] = None,
-) -> bool:
+) -> _TargetDeliveryOutcome:
     if discord_state_path is None:
         discord_state_path = hub_root / ".codex-autorunner" / "discord_state.sqlite3"
 
@@ -326,7 +448,11 @@ async def _deliver_to_discord(
         assistant_text, max_len=DISCORD_MAX_MESSAGE_LENGTH, with_numbering=False
     )
     if not chunks:
-        return False
+        return _TargetDeliveryOutcome(
+            success=False,
+            chunk_count=0,
+            error="empty_chunks",
+        )
 
     store = DiscordStateStore(discord_state_path)
     try:
@@ -342,9 +468,13 @@ async def _deliver_to_discord(
                 created_at=now_iso(),
             )
             await store.enqueue_outbox(record)
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to enqueue PMA output to Discord outbox")
-        return False
+        return _TargetDeliveryOutcome(
+            success=False,
+            chunk_count=len(chunks),
+            error=str(exc),
+        )
     finally:
         await store.close()
 
@@ -357,7 +487,7 @@ async def _deliver_to_discord(
         chunk_count=len(chunks),
         event_type=event_type,
     )
-    return True
+    return _TargetDeliveryOutcome(success=True, chunk_count=len(chunks))
 
 
 __all__ = ["deliver_pma_output_to_active_sink"]

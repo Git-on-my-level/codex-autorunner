@@ -6,11 +6,22 @@ from pathlib import Path
 
 import pytest
 
+import codex_autorunner.integrations.pma_delivery as pma_delivery_module
 from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_sink import PmaActiveSinkStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.pma_delivery import deliver_pma_output_to_active_sink
 from codex_autorunner.integrations.telegram.state import TelegramStateStore
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 @pytest.mark.anyio
@@ -425,3 +436,137 @@ async def test_pma_delivery_partial_failure_isolation(
         "chat:discord:111": "turn-fanout-partial",
         "chat:telegram:222": "turn-fanout-partial",
     }
+
+
+@pytest.mark.anyio
+async def test_pma_delivery_writes_mirror_record_with_target_keys(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets = PmaDeliveryTargetsStore(hub_root)
+    targets.set_targets(
+        [
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "123",
+                "thread_id": "456",
+            },
+            {"kind": "chat", "platform": "discord", "chat_id": "987654321"},
+        ]
+    )
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="mirror me",
+        turn_id="turn-mirror-1",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered is True
+
+    mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
+    records = _read_jsonl(mirror_path)
+    assert len(records) == 1
+    payload = records[0]
+    assert payload["turn_id"] == "turn-mirror-1"
+    assert payload["event_type"] == "flow_completed"
+    assert set(payload["delivery_targets"]) == {
+        "chat:telegram:123:456",
+        "chat:discord:987654321",
+    }
+    assert payload["chunk_count_by_target"] == {
+        "chat:telegram:123:456": 1,
+        "chat:discord:987654321": 1,
+    }
+    assert payload["errors"] == []
+
+
+@pytest.mark.anyio
+async def test_pma_delivery_mirror_includes_errors_when_targets_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets = PmaDeliveryTargetsStore(hub_root)
+    targets.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "111"},
+            {"kind": "chat", "platform": "telegram", "chat_id": "222"},
+        ]
+    )
+
+    async def _fail_discord_enqueue(self, record):
+        raise RuntimeError("discord write failed")
+
+    monkeypatch.setattr(DiscordStateStore, "enqueue_outbox", _fail_discord_enqueue)
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="mirror failures too",
+        turn_id="turn-mirror-failure",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered is False
+
+    mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
+    records = _read_jsonl(mirror_path)
+    assert len(records) == 1
+    payload = records[0]
+    assert payload["turn_id"] == "turn-mirror-failure"
+    assert set(payload["delivery_targets"]) == {
+        "chat:discord:111",
+        "chat:telegram:222",
+    }
+    assert payload["chunk_count_by_target"] == {
+        "chat:discord:111": 1,
+        "chat:telegram:222": 1,
+    }
+    errors = payload["errors"]
+    assert isinstance(errors, list)
+    assert len(errors) == 1
+    assert errors[0]["target"] == "chat:discord:111"
+    assert "discord write failed" in errors[0]["error"]
+
+
+@pytest.mark.anyio
+async def test_pma_delivery_mirror_rotates_when_file_exceeds_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    PmaDeliveryTargetsStore(hub_root).set_targets([{"kind": "web"}])
+
+    monkeypatch.setattr(pma_delivery_module, "PMA_DELIVERY_MIRROR_MAX_BYTES", 1)
+
+    first = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="first record",
+        turn_id="turn-rotate-1",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    second = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="second record",
+        turn_id="turn-rotate-2",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert first is True
+    assert second is True
+
+    mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
+    rotated_path = mirror_path.with_suffix(".jsonl.1")
+    assert mirror_path.exists()
+    assert rotated_path.exists()
+
+    current_records = _read_jsonl(mirror_path)
+    rotated_records = _read_jsonl(rotated_path)
+    assert len(current_records) == 1
+    assert len(rotated_records) == 1
+    assert current_records[0]["turn_id"] == "turn-rotate-2"
+    assert rotated_records[0]["turn_id"] == "turn-rotate-1"
