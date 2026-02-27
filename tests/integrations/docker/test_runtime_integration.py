@@ -23,8 +23,11 @@ def test_docker_exec_smoke(tmp_path: Path) -> None:
         pytest.skip("Set CAR_TEST_DOCKER=1 to enable docker smoke test")
 
     runtime = DockerRuntime()
-    if not runtime.is_available():
-        pytest.skip("Docker binary not available in PATH")
+    readiness = runtime.probe_readiness()
+    if not readiness.binary_available:
+        pytest.skip(f"Docker binary not available in PATH: {readiness.detail}")
+    if not readiness.daemon_reachable:
+        pytest.skip(f"Docker daemon unreachable: {readiness.detail}")
 
     image = os.environ.get("CAR_TEST_DOCKER_IMAGE", "busybox:latest")
     name = f"car-test-{uuid.uuid4().hex[:12]}"

@@ -37,6 +37,42 @@ def test_is_available_false_when_binary_missing() -> None:
     assert runtime.is_available() is False
 
 
+def test_probe_readiness_reports_daemon_unreachable() -> None:
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        if cmd[1] == "--version":
+            return _proc(cmd, stdout="Docker version 27.0.0\n")
+        if cmd[1] == "info":
+            return _proc(
+                cmd,
+                returncode=1,
+                stderr="Cannot connect to the Docker daemon",
+            )
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    readiness = runtime.probe_readiness()
+    assert readiness.binary_available is True
+    assert readiness.daemon_reachable is False
+    assert "Cannot connect to the Docker daemon" in readiness.detail
+
+
+def test_probe_readiness_reports_success() -> None:
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        if cmd[1] == "--version":
+            return _proc(cmd, stdout="Docker version 27.0.0\n")
+        if cmd[1] == "info":
+            return _proc(cmd, stdout="27.0.0\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    readiness = runtime.probe_readiness()
+    assert readiness.binary_available is True
+    assert readiness.daemon_reachable is True
+    assert readiness.ready is True
+
+
 def test_select_passthrough_env_supports_wildcards() -> None:
     selected = select_passthrough_env(
         ["CAR_*", "PATH"],

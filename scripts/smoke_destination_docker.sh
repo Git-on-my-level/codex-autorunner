@@ -109,6 +109,24 @@ run_capture() {
   fi
 }
 
+run_capture_allow_fail() {
+  local out_file="$1"
+  local err_file="$2"
+  local code_file="$3"
+  shift 3
+  printf '+'
+  printf ' %q' "$@"
+  printf ' > %q 2> %q (capture exit -> %q)\n' "$out_file" "$err_file" "$code_file"
+  if [[ "$EXECUTE" -eq 1 ]]; then
+    set +e
+    "$@" >"$out_file" 2>"$err_file"
+    local cmd_rc=$?
+    set -e
+    printf '%s\n' "$cmd_rc" >"$code_file"
+    return "$cmd_rc"
+  fi
+}
+
 repo_path_from_manifest() {
   local python_bin
   if [[ -x ".venv/bin/python" ]]; then
@@ -178,14 +196,38 @@ fi
 RUN_ID=""
 if [[ "$EXECUTE" -eq 1 ]]; then
   RUN_ID="$(sed -n 's/^Started ticket_flow run: //p' "$RUN_START_LOG" | tail -n 1)"
+  STATUS_STDOUT="$EVIDENCE_DIR/ticket_flow_status_initial.stdout"
+  STATUS_STDERR="$EVIDENCE_DIR/ticket_flow_status_initial.stderr"
+  STATUS_CODE="$EVIDENCE_DIR/ticket_flow_status_initial.exit_code"
+  STATUS_RC=0
   if [[ -n "$RUN_ID" ]]; then
-    run_cmd "${CAR_CMD[@]}" flow ticket_flow status \
+    run_capture_allow_fail \
+      "$STATUS_STDOUT" \
+      "$STATUS_STDERR" \
+      "$STATUS_CODE" \
+      "${CAR_CMD[@]}" flow ticket_flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --run-id "$RUN_ID" \
-      --json
+      --json || STATUS_RC=$?
   else
-    run_cmd "${CAR_CMD[@]}" flow ticket_flow status --repo "$REPO_PATH" --hub "$HUB_ROOT" --json
+    run_capture_allow_fail \
+      "$STATUS_STDOUT" \
+      "$STATUS_STDERR" \
+      "$STATUS_CODE" \
+      "${CAR_CMD[@]}" flow ticket_flow status \
+      --repo "$REPO_PATH" \
+      --hub "$HUB_ROOT" \
+      --json || STATUS_RC=$?
+  fi
+  if [[ -s "$STATUS_STDOUT" ]]; then
+    cat "$STATUS_STDOUT"
+  fi
+  if [[ "$STATUS_RC" -ne 0 ]]; then
+    echo "Warning: ticket_flow status failed (exit=$STATUS_RC). Evidence captured at:"
+    echo "  $STATUS_STDOUT"
+    echo "  $STATUS_STDERR"
+    echo "  $STATUS_CODE"
   fi
 
   run_cmd sh -c "find '$REPO_PATH/.codex-autorunner/runs' -maxdepth 3 -type f | sort > '$EVIDENCE_DIR/run_artifacts.txt'"
@@ -198,19 +240,32 @@ if [[ "$EXECUTE" -eq 1 ]]; then
 
   run_capture "$EVIDENCE_DIR/destination_effective.json" \
     "${CAR_CMD[@]}" hub destination show "$REPO_ID" --json --path "$HUB_ROOT"
+  STATUS_FINAL_STDOUT="$EVIDENCE_DIR/ticket_flow_status.json"
+  STATUS_FINAL_STDERR="$EVIDENCE_DIR/ticket_flow_status.stderr"
+  STATUS_FINAL_CODE="$EVIDENCE_DIR/ticket_flow_status.exit_code"
+  STATUS_FINAL_RC=0
   if [[ -n "$RUN_ID" ]]; then
-    run_capture "$EVIDENCE_DIR/ticket_flow_status.json" \
+    run_capture_allow_fail \
+      "$STATUS_FINAL_STDOUT" \
+      "$STATUS_FINAL_STDERR" \
+      "$STATUS_FINAL_CODE" \
       "${CAR_CMD[@]}" flow ticket_flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --run-id "$RUN_ID" \
-      --json
+      --json || STATUS_FINAL_RC=$?
   else
-    run_capture "$EVIDENCE_DIR/ticket_flow_status.json" \
+    run_capture_allow_fail \
+      "$STATUS_FINAL_STDOUT" \
+      "$STATUS_FINAL_STDERR" \
+      "$STATUS_FINAL_CODE" \
       "${CAR_CMD[@]}" flow ticket_flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
-      --json
+      --json || STATUS_FINAL_RC=$?
+  fi
+  if [[ "$STATUS_FINAL_RC" -ne 0 ]]; then
+    echo "Warning: final status capture failed (exit=$STATUS_FINAL_RC)."
   fi
 fi
 

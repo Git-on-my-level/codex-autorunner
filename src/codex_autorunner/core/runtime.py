@@ -13,6 +13,7 @@ from typing import Any, Optional, Union
 from ..manifest import load_manifest
 from .config import HubConfig, RepoConfig, load_repo_config
 from .destinations import (
+    probe_docker_readiness,
     resolve_effective_repo_destination,
     validate_manifest_destinations,
 )
@@ -493,10 +494,14 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
         )
         return checks
 
+    docker_repo_ids: list[str] = []
+
     for repo in manifest.repos:
         resolution = resolve_effective_repo_destination(repo, repos_by_id)
         kind = resolution.destination.kind
         source = resolution.source
+        if kind == "docker":
+            docker_repo_ids.append(repo.id)
         checks.append(
             DoctorCheck(
                 name=f"Hub destination ({repo.id})",
@@ -541,6 +546,53 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                     fix=f"Update malformed manifest repo entry in {hub_config.manifest_path}",
                 )
             )
+
+    if docker_repo_ids:
+        readiness = probe_docker_readiness()
+        repo_targets = ", ".join(sorted(docker_repo_ids))
+        checks.append(
+            DoctorCheck(
+                name="Hub destination (docker binary)",
+                passed=readiness.binary_available,
+                message=(
+                    "Docker CLI is available."
+                    if readiness.binary_available
+                    else f"Docker CLI unavailable: {readiness.detail}"
+                ),
+                severity="info" if readiness.binary_available else "warning",
+                check_id="hub.destination.docker.binary",
+                fix=(
+                    None
+                    if readiness.binary_available
+                    else "Install Docker CLI and ensure it is in PATH."
+                ),
+            )
+        )
+        checks.append(
+            DoctorCheck(
+                name="Hub destination (docker daemon)",
+                passed=readiness.daemon_reachable,
+                message=(
+                    f"Docker daemon reachable for repos: {repo_targets}. "
+                    f"{readiness.detail}"
+                    if readiness.daemon_reachable
+                    else (
+                        "Docker daemon unreachable for repos: "
+                        f"{repo_targets}. {readiness.detail or 'Run `docker info` for details.'}"
+                    )
+                ),
+                severity="info" if readiness.daemon_reachable else "warning",
+                check_id="hub.destination.docker.daemon",
+                fix=(
+                    None
+                    if readiness.daemon_reachable
+                    else (
+                        "Start Docker daemon/Desktop and rerun `docker info`. "
+                        "Destination kind=docker requires daemon connectivity."
+                    )
+                ),
+            )
+        )
 
     return checks
 

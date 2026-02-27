@@ -8,6 +8,7 @@ import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.destinations import DockerReadiness
 from codex_autorunner.core.runtime import (
     DoctorCheck,
     hub_destination_doctor_checks,
@@ -116,7 +117,9 @@ def test_hub_worktree_doctor_checks_detects_orphans(tmp_path: Path):
     assert "car hub worktree cleanup" in check.fix
 
 
-def test_hub_destination_doctor_checks_reports_effective_destination(tmp_path: Path):
+def test_hub_destination_doctor_checks_reports_effective_destination(
+    tmp_path: Path, monkeypatch
+):
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     seed_hub_files(hub_root, force=True)
@@ -148,6 +151,14 @@ def test_hub_destination_doctor_checks_reports_effective_destination(tmp_path: P
     )
 
     hub_config = load_hub_config(hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.probe_docker_readiness",
+        lambda: DockerReadiness(
+            binary_available=True,
+            daemon_reachable=True,
+            detail="docker daemon reachable",
+        ),
+    )
     checks = hub_destination_doctor_checks(hub_config)
     assert any(
         "base: effective destination 'docker'" in check.message for check in checks
@@ -157,6 +168,53 @@ def test_hub_destination_doctor_checks_reports_effective_destination(tmp_path: P
         for check in checks
     )
     assert all(check.passed for check in checks)
+
+
+def test_hub_destination_doctor_checks_reports_daemon_unreachable(
+    tmp_path: Path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: base",
+                "    path: workspace/base",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+                "    destination:",
+                "      kind: docker",
+                "      image: ghcr.io/acme/base:latest",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.probe_docker_readiness",
+        lambda: DockerReadiness(
+            binary_available=True,
+            daemon_reachable=False,
+            detail="Cannot connect to the Docker daemon",
+        ),
+    )
+    hub_config = load_hub_config(hub_root)
+    checks = hub_destination_doctor_checks(hub_config)
+    daemon_checks = [
+        check for check in checks if check.check_id == "hub.destination.docker.daemon"
+    ]
+    assert len(daemon_checks) == 1
+    daemon_check = daemon_checks[0]
+    assert daemon_check.passed is False
+    assert daemon_check.severity == "warning"
+    assert "Cannot connect to the Docker daemon" in daemon_check.message
 
 
 def test_hub_destination_doctor_checks_reports_invalid_destination(tmp_path: Path):

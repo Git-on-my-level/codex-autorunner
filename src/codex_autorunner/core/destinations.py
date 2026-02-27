@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Protocol
+from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence
 
 import yaml
 
 from ..manifest import ManifestRepo, normalize_manifest_destination
+from .utils import subprocess_env
 
 
 class Destination(Protocol):
@@ -69,6 +71,92 @@ class DestinationResolution:
 
     def to_dict(self) -> Dict[str, Any]:
         return self.destination.to_dict()
+
+
+RunFn = Callable[..., subprocess.CompletedProcess[str]]
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerReadiness:
+    binary_available: bool
+    daemon_reachable: bool
+    detail: str = ""
+
+    @property
+    def ready(self) -> bool:
+        return self.binary_available and self.daemon_reachable
+
+
+def _run_docker_probe_command(
+    *,
+    docker_binary: str,
+    args: Sequence[str],
+    run_fn: RunFn,
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
+    return run_fn(
+        [docker_binary, *[str(part) for part in args]],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=subprocess_env(),
+        timeout=timeout_seconds,
+    )
+
+
+def probe_docker_readiness(
+    *,
+    docker_binary: str = "docker",
+    run_fn: RunFn = subprocess.run,
+    timeout_seconds: float = 10.0,
+) -> DockerReadiness:
+    try:
+        version_proc = _run_docker_probe_command(
+            docker_binary=docker_binary,
+            args=["--version"],
+            run_fn=run_fn,
+            timeout_seconds=timeout_seconds,
+        )
+    except FileNotFoundError:
+        return DockerReadiness(
+            binary_available=False,
+            daemon_reachable=False,
+            detail=f"Docker binary '{docker_binary}' not found",
+        )
+
+    if version_proc.returncode != 0:
+        details = (version_proc.stderr or version_proc.stdout or "").strip()
+        return DockerReadiness(
+            binary_available=False,
+            daemon_reachable=False,
+            detail=details or "docker --version failed",
+        )
+
+    info_proc = _run_docker_probe_command(
+        docker_binary=docker_binary,
+        args=["info", "--format", "{{.ServerVersion}}"],
+        run_fn=run_fn,
+        timeout_seconds=timeout_seconds,
+    )
+    if info_proc.returncode != 0:
+        details = (info_proc.stderr or info_proc.stdout or "").strip()
+        return DockerReadiness(
+            binary_available=True,
+            daemon_reachable=False,
+            detail=details or "docker daemon is unreachable",
+        )
+
+    server_version = (info_proc.stdout or "").strip()
+    detail = (
+        f"docker daemon reachable (server={server_version})"
+        if server_version
+        else "docker daemon reachable"
+    )
+    return DockerReadiness(
+        binary_available=True,
+        daemon_reachable=True,
+        detail=detail,
+    )
 
 
 def default_local_destination() -> Dict[str, Any]:
@@ -308,10 +396,12 @@ __all__ = [
     "DestinationParseResult",
     "DestinationResolution",
     "DestinationValidationIssue",
+    "DockerReadiness",
     "DockerDestination",
     "LocalDestination",
     "default_local_destination",
     "parse_destination_config",
+    "probe_docker_readiness",
     "resolve_effective_repo_destination",
     "validate_manifest_destinations",
 ]

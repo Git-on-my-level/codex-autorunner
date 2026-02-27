@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+from ...core.destinations import DockerReadiness, probe_docker_readiness
 from ...core.utils import subprocess_env
 
 logger = logging.getLogger("codex_autorunner.integrations.docker.runtime")
@@ -193,11 +194,14 @@ class DockerRuntime:
         return proc
 
     def is_available(self) -> bool:
-        try:
-            self._run(["--version"], check=False, timeout_seconds=10)
-        except DockerUnavailableError:
-            return False
-        return True
+        return self.probe_readiness().binary_available
+
+    def probe_readiness(self, *, timeout_seconds: float = 10.0) -> DockerReadiness:
+        return probe_docker_readiness(
+            docker_binary=self._docker_binary,
+            run_fn=self._run_fn,
+            timeout_seconds=timeout_seconds,
+        )
 
     def ensure_container_running(self, spec: DockerContainerSpec) -> None:
         inspect_proc = self._run(
@@ -390,6 +394,7 @@ class DockerRuntime:
 __all__ = [
     "DockerContainerSpec",
     "DockerMount",
+    "DockerReadiness",
     "DockerRuntime",
     "DockerRuntimeError",
     "DockerUnavailableError",
