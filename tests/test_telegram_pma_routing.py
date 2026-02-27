@@ -12,6 +12,10 @@ from codex_autorunner.core.app_server_threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
+from codex_autorunner.core.pma_delivery_targets import (
+    PmaDeliveryTargetsStore,
+    target_key,
+)
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
 )
@@ -19,6 +23,9 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramDocument,
     TelegramMessage,
     TelegramVoice,
+)
+from codex_autorunner.integrations.telegram.handlers.commands import (
+    build_command_specs,
 )
 from codex_autorunner.integrations.telegram.handlers.commands import (
     workspace as workspace_commands_module,
@@ -38,6 +45,7 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     handle_media_message,
 )
 from codex_autorunner.integrations.telegram.handlers.selections import SelectionState
+from codex_autorunner.integrations.telegram.helpers import _format_help_text
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
     ThreadSummary,
@@ -1203,3 +1211,247 @@ async def test_resume_opencode_missing_session_clears_stale_topic_state(
     assert stale_session not in record.thread_summaries
     assert handler.answers and handler.answers[-1] == "Thread missing"
     assert any("Thread no longer exists." in text for text in handler.final_messages)
+
+
+class _PmaTargetsRouterStub:
+    def __init__(self, record: Optional[TelegramTopicRecord]) -> None:
+        self._record = record
+
+    async def get_topic(self, _key: str) -> Optional[TelegramTopicRecord]:
+        return self._record
+
+    async def ensure_topic(
+        self, _chat_id: int, _thread_id: Optional[int]
+    ) -> TelegramTopicRecord:
+        if self._record is None:
+            self._record = TelegramTopicRecord()
+        return self._record
+
+    async def update_topic(
+        self, _chat_id: int, _thread_id: Optional[int], apply: object
+    ) -> TelegramTopicRecord:
+        if self._record is None:
+            self._record = TelegramTopicRecord()
+        if callable(apply):
+            apply(self._record)
+        return self._record
+
+
+class _PmaTargetsHandler(TelegramCommandHandlers):
+    def __init__(
+        self,
+        *,
+        hub_root: Path,
+        record: Optional[TelegramTopicRecord],
+        pma_enabled: bool = True,
+    ) -> None:
+        self._logger = logging.getLogger("test")
+        self._hub_root = hub_root
+        self._hub_supervisor = SimpleNamespace(
+            hub_config=SimpleNamespace(pma=SimpleNamespace(enabled=pma_enabled))
+        )
+        self._router = _PmaTargetsRouterStub(record)
+        self.sent: list[str] = []
+
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        return f"{chat_id}:{thread_id}"
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> None:
+        self.sent.append(text)
+
+
+def _make_pma_message(
+    *, chat_id: int = -1001, thread_id: Optional[int] = 55
+) -> TelegramMessage:
+    return TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        from_user_id=99,
+        text="/pma",
+        date=None,
+        is_topic_message=thread_id is not None,
+    )
+
+
+@pytest.mark.anyio
+async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=TelegramTopicRecord())
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "target add here", _RuntimeStub())
+    await handler._handle_pma(message, "target add telegram:-2002:77", _RuntimeStub())
+    await handler._handle_pma(message, "target add discord:99887766", _RuntimeStub())
+
+    store = PmaDeliveryTargetsStore(hub_root)
+    state = store.load()
+    keys = {
+        key
+        for key in (target_key(target) for target in state["targets"])
+        if isinstance(key, str)
+    }
+    assert keys == {
+        "chat:discord:99887766",
+        "chat:telegram:-1001:55",
+        "chat:telegram:-2002:77",
+    }
+
+    await handler._handle_pma(message, "targets", _RuntimeStub())
+    assert "chat:telegram:-1001:55" in handler.sent[-1]
+    assert "chat:discord:99887766" in handler.sent[-1]
+
+    await handler._handle_pma(message, "target rm here", _RuntimeStub())
+    state = store.load()
+    keys = {
+        key
+        for key in (target_key(target) for target in state["targets"])
+        if isinstance(key, str)
+    }
+    assert "chat:telegram:-1001:55" not in keys
+
+    await handler._handle_pma(message, "target clear", _RuntimeStub())
+    assert store.load()["targets"] == []
+
+
+@pytest.mark.anyio
+async def test_pma_target_add_invalid_ref_reports_usage(tmp_path: Path) -> None:
+    handler = _PmaTargetsHandler(
+        hub_root=tmp_path / "hub",
+        record=TelegramTopicRecord(),
+    )
+    message = _make_pma_message()
+
+    await handler._handle_pma(message, "target add telegram:abc", _RuntimeStub())
+    assert "Invalid target ref" in handler.sent[-1]
+    assert "/pma target add <ref>" in handler.sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_on_sets_here_target_and_replaces_single_target(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.set_targets([{"kind": "chat", "platform": "discord", "chat_id": "111"}])
+    record = TelegramTopicRecord(
+        pma_enabled=False,
+        repo_id="repo-1",
+        workspace_path=str(tmp_path / "repo"),
+        workspace_id="workspace-1",
+        active_thread_id="thread-1",
+    )
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "on", _RuntimeStub())
+
+    assert record.pma_enabled is True
+    assert store.load()["targets"] == [
+        {
+            "kind": "chat",
+            "platform": "telegram",
+            "chat_id": "-1001",
+            "thread_id": "55",
+            "conversation_key": "-1001:55",
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_pma_on_keeps_multi_targets_and_adds_here(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "111"},
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "-2002",
+                "thread_id": "77",
+            },
+        ]
+    )
+    handler = _PmaTargetsHandler(
+        hub_root=hub_root,
+        record=TelegramTopicRecord(pma_enabled=False),
+    )
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "on", _RuntimeStub())
+
+    keys = {
+        key
+        for key in (target_key(target) for target in store.load()["targets"])
+        if isinstance(key, str)
+    }
+    assert keys == {
+        "chat:discord:111",
+        "chat:telegram:-1001:55",
+        "chat:telegram:-2002:77",
+    }
+
+
+@pytest.mark.anyio
+async def test_pma_off_keeps_delivery_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.set_targets([{"kind": "chat", "platform": "discord", "chat_id": "111"}])
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        pma_prev_repo_id="repo-2",
+        pma_prev_workspace_path=str(tmp_path / "repo"),
+        pma_prev_workspace_id="workspace-2",
+        pma_prev_active_thread_id="thread-2",
+    )
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "off", _RuntimeStub())
+
+    assert record.pma_enabled is False
+    assert store.load()["targets"] == [
+        {"kind": "chat", "platform": "discord", "chat_id": "111"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_pma_status_does_not_mutate_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.set_targets([{"kind": "chat", "platform": "discord", "chat_id": "111"}])
+    record = TelegramTopicRecord(pma_enabled=False)
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "status", _RuntimeStub())
+
+    assert handler.sent[-1] == "PMA mode: disabled"
+    assert store.load()["targets"] == [
+        {"kind": "chat", "platform": "discord", "chat_id": "111"}
+    ]
+
+
+class _HelpHandlersStub:
+    async def _noop(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    def __getattr__(self, name: str) -> object:
+        if name.startswith("_handle_"):
+            return self._noop
+        raise AttributeError(name)
+
+
+def test_help_text_mentions_pma_target_management() -> None:
+    specs = build_command_specs(_HelpHandlersStub())
+    text = _format_help_text(specs)
+    assert "/pma - PMA mode and delivery targets" in text
