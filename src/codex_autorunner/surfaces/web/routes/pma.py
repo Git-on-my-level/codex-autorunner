@@ -64,15 +64,15 @@ from ....core.state_roots import is_within_allowed_root
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
-from ....integrations.chat.text_chunking import chunk_text
 from ....integrations.discord.config import (
     DEFAULT_STATE_FILE as DISCORD_DEFAULT_STATE_FILE,
 )
 from ....integrations.github.context_injection import maybe_inject_github_context
-from ....integrations.pma_delivery import deliver_pma_output_to_active_sink
+from ....integrations.pma_delivery import (
+    deliver_pma_dispatches_to_delivery_targets,
+    deliver_pma_output_to_active_sink,
+)
 from ....integrations.telegram.config import DEFAULT_STATE_FILE
-from ....integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
-from ....integrations.telegram.state import OutboxRecord, TelegramStateStore
 from ..schemas import (
     PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
@@ -350,83 +350,18 @@ def build_pma_routes() -> APIRouter:
         if not dispatches:
             return
 
-        sink_store = PmaActiveSinkStore(hub_root)
-        sink = sink_store.load()
-        if not isinstance(sink, dict):
-            return
-        kind = sink.get("kind")
-        platform = sink.get("platform")
-        if kind == "telegram":
-            chat_id = sink.get("chat_id")
-            thread_id = sink.get("thread_id")
-            if not isinstance(chat_id, int):
-                return
-            if thread_id is not None and not isinstance(thread_id, int):
-                thread_id = None
-        elif kind == "chat" and platform == "telegram":
-            raw_chat_id = sink.get("chat_id")
-            if isinstance(raw_chat_id, str):
-                raw_chat_id = raw_chat_id.strip()
-            if not isinstance(raw_chat_id, (str, int)):
-                return
-            try:
-                chat_id = int(raw_chat_id)
-            except (TypeError, ValueError):
-                return
-            raw_thread_id = sink.get("thread_id")
-            if isinstance(raw_thread_id, str):
-                raw_thread_id = raw_thread_id.strip()
-            thread_id: Optional[int] = None  # type: ignore[no-redef]
-            if raw_thread_id:
-                try:
-                    thread_id = int(raw_thread_id)
-                except (TypeError, ValueError):
-                    thread_id = None
-        else:
-            return
-
         state_path = _resolve_telegram_state_path(request)
-        store = TelegramStateStore(state_path)
+        discord_state_path = _resolve_discord_state_path(request)
         try:
-            for dispatch in dispatches:
-                title = dispatch.title or "PMA dispatch"
-                priority = dispatch.priority or "info"
-                header = f"**PMA dispatch** ({priority})\n{title}"
-                body = dispatch.body.strip()
-                link_lines = []
-                for link in dispatch.links:
-                    label = link.get("label", "")
-                    href = link.get("href", "")
-                    if label and href:
-                        link_lines.append(f"- {label}: {href}")
-                details = "\n".join(
-                    line for line in [body, "\n".join(link_lines)] if line
-                ).strip()
-                message = header
-                if details:
-                    message = f"{header}\n\n{details}"
-
-                chunks = chunk_text(
-                    message, max_len=TELEGRAM_MAX_MESSAGE_LENGTH, with_numbering=True
-                )
-                for idx, chunk in enumerate(chunks, 1):
-                    record_id = f"pma-dispatch:{dispatch.dispatch_id}:{idx}"
-                    record = OutboxRecord(
-                        record_id=record_id,
-                        chat_id=chat_id,
-                        thread_id=thread_id,
-                        reply_to_message_id=None,
-                        placeholder_message_id=None,
-                        text=chunk,
-                        created_at=now_iso(),
-                        operation="send",
-                        outbox_key=record_id,
-                    )
-                    await store.enqueue_outbox(record)
+            await deliver_pma_dispatches_to_delivery_targets(
+                hub_root=hub_root,
+                turn_id=turn_id,
+                dispatches=dispatches,
+                telegram_state_path=state_path,
+                discord_state_path=discord_state_path,
+            )
         except Exception:
-            logger.exception("Failed to enqueue PMA dispatch to Telegram outbox")
-        finally:
-            await store.close()
+            logger.exception("Failed to deliver PMA dispatches to delivery targets")
 
     async def _persist_state(store: Optional[PmaStateStore]) -> None:
         if store is None:
