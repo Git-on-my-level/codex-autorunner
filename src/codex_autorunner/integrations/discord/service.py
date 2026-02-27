@@ -32,7 +32,7 @@ from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
-from ...core.pma_sink import PmaActiveSinkStore
+from ...core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
@@ -548,7 +548,8 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     guild_id=guild_id,
-                    command=command,
+                    command_path=ingress.command_path,
+                    options=ingress.options,
                 )
             else:
                 await self._respond_ephemeral(
@@ -744,9 +745,8 @@ class DiscordBotService:
                     prompt_text,
                     hub_root=self._config.root,
                 )
-                PmaActiveSinkStore(self._config.root).set_chat(
-                    platform="discord",
-                    chat_id=channel_id,
+                PmaDeliveryTargetsStore(self._config.root).add_target(
+                    self._pma_here_target(channel_id)
                 )
             except Exception as exc:
                 log_event(
@@ -2202,38 +2202,35 @@ class DiscordBotService:
         *,
         channel_id: str,
         guild_id: Optional[str],
-        command: str,
+        command_path: tuple[str, ...],
+        options: dict[str, Any],
     ) -> None:
-        if not self._config.pma_enabled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
-            )
-            return
-
-        subcommand = command.split(":")[-1] if ":" in command else "status"
+        subcommand = command_path[1] if len(command_path) > 1 else "status"
         if subcommand == "on":
-            await self._handle_pma_on(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                guild_id=guild_id,
-            )
+            pass
         elif subcommand == "off":
-            await self._handle_pma_off(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
+            pass
         elif subcommand == "status":
-            await self._handle_pma_status(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
+            pass
+        elif subcommand == "targets":
+            pass
+        elif subcommand == "target":
+            pass
         else:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "Unknown PMA subcommand. Use on, off, or status.",
             )
+            return
+        await self._handle_pma_command(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            command_path=command_path,
+            options=options,
+        )
 
     async def _sync_application_commands_on_startup(self) -> None:
         registration = self._config.command_registration
@@ -2582,6 +2579,7 @@ class DiscordBotService:
                     channel_id=channel_id,
                     guild_id=guild_id,
                     command_path=ingress.command_path,
+                    options=ingress.options,
                 )
                 return
 
@@ -2870,6 +2868,10 @@ class DiscordBotService:
             "/pma on - Enable PMA mode",
             "/pma off - Disable PMA mode",
             "/pma status - Show PMA status",
+            "/pma targets - List PMA delivery targets",
+            "/pma target add <ref> - Add a PMA delivery target",
+            "/pma target rm <ref> - Remove a PMA delivery target",
+            "/pma target clear - Clear PMA delivery targets",
             "",
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",
@@ -4500,6 +4502,7 @@ class DiscordBotService:
         channel_id: str,
         guild_id: Optional[str],
         command_path: tuple[str, ...],
+        options: Optional[dict[str, Any]] = None,
     ) -> None:
         if not self._config.pma_enabled:
             await self._respond_ephemeral(
@@ -4509,6 +4512,7 @@ class DiscordBotService:
             )
             return
 
+        command_options = options or {}
         subcommand = command_path[1] if len(command_path) > 1 else "status"
 
         if subcommand == "on":
@@ -4525,6 +4529,20 @@ class DiscordBotService:
         elif subcommand == "status":
             await self._handle_pma_status(
                 interaction_id, interaction_token, channel_id=channel_id
+            )
+        elif subcommand == "targets":
+            await self._handle_pma_targets_list(
+                interaction_id,
+                interaction_token,
+            )
+        elif subcommand == "target":
+            action = command_path[2] if len(command_path) > 2 else ""
+            await self._handle_pma_target_mutation(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                action=action,
+                options=command_options,
             )
         else:
             await self._respond_ephemeral(
@@ -4569,11 +4587,16 @@ class DiscordBotService:
             pma_prev_repo_id=prev_repo_id,
         )
 
-        sink_store = PmaActiveSinkStore(self._config.root)
-        sink_store.set_chat(
-            platform="discord",
-            chat_id=channel_id,
-        )
+        targets_store = PmaDeliveryTargetsStore(self._config.root)
+        here_target = self._pma_here_target(channel_id)
+        state = targets_store.load()
+        current_targets = [
+            target for target in state.get("targets", []) if isinstance(target, dict)
+        ]
+        if len(current_targets) > 1:
+            targets_store.add_target(here_target)
+        else:
+            targets_store.set_targets([here_target])
 
         hint = (
             "Use /pma off to exit. Previous binding saved."
@@ -4595,14 +4618,6 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
-            sink_store = PmaActiveSinkStore(self._config.root)
-            sink = sink_store.load()
-            if (
-                sink is not None
-                and sink.get("platform") == "discord"
-                and sink.get("chat_id") == channel_id
-            ):
-                sink_store.clear()
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -4619,15 +4634,6 @@ class DiscordBotService:
             pma_prev_workspace_path=None,
             pma_prev_repo_id=None,
         )
-
-        sink_store = PmaActiveSinkStore(self._config.root)
-        sink = sink_store.load()
-        if (
-            sink is not None
-            and sink.get("platform") == "discord"
-            and sink.get("chat_id") == channel_id
-        ):
-            sink_store.clear()
 
         if prev_workspace:
             await self._store.upsert_binding(
@@ -4655,21 +4661,21 @@ class DiscordBotService:
         channel_id: str,
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
+        here_key = target_key(self._pma_here_target(channel_id))
+        targets = PmaDeliveryTargetsStore(self._config.root).load().get("targets", [])
+        active_here = isinstance(here_key, str) and any(
+            target_key(candidate) == here_key
+            for candidate in targets
+            if isinstance(candidate, dict)
+        )
         if binding is None:
-            sink_store = PmaActiveSinkStore(self._config.root)
-            sink = sink_store.load()
-            active_here = (
-                sink is not None
-                and sink.get("platform") == "discord"
-                and sink.get("chat_id") == channel_id
-            )
-            status = "enabled" if active_here else "disabled"
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "\n".join(
                     [
-                        f"PMA mode: {status}",
+                        "PMA mode: disabled",
+                        f"Delivery targets include this channel: {active_here}",
                         "Current workspace: unbound",
                     ]
                 ),
@@ -4680,16 +4686,9 @@ class DiscordBotService:
         status = "enabled" if pma_enabled else "disabled"
 
         if pma_enabled:
-            sink_store = PmaActiveSinkStore(self._config.root)
-            sink = sink_store.load()
-            active_here = (
-                sink is not None
-                and sink.get("platform") == "discord"
-                and sink.get("chat_id") == channel_id
-            )
             lines = [
                 f"PMA mode: {status}",
-                f"Active sink targeting this channel: {active_here}",
+                f"Delivery targets include this channel: {active_here}",
             ]
         else:
             workspace = binding.get("workspace_path", "unknown")
@@ -4703,6 +4702,186 @@ class DiscordBotService:
             interaction_token,
             "\n".join(lines),
         )
+
+    async def _handle_pma_targets_list(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> None:
+        state = PmaDeliveryTargetsStore(self._config.root).load()
+        targets = [
+            target for target in state.get("targets", []) if isinstance(target, dict)
+        ]
+        if not targets:
+            text = "PMA delivery targets: (none)"
+        else:
+            lines = ["PMA delivery targets:"]
+            for target in targets:
+                key = target_key(target)
+                if not isinstance(key, str):
+                    continue
+                label = self._format_pma_target_label(target)
+                if label:
+                    lines.append(f"- {key} ({label})")
+                else:
+                    lines.append(f"- {key}")
+            text = "\n".join(lines)
+        await self._respond_ephemeral(interaction_id, interaction_token, text)
+
+    async def _handle_pma_target_mutation(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        action: str,
+        options: dict[str, Any],
+    ) -> None:
+        action_norm = action.strip().lower()
+        store = PmaDeliveryTargetsStore(self._config.root)
+        if action_norm == "clear":
+            store.set_targets([])
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Cleared PMA delivery targets.",
+            )
+            return
+
+        if action_norm not in {"add", "rm", "remove"}:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                self._pma_usage_text(),
+            )
+            return
+
+        raw_ref = options.get("ref")
+        ref = raw_ref.strip() if isinstance(raw_ref, str) else ""
+        if not ref:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                self._pma_usage_text(),
+            )
+            return
+        target = self._parse_pma_target_ref(channel_id=channel_id, ref=ref)
+        if target is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Invalid target ref '{ref}'.\n{self._pma_usage_text()}",
+            )
+            return
+        key = target_key(target)
+        if not isinstance(key, str):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Invalid target ref '{ref}'.",
+            )
+            return
+
+        if action_norm == "add":
+            store.add_target(target)
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Added PMA delivery target: {key}",
+            )
+            return
+
+        removed = store.remove_target(target)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            (
+                f"Removed PMA delivery target: {key}"
+                if removed
+                else f"PMA delivery target not found: {key}"
+            ),
+        )
+
+    def _pma_usage_text(self) -> str:
+        return "\n".join(
+            [
+                "Usage:",
+                "/pma on|off|status|targets",
+                "/pma target add <ref>",
+                "/pma target rm <ref>",
+                "/pma target clear",
+                "Refs: here | discord:<channel_id> | telegram:<chat_id>[:<thread_id>]",
+            ]
+        )
+
+    def _pma_here_target(self, channel_id: str) -> dict[str, Any]:
+        return {
+            "kind": "chat",
+            "platform": "discord",
+            "chat_id": channel_id,
+        }
+
+    def _parse_pma_target_ref(
+        self, *, channel_id: str, ref: str
+    ) -> Optional[dict[str, Any]]:
+        value = ref.strip()
+        if not value:
+            return None
+        lowered = value.lower()
+        if lowered == "here":
+            return self._pma_here_target(channel_id)
+        if lowered.startswith("discord:"):
+            chat_id = value.split(":", 1)[1].strip()
+            if not chat_id:
+                return None
+            return {
+                "kind": "chat",
+                "platform": "discord",
+                "chat_id": chat_id,
+            }
+        if lowered.startswith("telegram:"):
+            parts = value.split(":")
+            if len(parts) < 2 or len(parts) > 3:
+                return None
+            chat_id_raw = parts[1].strip()
+            if not chat_id_raw or not chat_id_raw.lstrip("-").isdigit():
+                return None
+            target: dict[str, Any] = {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": str(int(chat_id_raw)),
+            }
+            if len(parts) == 3:
+                thread_raw = parts[2].strip()
+                if not thread_raw or not thread_raw.lstrip("-").isdigit():
+                    return None
+                target["thread_id"] = str(int(thread_raw))
+            return target
+        return None
+
+    def _format_pma_target_label(self, target: dict[str, Any]) -> str:
+        label = target.get("label")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+        kind = target.get("kind")
+        if kind == "chat":
+            platform = target.get("platform")
+            chat_id = target.get("chat_id")
+            thread_id = target.get("thread_id")
+            if (
+                isinstance(platform, str)
+                and isinstance(chat_id, str)
+                and platform
+                and chat_id
+            ):
+                if isinstance(thread_id, str) and thread_id:
+                    return f"{platform} {chat_id} thread {thread_id}"
+                return f"{platform} {chat_id}"
+        if kind == "local":
+            path = target.get("path")
+            if isinstance(path, str) and path:
+                return path
+        return ""
 
     async def _respond_ephemeral(
         self,

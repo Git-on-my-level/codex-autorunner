@@ -402,6 +402,49 @@ def build_application_commands() -> list[dict[str, Any]]:
                     "name": "status",
                     "description": "Show PMA mode status",
                 },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "targets",
+                    "description": "List PMA delivery targets",
+                },
+                {
+                    "type": SUB_COMMAND_GROUP,
+                    "name": "target",
+                    "description": "Manage PMA delivery targets",
+                    "options": [
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "add",
+                            "description": "Add PMA delivery target",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "ref",
+                                    "description": "here | discord:<channel_id> | telegram:<chat_id>[:<thread_id>]",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "rm",
+                            "description": "Remove PMA delivery target",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "ref",
+                                    "description": "here | discord:<channel_id> | telegram:<chat_id>[:<thread_id>]",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "clear",
+                            "description": "Clear PMA delivery targets",
+                        },
+                    ],
+                },
             ],
         },
     ]

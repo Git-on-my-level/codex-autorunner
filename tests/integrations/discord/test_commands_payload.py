@@ -72,7 +72,16 @@ def test_build_application_commands_structure_is_stable() -> None:
     pma = next(cmd for cmd in commands if cmd["name"] == "pma")
     assert pma["type"] == 1
     pma_options = pma["options"]
-    assert [opt["name"] for opt in pma_options] == ["on", "off", "status"]
+    assert [opt["name"] for opt in pma_options] == [
+        "on",
+        "off",
+        "status",
+        "targets",
+        "target",
+    ]
+
+    pma_target = _find_option(pma_options, "target")
+    assert [opt["name"] for opt in pma_target["options"]] == ["add", "rm", "clear"]
 
 
 def test_required_options_are_marked_required() -> None:
@@ -93,3 +102,12 @@ def test_required_options_are_marked_required() -> None:
 
     assert text_option["required"] is True
     assert run_id_option["required"] is False
+
+    pma_options = commands[1]["options"]
+    target_group = _find_option(pma_options, "target")
+    add_ref = _find_option(
+        _find_option(target_group["options"], "add")["options"], "ref"
+    )
+    rm_ref = _find_option(_find_option(target_group["options"], "rm")["options"], "ref")
+    assert add_ref["required"] is True
+    assert rm_ref["required"] is True
