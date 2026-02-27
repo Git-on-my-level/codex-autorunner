@@ -233,9 +233,8 @@ async def test_status_creates_record(tmp_path: Path) -> None:
     text = fake_bot.messages[-1]["text"]
     assert "Workspace: unbound" in text
     assert "Topic not bound" not in text
-    record = service._router.get_topic(
-        service._router.resolve_key(message.chat_id, message.thread_id)
-    )
+    key = await service._router.resolve_key(message.chat_id, message.thread_id)
+    record = await service._router.get_topic(key)
     assert record is not None
 
 
@@ -250,9 +249,10 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        runtime = service._router.runtime_for(
-            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
         )
+        runtime = service._router.runtime_for(key)
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
     finally:
@@ -430,9 +430,10 @@ async def test_error_notification_surfaces(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        runtime = service._router.runtime_for(
-            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
         )
+        runtime = service._router.runtime_for(key)
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
     finally:
@@ -455,9 +456,10 @@ async def test_bang_shell_attaches_output(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        runtime = service._router.runtime_for(
-            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
         )
+        runtime = service._router.runtime_for(key)
         message = build_message("!echo hi", message_id=11)
         await service._handle_bang_shell(message, "!echo hi", runtime)
     finally:
@@ -482,9 +484,10 @@ async def test_bang_shell_timeout_message(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        runtime = service._router.runtime_for(
-            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
         )
+        runtime = service._router.runtime_for(key)
         message = build_message("!top", message_id=11)
         await service._handle_bang_shell(message, "!top", runtime)
     finally:
@@ -504,9 +507,10 @@ async def test_diff_command_uses_app_server(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        runtime = service._router.runtime_for(
-            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
         )
+        runtime = service._router.runtime_for(key)
         message = build_message("/diff", message_id=11)
         await service._handle_diff(message, "", runtime)
     finally:
@@ -543,9 +547,10 @@ async def test_thread_start_rejects_mismatched_workspace(tmp_path: Path) -> None
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        runtime = service._router.runtime_for(
-            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
         )
+        runtime = service._router.runtime_for(key)
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
     finally:
