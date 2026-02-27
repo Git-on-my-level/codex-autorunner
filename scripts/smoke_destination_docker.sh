@@ -70,10 +70,22 @@ if [[ "$DOCKER_IMAGE" == "" ]]; then
   exit 2
 fi
 
-HUB_ROOT="$(cd "$HUB_ROOT" && pwd)"
+HUB_ROOT="$(cd "$HUB_ROOT" && pwd -P)"
 MANIFEST_PATH="$HUB_ROOT/.codex-autorunner/manifest.yml"
 if [[ ! -f "$MANIFEST_PATH" ]]; then
   echo "Manifest not found: $MANIFEST_PATH" >&2
+  exit 1
+fi
+
+CAR_CMD=()
+if command -v car >/dev/null 2>&1; then
+  CAR_CMD=(car)
+elif [[ -x ".venv/bin/python" ]]; then
+  CAR_CMD=(".venv/bin/python" "-m" "codex_autorunner.cli")
+elif command -v python3 >/dev/null 2>&1; then
+  CAR_CMD=("python3" "-m" "codex_autorunner.cli")
+else
+  echo "Could not resolve CAR CLI command. Install 'car' or use a repo with .venv." >&2
   exit 1
 fi
 
@@ -138,40 +150,42 @@ echo "Repo id:    $REPO_ID"
 echo "Repo path:  $REPO_PATH"
 echo "Image:      $DOCKER_IMAGE"
 echo "Execute:    $EXECUTE"
+echo "CAR cmd:    ${CAR_CMD[*]}"
 echo "Evidence:   $EVIDENCE_DIR"
 echo
 
-run_cmd car hub destination set "$REPO_ID" docker \
+run_cmd "${CAR_CMD[@]}" hub destination set "$REPO_ID" docker \
   --image "$DOCKER_IMAGE" \
   --env "CAR_*" \
   --json \
   --path "$HUB_ROOT"
 
-run_cmd car hub destination show "$REPO_ID" --json --path "$HUB_ROOT"
+run_cmd "${CAR_CMD[@]}" hub destination show "$REPO_ID" --json --path "$HUB_ROOT"
 
-run_cmd car flow ticket_flow bootstrap --repo "$REPO_PATH" --hub "$HUB_ROOT"
+run_cmd "${CAR_CMD[@]}" flow ticket_flow bootstrap --repo "$REPO_PATH" --hub "$HUB_ROOT"
 
 if [[ "$EXECUTE" -eq 1 ]]; then
   mkdir -p "$EVIDENCE_DIR"
-  printf '+ %q' car flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
+  printf '+'
+  printf ' %q' "${CAR_CMD[@]}" flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
   printf '\n'
-  car flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new \
+  "${CAR_CMD[@]}" flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new \
     | tee "$RUN_START_LOG"
 else
-  run_cmd car flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
+  run_cmd "${CAR_CMD[@]}" flow ticket_flow start --repo "$REPO_PATH" --hub "$HUB_ROOT" --force-new
 fi
 
 RUN_ID=""
 if [[ "$EXECUTE" -eq 1 ]]; then
   RUN_ID="$(sed -n 's/^Started ticket_flow run: //p' "$RUN_START_LOG" | tail -n 1)"
   if [[ -n "$RUN_ID" ]]; then
-    run_cmd car flow ticket_flow status \
+    run_cmd "${CAR_CMD[@]}" flow ticket_flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --run-id "$RUN_ID" \
       --json
   else
-    run_cmd car flow ticket_flow status --repo "$REPO_PATH" --hub "$HUB_ROOT" --json
+    run_cmd "${CAR_CMD[@]}" flow ticket_flow status --repo "$REPO_PATH" --hub "$HUB_ROOT" --json
   fi
 
   run_cmd sh -c "find '$REPO_PATH/.codex-autorunner/runs' -maxdepth 3 -type f | sort > '$EVIDENCE_DIR/run_artifacts.txt'"
@@ -183,17 +197,17 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   fi
 
   run_capture "$EVIDENCE_DIR/destination_effective.json" \
-    car hub destination show "$REPO_ID" --json --path "$HUB_ROOT"
+    "${CAR_CMD[@]}" hub destination show "$REPO_ID" --json --path "$HUB_ROOT"
   if [[ -n "$RUN_ID" ]]; then
     run_capture "$EVIDENCE_DIR/ticket_flow_status.json" \
-      car flow ticket_flow status \
+      "${CAR_CMD[@]}" flow ticket_flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --run-id "$RUN_ID" \
       --json
   else
     run_capture "$EVIDENCE_DIR/ticket_flow_status.json" \
-      car flow ticket_flow status \
+      "${CAR_CMD[@]}" flow ticket_flow status \
       --repo "$REPO_PATH" \
       --hub "$HUB_ROOT" \
       --json
