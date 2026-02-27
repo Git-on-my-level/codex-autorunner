@@ -6,6 +6,7 @@ from ...core.config import load_repo_config
 from ...core.hub import HubSupervisor as _HubSupervisor
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
+from .commands.chat import register_chat_commands
 from .commands.cleanup import register_cleanup_commands
 from .commands.describe import register_describe_commands
 from .commands.discord import register_discord_commands
@@ -82,6 +83,7 @@ from .commands.utils import (
     resolve_hub_config_path_for_cli as _resolve_hub_config_path_for_cli,
 )
 from .commands.worktree import register_worktree_commands
+from .pma_cli import _resolve_hub_path as _resolve_pma_hub_path
 from .pma_cli import pma_app as pma_cli_app
 
 HubSupervisor = _HubSupervisor
@@ -99,6 +101,7 @@ discord_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
 repos_app = typer.Typer(add_completion=False)
 cleanup_app = typer.Typer(add_completion=False)
+chat_app = typer.Typer(add_completion=False)
 worktree_app = typer.Typer(add_completion=False)
 hub_tickets_app = typer.Typer(add_completion=False)
 doctor_app = typer.Typer(add_completion=False, invoke_without_command=True)
@@ -188,6 +191,7 @@ app.add_typer(templates_app, name="templates")
 # UX alias: allow singular form (`car template ...`) in addition to `car templates ...`.
 app.add_typer(templates_app, name="template")
 app.add_typer(cleanup_app, name="cleanup")
+app.add_typer(chat_app, name="chat")
 register_templates_commands(
     templates_app,
     require_repo_config=_require_repo_config,
@@ -218,6 +222,10 @@ register_inbox_commands(
 register_cleanup_commands(
     cleanup_app,
     require_repo_config=_require_repo_config,
+)
+register_chat_commands(
+    chat_app,
+    resolve_hub_path=_resolve_pma_hub_path,
 )
 app.add_typer(doctor_app, name="doctor")
 register_doctor_commands(doctor_app)

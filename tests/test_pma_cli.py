@@ -5,6 +5,10 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.pma_delivery_targets import (
+    PmaDeliveryTargetsStore,
+    target_key,
+)
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
 
@@ -429,3 +433,73 @@ def test_pma_context_compact_snapshots_and_rewrites_active_context(tmp_path: Pat
     assert "## Open questions" in compacted
     assert "## Archived context summary" in compacted
     assert len(compacted.splitlines()) <= 24
+
+
+def test_pma_targets_group_has_required_commands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["targets", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "list" in output
+    assert "add" in output
+    assert "rm" in output
+    assert "clear" in output
+
+
+def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    runner = CliRunner()
+
+    add_result = runner.invoke(
+        pma_app,
+        ["targets", "add", "telegram:-100123:777", "--path", str(tmp_path)],
+    )
+    assert add_result.exit_code == 0
+    assert "Added PMA delivery target: chat:telegram:-100123:777" in add_result.stdout
+
+    add_discord_result = runner.invoke(
+        pma_app,
+        ["targets", "add", "discord:987654321", "--path", str(tmp_path)],
+    )
+    assert add_discord_result.exit_code == 0
+    assert (
+        "Added PMA delivery target: chat:discord:987654321" in add_discord_result.stdout
+    )
+
+    list_result = runner.invoke(pma_app, ["targets", "list", "--path", str(tmp_path)])
+    assert list_result.exit_code == 0
+    assert "chat:telegram:-100123:777" in list_result.stdout
+    assert "chat:discord:987654321" in list_result.stdout
+
+    rm_result = runner.invoke(
+        pma_app,
+        ["targets", "rm", "chat:telegram:-100123:777", "--path", str(tmp_path)],
+    )
+    assert rm_result.exit_code == 0
+    assert "Removed PMA delivery target: chat:telegram:-100123:777" in rm_result.stdout
+
+    clear_result = runner.invoke(
+        pma_app,
+        ["targets", "clear", "--path", str(tmp_path)],
+    )
+    assert clear_result.exit_code == 0
+    assert "Cleared PMA delivery targets." in clear_result.stdout
+
+    state = PmaDeliveryTargetsStore(tmp_path).load()
+    keys = {
+        key
+        for key in (target_key(target) for target in state.get("targets", []))
+        if isinstance(key, str)
+    }
+    assert keys == set()
+
+
+def test_pma_targets_add_rejects_invalid_ref(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["targets", "add", "telegram:not-a-number", "--path", str(tmp_path)],
+    )
+    assert result.exit_code == 1
+    assert "Invalid target ref" in result.output
