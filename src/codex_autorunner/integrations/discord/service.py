@@ -2138,6 +2138,26 @@ class DiscordBotService:
                     options=options,
                 )
                 return
+            if command_path == ("car", "flow", "issue"):
+                await self._handle_flow_issue(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                )
+                return
+            if command_path == ("car", "flow", "plan"):
+                await self._handle_flow_plan(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                )
+                return
             if command_path == ("car", "flow", "resume"):
                 await self._handle_flow_resume(
                     interaction_id,

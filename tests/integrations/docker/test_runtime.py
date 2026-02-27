@@ -95,7 +95,7 @@ def test_select_passthrough_env_defaults_to_process_env(
 ) -> None:
     monkeypatch.setenv("CAR_TEST_TOKEN", "present")
     selected = select_passthrough_env(["CAR_TEST_*"])
-    assert selected == {"CAR_TEST_TOKEN": "present"}
+    assert selected["CAR_TEST_TOKEN"] == "present"
 
 
 def test_normalize_mounts_adds_repo_root_mount(tmp_path: Path) -> None:

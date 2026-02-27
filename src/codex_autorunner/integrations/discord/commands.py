@@ -322,6 +322,32 @@ def build_application_commands() -> list[dict[str, Any]]:
                         },
                         {
                             "type": SUB_COMMAND,
+                            "name": "issue",
+                            "description": "Seed ISSUE.md from a GitHub issue",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "issue_ref",
+                                    "description": "Issue number or GitHub URL",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "plan",
+                            "description": "Seed ISSUE.md from a plain text plan",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "text",
+                                    "description": "Plan text",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
                             "name": "resume",
                             "description": "Resume a flow",
                             "options": [

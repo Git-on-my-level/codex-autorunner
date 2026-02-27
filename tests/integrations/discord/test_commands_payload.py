@@ -63,6 +63,8 @@ def test_build_application_commands_structure_is_stable() -> None:
     assert [opt["name"] for opt in flow_options] == [
         "status",
         "runs",
+        "issue",
+        "plan",
         "resume",
         "stop",
         "archive",
@@ -96,10 +98,16 @@ def test_required_options_are_marked_required() -> None:
     assert update_target["required"] is False
 
     flow = _find_option(car_options, "flow")
+    flow_issue = _find_option(flow["options"], "issue")
+    issue_ref_option = _find_option(flow_issue["options"], "issue_ref")
+    flow_plan = _find_option(flow["options"], "plan")
+    plan_text_option = _find_option(flow_plan["options"], "text")
     flow_reply = _find_option(flow["options"], "reply")
     text_option = _find_option(flow_reply["options"], "text")
     run_id_option = _find_option(flow_reply["options"], "run_id")
 
+    assert issue_ref_option["required"] is True
+    assert plan_text_option["required"] is True
     assert text_option["required"] is True
     assert run_id_option["required"] is False
 
