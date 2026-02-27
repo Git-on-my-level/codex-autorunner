@@ -27,6 +27,7 @@ All durable artifacts must live under one of these roots:
 - `archive/` - Worktree snapshots
 - `bin/` - Generated helper scripts
 - `workspace/` - Workspace directory
+- `app_server_workspaces/` - App-server supervisor/workspace state when the effective destination is `docker`
 
 **Notable repo-local artifacts**:
 - `flows/<run_id>/chat/inbound.jsonl` - Mirrored inbound chat events for a flow run
@@ -62,7 +63,13 @@ All durable artifacts must live under one of these roots:
 - `update_cache/` - Cached update artifacts
 - `update_status.json` - Update status
 - `locks/` - Cross-repo locks (e.g., telegram bot lock)
-- `workspaces/` - App-server workspaces
+- `workspaces/` - App-server workspaces (default for non-docker destinations)
+
+**Docker destination override**:
+- When a repo/worktree runs with effective destination `docker`, supervisor state root is forced to:
+  - `<repo_root>/.codex-autorunner/app_server_workspaces`
+- Rationale: docker-wrapped commands execute inside the repo bind mount, so state must be writable and visible from that mount.
+- This still satisfies the canonical state contract because the override remains under repo-local `.codex-autorunner/`.
 
 **Resolution**: `resolve_global_state_root()` in `core/state_roots.py`
 

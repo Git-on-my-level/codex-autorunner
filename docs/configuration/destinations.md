@@ -42,6 +42,10 @@ Notes:
 - Extra `mounts` are optional.
 - `env_passthrough` supports wildcard patterns (for example `CAR_*`).
 - `container_name` is optional; CAR chooses a deterministic default when omitted.
+- Docker destination also overrides app-server supervisor state root to:
+  - `<repo_root>/.codex-autorunner/app_server_workspaces`
+- Why: docker execution is bound to the repo mount, so supervisor/workspace state must live in a path that is available and writable from that mount.
+- This remains canonical because it is still under `.codex-autorunner/` (repo-local root), not a shadow location.
 
 ## CLI Usage
 
