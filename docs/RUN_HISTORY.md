@@ -49,6 +49,13 @@ Use FlowStore artifacts:
 
 Artifact discovery must come from `flow_artifacts` first. Filesystem scanning is fallback-only for legacy compatibility paths.
 
+### Chat Mirroring Artifact Kinds
+
+When flow-chat mirroring is enabled, `flow_artifacts` may include:
+
+- `chat_inbound` - points to `.codex-autorunner/flows/<run_id>/chat/inbound.jsonl`
+- `chat_outbound` - points to `.codex-autorunner/flows/<run_id>/chat/outbound.jsonl`
+
 ## Compatibility And Deprecation
 
 - Legacy numeric run logs (`.codex-autorunner/runs/<int>/run.log`) are deprecated and not canonical for new runs.

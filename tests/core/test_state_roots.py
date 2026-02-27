@@ -17,6 +17,7 @@ from codex_autorunner.core.state_roots import (
     resolve_repo_state_root,
     validate_path_within_roots,
 )
+from codex_autorunner.integrations.chat.run_mirror import ChatRunMirror
 
 
 class TestResolveRepoStateRoot:
@@ -184,6 +185,11 @@ class TestStateRootContract:
             state_root / "lock",
             state_root / "runs",
             state_root / "flows.db",
+            state_root / "pma" / "delivery_targets.json",
+            state_root / "pma" / "deliveries.jsonl",
+            state_root / "chat" / "channel_directory.json",
+            state_root / "flows" / "run-id" / "chat" / "inbound.jsonl",
+            state_root / "flows" / "run-id" / "chat" / "outbound.jsonl",
         ]
         for path in canonical_paths:
             assert is_within_allowed_root(path, allowed_roots=[state_root])
@@ -206,3 +212,30 @@ class TestStateRootContract:
         global_root = resolve_global_state_root()
         cache_root = resolve_cache_root()
         assert is_within_allowed_root(cache_root, allowed_roots=[global_root]) is False
+
+    def test_chat_run_mirror_rejects_paths_outside_repo_state_root(self, tmp_path):
+        mirror = ChatRunMirror(Path(tmp_path))
+        escaped_run_id = "../../../../outside-state-root"
+        escaped_target = (
+            Path(tmp_path)
+            / ".codex-autorunner"
+            / "flows"
+            / escaped_run_id
+            / "chat"
+            / "inbound.jsonl"
+        ).resolve()
+        state_root = resolve_repo_state_root(Path(tmp_path)).resolve()
+        assert (
+            is_within_allowed_root(escaped_target, allowed_roots=[state_root]) is False
+        )
+
+        mirror.mirror_inbound(
+            run_id=escaped_run_id,
+            platform="telegram",
+            event_type="flow_resume_command",
+            text="/flow resume",
+            chat_id=-1001,
+            thread_id=1,
+        )
+
+        assert not escaped_target.exists()

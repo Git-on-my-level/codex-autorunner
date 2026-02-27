@@ -9,6 +9,11 @@ from ...core.config import load_repo_config
 from ...core.flows import FlowStore
 from ...core.locks import file_lock
 from ...core.logging_utils import log_event
+from ...core.state_roots import (
+    StateRootError,
+    resolve_repo_state_root,
+    validate_path_within_roots,
+)
 from ...core.time_utils import now_iso
 
 logger = logging.getLogger(__name__)
@@ -37,6 +42,8 @@ class ChatRunMirror:
 
     def __init__(self, repo_root: Path, *, logger_: Optional[logging.Logger] = None):
         self._repo_root = repo_root.resolve()
+        self._repo_state_root = resolve_repo_state_root(self._repo_root).resolve()
+        self._flow_root = (self._repo_state_root / "flows").resolve()
         self._logger = logger_ or logger
 
     def mirror_inbound(
@@ -102,6 +109,8 @@ class ChatRunMirror:
             return
 
         path = self._jsonl_path(run_id_norm, direction)
+        if path is None:
+            return
         record: dict[str, Any] = {
             "ts": now_iso(),
             "run_id": run_id_norm,
@@ -149,15 +158,23 @@ class ChatRunMirror:
                 exc=exc,
             )
 
-    def _jsonl_path(self, run_id: str, direction: str) -> Path:
-        return (
-            self._repo_root
-            / ".codex-autorunner"
-            / "flows"
-            / run_id
-            / "chat"
-            / f"{direction}.jsonl"
-        )
+    def _jsonl_path(self, run_id: str, direction: str) -> Optional[Path]:
+        path = (self._flow_root / run_id / "chat" / f"{direction}.jsonl").resolve()
+        try:
+            validate_path_within_roots(path, allowed_roots=[self._flow_root])
+        except StateRootError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "chat.run_mirror.path_outside_root",
+                run_id=run_id,
+                direction=direction,
+                path=str(path),
+                allowed_root=str(self._flow_root),
+                exc=exc,
+            )
+            return None
+        return path
 
     def _append_jsonl(self, path: Path, record: Mapping[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

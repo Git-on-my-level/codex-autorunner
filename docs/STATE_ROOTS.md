@@ -28,6 +28,10 @@ All durable artifacts must live under one of these roots:
 - `bin/` - Generated helper scripts
 - `workspace/` - Workspace directory
 
+**Notable repo-local artifacts**:
+- `flows/<run_id>/chat/inbound.jsonl` - Mirrored inbound chat events for a flow run
+- `flows/<run_id>/chat/outbound.jsonl` - Mirrored outbound chat events for a flow run
+
 **Resolution**: `resolve_repo_state_root(repo_root)` in `core/state_roots.py`
 
 ### 2. Hub Root
@@ -42,6 +46,9 @@ All durable artifacts must live under one of these roots:
 - `config.yml` - Hub config
 - `codex-autorunner-hub.log` - Hub logs
 - `templates/` - Hub-scoped templates
+- `pma/delivery_targets.json` - PMA delivery target intent + per-target delivery bookkeeping
+- `chat/channel_directory.json` - Derived cross-platform channel directory cache
+- `pma/deliveries.jsonl` - PMA delivery mirror log (when local mirroring is enabled)
 
 **Resolution**: Hub root is typically the hub's repo root, using repo-local patterns.
 
