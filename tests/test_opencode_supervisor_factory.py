@@ -7,6 +7,7 @@ from codex_autorunner.core.config import (
     load_repo_config,
 )
 from codex_autorunner.integrations.agents import opencode_supervisor_factory
+from codex_autorunner.integrations.agents.destination_wrapping import WrappedCommand
 from tests.conftest import write_test_config
 
 
@@ -79,3 +80,53 @@ def test_build_opencode_supervisor_from_repo_config(
     assert captured["max_text_chars"] == 9999
     assert captured["base_env"] is env
     assert captured["subagent_models"] == {"subagent": "model-x", "helper": "model-y"}
+
+
+def test_build_opencode_supervisor_from_repo_config_wraps_for_docker_destination(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    write_test_config(repo_root / REPO_OVERRIDE_FILENAME, {})
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    config.effective_destination = {"kind": "docker", "image": "busybox:latest"}
+    captured: dict = {}
+
+    monkeypatch.setattr(
+        opencode_supervisor_factory,
+        "wrap_command_for_destination",
+        lambda **_: WrappedCommand(
+            command=["docker", "exec", "ctr", "opencode", "serve"]
+        ),
+    )
+
+    def _fake_build_opencode_supervisor(**kwargs):
+        captured.update(kwargs)
+        return "supervisor"
+
+    monkeypatch.setattr(
+        opencode_supervisor_factory,
+        "build_opencode_supervisor",
+        _fake_build_opencode_supervisor,
+    )
+
+    supervisor = opencode_supervisor_factory.build_opencode_supervisor_from_repo_config(
+        config,
+        workspace_root=repo_root,
+        logger=logging.getLogger("test.opencode"),
+        base_env={},
+    )
+
+    assert supervisor == "supervisor"
+    assert captured["opencode_command"] == [
+        "docker",
+        "exec",
+        "ctr",
+        "opencode",
+        "serve",
+    ]

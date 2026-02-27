@@ -129,6 +129,7 @@ def build_docker_container_spec(
         raise ValueError("docker image is required")
 
     repo_abs = repo_root.resolve()
+    home_dir = Path.home()
     passthrough = select_passthrough_env(
         env_passthrough_patterns or (),
         source_env=source_env,
@@ -145,7 +146,11 @@ def build_docker_container_spec(
         image=image.strip(),
         mounts=normalize_mounts(repo_abs, mounts),
         env=merged_env,
-        workdir=workdir or str(repo_abs),
+        workdir=(
+            _expand_template(str(workdir), repo_root=repo_abs, home_dir=home_dir)
+            if workdir
+            else str(repo_abs)
+        ),
     )
 
 

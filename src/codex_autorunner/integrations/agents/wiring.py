@@ -7,11 +7,16 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...core.config import RepoConfig
+from ...core.destinations import DockerDestination
 from ...core.ports.agent_backend import AgentBackend
 from ...core.state import RunnerState
 from ..app_server.env import build_app_server_env
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from .codex_backend import CodexAppServerBackend
+from .destination_wrapping import (
+    resolve_destination_from_config,
+    wrap_command_for_destination,
+)
 from .opencode_backend import OpenCodeBackend
 from .opencode_supervisor_factory import build_opencode_supervisor_from_repo_config
 
@@ -27,6 +32,9 @@ class AgentBackendFactory:
         self._repo_root = repo_root
         self._config = config
         self._logger = logging.getLogger("codex_autorunner.app_server")
+        self._destination = resolve_destination_from_config(
+            getattr(config, "effective_destination", {"kind": "local"})
+        )
         self._backend_cache: dict[str, AgentBackend] = {}
         self._opencode_supervisor: Optional[Any] = None
         self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = None
@@ -155,11 +163,31 @@ class AgentBackendFactory:
     def _ensure_opencode_supervisor(self) -> Optional[Any]:
         if self._opencode_supervisor is not None:
             return self._opencode_supervisor
+        opencode_command_override: Optional[list[str]] = None
+        if isinstance(self._destination, DockerDestination):
+            agent_cmd = self._config.agent_serve_command("opencode")
+            if not agent_cmd:
+                opencode_binary = self._config.agent_binary("opencode")
+                agent_cmd = [
+                    opencode_binary,
+                    "serve",
+                    "--hostname",
+                    "127.0.0.1",
+                    "--port",
+                    "0",
+                ]
+            wrapped = wrap_command_for_destination(
+                command=agent_cmd,
+                destination=self._destination,
+                repo_root=self._repo_root,
+            )
+            opencode_command_override = wrapped.command
         supervisor = build_opencode_supervisor_from_repo_config(
             self._config,
             workspace_root=self._repo_root,
             logger=self._logger,
             base_env=None,
+            command_override=opencode_command_override,
         )
         self._opencode_supervisor = supervisor
         return supervisor
@@ -195,12 +223,24 @@ class AgentBackendFactory:
         if not self._config.app_server.command:
             raise ValueError("app_server.command is required for codex backend")
 
+        supervisor_command = list(self._config.app_server.command)
+        state_root = self._config.app_server.state_root
+        if isinstance(self._destination, DockerDestination):
+            wrapped = wrap_command_for_destination(
+                command=supervisor_command,
+                destination=self._destination,
+                repo_root=self._repo_root,
+            )
+            supervisor_command = wrapped.command
+            if wrapped.state_root_override is not None:
+                state_root = wrapped.state_root_override
+
         def _env_builder(
             workspace_root: Path, _workspace_id: str, state_dir: Path
         ) -> dict[str, str]:
             state_dir.mkdir(parents=True, exist_ok=True)
             return build_app_server_env(
-                self._config.app_server.command,
+                supervisor_command,
                 workspace_root,
                 state_dir,
                 logger=self._logger,
@@ -208,8 +248,8 @@ class AgentBackendFactory:
             )
 
         self._codex_supervisor = WorkspaceAppServerSupervisor(
-            self._config.app_server.command,
-            state_root=self._config.app_server.state_root,
+            supervisor_command,
+            state_root=state_root,
             env_builder=_env_builder,
             logger=self._logger,
             auto_restart=self._config.app_server.auto_restart,
@@ -240,6 +280,9 @@ def build_app_server_supervisor_factory(
     logger: Optional[logging.Logger] = None,
 ) -> SupervisorFactory:
     app_logger = logger or logging.getLogger("codex_autorunner.app_server")
+    destination = resolve_destination_from_config(
+        getattr(config, "effective_destination", {"kind": "local"})
+    )
 
     def factory(
         event_prefix: str, notification_handler: Optional[NotificationHandler]
@@ -247,12 +290,24 @@ def build_app_server_supervisor_factory(
         if not config.app_server.command:
             raise ValueError("app_server.command is required for supervisor")
 
+        supervisor_command = list(config.app_server.command)
+        state_root = config.app_server.state_root
+        if isinstance(destination, DockerDestination):
+            wrapped = wrap_command_for_destination(
+                command=supervisor_command,
+                destination=destination,
+                repo_root=config.root,
+            )
+            supervisor_command = wrapped.command
+            if wrapped.state_root_override is not None:
+                state_root = wrapped.state_root_override
+
         def _env_builder(
             workspace_root: Path, _workspace_id: str, state_dir: Path
         ) -> dict[str, str]:
             state_dir.mkdir(parents=True, exist_ok=True)
             return build_app_server_env(
-                config.app_server.command,
+                supervisor_command,
                 workspace_root,
                 state_dir,
                 logger=app_logger,
@@ -260,8 +315,8 @@ def build_app_server_supervisor_factory(
             )
 
         return WorkspaceAppServerSupervisor(
-            config.app_server.command,
-            state_root=config.app_server.state_root,
+            supervisor_command,
+            state_root=state_root,
             env_builder=_env_builder,
             logger=app_logger,
             notification_handler=notification_handler,
