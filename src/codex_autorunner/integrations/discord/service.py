@@ -27,13 +27,7 @@ from ...core.flows import (
     archive_flow_run_artifacts,
     load_latest_paused_ticket_flow_dispatch,
 )
-from ...core.flows.ux_helpers import (
-    build_flow_status_snapshot,
-    ensure_worker,
-    issue_md_path,
-    seed_issue_from_github,
-    seed_issue_from_text,
-)
+from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
@@ -60,11 +54,7 @@ from ...core.update import (
     _spawn_update_process,
 )
 from ...core.update_paths import resolve_update_paths
-from ...core.utils import (
-    atomic_write,
-    canonicalize_path,
-    find_repo_root,
-)
+from ...core.utils import canonicalize_path, find_repo_root
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.app_server.client import CodexAppServerClient
@@ -100,7 +90,6 @@ from ...integrations.chat.update_notifier import (
     mark_update_status_notified,
 )
 from ...integrations.github.service import (
-    GitHubError,
     GitHubService,
     find_github_links,
     parse_github_url,
@@ -6412,6 +6401,10 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
+        from ...core.flows.ux_helpers import issue_md_path, seed_issue_from_github
+        from ...core.utils import atomic_write
+        from ...integrations.github.service import GitHubError
+
         _ = channel_id, guild_id
         issue_ref = options.get("issue_ref")
         if not isinstance(issue_ref, str) or not issue_ref.strip():
@@ -6460,6 +6453,9 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
+        from ...core.flows.ux_helpers import issue_md_path, seed_issue_from_text
+        from ...core.utils import atomic_write
+
         _ = channel_id, guild_id
         plan_text = options.get("text")
         if not isinstance(plan_text, str) or not plan_text.strip():
