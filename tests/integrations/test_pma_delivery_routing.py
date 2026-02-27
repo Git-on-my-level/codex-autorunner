@@ -241,9 +241,15 @@ async def test_pma_delivery_same_turn_allowed_after_sink_target_changes(
         outbox = await store.list_outbox()
     finally:
         await store.close()
-    assert len(outbox) == 1
-    assert outbox[0].channel_id == "222222222222222222"
-    assert "second channel" in outbox[0].payload_json.get("content", "")
+    assert len(outbox) == 2
+    by_channel = {record.channel_id: record for record in outbox}
+    assert set(by_channel) == {"111111111111111111", "222222222222222222"}
+    assert "first channel" in by_channel["111111111111111111"].payload_json.get(
+        "content", ""
+    )
+    assert "second channel" in by_channel["222222222222222222"].payload_json.get(
+        "content", ""
+    )
 
 
 @pytest.mark.anyio
@@ -293,6 +299,103 @@ async def test_pma_delivery_fanout_telegram_and_discord(
     assert telegram_outbox[0].chat_id == 123
     assert telegram_outbox[0].thread_id == 456
     assert discord_outbox[0].channel_id == "987654321012345678"
+
+
+@pytest.mark.anyio
+async def test_pma_delivery_fanout_two_telegram_targets(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets = PmaDeliveryTargetsStore(hub_root)
+    targets.set_targets(
+        [
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "123",
+                "thread_id": "456",
+            },
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "123",
+                "thread_id": "789",
+            },
+        ]
+    )
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="fanout telegram x2",
+        turn_id="turn-fanout-tg-2",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered is True
+
+    telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
+    try:
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await telegram_store.close()
+
+    assert len(telegram_outbox) == 2
+    assert {(record.chat_id, record.thread_id) for record in telegram_outbox} == {
+        (123, 456),
+        (123, 789),
+    }
+    assert len({record.record_id for record in telegram_outbox}) == 2
+    assert (
+        len(
+            {
+                record.outbox_key
+                for record in telegram_outbox
+                if isinstance(record.outbox_key, str)
+            }
+        )
+        == 2
+    )
+
+
+@pytest.mark.anyio
+async def test_pma_delivery_fanout_two_discord_targets(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets = PmaDeliveryTargetsStore(hub_root)
+    targets.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "111111111111111111"},
+            {"kind": "chat", "platform": "discord", "chat_id": "222222222222222222"},
+        ]
+    )
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="fanout discord x2",
+        turn_id="turn-fanout-discord-2",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered is True
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.initialize()
+        discord_outbox = await discord_store.list_outbox()
+    finally:
+        await discord_store.close()
+
+    assert len(discord_outbox) == 2
+    assert {record.channel_id for record in discord_outbox} == {
+        "111111111111111111",
+        "222222222222222222",
+    }
+    assert len({record.record_id for record in discord_outbox}) == 2
 
 
 @pytest.mark.anyio

@@ -85,6 +85,12 @@ def _resolve_mirror_path(hub_root: Path) -> Path:
     return (hub_root / PMA_DELIVERY_MIRROR_REL_PATH).resolve()
 
 
+def _outbox_record_id(
+    *, turn_id: str, target_delivery_key: str, chunk_index: int
+) -> str:
+    return f"pma:{turn_id}:{target_delivery_key}:{chunk_index}"
+
+
 def _rotate_jsonl_if_needed(path: Path, *, max_bytes: int) -> None:
     if max_bytes <= 0:
         return
@@ -280,6 +286,7 @@ async def deliver_pma_output_to_active_sink(
             outcome = await _deliver_to_discord(
                 hub_root=hub_root,
                 channel_id=discord_channel_id,
+                target_delivery_key=key,
                 assistant_text=assistant_text,
                 turn_id=turn_id,
                 discord_state_path=discord_state_path,
@@ -316,6 +323,7 @@ async def deliver_pma_output_to_active_sink(
             hub_root=hub_root,
             chat_id=chat_id,
             thread_id=thread_id,
+            target_delivery_key=key,
             assistant_text=assistant_text,
             turn_id=turn_id,
             event_type=event_type,
@@ -377,6 +385,7 @@ async def _deliver_to_telegram(
     hub_root: Path,
     chat_id: int,
     thread_id: Optional[int],
+    target_delivery_key: str,
     assistant_text: str,
     turn_id: str,
     event_type: Optional[str] = None,
@@ -396,7 +405,11 @@ async def _deliver_to_telegram(
     store = TelegramStateStore(resolved_state_path)
     try:
         for idx, chunk in enumerate(chunks, 1):
-            record_id = f"pma:{turn_id}:{idx}"
+            record_id = _outbox_record_id(
+                turn_id=turn_id,
+                target_delivery_key=target_delivery_key,
+                chunk_index=idx,
+            )
             record = OutboxRecord(
                 record_id=record_id,
                 chat_id=chat_id,
@@ -426,6 +439,7 @@ async def _deliver_to_telegram(
         turn_id=turn_id,
         chat_id=chat_id,
         thread_id=thread_id,
+        target=target_delivery_key,
         chunk_count=len(chunks),
         event_type=event_type,
     )
@@ -436,6 +450,7 @@ async def _deliver_to_discord(
     *,
     hub_root: Path,
     channel_id: str,
+    target_delivery_key: str,
     assistant_text: str,
     turn_id: str,
     discord_state_path: Optional[Path] = None,
@@ -458,7 +473,11 @@ async def _deliver_to_discord(
     try:
         await store.initialize()
         for idx, chunk in enumerate(chunks, 1):
-            record_id = f"pma:{turn_id}:{idx}"
+            record_id = _outbox_record_id(
+                turn_id=turn_id,
+                target_delivery_key=target_delivery_key,
+                chunk_index=idx,
+            )
             record = DiscordOutboxRecord(
                 record_id=record_id,
                 channel_id=channel_id,
@@ -484,6 +503,7 @@ async def _deliver_to_discord(
         "pma.delivery.discord",
         turn_id=turn_id,
         channel_id=channel_id,
+        target=target_delivery_key,
         chunk_count=len(chunks),
         event_type=event_type,
     )
