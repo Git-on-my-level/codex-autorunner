@@ -382,16 +382,3 @@ export function initAgentControls(config = {}) {
 export async function ensureAgentCatalog() {
     await refreshAgentControls({ force: true, reason: "manual" });
 }
-export function clearAgentSelectionStorage() {
-    if (REPO_ID)
-        return;
-    safeSetStorage(STORAGE_KEYS.selected, "");
-    const candidates = new Set([
-        ...agentList.map((agent) => agent.id),
-        ...FALLBACK_AGENTS.map((agent) => agent.id),
-    ]);
-    candidates.forEach((agentId) => {
-        safeSetStorage(STORAGE_KEYS.model(agentId), "");
-        safeSetStorage(STORAGE_KEYS.reasoning(agentId), "");
-    });
-}

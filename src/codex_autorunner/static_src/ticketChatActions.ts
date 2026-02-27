@@ -11,6 +11,7 @@ import { renderDiff } from "./diffRenderer.js";
 import { newClientTurnId, streamTurnEvents } from "./fileChat.js";
 import { loadPendingTurn, savePendingTurn, clearPendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
+import { getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 
 export type TicketChatStatus = ChatStatus;
 
@@ -369,9 +370,15 @@ export async function sendTicketChat(): Promise<void> {
     els.input.value = "";
   }
 
-  const agent = els.agentSelect?.value || "codex";
-  const model = els.modelSelect?.value || undefined;
-  const reasoning = els.reasoningSelect?.value || undefined;
+  const agent = els.agentSelect
+    ? (els.agentSelect.value || "codex")
+    : (getSelectedAgent() || "codex");
+  const model = els.modelSelect
+    ? (els.modelSelect.value || undefined)
+    : (getSelectedModel(agent) || undefined);
+  const reasoning = els.reasoningSelect
+    ? (els.reasoningSelect.value || undefined)
+    : (getSelectedReasoning(agent) || undefined);
 
   try {
     await performTicketChatRequest(
