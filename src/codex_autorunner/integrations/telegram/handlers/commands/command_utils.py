@@ -9,7 +9,6 @@ import httpx
 
 from .....agents.opencode.client import OpenCodeProtocolError
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
-from .....core.injected_context import wrap_injected_context
 from ...helpers import format_public_error
 from ...payload_utils import extract_opencode_error_detail
 
@@ -141,35 +140,3 @@ def _opencode_review_arguments(target: dict[str, Any]) -> str:
                 return f"uncommitted\n\n{instructions}"
         return "uncommitted"
     return json.dumps(target, sort_keys=True)
-
-
-def _issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
-    if not prompt_text or not links or len(links) != 1:
-        return None
-    stripped = prompt_text.strip()
-    if not stripped:
-        return None
-    wrappers = (
-        "{link}",
-        "<{link}>",
-        "({link})",
-        "[{link}]",
-        "`{link}`",
-    )
-    link = links[0]
-    for wrapper in wrappers:
-        if stripped == wrapper.format(link=link):
-            return link
-    return None
-
-
-def _issue_only_workflow_hint(issue_number: int) -> str:
-    return wrap_injected_context(
-        "Issue-only GitHub message detected (no extra context).\n"
-        f"Treat this as a request to implement issue #{issue_number}.\n"
-        "Create a new branch from the latest head branch, "
-        "sync with the current origin default branch first,\n"
-        "implement the fix, and open a PR.\n"
-        f"Ensure the PR description includes `Closes #{issue_number}` "
-        "so GitHub auto-closes the issue when merged."
-    )

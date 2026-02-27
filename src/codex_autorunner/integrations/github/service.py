@@ -296,6 +296,19 @@ def find_github_links(text: str) -> list[str]:
     return [m.group(0) for m in GITHUB_LINK_RE.finditer(raw)]
 
 
+def _repo_slug_dirname(slug: str) -> str:
+    import hashlib
+
+    normalized = (slug or "").strip().lower()
+    safe_base = re.sub(r"[^a-z0-9._-]+", "-", normalized.replace("/", "--")).strip(".-")
+    if not safe_base:
+        safe_base = "unknown-repo"
+    # Preserve readability while making collisions across different slugs
+    # practically impossible.
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
+    return f"{safe_base[:80]}-{digest}"
+
+
 class GitHubService:
     def __init__(self, repo_root: Path, raw_config: Optional[dict] = None):
         self.repo_root = repo_root
@@ -475,15 +488,24 @@ class GitHubService:
             return []
         return [item for item in payload if isinstance(item, dict)]
 
-    def issue_view(self, *, number: int, cwd: Optional[Path] = None) -> dict:
+    def issue_view(
+        self,
+        *,
+        number: int,
+        cwd: Optional[Path] = None,
+        repo_slug: Optional[str] = None,
+    ) -> dict:
+        args = [
+            "issue",
+            "view",
+            str(number),
+            "--json",
+            "number,url,title,body,state,author,labels,comments",
+        ]
+        if repo_slug:
+            args += ["-R", repo_slug]
         proc = self._gh(
-            [
-                "issue",
-                "view",
-                str(number),
-                "--json",
-                "number,url,title,body,state,author,labels,comments",
-            ],
+            args,
             cwd=cwd or self.repo_root,
             check=True,
             timeout_seconds=20,
@@ -506,15 +528,24 @@ class GitHubService:
             )
         return num
 
-    def pr_view(self, *, number: int, cwd: Optional[Path] = None) -> dict:
+    def pr_view(
+        self,
+        *,
+        number: int,
+        cwd: Optional[Path] = None,
+        repo_slug: Optional[str] = None,
+    ) -> dict:
+        args = [
+            "pr",
+            "view",
+            str(number),
+            "--json",
+            "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles,headRefName,baseRefName",
+        ]
+        if repo_slug:
+            args += ["-R", repo_slug]
         proc = self._gh(
-            [
-                "pr",
-                "view",
-                str(number),
-                "--json",
-                "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles,headRefName,baseRefName",
-            ],
+            args,
             cwd=cwd or self.repo_root,
             check=True,
             timeout_seconds=30,
@@ -728,7 +759,9 @@ class GitHubService:
         ]
         self._gh(args, cwd=cwd or self.repo_root, check=True, timeout_seconds=20)
 
-    def build_context_file_from_url(self, url: str) -> Optional[dict]:
+    def build_context_file_from_url(
+        self, url: str, *, allow_cross_repo: bool = False
+    ) -> Optional[dict]:
         parsed = parse_github_url(url)
         if not parsed:
             return None
@@ -737,24 +770,35 @@ class GitHubService:
         if not self.gh_authenticated():
             return None
         slug, kind, number = parsed
-        repo = self.repo_info()
-        if slug.lower() != repo.name_with_owner.lower():
-            return None
+        repo_slug = slug
+        if not allow_cross_repo:
+            repo = self.repo_info()
+            if slug.lower() != repo.name_with_owner.lower():
+                return None
+            repo_slug = repo.name_with_owner
 
         if kind == "issue":
-            issue_obj = self.issue_view(number=number)
-            lines = _format_issue_context(issue_obj, repo=repo.name_with_owner)
+            issue_obj = self.issue_view(
+                number=number,
+                repo_slug=repo_slug if allow_cross_repo else None,
+            )
+            lines = _format_issue_context(issue_obj, repo=repo_slug)
         else:
-            pr_obj = self.pr_view(number=number)
-            owner, repo_name = repo.name_with_owner.split("/", 1)
+            pr_obj = self.pr_view(
+                number=number,
+                repo_slug=repo_slug if allow_cross_repo else None,
+            )
+            owner, repo_name = repo_slug.split("/", 1)
             review_threads = self.pr_review_threads(
                 owner=owner, repo=repo_name, number=number
             )
             lines = _format_pr_context(
-                pr_obj, repo=repo.name_with_owner, review_threads=review_threads
+                pr_obj, repo=repo_slug, review_threads=review_threads
             )
 
         rel_dir = Path(".codex-autorunner") / "github_context"
+        if allow_cross_repo:
+            rel_dir = rel_dir / _repo_slug_dirname(repo_slug)
         abs_dir = self.repo_root / rel_dir
         abs_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{kind}-{int(number)}.md"
