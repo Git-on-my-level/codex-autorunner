@@ -2554,7 +2554,7 @@ class DiscordBotService:
             self._channel_directory_store.record_seen(
                 "discord",
                 channel_id,
-                guild_id,
+                None,
                 display,
                 meta,
             )

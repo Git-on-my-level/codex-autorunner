@@ -6,7 +6,10 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
+from codex_autorunner.integrations.chat.channel_directory import (
+    ChannelDirectoryStore,
+    channel_entry_key,
+)
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -97,7 +100,8 @@ async def test_message_create_records_channel_directory_with_names(
     entry = entries[0]
     assert entry["platform"] == "discord"
     assert entry["chat_id"] == "channel-1"
-    assert entry["thread_id"] == "guild-1"
+    assert channel_entry_key(entry) == "discord:channel-1"
+    assert "thread_id" not in entry
     assert entry["display"] == "CAR HQ / #general"
     assert entry["meta"] == {"guild_id": "guild-1"}
 
@@ -134,6 +138,7 @@ async def test_message_create_records_channel_directory_with_id_fallbacks(
     entry = entries[0]
     assert entry["platform"] == "discord"
     assert entry["chat_id"] == "channel-9"
-    assert entry["thread_id"] == "guild-9"
+    assert channel_entry_key(entry) == "discord:channel-9"
+    assert "thread_id" not in entry
     assert entry["display"] == "guild:guild-9 / #channel-9"
     assert entry["meta"] == {"guild_id": "guild-9"}
