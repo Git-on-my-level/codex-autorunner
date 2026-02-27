@@ -22,7 +22,10 @@ Telegram bot and adapters.
 
 ## Ticket Flow Commands
 
-Use `/flow ...` to control the ticket flow for a bound workspace.
+Use `/flow ...` to control ticket flow for a bound workspace, or view hub overview
+for `status`/`runs` in PMA or unbound contexts.
+
+Note: Telegram currently exposes the superset of flow controls across chat surfaces.
 
 Command reference:
 - `/flow` or `/flow help`

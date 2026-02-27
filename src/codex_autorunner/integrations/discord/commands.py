@@ -322,6 +322,32 @@ def build_application_commands() -> list[dict[str, Any]]:
                         },
                         {
                             "type": SUB_COMMAND,
+                            "name": "issue",
+                            "description": "Seed ISSUE.md from a GitHub issue",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "issue_ref",
+                                    "description": "Issue number or URL",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "plan",
+                            "description": "Seed ISSUE.md from plan text",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "text",
+                                    "description": "Plan text",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
                             "name": "resume",
                             "description": "Resume a flow",
                             "options": [
@@ -350,6 +376,19 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "type": SUB_COMMAND,
                             "name": "archive",
                             "description": "Archive a flow",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "run_id",
+                                    "description": "Flow run id",
+                                    "required": False,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "recover",
+                            "description": "Recover a flow",
                             "options": [
                                 {
                                     "type": STRING,

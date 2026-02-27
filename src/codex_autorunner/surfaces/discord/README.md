@@ -23,6 +23,22 @@ Discord bot surface and adapters.
 
 Recommended during development: use guild-scoped command registration so command updates propagate quickly.
 
+## Flow Commands
+
+Use `/car flow ...` for ticket flow actions:
+
+- `/car flow status [run_id]`
+- `/car flow runs [limit]`
+- `/car flow issue issue_ref:<issue#|url>`
+- `/car flow plan text:<plan>`
+- `/car flow resume [run_id]`
+- `/car flow stop [run_id]`
+- `/car flow recover [run_id]`
+- `/car flow archive [run_id]`
+- `/car flow reply text:<message> [run_id]`
+
+In PMA mode (or when unbound), `/car flow status` and `/car flow runs` default to a hub-wide overview.
+
 ## Common Failure Mode: Slash Works, Messages Do Not
 
 If `/car ...` works but normal channel messages do not get replies, the bot usually lacks effective guild/channel access.
