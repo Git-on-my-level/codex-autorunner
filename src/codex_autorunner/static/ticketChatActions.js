@@ -310,10 +310,15 @@ export async function sendTicketChat() {
     if (els.input) {
         els.input.value = "";
     }
-    const selectedAgent = els.agentSelect?.value || getSelectedAgent();
-    const agent = selectedAgent || "codex";
-    const model = (els.modelSelect?.value || getSelectedModel(agent)) || undefined;
-    const reasoning = (els.reasoningSelect?.value || getSelectedReasoning(agent)) || undefined;
+    const agent = els.agentSelect
+        ? (els.agentSelect.value || "codex")
+        : (getSelectedAgent() || "codex");
+    const model = els.modelSelect
+        ? (els.modelSelect.value || undefined)
+        : (getSelectedModel(agent) || undefined);
+    const reasoning = els.reasoningSelect
+        ? (els.reasoningSelect.value || undefined)
+        : (getSelectedReasoning(agent) || undefined);
     try {
         await performTicketChatRequest(ticketChatState.ticketIndex, message, ticketChatState.controller.signal, {
             agent,
