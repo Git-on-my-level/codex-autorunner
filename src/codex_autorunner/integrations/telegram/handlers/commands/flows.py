@@ -216,6 +216,9 @@ class FlowCommands(SharedHelpers):
                 return get_controller(repo_root)
         return _get_ticket_controller(repo_root)
 
+    def _flow_run_mirror(self, repo_root: Path) -> ChatRunMirror:
+        return ChatRunMirror(repo_root, logger_=_logger)
+
     def _flow_repo_context_cache(self) -> dict[str, str]:
         cache = getattr(self, "_flow_repo_context", None)
         if isinstance(cache, dict):
@@ -1342,6 +1345,7 @@ class FlowCommands(SharedHelpers):
         force_new = self._has_flag(argv, "--force-new") or self._has_flag(
             argv, "--force"
         )
+        run_mirror = self._flow_run_mirror(repo_root)
         ticket_dir = _ticket_dir(repo_root)
         ticket_dir.mkdir(parents=True, exist_ok=True)
         existing_tickets = list_ticket_paths(ticket_dir)
@@ -1361,13 +1365,37 @@ class FlowCommands(SharedHelpers):
             store.close()
 
         if not force_new and active_run:
+            run_mirror.mirror_inbound(
+                run_id=active_run.id,
+                platform="telegram",
+                event_type="flow_bootstrap_command",
+                kind="command",
+                actor="user",
+                text=(message.text or "").strip(),
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                meta={"force_new": force_new, "reuse_existing": True},
+            )
             _spawn_flow_worker(repo_root, active_run.id)
+            outbound_text = f"Reusing ticket flow run {_code(active_run.id)} ({active_run.status.value})."
             await self._send_message(
                 message.chat_id,
-                f"Reusing ticket flow run {_code(active_run.id)} ({active_run.status.value}).",
+                outbound_text,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 parse_mode="Markdown",
+            )
+            run_mirror.mirror_outbound(
+                run_id=active_run.id,
+                platform="telegram",
+                event_type="flow_bootstrap_reuse_notice",
+                kind="notice",
+                actor="car",
+                text=outbound_text,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                meta={"status": active_run.status.value},
             )
             return
 
@@ -1468,17 +1496,40 @@ You are the first ticket in a new ticket_flow run.
             input_data={},
             metadata={"seeded_ticket": seeded, "origin": "telegram"},
         )
+        run_mirror.mirror_inbound(
+            run_id=flow_record.id,
+            platform="telegram",
+            event_type="flow_bootstrap_command",
+            kind="command",
+            actor="user",
+            text=(message.text or "").strip(),
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            meta={"force_new": force_new, "seeded_ticket": seeded},
+        )
         _spawn_flow_worker(repo_root, flow_record.id)
 
         if not issue_exists and not tickets_exist:
             await self._send_flow_issue_hint(message, repo_root)
 
+        outbound_text = f"Started ticket flow run {_code(flow_record.id)}."
         await self._send_message(
             message.chat_id,
-            f"Started ticket flow run {_code(flow_record.id)}.",
+            outbound_text,
             thread_id=message.thread_id,
             reply_to=message.message_id,
             parse_mode="Markdown",
+        )
+        run_mirror.mirror_outbound(
+            run_id=flow_record.id,
+            platform="telegram",
+            event_type="flow_bootstrap_started_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
         )
 
     async def _send_flow_issue_hint(
@@ -1609,14 +1660,17 @@ You are the first ticket in a new ticket_flow run.
             store.close()
 
         force = self._has_flag(argv, "--force")
-        run_mirror = ChatRunMirror(repo_root, logger_=_logger)
+        run_mirror = self._flow_run_mirror(repo_root)
         run_mirror.mirror_inbound(
             run_id=record.id,
             platform="telegram",
             event_type="flow_resume_command",
+            kind="command",
+            actor="user",
             text=(message.text or "").strip(),
             chat_id=message.chat_id,
             thread_id=message.thread_id,
+            message_id=message.message_id,
             meta={"force": force},
         )
         controller = self._ticket_controller_for(repo_root)
@@ -1643,6 +1697,8 @@ You are the first ticket in a new ticket_flow run.
             run_id=updated.id,
             platform="telegram",
             event_type="flow_resume_notice",
+            kind="notice",
+            actor="car",
             text=outbound_text,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
@@ -1697,15 +1753,39 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
 
+        run_mirror = self._flow_run_mirror(repo_root)
+        run_mirror.mirror_inbound(
+            run_id=record.id,
+            platform="telegram",
+            event_type="flow_stop_command",
+            kind="command",
+            actor="user",
+            text=(message.text or "").strip(),
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+        )
         controller = self._ticket_controller_for(repo_root)
         self._stop_flow_worker(repo_root, record.id)
         updated = await controller.stop_flow(record.id)
+        outbound_text = f"Stopped run {_code(updated.id)} ({updated.status.value})."
         await self._send_message(
             message.chat_id,
-            f"Stopped run {_code(updated.id)} ({updated.status.value}).",
+            outbound_text,
             thread_id=message.thread_id,
             reply_to=message.message_id,
             parse_mode="Markdown",
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="telegram",
+            event_type="flow_stop_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            meta={"status": updated.status.value},
         )
 
     async def _handle_flow_recover(
@@ -1902,6 +1982,18 @@ You are the first ticket in a new ticket_flow run.
             return
 
         run_id, run_record = paused
+        run_mirror = self._flow_run_mirror(repo_root)
+        run_mirror.mirror_inbound(
+            run_id=run_id,
+            platform="telegram",
+            event_type="flow_reply_command",
+            kind="command",
+            actor="user",
+            text=text,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+        )
         success, result = await self._write_user_reply_from_telegram(
             repo_root, run_id, run_record, message, text
         )
@@ -1910,4 +2002,15 @@ You are the first ticket in a new ticket_flow run.
             result,
             thread_id=message.thread_id,
             reply_to=message.message_id,
+        )
+        run_mirror.mirror_outbound(
+            run_id=run_id,
+            platform="telegram",
+            event_type="flow_reply_notice",
+            kind="notice",
+            actor="car",
+            text=result,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            meta={"success": success},
         )

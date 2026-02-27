@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -105,6 +106,28 @@ async def test_flow_bootstrap_skips_prompt_when_tickets_exist(
 
     assert handler.prompts == []
     assert controller.start_calls
+    inbound_path = (
+        repo_root / ".codex-autorunner" / "flows" / "run-1" / "chat" / "inbound.jsonl"
+    )
+    outbound_path = (
+        repo_root / ".codex-autorunner" / "flows" / "run-1" / "chat" / "outbound.jsonl"
+    )
+    assert inbound_path.exists()
+    assert outbound_path.exists()
+    inbound_records = [
+        json.loads(line)
+        for line in inbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    outbound_records = [
+        json.loads(line)
+        for line in outbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert inbound_records[-1]["event_type"] == "flow_bootstrap_command"
+    assert inbound_records[-1]["kind"] == "command"
+    assert outbound_records[-1]["event_type"] == "flow_bootstrap_started_notice"
+    assert outbound_records[-1]["kind"] == "notice"
 
 
 @pytest.mark.anyio

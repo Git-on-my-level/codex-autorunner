@@ -23,6 +23,12 @@ _ARTIFACT_KIND_BY_DIRECTION = {
     "outbound": "chat_outbound",
 }
 _TEXT_PREVIEW_MAX_CHARS = 240
+_TEXT_MAX_CHARS = 4000
+_DEFAULT_KIND = "notice"
+_DEFAULT_ACTOR_BY_DIRECTION = {
+    "inbound": "user",
+    "outbound": "car",
+}
 
 
 def _coerce_text_or_int(value: Any) -> Optional[str]:
@@ -51,10 +57,13 @@ class ChatRunMirror:
         *,
         run_id: str,
         platform: str,
-        event_type: str,
+        event_type: Optional[str] = None,
+        kind: Optional[str] = None,
+        actor: Optional[str] = None,
         text: Optional[str] = None,
         chat_id: Optional[str | int] = None,
         thread_id: Optional[str | int] = None,
+        message_id: Optional[str | int] = None,
         meta: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self._mirror(
@@ -62,9 +71,12 @@ class ChatRunMirror:
             run_id=run_id,
             platform=platform,
             event_type=event_type,
+            kind=kind,
+            actor=actor,
             text=text,
             chat_id=chat_id,
             thread_id=thread_id,
+            message_id=message_id,
             meta=meta,
         )
 
@@ -73,10 +85,13 @@ class ChatRunMirror:
         *,
         run_id: str,
         platform: str,
-        event_type: str,
+        event_type: Optional[str] = None,
+        kind: Optional[str] = None,
+        actor: Optional[str] = None,
         text: Optional[str] = None,
         chat_id: Optional[str | int] = None,
         thread_id: Optional[str | int] = None,
+        message_id: Optional[str | int] = None,
         meta: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self._mirror(
@@ -84,9 +99,12 @@ class ChatRunMirror:
             run_id=run_id,
             platform=platform,
             event_type=event_type,
+            kind=kind,
+            actor=actor,
             text=text,
             chat_id=chat_id,
             thread_id=thread_id,
+            message_id=message_id,
             meta=meta,
         )
 
@@ -96,40 +114,60 @@ class ChatRunMirror:
         direction: str,
         run_id: str,
         platform: str,
-        event_type: str,
+        event_type: Optional[str],
+        kind: Optional[str],
+        actor: Optional[str],
         text: Optional[str],
         chat_id: Optional[str | int],
         thread_id: Optional[str | int],
+        message_id: Optional[str | int],
         meta: Optional[Mapping[str, Any]],
     ) -> None:
         run_id_norm = (run_id or "").strip()
         platform_norm = (platform or "").strip().lower()
-        event_type_norm = (event_type or "").strip()
-        if not run_id_norm or not platform_norm or not event_type_norm:
+        event_type_norm = (event_type or "").strip() or None
+        kind_norm = (kind or "").strip().lower() or None
+        if kind_norm is None:
+            kind_norm = event_type_norm
+        if not kind_norm:
+            kind_norm = _DEFAULT_KIND
+        actor_norm = (actor or "").strip().lower() or _DEFAULT_ACTOR_BY_DIRECTION.get(
+            direction, "car"
+        )
+        if not run_id_norm or not platform_norm:
             return
 
         path = self._jsonl_path(run_id_norm, direction)
         if path is None:
             return
-        record: dict[str, Any] = {
-            "ts": now_iso(),
-            "run_id": run_id_norm,
-            "direction": direction,
-            "platform": platform_norm,
-            "event_type": event_type_norm,
-        }
 
         chat_id_norm = _coerce_text_or_int(chat_id)
-        if chat_id_norm is not None:
-            record["chat_id"] = chat_id_norm
         thread_id_norm = _coerce_text_or_int(thread_id)
-        if thread_id_norm is not None:
-            record["thread_id"] = thread_id_norm
-        if isinstance(text, str):
-            record["text_preview"] = text[:_TEXT_PREVIEW_MAX_CHARS]
-            record["text_bytes"] = len(text.encode("utf-8"))
-        if isinstance(meta, Mapping):
-            record["meta"] = dict(meta)
+        message_id_norm = _coerce_text_or_int(message_id)
+        text_raw = text if isinstance(text, str) else ""
+        text_trimmed = text_raw[:_TEXT_MAX_CHARS]
+        meta_payload = dict(meta) if isinstance(meta, Mapping) else {}
+        meta_payload.setdefault("run_id", run_id_norm)
+        if event_type_norm:
+            meta_payload.setdefault("event_type", event_type_norm)
+
+        record: dict[str, Any] = {
+            "ts": now_iso(),
+            "direction": direction,
+            "platform": platform_norm,
+            "chat_id": chat_id_norm or "",
+            "thread_id": thread_id_norm,
+            "message_id": message_id_norm,
+            "actor": actor_norm,
+            "kind": kind_norm,
+            "text": text_trimmed,
+            "meta": meta_payload,
+            # Compatibility fields retained for current readers.
+            "run_id": run_id_norm,
+            "event_type": event_type_norm or kind_norm,
+            "text_preview": text_trimmed[:_TEXT_PREVIEW_MAX_CHARS],
+            "text_bytes": len(text_raw.encode("utf-8")),
+        }
 
         try:
             self._append_jsonl(path, record)

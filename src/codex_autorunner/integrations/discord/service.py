@@ -82,6 +82,7 @@ from ...integrations.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
+from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
@@ -672,6 +673,18 @@ class DiscordBotService:
                         return
 
                 reply_path = self._write_user_reply(workspace_root, paused, reply_text)
+                run_mirror = self._flow_run_mirror(workspace_root)
+                run_mirror.mirror_inbound(
+                    run_id=paused.id,
+                    platform="discord",
+                    event_type="flow_reply_message",
+                    kind="command",
+                    actor="user",
+                    text=reply_text,
+                    chat_id=channel_id,
+                    thread_id=event.thread.thread_id,
+                    message_id=event.message.message_id,
+                )
                 controller = build_ticket_flow_controller(workspace_root)
                 try:
                     updated = await controller.resume_flow(paused.id)
@@ -693,6 +706,16 @@ class DiscordBotService:
                 await self._send_channel_message_safe(
                     channel_id,
                     {"content": content},
+                )
+                run_mirror.mirror_outbound(
+                    run_id=updated.id,
+                    platform="discord",
+                    event_type="flow_reply_notice",
+                    kind="notice",
+                    actor="car",
+                    text=content,
+                    chat_id=channel_id,
+                    thread_id=event.thread.thread_id,
                 )
                 return
 
@@ -2106,6 +2129,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "runs"):
@@ -2122,6 +2147,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "stop"):
@@ -2130,6 +2157,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "archive"):
@@ -2138,6 +2167,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "reply"):
@@ -2146,6 +2177,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             await self._respond_ephemeral(
@@ -2321,6 +2354,7 @@ class DiscordBotService:
             if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
                 continue
             workspace_root = canonicalize_path(Path(workspace_raw))
+            run_mirror = self._flow_run_mirror(workspace_root)
             snapshot = await asyncio.to_thread(
                 load_latest_paused_ticket_flow_dispatch, workspace_root
             )
@@ -2353,6 +2387,21 @@ class DiscordBotService:
                             operation="send",
                             payload_json={"content": chunk},
                         )
+                    )
+                    run_mirror.mirror_outbound(
+                        run_id=snapshot.run_id,
+                        platform="discord",
+                        event_type="flow_pause_dispatch_notice",
+                        kind="dispatch",
+                        actor="car",
+                        text=chunk,
+                        chat_id=channel_id,
+                        thread_id=binding.get("guild_id"),
+                        message_id=record_id,
+                        meta={
+                            "dispatch_seq": snapshot.dispatch_seq,
+                            "chunk_index": index,
+                        },
                     )
                 except Exception as exc:
                     enqueued = False
@@ -3851,6 +3900,9 @@ class DiscordBotService:
             return None
         return record
 
+    def _flow_run_mirror(self, workspace_root: Path) -> ChatRunMirror:
+        return ChatRunMirror(workspace_root, logger_=self._logger)
+
     @staticmethod
     def _select_default_status_run(
         records: list[FlowRunRecord],
@@ -3869,6 +3921,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -3960,6 +4014,31 @@ class DiscordBotService:
             f"Worker: {worker_text}",
             f"Current ticket: {current_ticket or '-'}",
         ]
+        response_text = "\n".join(lines)
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=record.id,
+            platform="discord",
+            event_type="flow_status_command",
+            kind="command",
+            actor="user",
+            text="/car flow status",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+            meta={"interaction_token": interaction_token},
+        )
+        run_mirror.mirror_outbound(
+            run_id=record.id,
+            platform="discord",
+            event_type="flow_status_notice",
+            kind="notice",
+            actor="car",
+            text=response_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            meta={"response_type": "ephemeral"},
+        )
 
         status_buttons = build_flow_status_buttons(
             record.id,
@@ -3970,12 +4049,12 @@ class DiscordBotService:
             await self._respond_with_components(
                 interaction_id,
                 interaction_token,
-                "\n".join(lines),
+                response_text,
                 status_buttons,
             )
         else:
             await self._respond_ephemeral(
-                interaction_id, interaction_token, "\n".join(lines)
+                interaction_id, interaction_token, response_text
             )
 
     async def _handle_flow_runs(
@@ -4054,6 +4133,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -4122,6 +4203,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_resume_command",
+            kind="command",
+            actor="user",
+            text="/car flow resume",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         controller = build_ticket_flow_controller(workspace_root)
         try:
             updated = await controller.resume_flow(target.id)
@@ -4133,10 +4226,21 @@ class DiscordBotService:
             workspace_root, updated.id, is_terminal=updated.status.is_terminal()
         )
         self._close_worker_handles(ensure_result)
+        outbound_text = f"Resumed run {updated.id}."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Resumed run {updated.id}.",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="discord",
+            event_type="flow_resume_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
         )
 
     async def _handle_flow_stop(
@@ -4146,6 +4250,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -4210,6 +4316,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_stop_command",
+            kind="command",
+            actor="user",
+            text="/car flow stop",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         controller = build_ticket_flow_controller(workspace_root)
         try:
             updated = await controller.stop_flow(target.id)
@@ -4217,10 +4335,22 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
+        outbound_text = f"Stop requested for run {updated.id} ({updated.status.value})."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Stop requested for run {updated.id} ({updated.status.value}).",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="discord",
+            event_type="flow_stop_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            meta={"status": updated.status.value},
         )
 
     async def _handle_flow_archive(
@@ -4230,6 +4360,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -4291,6 +4423,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_archive_command",
+            kind="command",
+            actor="user",
+            text="/car flow archive",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         try:
             summary = archive_flow_run_artifacts(
                 workspace_root,
@@ -4302,10 +4446,22 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
+        outbound_text = f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']})."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']}).",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_archive_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            meta={"archived_runs": summary.get("archived_runs")},
         )
 
     async def _handle_flow_reply(
@@ -4315,6 +4471,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         text = options.get("text")
         if not isinstance(text, str) or not text.strip():
@@ -4394,6 +4552,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_reply_command",
+            kind="command",
+            actor="user",
+            text=text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         reply_path = self._write_user_reply(workspace_root, target, text)
 
         controller = build_ticket_flow_controller(workspace_root)
@@ -4407,10 +4577,23 @@ class DiscordBotService:
             workspace_root, updated.id, is_terminal=updated.status.is_terminal()
         )
         self._close_worker_handles(ensure_result)
+        outbound_text = (
+            f"Reply saved to {reply_path.name} and resumed run {updated.id}."
+        )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Reply saved to {reply_path.name} and resumed run {updated.id}.",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="discord",
+            event_type="flow_reply_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
         )
 
     def _write_user_reply(
@@ -5174,6 +5357,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         options={"run_id": values[0]},
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
                     )
                 return
 
@@ -5187,6 +5372,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         custom_id=custom_id,
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
                     )
                 return
 
@@ -5258,6 +5445,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         options={"run_id": values[0]},
+                        channel_id=channel_id,
+                        guild_id=guild_id,
                     )
                 return
 
@@ -5271,6 +5460,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         custom_id=custom_id,
+                        channel_id=channel_id,
+                        guild_id=guild_id,
                     )
                 return
 
@@ -5361,6 +5552,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         custom_id: str,
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         parts = custom_id.split(":")
         if len(parts) < 3:
@@ -5433,6 +5626,8 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 options={"run_id": run_id},
+                channel_id=channel_id,
+                guild_id=guild_id,
             )
         else:
             await self._respond_ephemeral(

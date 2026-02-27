@@ -58,9 +58,25 @@ def test_chat_run_mirror_writes_jsonl_and_registers_artifacts(tmp_path: Path) ->
     assert inbound_records[0]["run_id"] == run_id
     assert inbound_records[0]["direction"] == "inbound"
     assert inbound_records[0]["event_type"] == "flow_resume_command"
+    assert inbound_records[0]["platform"] == "telegram"
+    assert inbound_records[0]["chat_id"] == "-1001"
+    assert inbound_records[0]["thread_id"] == "12"
+    assert inbound_records[0]["message_id"] is None
+    assert inbound_records[0]["actor"] == "user"
+    assert inbound_records[0]["kind"] == "flow_resume_command"
+    assert inbound_records[0]["text"] == "/flow resume"
+    assert inbound_records[0]["meta"]["run_id"] == run_id
     assert outbound_records[0]["run_id"] == run_id
     assert outbound_records[0]["direction"] == "outbound"
     assert outbound_records[0]["event_type"] == "flow_resume_notice"
+    assert outbound_records[0]["platform"] == "telegram"
+    assert outbound_records[0]["chat_id"] == "-1001"
+    assert outbound_records[0]["thread_id"] == "12"
+    assert outbound_records[0]["message_id"] is None
+    assert outbound_records[0]["actor"] == "car"
+    assert outbound_records[0]["kind"] == "flow_resume_notice"
+    assert outbound_records[0]["text"] == f"Resumed run `{run_id}`."
+    assert outbound_records[0]["meta"]["run_id"] == run_id
 
     with FlowStore(tmp_path / ".codex-autorunner" / "flows.db") as store:
         artifacts = store.get_artifacts(run_id)

@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 
@@ -88,6 +89,18 @@ async def test_pause_dispatch_sends_text_and_attachments(tmp_path: Path) -> None
     assert all(not text.startswith("Part ") for _, text, _ in calls)
     assert docs == ["note.txt"]
     assert record.last_ticket_dispatch_seq == "run1:0001"
+    mirror_path = (
+        workspace / ".codex-autorunner" / "flows" / "run1" / "chat" / "outbound.jsonl"
+    )
+    assert mirror_path.exists()
+    mirror_records = [
+        json.loads(line)
+        for line in mirror_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert mirror_records
+    assert mirror_records[-1]["event_type"] == "flow_pause_dispatch_notice"
+    assert mirror_records[-1]["kind"] == "dispatch"
 
 
 @pytest.mark.asyncio
