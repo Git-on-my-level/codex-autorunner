@@ -60,16 +60,19 @@ Telegram auth envs (names configurable via `telegram_bot.*_env`):
 - `CAR_TELEGRAM_CHAT_ID`
 - `CAR_TELEGRAM_THREAD_ID` (optional, for topic/thread routing)
 
-## App-server workspace PATH
+## Workspace PATH bootstrap
 
-For app-server-backed agent runtimes (web terminal/PMA and Telegram), CAR prepends
-workspace-local paths to `PATH` when starting each workspace client:
+For app-server-backed agent runtimes (web terminal/PMA and Telegram) and Discord
+`!<shell command>` passthrough, CAR prepends workspace-local paths to `PATH`:
 
 - `<workspace>/.codex-autorunner/bin`
 - `<workspace>` (only when `<workspace>/car` exists)
 
 This makes `car` resolve to the workspace shim/runtime for that workspace without
 requiring a global shell install.
+
+CAR also augments PATH with common non-interactive install locations (for example,
+`~/.local/bin`) so pipx-installed `car` remains discoverable in daemon contexts.
 
 ## Voice input
 
