@@ -90,6 +90,14 @@ def test_select_passthrough_env_supports_wildcards() -> None:
     }
 
 
+def test_select_passthrough_env_defaults_to_process_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAR_TEST_TOKEN", "present")
+    selected = select_passthrough_env(["CAR_TEST_*"])
+    assert selected == {"CAR_TEST_TOKEN": "present"}
+
+
 def test_normalize_mounts_adds_repo_root_mount(tmp_path: Path) -> None:
     mounts = normalize_mounts(
         tmp_path, mounts=[{"source": "/tmp/a", "target": "/tmp/a"}]
@@ -158,6 +166,18 @@ def test_ensure_container_running_runs_new_container_when_missing(
     assert "-e" in run_call
     assert "CAR_TOKEN=abc" in run_call
     assert "EXTRA=1" in run_call
+
+
+def test_build_docker_container_spec_ignores_invalid_explicit_env(
+    tmp_path: Path,
+) -> None:
+    spec = build_docker_container_spec(
+        name="demo",
+        image="busybox:latest",
+        repo_root=tmp_path,
+        explicit_env=["not-a-mapping"],  # type: ignore[arg-type]
+    )
+    assert spec.env == {}
 
 
 def test_ensure_container_running_raises_on_run_failure() -> None:

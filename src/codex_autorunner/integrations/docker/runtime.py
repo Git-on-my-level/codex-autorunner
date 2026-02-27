@@ -4,6 +4,7 @@ import dataclasses
 import datetime as dt
 import fnmatch
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -57,7 +58,7 @@ def select_passthrough_env(
     *,
     source_env: Optional[Mapping[str, str]] = None,
 ) -> dict[str, str]:
-    src = source_env or {}
+    src: Mapping[str, str] = source_env if source_env is not None else os.environ
     selected: dict[str, str] = {}
     normalized_patterns = [str(p).strip() for p in patterns if str(p).strip()]
     if not normalized_patterns:
@@ -136,7 +137,8 @@ def build_docker_container_spec(
         source_env=source_env,
     )
     merged_env = dict(sorted(passthrough.items()))
-    for key, value in (explicit_env or {}).items():
+    explicit_items = explicit_env.items() if isinstance(explicit_env, Mapping) else ()
+    for key, value in explicit_items:
         if not isinstance(key, str) or not key.strip():
             continue
         if value is None:

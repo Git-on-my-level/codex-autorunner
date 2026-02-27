@@ -27,7 +27,13 @@ from ...core.flows import (
     archive_flow_run_artifacts,
     load_latest_paused_ticket_flow_dispatch,
 )
-from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
+from ...core.flows.ux_helpers import (
+    build_flow_status_snapshot,
+    ensure_worker,
+    issue_md_path,
+    seed_issue_from_github,
+    seed_issue_from_text,
+)
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
@@ -55,6 +61,7 @@ from ...core.update import (
 )
 from ...core.update_paths import resolve_update_paths
 from ...core.utils import (
+    atomic_write,
     canonicalize_path,
     find_repo_root,
 )
@@ -93,6 +100,7 @@ from ...integrations.chat.update_notifier import (
     mark_update_status_notified,
 )
 from ...integrations.github.service import (
+    GitHubError,
     GitHubService,
     find_github_links,
     parse_github_url,
@@ -6392,6 +6400,81 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             message_text,
+        )
+
+    async def _handle_flow_issue(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
+    ) -> None:
+        _ = channel_id, guild_id
+        issue_ref = options.get("issue_ref")
+        if not isinstance(issue_ref, str) or not issue_ref.strip():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Provide an issue reference: `/car flow issue issue_ref:<issue#|url>`",
+            )
+            return
+        issue_ref = issue_ref.strip()
+        try:
+            seed = seed_issue_from_github(
+                workspace_root,
+                issue_ref,
+                github_service_factory=GitHubService,
+            )
+            atomic_write(issue_md_path(workspace_root), seed.content)
+        except GitHubError as exc:
+            await self._respond_ephemeral(
+                interaction_id, interaction_token, f"GitHub error: {exc}"
+            )
+            return
+        except RuntimeError as exc:
+            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            return
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to fetch issue: {exc}",
+            )
+            return
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Seeded ISSUE.md from GitHub issue {seed.issue_number}.",
+        )
+
+    async def _handle_flow_plan(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
+    ) -> None:
+        _ = channel_id, guild_id
+        plan_text = options.get("text")
+        if not isinstance(plan_text, str) or not plan_text.strip():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Provide a plan: `/car flow plan text:<plan>`",
+            )
+            return
+        content = seed_issue_from_text(plan_text.strip())
+        atomic_write(issue_md_path(workspace_root), content)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Seeded ISSUE.md from your plan.",
         )
 
     async def _handle_car_interrupt(
