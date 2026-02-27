@@ -146,6 +146,78 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
     }
 
 
+def test_pma_chat_github_injection_uses_raw_user_message(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+
+    app = create_hub_app(hub_env.hub_root)
+    observed: dict[str, str] = {}
+
+    async def _fake_github_context_injection(**kwargs):
+        observed["link_source_text"] = str(kwargs.get("link_source_text") or "")
+        prompt_text = str(kwargs.get("prompt_text") or "")
+        return f"{prompt_text}\n\n[injected-from-github]", True
+
+    monkeypatch.setattr(
+        pma_routes, "maybe_inject_github_context", _fake_github_context_injection
+    )
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-1"
+
+        async def wait(self, timeout=None):
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["ok"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt = None
+
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, approval_policy, sandbox_policy, turn_kwargs
+            self.prompt = prompt
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    client = TestClient(app)
+    message = "https://github.com/example/repo/issues/321"
+    resp = client.post("/hub/pma/chat", json={"message": message})
+    assert resp.status_code == 200
+    assert observed["link_source_text"] == message
+    assert "[injected-from-github]" in str(
+        app.state.app_server_supervisor.client.prompt
+    )
+
+
 @pytest.mark.anyio
 async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
     _enable_pma(hub_env.hub_root)

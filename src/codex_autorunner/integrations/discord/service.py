@@ -27,7 +27,16 @@ from ...core.flows import (
     archive_flow_run_artifacts,
     load_latest_paused_ticket_flow_dispatch,
 )
-from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
+from ...core.flows.reconciler import reconcile_flow_run
+from ...core.flows.surface_defaults import should_route_flow_read_to_hub_overview
+from ...core.flows.ux_helpers import (
+    build_flow_status_snapshot,
+    ensure_worker,
+    issue_md_path,
+    seed_issue_from_github,
+    seed_issue_from_text,
+    ticket_progress,
+)
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
@@ -46,6 +55,7 @@ from ...core.ports.run_event import (
 )
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
+from ...core.ticket_flow_summary import build_ticket_flow_display
 from ...core.update import (
     UpdateInProgressError,
     _normalize_update_ref,
@@ -54,7 +64,10 @@ from ...core.update import (
     _spawn_update_process,
 )
 from ...core.update_paths import resolve_update_paths
-from ...core.utils import canonicalize_path, find_repo_root
+from ...core.utils import (
+    atomic_write,
+    canonicalize_path,
+)
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.app_server.client import CodexAppServerClient
@@ -89,10 +102,10 @@ from ...integrations.chat.update_notifier import (
     format_update_status_message,
     mark_update_status_notified,
 )
+from ...integrations.github.context_injection import maybe_inject_github_context
 from ...integrations.github.service import (
+    GitHubError,
     GitHubService,
-    find_github_links,
-    parse_github_url,
 )
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
@@ -109,6 +122,7 @@ from .allowlist import DiscordAllowlist, allowlist_allows
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
+    DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_bind_picker,
     build_cancel_turn_button,
     build_flow_runs_picker,
@@ -140,7 +154,7 @@ from .state import DiscordStateStore, OutboxRecord
 DISCORD_EPHEMERAL_FLAG = 64
 PAUSE_SCAN_INTERVAL_SECONDS = 5.0
 FLOW_RUNS_DEFAULT_LIMIT = 5
-FLOW_RUNS_MAX_LIMIT = 20
+FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 MESSAGE_TURN_APPROVAL_POLICY = "never"
 MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
@@ -785,7 +799,10 @@ class DiscordBotService:
                 return
 
         prompt_text, github_injected = await self._maybe_inject_github_context(
-            prompt_text, workspace_root
+            prompt_text,
+            workspace_root,
+            link_source_text=text if pma_enabled else None,
+            allow_cross_repo=pma_enabled,
         )
 
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
@@ -1177,115 +1194,20 @@ class DiscordBotService:
             store.close()
 
     async def _maybe_inject_github_context(
-        self, prompt_text: str, workspace_root: Path
+        self,
+        prompt_text: str,
+        workspace_root: Path,
+        *,
+        link_source_text: Optional[str] = None,
+        allow_cross_repo: bool = False,
     ) -> tuple[str, bool]:
-        if not prompt_text or not workspace_root:
-            return prompt_text, False
-        links = find_github_links(prompt_text)
-        if not links:
-            log_event(
-                self._logger,
-                logging.DEBUG,
-                "discord.github_context.skip",
-                reason="no_links",
-            )
-            return prompt_text, False
-        repo_root = find_repo_root(workspace_root)
-        if repo_root is None:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.github_context.skip",
-                reason="repo_not_found",
-                workspace_path=str(workspace_root),
-            )
-            return prompt_text, False
-        try:
-            repo_config = load_repo_config(repo_root)
-            raw_config = repo_config.raw if repo_config else None
-        except Exception:
-            raw_config = None
-        svc = GitHubService(repo_root, raw_config=raw_config)
-        if not svc.gh_available():
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.github_context.skip",
-                reason="gh_unavailable",
-                repo_root=str(repo_root),
-            )
-            return prompt_text, False
-        if not svc.gh_authenticated():
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.github_context.skip",
-                reason="gh_unauthenticated",
-                repo_root=str(repo_root),
-            )
-            return prompt_text, False
-        issue_only_link = self._issue_only_link(prompt_text, links)
-        for link in links:
-            try:
-                result = await asyncio.to_thread(svc.build_context_file_from_url, link)
-            except Exception:
-                result = None
-            if result and result.get("hint"):
-                separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-                hint = str(result["hint"])
-                parsed = parse_github_url(link)
-                if (
-                    issue_only_link
-                    and link == issue_only_link
-                    and parsed
-                    and parsed[1] == "issue"
-                ):
-                    hint = f"{hint}\n\n{self._issue_only_workflow_hint(parsed[2])}"
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.github_context.injected",
-                    repo_root=str(repo_root),
-                    path=result.get("path"),
-                )
-                return f"{prompt_text}{separator}{hint}", True
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.github_context.skip",
-            reason="no_context",
-            repo_root=str(repo_root),
-        )
-        return prompt_text, False
-
-    def _issue_only_link(self, prompt_text: str, links: list[str]) -> Optional[str]:
-        if not prompt_text or not links or len(links) != 1:
-            return None
-        stripped = prompt_text.strip()
-        if not stripped:
-            return None
-        wrappers = (
-            "{link}",
-            "<{link}>",
-            "({link})",
-            "[{link}]",
-            "`{link}`",
-        )
-        link = links[0]
-        for wrapper in wrappers:
-            if stripped == wrapper.format(link=link):
-                return link
-        return None
-
-    def _issue_only_workflow_hint(self, issue_number: int) -> str:
-        return wrap_injected_context(
-            "Issue-only GitHub message detected (no extra context).\n"
-            f"Treat this as a request to implement issue #{issue_number}.\n"
-            "Create a new branch from the latest head branch, "
-            "sync with the current origin default branch first,\n"
-            "implement the fix, and open a PR.\n"
-            f"Ensure the PR description includes `Closes #{issue_number}` "
-            "so GitHub auto-closes the issue when merged."
+        return await maybe_inject_github_context(
+            prompt_text=prompt_text,
+            link_source_text=link_source_text or prompt_text,
+            workspace_root=workspace_root,
+            logger=self._logger,
+            event_prefix="discord.github_context",
+            allow_cross_repo=allow_cross_repo,
         )
 
     def _build_message_session_key(
@@ -2114,29 +2036,35 @@ class DiscordBotService:
             return
 
         if command_path[:2] == ("car", "flow"):
+            if command_path in {("car", "flow", "status"), ("car", "flow", "runs")}:
+                action = command_path[2]
+                workspace_root = await self._resolve_workspace_for_flow_read(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    action=action,
+                )
+                if workspace_root is None:
+                    return
+                if action == "status":
+                    await self._handle_flow_status(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options=options,
+                    )
+                else:
+                    await self._handle_flow_runs(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options=options,
+                    )
+                return
             workspace_root = await self._require_bound_workspace(
                 interaction_id, interaction_token, channel_id=channel_id
             )
             if workspace_root is None:
-                return
-
-            if command_path == ("car", "flow", "status"):
-                await self._handle_flow_status(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                    options=options,
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                )
-                return
-            if command_path == ("car", "flow", "runs"):
-                await self._handle_flow_runs(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                    options=options,
-                )
                 return
             if command_path == ("car", "flow", "issue"):
                 await self._handle_flow_issue(
@@ -2186,6 +2114,14 @@ class DiscordBotService:
                     options=options,
                     channel_id=channel_id,
                     guild_id=guild_id,
+                )
+                return
+            if command_path == ("car", "flow", "recover"):
+                await self._handle_flow_recover(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options=options,
                 )
                 return
             if command_path == ("car", "flow", "reply"):
@@ -3000,9 +2936,12 @@ class DiscordBotService:
             "**Flow Commands:**",
             "/car flow status [run_id] - Show flow status",
             "/car flow runs [limit] - List flow runs",
+            "/car flow issue <issue#|url> - Seed ISSUE.md from GitHub",
+            "/car flow plan <text> - Seed ISSUE.md from plan text",
             "/car flow resume [run_id] - Resume a paused flow",
             "/car flow stop [run_id] - Stop a flow",
             "/car flow archive [run_id] - Archive a flow",
+            "/car flow recover [run_id] - Reconcile active flow run state",
             "/car flow reply <text> [run_id] - Reply to paused flow",
             "",
             "**File Commands:**",
@@ -3856,6 +3795,125 @@ class DiscordBotService:
             f"Model set to {model_name}{effort_note}. Will apply on the next turn.",
         )
 
+    async def _resolve_workspace_for_flow_read(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        action: str,
+    ) -> Optional[Path]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        pma_enabled = bool(binding and binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path") if binding else None
+        has_workspace_binding = isinstance(workspace_raw, str) and bool(
+            workspace_raw.strip()
+        )
+
+        if should_route_flow_read_to_hub_overview(
+            action=action,
+            pma_enabled=pma_enabled,
+            has_workspace_binding=has_workspace_binding,
+        ):
+            await self._send_hub_flow_overview(interaction_id, interaction_token)
+            return None
+
+        if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<...>` first."
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                text,
+            )
+            return None
+        if pma_enabled:
+            text = format_discord_message(
+                "PMA mode is enabled for this channel. Run `/pma off` to use workspace-scoped `/car` commands."
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                text,
+            )
+            return None
+        if not has_workspace_binding:
+            text = format_discord_message(
+                "Binding is invalid. Run `/car bind path:<...>` first."
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                text,
+            )
+            return None
+        return canonicalize_path(Path(str(workspace_raw)))
+
+    async def _send_hub_flow_overview(
+        self, interaction_id: str, interaction_token: str
+    ) -> None:
+        if not self._manifest_path or not self._manifest_path.exists():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Hub manifest not configured.",
+            )
+            return
+
+        try:
+            manifest = load_manifest(self._manifest_path, self._config.root)
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to load manifest: {exc}",
+            )
+            return
+
+        lines = ["Hub Flow Overview:"]
+        seen_any = False
+        for repo in manifest.repos:
+            if not repo.enabled:
+                continue
+            seen_any = True
+            repo_root = (self._config.root / repo.path).resolve()
+            label = repo.display_name or repo.id
+            try:
+                store = self._open_flow_store(repo_root)
+            except Exception:
+                lines.append(f"❓ {label}: Error reading state")
+                continue
+            try:
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+                latest = runs[0] if runs else None
+                progress = ticket_progress(repo_root)
+                display = build_ticket_flow_display(
+                    status=latest.status.value if latest else None,
+                    done_count=progress.get("done", 0),
+                    total_count=progress.get("total", 0),
+                    run_id=latest.id if latest else None,
+                )
+                run_id = display.get("run_id")
+                run_suffix = f" run {run_id}" if run_id else ""
+                lines.append(
+                    f"{display['status_icon']} {label}: {display['status_label']} "
+                    f"{display['done_count']}/{display['total_count']}{run_suffix}"
+                )
+            except Exception:
+                lines.append(f"❓ {label}: Error reading state")
+            finally:
+                store.close()
+
+        if not seen_any:
+            lines.append("No enabled repositories found.")
+        lines.append("Use `/car bind` for repo-specific flow actions.")
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "\n".join(lines),
+        )
+
     async def _require_bound_workspace(
         self,
         interaction_id: str,
@@ -3876,7 +3934,7 @@ class DiscordBotService:
             return None
         if bool(binding.get("pma_enabled", False)):
             text = format_discord_message(
-                "PMA mode is enabled for this channel. Run `/pma off` before using `/car flow` commands."
+                "PMA mode is enabled for this channel. Run `/pma off` to use workspace-scoped `/car` commands."
             )
             await self._respond_ephemeral(
                 interaction_id,
@@ -4134,6 +4192,168 @@ class DiscordBotService:
         await self._respond_with_components(
             interaction_id, interaction_token, "\n".join(lines), components
         )
+
+    async def _handle_flow_issue(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
+    ) -> None:
+        _ = channel_id, guild_id
+        issue_ref = options.get("issue_ref")
+        if not isinstance(issue_ref, str) or not issue_ref.strip():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Provide an issue reference: `/car flow issue issue_ref:<issue#|url>`",
+            )
+            return
+        issue_ref = issue_ref.strip()
+        try:
+            seed = seed_issue_from_github(
+                workspace_root,
+                issue_ref,
+                github_service_factory=GitHubService,
+            )
+            atomic_write(issue_md_path(workspace_root), seed.content)
+        except GitHubError as exc:
+            await self._respond_ephemeral(
+                interaction_id, interaction_token, f"GitHub error: {exc}"
+            )
+            return
+        except RuntimeError as exc:
+            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            return
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to fetch issue: {exc}",
+            )
+            return
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Seeded ISSUE.md from GitHub issue {seed.issue_number}.",
+        )
+
+    async def _handle_flow_plan(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
+    ) -> None:
+        _ = channel_id, guild_id
+        plan_text = options.get("text")
+        if not isinstance(plan_text, str) or not plan_text.strip():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Provide a plan: `/car flow plan text:<plan>`",
+            )
+            return
+        content = seed_issue_from_text(plan_text.strip())
+        atomic_write(issue_md_path(workspace_root), content)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Seeded ISSUE.md from your plan.",
+        )
+
+    async def _handle_flow_recover(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        run_id_opt = options.get("run_id")
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.flow.store_open_failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            target: Optional[FlowRunRecord] = None
+            if isinstance(run_id_opt, str) and run_id_opt.strip():
+                try:
+                    target = self._resolve_flow_run_by_id(
+                        store, run_id=run_id_opt.strip()
+                    )
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        run_id=run_id_opt.strip(),
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow run: {exc}",
+                        user_message="Unable to query flow database. Please try again later.",
+                    ) from None
+            else:
+                try:
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        workspace_root=str(workspace_root),
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow runs: {exc}",
+                        user_message="Unable to query flow database. Please try again later.",
+                    ) from None
+                target = next(
+                    (record for record in runs if record.status.is_active()),
+                    None,
+                )
+
+            if target is None:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "No active ticket_flow run found.",
+                )
+                return
+
+            target, updated, locked = reconcile_flow_run(workspace_root, target, store)
+            if locked:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    f"Run {target.id} is locked for reconcile; try again.",
+                )
+                return
+            verdict = "Recovered" if updated else "No changes needed"
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"{verdict} for run {target.id} ({target.status.value}).",
+            )
+        finally:
+            store.close()
 
     @staticmethod
     def _close_worker_handles(ensure_result: dict[str, Any]) -> None:
@@ -6409,88 +6629,6 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             message_text,
-        )
-
-    async def _handle_flow_issue(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        workspace_root: Path,
-        options: dict[str, Any],
-        channel_id: Optional[str] = None,
-        guild_id: Optional[str] = None,
-    ) -> None:
-        from ...core.flows.ux_helpers import issue_md_path, seed_issue_from_github
-        from ...core.utils import atomic_write
-        from ...integrations.github.service import GitHubError
-
-        _ = channel_id, guild_id
-        issue_ref = options.get("issue_ref")
-        if not isinstance(issue_ref, str) or not issue_ref.strip():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Provide an issue reference: `/car flow issue issue_ref:<issue#|url>`",
-            )
-            return
-        issue_ref = issue_ref.strip()
-        try:
-            seed = seed_issue_from_github(
-                workspace_root,
-                issue_ref,
-                github_service_factory=GitHubService,
-            )
-            atomic_write(issue_md_path(workspace_root), seed.content)
-        except GitHubError as exc:
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, f"GitHub error: {exc}"
-            )
-            return
-        except RuntimeError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
-            return
-        except Exception as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to fetch issue: {exc}",
-            )
-            return
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Seeded ISSUE.md from GitHub issue {seed.issue_number}.",
-        )
-
-    async def _handle_flow_plan(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        workspace_root: Path,
-        options: dict[str, Any],
-        channel_id: Optional[str] = None,
-        guild_id: Optional[str] = None,
-    ) -> None:
-        from ...core.flows.ux_helpers import issue_md_path, seed_issue_from_text
-        from ...core.utils import atomic_write
-
-        _ = channel_id, guild_id
-        plan_text = options.get("text")
-        if not isinstance(plan_text, str) or not plan_text.strip():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Provide a plan: `/car flow plan text:<plan>`",
-            )
-            return
-        content = seed_issue_from_text(plan_text.strip())
-        atomic_write(issue_md_path(workspace_root), content)
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Seeded ISSUE.md from your plan.",
         )
 
     async def _handle_car_interrupt(

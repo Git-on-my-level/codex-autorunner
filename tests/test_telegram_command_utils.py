@@ -8,11 +8,11 @@ import pytest
 
 from codex_autorunner.agents.opencode.client import OpenCodeProtocolError
 from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisorError
+from codex_autorunner.integrations.github.context_injection import issue_only_link
 from codex_autorunner.integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from codex_autorunner.integrations.telegram.handlers.commands.command_utils import (
     _format_httpx_exception,
     _format_opencode_exception,
-    _issue_only_link,
     _opencode_review_arguments,
 )
 from codex_autorunner.integrations.telegram.transport import TelegramMessageTransport
@@ -20,15 +20,15 @@ from codex_autorunner.integrations.telegram.transport import TelegramMessageTran
 
 def test_issue_only_link_matches_single_link_wrappers() -> None:
     link = "https://example.com/issue/1"
-    assert _issue_only_link(link, [link]) == link
-    assert _issue_only_link(f"<{link}>", [link]) == link
-    assert _issue_only_link(f"({link})", [link]) == link
+    assert issue_only_link(link, [link]) == link
+    assert issue_only_link(f"<{link}>", [link]) == link
+    assert issue_only_link(f"({link})", [link]) == link
 
 
 def test_issue_only_link_ignores_non_wrapper_text() -> None:
-    assert _issue_only_link("", ["https://example.com"]) is None
-    assert _issue_only_link("check this", ["https://example.com"]) is None
-    assert _issue_only_link("https://example.com", ["one", "two"]) is None
+    assert issue_only_link("", ["https://example.com"]) is None
+    assert issue_only_link("check this", ["https://example.com"]) is None
+    assert issue_only_link("https://example.com", ["one", "two"]) is None
 
 
 def test_opencode_review_arguments_reduces_known_target_types() -> None:

@@ -34,7 +34,6 @@ from .....agents.opencode.runtime import (
     split_model_id,
 )
 from .....core.coercion import coerce_int
-from .....core.config import load_repo_config
 from .....core.context_awareness import CAR_AWARENESS_BLOCK
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
@@ -46,7 +45,7 @@ from .....integrations.app_server.threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
-from .....integrations.github.service import GitHubService
+from .....integrations.github.context_injection import maybe_inject_github_context
 from ....app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
@@ -83,13 +82,10 @@ from ...helpers import (
     _prepare_shell_response,
     _preview_from_text,
     _render_command_output,
-    _repo_root,
     _set_thread_summary,
     _with_conversation_id,
-    find_github_links,
     format_public_error,
     is_interrupt_status,
-    parse_github_url,
 )
 from ...state import topic_key as build_topic_key
 
@@ -99,8 +95,6 @@ if TYPE_CHECKING:
 from .command_utils import (
     _format_httpx_exception,
     _format_opencode_exception,
-    _issue_only_link,
-    _issue_only_workflow_hint,
 )
 from .shared import SharedHelpers
 
@@ -133,14 +127,6 @@ _GENERIC_TELEGRAM_ERRORS = {
     "Telegram file download failed",
     "Telegram API returned error",
 }
-
-_ISSUE_ONLY_LINK_WRAPPERS = (
-    "{link}",
-    "<{link}>",
-    "({link})",
-    "[{link}]",
-    "`{link}`",
-)
 
 
 @dataclass
@@ -349,87 +335,23 @@ class ExecutionCommands(SharedHelpers):
         return disclaimer
 
     async def _maybe_inject_github_context(
-        self, prompt_text: str, record: Any
+        self,
+        prompt_text: str,
+        record: Any,
+        *,
+        link_source_text: Optional[str] = None,
+        allow_cross_repo: bool = False,
     ) -> tuple[str, bool]:
         if not prompt_text or not record or not record.workspace_path:
             return prompt_text, False
-        links = find_github_links(prompt_text)
-        if not links:
-            log_event(
-                self._logger,
-                logging.DEBUG,
-                "telegram.github_context.skip",
-                reason="no_links",
-            )
-            return prompt_text, False
-        workspace_root = Path(record.workspace_path)
-        repo_root = _repo_root(workspace_root)
-        if repo_root is None:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.github_context.skip",
-                reason="repo_not_found",
-                workspace_path=str(workspace_root),
-            )
-            return prompt_text, False
-        try:
-            repo_config = load_repo_config(repo_root)
-            raw_config = repo_config.raw if repo_config else None
-        except Exception:
-            raw_config = None
-        svc = GitHubService(repo_root, raw_config=raw_config)
-        if not svc.gh_available():
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.github_context.skip",
-                reason="gh_unavailable",
-                repo_root=str(repo_root),
-            )
-            return prompt_text, False
-        if not svc.gh_authenticated():
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.github_context.skip",
-                reason="gh_unauthenticated",
-                repo_root=str(repo_root),
-            )
-            return prompt_text, False
-        issue_only_link = _issue_only_link(prompt_text, links)
-        for link in links:
-            try:
-                result = await asyncio.to_thread(svc.build_context_file_from_url, link)
-            except Exception:
-                result = None
-            if result and result.get("hint"):
-                separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-                hint = str(result["hint"])
-                parsed = parse_github_url(link)
-                if (
-                    issue_only_link
-                    and link == issue_only_link
-                    and parsed
-                    and parsed[1] == "issue"
-                ):
-                    hint = f"{hint}\n\n{_issue_only_workflow_hint(parsed[2])}"
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "telegram.github_context.injected",
-                    repo_root=str(repo_root),
-                    path=result.get("path"),
-                )
-                return f"{prompt_text}{separator}{hint}", True
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.github_context.skip",
-            reason="no_context",
-            repo_root=str(repo_root),
+        return await maybe_inject_github_context(
+            prompt_text=prompt_text,
+            link_source_text=link_source_text or prompt_text,
+            workspace_root=Path(record.workspace_path),
+            logger=self._logger,
+            event_prefix="telegram.github_context",
+            allow_cross_repo=allow_cross_repo,
         )
-        return prompt_text, False
 
     def _maybe_inject_prompt_context(self, prompt_text: str) -> tuple[str, bool]:
         if not prompt_text or not prompt_text.strip():
@@ -2584,6 +2506,7 @@ class ExecutionCommands(SharedHelpers):
             prompt_text, transcript_text=transcript_text
         )
         if pma_enabled:
+            user_message_prompt = prompt_text
             pma_prompt = await self._prepare_pma_prompt(prompt_text)
             if pma_prompt is None:
                 failure_message = "PMA unavailable; hub snapshot failed."
@@ -2597,7 +2520,19 @@ class ExecutionCommands(SharedHelpers):
                 return _TurnRunFailure(
                     failure_message, None, transcript_message_id, transcript_text
                 )
-            prompt_text = pma_prompt
+            prompt_text, injected = await self._maybe_inject_github_context(
+                pma_prompt,
+                record,
+                link_source_text=user_message_prompt,
+                allow_cross_repo=True,
+            )
+            if injected:
+                await self._send_message(
+                    message.chat_id,
+                    "gh CLI used, github context injected",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
         else:
             prompt_text, key = await self._prepare_turn_context(
                 message, prompt_text, record

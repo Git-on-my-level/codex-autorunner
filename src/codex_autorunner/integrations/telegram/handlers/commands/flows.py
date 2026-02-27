@@ -12,6 +12,7 @@ from .....core.config import load_hub_config, load_repo_config
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
+from .....core.flows.surface_defaults import should_route_flow_read_to_hub_overview
 from .....core.flows.ux_helpers import (
     bootstrap_check,
     build_flow_status_snapshot,
@@ -515,11 +516,16 @@ class FlowCommands(SharedHelpers):
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._store.get_topic(key)
         is_pma = bool(record and getattr(record, "pma_enabled", False))
-        is_unbound = bool(not record or not getattr(record, "workspace_path", None))
+        has_workspace_binding = bool(record and getattr(record, "workspace_path", None))
+        route_to_hub_overview = should_route_flow_read_to_hub_overview(
+            action=action_raw,
+            pma_enabled=is_pma,
+            has_workspace_binding=has_workspace_binding,
+            has_explicit_target=bool(target_repo_root),
+        )
 
         if not target_repo_root and not action_raw:
-            # Check if we should show Hub Overview
-            if is_pma or is_unbound:
+            if route_to_hub_overview:
                 await self._send_flow_hub_overview(message)
                 return
             action = "status"
@@ -534,7 +540,7 @@ class FlowCommands(SharedHelpers):
         elif record and record.workspace_path:
             repo_root = canonicalize_path(Path(record.workspace_path))
         else:
-            if action == "status" and (is_pma or is_unbound):
+            if route_to_hub_overview:
                 await self._send_flow_hub_overview(message)
                 return
             await self._send_message(

@@ -68,6 +68,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "resume",
         "stop",
         "archive",
+        "recover",
         "reply",
     ]
 
@@ -99,15 +100,20 @@ def test_required_options_are_marked_required() -> None:
 
     flow = _find_option(car_options, "flow")
     flow_issue = _find_option(flow["options"], "issue")
-    issue_ref_option = _find_option(flow_issue["options"], "issue_ref")
+    flow_issue_ref = _find_option(flow_issue["options"], "issue_ref")
+    assert flow_issue_ref["required"] is True
+
     flow_plan = _find_option(flow["options"], "plan")
-    plan_text_option = _find_option(flow_plan["options"], "text")
+    flow_plan_text = _find_option(flow_plan["options"], "text")
+    assert flow_plan_text["required"] is True
+
+    flow_recover = _find_option(flow["options"], "recover")
+    flow_recover_run_id = _find_option(flow_recover["options"], "run_id")
+    assert flow_recover_run_id["required"] is False
     flow_reply = _find_option(flow["options"], "reply")
     text_option = _find_option(flow_reply["options"], "text")
     run_id_option = _find_option(flow_reply["options"], "run_id")
 
-    assert issue_ref_option["required"] is True
-    assert plan_text_option["required"] is True
     assert text_option["required"] is True
     assert run_id_option["required"] is False
 

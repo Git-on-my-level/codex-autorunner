@@ -328,7 +328,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                 {
                                     "type": STRING,
                                     "name": "issue_ref",
-                                    "description": "Issue number or GitHub URL",
+                                    "description": "Issue number or URL",
                                     "required": True,
                                 }
                             ],
@@ -336,7 +336,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": SUB_COMMAND,
                             "name": "plan",
-                            "description": "Seed ISSUE.md from a plain text plan",
+                            "description": "Seed ISSUE.md from plan text",
                             "options": [
                                 {
                                     "type": STRING,
@@ -376,6 +376,19 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "type": SUB_COMMAND,
                             "name": "archive",
                             "description": "Archive a flow",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "run_id",
+                                    "description": "Flow run id",
+                                    "required": False,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "recover",
+                            "description": "Recover a flow",
                             "options": [
                                 {
                                     "type": STRING,
