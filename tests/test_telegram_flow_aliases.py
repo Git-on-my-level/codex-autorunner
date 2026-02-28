@@ -21,6 +21,7 @@ class _FlowReplyAliasHandler(FlowCommands):
     def __init__(self, repo_root: Path, *, explode: bool = False) -> None:
         self._store = _TopicStoreStub(repo_root)
         self.reply_args: list[str] = []
+        self.sent: list[str] = []
         self.explode = explode
 
     async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
@@ -37,13 +38,15 @@ class _FlowReplyAliasHandler(FlowCommands):
     async def _send_message(
         self,
         _chat_id: int,
-        _text: str,
+        text: str,
         *,
         thread_id: int | None = None,
         reply_to: int | None = None,
         reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
     ) -> None:
-        _ = (thread_id, reply_to, reply_markup)
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
+        self.sent.append(text)
 
 
 def _message(text: str) -> TelegramMessage:
@@ -73,3 +76,17 @@ async def test_flow_command_errors_are_reported(tmp_path: Path) -> None:
     await handler._handle_flow(message, "reply hello world")
 
     assert handler.reply_args == []
+
+
+@pytest.mark.anyio
+async def test_flow_restart_returns_unknown_command_and_help(tmp_path: Path) -> None:
+    handler = _FlowReplyAliasHandler(tmp_path)
+    message = _message("/flow restart")
+
+    await handler._handle_flow(message, "restart")
+
+    assert handler.reply_args == []
+    assert handler.sent[0] == "Unknown /flow command: restart. Use /flow help."
+    assert "/flow status [run_id]" in handler.sent[1]
+    assert "/flow runs [N]" in handler.sent[1]
+    assert "/flow restart" not in handler.sent[1]

@@ -941,6 +941,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("Flow:")
         lines.append("/flow")
         lines.append("/flow status [run_id]")
+        lines.append("/flow runs [N]")
         lines.append("/flow issue <issue#|url>")
         lines.append("/flow plan <text>")
         lines.append("/flow resume [run_id]")

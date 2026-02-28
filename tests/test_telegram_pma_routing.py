@@ -1375,6 +1375,29 @@ async def test_pma_target_clear_rejects_extra_args(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_pma_target_remove_alias_reports_usage(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    handler = _PmaTargetsHandler(
+        hub_root=hub_root,
+        record=TelegramTopicRecord(),
+    )
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+    store = PmaDeliveryTargetsStore(hub_root)
+
+    await handler._handle_pma(message, "target add here", _RuntimeStub())
+    await handler._handle_pma(message, "target remove here", _RuntimeStub())
+
+    assert "Usage:" in handler.sent[-1]
+    assert "/pma target rm <ref>" in handler.sent[-1]
+    keys = {
+        key
+        for key in (target_key(target) for target in store.load()["targets"])
+        if isinstance(key, str)
+    }
+    assert "chat:telegram:-1001:55" in keys
+
+
+@pytest.mark.anyio
 async def test_pma_on_sets_here_target_and_replaces_single_target(
     tmp_path: Path,
 ) -> None:
@@ -1494,3 +1517,5 @@ def test_help_text_mentions_pma_target_management() -> None:
     specs = build_command_specs(_HelpHandlersStub())
     text = _format_help_text(specs)
     assert "/pma - PMA mode and delivery targets" in text
+    assert "/flow runs [N]" in text
+    assert "/flow restart" not in text

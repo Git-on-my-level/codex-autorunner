@@ -1845,32 +1845,6 @@ You are the first ticket in a new ticket_flow run.
             parse_mode="Markdown",
         )
 
-    async def _handle_flow_restart(
-        self,
-        message: TelegramMessage,
-        repo_root: Path,
-        argv: Optional[list[str]] = None,
-    ) -> None:
-        argv = argv or []
-        store = _load_flow_store(repo_root)
-        record = None
-        try:
-            store.initialize()
-            run_id_raw = self._first_non_flag(argv)
-            if run_id_raw:
-                run_id, error = self._resolve_run_id_input(store, run_id_raw)
-                if error is None and run_id:
-                    record = store.get_flow_run(run_id)
-            else:
-                record = _select_latest_run(store, lambda run: run.status.is_active())
-        finally:
-            store.close()
-        if record and not record.status.is_terminal():
-            controller = self._ticket_controller_for(repo_root)
-            self._stop_flow_worker(repo_root, record.id)
-            await controller.stop_flow(record.id)
-        await self._handle_flow_bootstrap(message, repo_root, argv=["--force-new"])
-
     async def _handle_flow_archive(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
