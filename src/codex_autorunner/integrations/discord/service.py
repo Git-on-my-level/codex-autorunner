@@ -2973,6 +2973,9 @@ class DiscordBotService:
             "/pma off - Disable PMA mode",
             "/pma status - Show PMA status",
             "/pma targets - List PMA delivery targets",
+            "/pma targets add <ref> - Add a PMA delivery target",
+            "/pma targets rm <ref> - Remove a PMA delivery target",
+            "/pma targets clear - Clear PMA delivery targets",
             "/pma target add <ref> - Add a PMA delivery target",
             "/pma target rm <ref> - Remove a PMA delivery target",
             "/pma target clear - Clear PMA delivery targets",
@@ -5081,6 +5084,16 @@ class DiscordBotService:
                 interaction_id, interaction_token, channel_id=channel_id
             )
         elif subcommand == "targets":
+            if len(command_path) > 2:
+                action = command_path[2] if len(command_path) > 2 else ""
+                await self._handle_pma_target_mutation(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    action=action,
+                    options=command_options,
+                )
+                return
             await self._handle_pma_targets_list(
                 interaction_id,
                 interaction_token,
@@ -5612,6 +5625,9 @@ class DiscordBotService:
                 "Usage:",
                 "/pma (no subcommand) => status",
                 "/pma on|off|status|targets",
+                "/pma targets add <ref>",
+                "/pma targets rm <ref>",
+                "/pma targets clear",
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
@@ -5620,6 +5636,7 @@ class DiscordBotService:
                 "/pma thread archive <id>",
                 "/pma thread resume <id> <backend_id>",
                 pma_delivery_target_ref_usage(include_here=True),
+                "Local path targets must resolve within the hub root.",
             ]
         )
 

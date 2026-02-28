@@ -32,6 +32,7 @@ FastAPI web UI, API routes, and web-specific workflows.
 - PMA web/API surface: `routes/pma.py` (`/hub/pma/*`)
   - Chat/session lifecycle: `POST /hub/pma/chat`, `GET /hub/pma/active`, `GET /hub/pma/history`, `POST /hub/pma/interrupt|stop|new|reset|compact`, `GET /hub/pma/turns/{turn_id}/events`
   - Managed threads: `POST /hub/pma/threads`, `GET /hub/pma/threads`, `POST /hub/pma/threads/{managed_thread_id}/messages|resume|compact|archive|interrupt`, `GET /hub/pma/threads/{managed_thread_id}/turns`
+  - Delivery targets: `GET /hub/pma/targets`, `POST /hub/pma/targets`, `DELETE /hub/pma/targets/{target_ref}`, `DELETE /hub/pma/targets`
   - PMA docs + context: `GET /hub/pma/docs`, `GET/PUT /hub/pma/docs/{name}`, `GET /hub/pma/docs/history/{name}`, `POST /hub/pma/context/snapshot`
   - FileBox-backed PMA files: `GET /hub/pma/files`, `POST /hub/pma/files/{box}`, `GET/DELETE /hub/pma/files/{box}/{filename}`, `DELETE /hub/pma/files/{box}`
   - Queue + dispatch + model/safety discovery: `GET /hub/pma/queue`, `GET /hub/pma/dispatches`, `POST /hub/pma/dispatches/{dispatch_id}/resolve`, `GET /hub/pma/agents`, `GET /hub/pma/agents/{agent}/models`, `GET /hub/pma/audit/recent`, `GET /hub/pma/safety/stats`

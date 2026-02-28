@@ -1070,12 +1070,7 @@ class TelegramCommandHandlers(
         action_args = argv[1:]
         if action == "targets":
             if action_args:
-                await self._send_message(
-                    message.chat_id,
-                    self._pma_usage(),
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
+                await self._handle_pma_target_mutation(message, action_args)
                 return
             await self._handle_pma_targets_list(message)
             return
@@ -1543,6 +1538,9 @@ class TelegramCommandHandlers(
                 "Usage:",
                 "/pma (or /pma status)",
                 "/pma on|off|status|targets",
+                "/pma targets add <ref>",
+                "/pma targets rm <ref>",
+                "/pma targets clear",
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
@@ -1551,6 +1549,7 @@ class TelegramCommandHandlers(
                 "/pma thread archive <id>",
                 "/pma thread resume <id> <backend_id>",
                 pma_delivery_target_ref_usage(include_here=True),
+                "Local path targets must resolve within the hub root.",
             ]
         )
 

@@ -959,6 +959,9 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("PMA:")
         lines.append("/pma (or /pma status)")
         lines.append("/pma on|off|status|targets")
+        lines.append("/pma targets add <ref>")
+        lines.append("/pma targets rm <ref>")
+        lines.append("/pma targets clear")
         lines.append("/pma target add <ref>")
         lines.append("/pma target rm <ref>")
         lines.append("/pma target clear")
@@ -967,6 +970,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/pma thread archive <id>")
         lines.append("/pma thread resume <id> <backend_id>")
         lines.append(pma_delivery_target_ref_usage(include_here=True))
+        lines.append("Local path targets must resolve within the hub root.")
 
     lines.append("")
     lines.append("Other:")

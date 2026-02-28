@@ -32,7 +32,8 @@ pma_app.add_typer(targets_app, name="targets")
 
 _TARGET_REF_ARG_HELP = (
     "Target ref (e.g. here, telegram:-100123:777, discord:123456789012345678, "
-    "chat:telegram:-100123:777, local:./notes/pma.md, web)"
+    "chat:telegram:-100123:777, local:./notes/pma.md, web). "
+    "Local path refs must resolve within the hub root."
 )
 
 
@@ -98,6 +99,7 @@ def _pma_targets_usage() -> str:
             "targets add <ref>",
             "targets rm <ref>",
             "targets clear",
+            "Local path refs must resolve within the hub root.",
             pma_delivery_target_ref_usage(multiline=True),
         ]
     )
@@ -648,7 +650,10 @@ def pma_targets_add(
     ref: str = typer.Argument(..., help=_TARGET_REF_ARG_HELP),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Add a PMA delivery target."""
+    """Add a PMA delivery target.
+
+    Local path refs must resolve within the hub root.
+    """
     target = _parse_pma_target_ref(ref)
     if target is None:
         typer.echo(f"Invalid target ref '{ref}'.\n{_pma_targets_usage()}", err=True)
@@ -670,7 +675,10 @@ def pma_targets_rm(
     ref: str = typer.Argument(..., help=_TARGET_REF_ARG_HELP),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Remove a PMA delivery target."""
+    """Remove a PMA delivery target.
+
+    Local path refs must resolve within the hub root.
+    """
     target = _parse_pma_target_ref(ref)
     if target is None:
         typer.echo(f"Invalid target ref '{ref}'.\n{_pma_targets_usage()}", err=True)

@@ -1307,6 +1307,9 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
     await handler._handle_pma(
         message, "target add local:./notes/pma.md", _RuntimeStub()
     )
+    await handler._handle_pma(
+        message, "targets add local:./notes/pma2.md", _RuntimeStub()
+    )
 
     store = PmaDeliveryTargetsStore(hub_root)
     state = store.load()
@@ -1318,6 +1321,7 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
     assert keys == {
         "web",
         "local:./notes/pma.md",
+        "local:./notes/pma2.md",
         "chat:discord:99887766",
         "chat:discord:556677",
         "chat:telegram:-1001:55",
@@ -1331,6 +1335,7 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
     assert "chat:discord:556677" in handler.sent[-1]
     assert "chat:telegram:-3003:88" in handler.sent[-1]
     assert "local:./notes/pma.md" in handler.sent[-1]
+    assert "local:./notes/pma2.md" in handler.sent[-1]
     assert "web" in handler.sent[-1]
 
     await handler._handle_pma(message, "target rm here", _RuntimeStub())
@@ -1341,6 +1346,16 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
         if isinstance(key, str)
     }
     assert "chat:telegram:-1001:55" not in keys
+    await handler._handle_pma(
+        message, "targets rm local:./notes/pma2.md", _RuntimeStub()
+    )
+    state = store.load()
+    keys = {
+        key
+        for key in (target_key(target) for target in state["targets"])
+        if isinstance(key, str)
+    }
+    assert "local:./notes/pma2.md" not in keys
 
     await handler._handle_pma(message, "target clear", _RuntimeStub())
     assert store.load()["targets"] == []
@@ -1702,6 +1717,9 @@ def test_help_text_mentions_pma_target_management() -> None:
     assert "PMA:" in text
     assert "/pma (or /pma status)" in text
     assert "/pma on|off|status|targets" in text
+    assert "/pma targets add <ref>" in text
+    assert "/pma targets rm <ref>" in text
+    assert "/pma targets clear" in text
     assert "/pma target add <ref>" in text
     assert "/pma target rm <ref>" in text
     assert "/pma target clear" in text
@@ -1710,5 +1728,6 @@ def test_help_text_mentions_pma_target_management() -> None:
     assert "/pma thread archive <id>" in text
     assert "/pma thread resume <id> <backend_id>" in text
     assert "Refs: here | web | local:<path>" in text
+    assert "Local path targets must resolve within the hub root." in text
     assert "/flow runs [N]" in text
     assert "/flow restart" not in text
