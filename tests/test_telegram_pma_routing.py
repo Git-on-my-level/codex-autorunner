@@ -16,6 +16,7 @@ from codex_autorunner.core.pma_delivery_targets import (
     PmaDeliveryTargetsStore,
     target_key,
 )
+from codex_autorunner.core.pma_target_refs import parse_pma_target_ref
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
 )
@@ -50,6 +51,7 @@ from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
     ThreadSummary,
 )
+from codex_autorunner.surfaces.cli import pma_cli
 
 
 class _RouterStub:
@@ -1288,6 +1290,51 @@ def _make_pma_message(
     )
 
 
+def _targets_state_without_updated_at(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "version": state.get("version"),
+        "targets": state.get("targets"),
+        "last_delivery_by_target": state.get("last_delivery_by_target"),
+        "active_target_key": state.get("active_target_key"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected_key"),
+    [
+        ("here", "chat:telegram:-1001:55"),
+        ("web", "web"),
+        (
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+        ),
+        ("telegram:-100123", "chat:telegram:-100123"),
+        ("telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("discord:99887766", "chat:discord:99887766"),
+        ("chat:telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("chat:discord:99887766", "chat:discord:99887766"),
+        ("telegram:abc", None),
+        ("discord:", None),
+        ("chat:discord:123:456", None),
+    ],
+)
+def test_pma_target_ref_matrix_telegram_matches_canonical_parser(
+    tmp_path: Path, ref: str, expected_key: Optional[str]
+) -> None:
+    handler = _PmaTargetsHandler(
+        hub_root=tmp_path / "hub", record=TelegramTopicRecord()
+    )
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+    parsed = handler._parse_pma_target_ref(message, ref)
+    canonical = parse_pma_target_ref(ref, here_target=handler._pma_here_target(message))
+    assert parsed == canonical
+    if expected_key is None:
+        assert parsed is None
+        return
+    assert parsed is not None
+    assert target_key(parsed) == expected_key
+
+
 @pytest.mark.anyio
 async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
@@ -1295,8 +1342,17 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
     message = _make_pma_message(chat_id=-1001, thread_id=55)
 
     await handler._handle_pma(message, "target add here", _RuntimeStub())
+    await handler._handle_pma(message, "target add web", _RuntimeStub())
+    await handler._handle_pma(
+        message,
+        "target add local:.codex-autorunner/pma/deliveries.jsonl",
+        _RuntimeStub(),
+    )
     await handler._handle_pma(message, "target add telegram:-2002:77", _RuntimeStub())
     await handler._handle_pma(message, "target add discord:99887766", _RuntimeStub())
+    await handler._handle_pma(
+        message, "target add chat:telegram:-2002:77", _RuntimeStub()
+    )
 
     store = PmaDeliveryTargetsStore(hub_root)
     state = store.load()
@@ -1306,12 +1362,15 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
         if isinstance(key, str)
     }
     assert keys == {
+        "web",
+        "local:.codex-autorunner/pma/deliveries.jsonl",
         "chat:discord:99887766",
         "chat:telegram:-1001:55",
         "chat:telegram:-2002:77",
     }
 
     await handler._handle_pma(message, "targets", _RuntimeStub())
+    assert "web" in handler.sent[-1]
     assert "chat:telegram:-1001:55" in handler.sent[-1]
     assert "chat:discord:99887766" in handler.sent[-1]
 
@@ -1339,6 +1398,47 @@ async def test_pma_target_add_invalid_ref_reports_usage(tmp_path: Path) -> None:
     await handler._handle_pma(message, "target add telegram:abc", _RuntimeStub())
     assert "Invalid target ref" in handler.sent[-1]
     assert "/pma target add <ref>" in handler.sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_target_ref_sequence_matches_cli_store_payload(
+    tmp_path: Path,
+) -> None:
+    telegram_root = tmp_path / "telegram-hub"
+    cli_root = tmp_path / "cli-hub"
+    handler = _PmaTargetsHandler(hub_root=telegram_root, record=TelegramTopicRecord())
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    add_refs = [
+        "web",
+        "local:.codex-autorunner/pma/deliveries.jsonl",
+        "telegram:-2002:77",
+        "discord:99887766",
+        "chat:telegram:-2002:77",
+    ]
+    remove_refs = ["telegram:-2002:77"]
+
+    for ref in add_refs:
+        await handler._handle_pma(message, f"target add {ref}", _RuntimeStub())
+    for ref in remove_refs:
+        await handler._handle_pma(message, f"target rm {ref}", _RuntimeStub())
+
+    telegram_state = PmaDeliveryTargetsStore(telegram_root).load()
+
+    cli_store = PmaDeliveryTargetsStore(cli_root)
+    for ref in add_refs:
+        parsed = pma_cli._parse_pma_target_ref(ref)
+        assert parsed is not None
+        cli_store.add_target(parsed)
+    for ref in remove_refs:
+        parsed = pma_cli._parse_pma_target_ref(ref)
+        assert parsed is not None
+        cli_store.remove_target(parsed)
+    cli_state = cli_store.load()
+
+    assert _targets_state_without_updated_at(
+        telegram_state
+    ) == _targets_state_without_updated_at(cli_state)
 
 
 @pytest.mark.anyio

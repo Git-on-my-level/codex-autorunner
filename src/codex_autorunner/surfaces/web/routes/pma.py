@@ -57,8 +57,8 @@ from ....core.pma_sink import PmaActiveSinkStore
 from ....core.pma_state import PmaStateStore
 from ....core.pma_target_refs import (
     format_pma_target_label,
+    invalid_pma_target_ref_message,
     parse_pma_target_ref,
-    pma_targets_usage,
 )
 from ....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
@@ -1126,7 +1126,7 @@ def build_pma_routes() -> APIRouter:
             if target is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid target ref '{ref}'.\n{pma_targets_usage()}",
+                    detail=invalid_pma_target_ref_message(ref),
                 )
             parsed_key = target_key(target)
             if not isinstance(parsed_key, str):
@@ -1170,7 +1170,7 @@ def build_pma_routes() -> APIRouter:
         if target is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid target ref '{ref}'.\n{pma_targets_usage()}",
+                detail=invalid_pma_target_ref_message(ref),
             )
         key = target_key(target)
         if not isinstance(key, str):
@@ -1197,7 +1197,7 @@ def build_pma_routes() -> APIRouter:
         if target is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid target ref '{ref}'.\n{pma_targets_usage()}",
+                detail=invalid_pma_target_ref_message(ref),
             )
         key = target_key(target)
         if not isinstance(key, str):

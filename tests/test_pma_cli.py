@@ -1,7 +1,9 @@
 """Tests for PMA CLI commands."""
 
 from pathlib import Path
+from typing import Optional
 
+import pytest
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
@@ -9,6 +11,8 @@ from codex_autorunner.core.pma_delivery_targets import (
     PmaDeliveryTargetsStore,
     target_key,
 )
+from codex_autorunner.core.pma_target_refs import parse_pma_target_ref
+from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
 
@@ -450,6 +454,29 @@ def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
     runner = CliRunner()
 
+    add_web_result = runner.invoke(
+        pma_app,
+        ["targets", "add", "web", "--path", str(tmp_path)],
+    )
+    assert add_web_result.exit_code == 0
+    assert "Added PMA delivery target: web" in add_web_result.stdout
+
+    add_local_result = runner.invoke(
+        pma_app,
+        [
+            "targets",
+            "add",
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    assert add_local_result.exit_code == 0
+    assert (
+        "Added PMA delivery target: local:.codex-autorunner/pma/deliveries.jsonl"
+        in add_local_result.stdout
+    )
+
     add_result = runner.invoke(
         pma_app,
         ["targets", "add", "telegram:-100123:777", "--path", str(tmp_path)],
@@ -466,8 +493,20 @@ def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
         "Added PMA delivery target: chat:discord:987654321" in add_discord_result.stdout
     )
 
+    add_chat_key_result = runner.invoke(
+        pma_app,
+        ["targets", "add", "chat:telegram:-100123:777", "--path", str(tmp_path)],
+    )
+    assert add_chat_key_result.exit_code == 0
+    assert (
+        "Added PMA delivery target: chat:telegram:-100123:777"
+        in add_chat_key_result.stdout
+    )
+
     list_result = runner.invoke(pma_app, ["targets", "list", "--path", str(tmp_path)])
     assert list_result.exit_code == 0
+    assert "web" in list_result.stdout
+    assert "local:.codex-autorunner/pma/deliveries.jsonl" in list_result.stdout
     assert "chat:telegram:-100123:777" in list_result.stdout
     assert "chat:discord:987654321" in list_result.stdout
 
@@ -503,3 +542,38 @@ def test_pma_targets_add_rejects_invalid_ref(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "Invalid target ref" in result.output
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected_key"),
+    [
+        ("web", "web"),
+        (
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+        ),
+        ("telegram:-100123", "chat:telegram:-100123"),
+        ("telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("discord:987654321", "chat:discord:987654321"),
+        ("chat:telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("chat:discord:987654321", "chat:discord:987654321"),
+        ("", None),
+        ("telegram:not-a-number", None),
+        ("telegram:-100123:not-a-number", None),
+        ("discord:", None),
+        ("chat:telegram:-100123:not-a-number", None),
+        ("chat:discord:", None),
+        ("chat:discord:123:456", None),
+    ],
+)
+def test_pma_target_ref_matrix_cli_matches_canonical_parser(
+    ref: str, expected_key: Optional[str]
+) -> None:
+    cli_target = pma_cli._parse_pma_target_ref(ref)
+    canonical_target = parse_pma_target_ref(ref)
+    assert cli_target == canonical_target
+    if expected_key is None:
+        assert canonical_target is None
+        return
+    assert canonical_target is not None
+    assert target_key(canonical_target) == expected_key

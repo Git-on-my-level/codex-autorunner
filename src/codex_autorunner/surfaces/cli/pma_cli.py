@@ -16,10 +16,10 @@ from ...core.pma_target_refs import (
     format_pma_target_label as _format_pma_target_label,
 )
 from ...core.pma_target_refs import (
-    parse_pma_target_ref as _parse_pma_target_ref,
+    invalid_pma_target_ref_message as _invalid_pma_target_ref_message,
 )
 from ...core.pma_target_refs import (
-    pma_targets_usage as _pma_targets_usage,
+    parse_pma_target_ref as _parse_pma_target_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -606,7 +606,7 @@ def pma_targets_add(
     """Add a PMA delivery target."""
     target = _parse_pma_target_ref(ref)
     if target is None:
-        typer.echo(f"Invalid target ref '{ref}'.\n{_pma_targets_usage()}", err=True)
+        typer.echo(_invalid_pma_target_ref_message(ref), err=True)
         raise typer.Exit(code=1) from None
 
     key = target_key(target)
@@ -629,7 +629,7 @@ def pma_targets_rm(
     """Remove a PMA delivery target."""
     target = _parse_pma_target_ref(ref)
     if target is None:
-        typer.echo(f"Invalid target ref '{ref}'.\n{_pma_targets_usage()}", err=True)
+        typer.echo(_invalid_pma_target_ref_message(ref), err=True)
         raise typer.Exit(code=1) from None
 
     key = target_key(target)

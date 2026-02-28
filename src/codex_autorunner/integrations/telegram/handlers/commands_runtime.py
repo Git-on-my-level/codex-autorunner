@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.logging_utils import log_event
 from ....core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
+from ....core.pma_target_refs import parse_pma_target_ref, pma_targets_usage
 from ....core.state import now_iso
 from ....core.update import (
     _available_update_target_options,
@@ -1255,7 +1256,7 @@ class TelegramCommandHandlers(
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
-                "Refs: here | telegram:<chat_id>[:<thread_id>] | discord:<channel_id>",
+                pma_targets_usage(include_here=True),
             ]
         )
 
@@ -1273,40 +1274,7 @@ class TelegramCommandHandlers(
     def _parse_pma_target_ref(
         self, message: TelegramMessage, ref: str
     ) -> Optional[dict[str, Any]]:
-        value = ref.strip()
-        if not value:
-            return None
-        lowered = value.lower()
-        if lowered == "here":
-            return self._pma_here_target(message)
-        if lowered.startswith("telegram:"):
-            parts = value.split(":")
-            if len(parts) < 2 or len(parts) > 3:
-                return None
-            chat_id_raw = parts[1].strip()
-            if not chat_id_raw or not chat_id_raw.lstrip("-").isdigit():
-                return None
-            target = {
-                "kind": "chat",
-                "platform": "telegram",
-                "chat_id": str(int(chat_id_raw)),
-            }
-            if len(parts) == 3:
-                thread_raw = parts[2].strip()
-                if not thread_raw or not thread_raw.lstrip("-").isdigit():
-                    return None
-                target["thread_id"] = str(int(thread_raw))
-            return target
-        if lowered.startswith("discord:"):
-            channel_id = value.split(":", 1)[1].strip()
-            if not channel_id:
-                return None
-            return {
-                "kind": "chat",
-                "platform": "discord",
-                "chat_id": channel_id,
-            }
-        return None
+        return parse_pma_target_ref(ref, here_target=self._pma_here_target(message))
 
     def _format_pma_target_label(self, target: dict[str, Any]) -> str:
         label = target.get("label")

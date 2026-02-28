@@ -11,6 +11,7 @@ from codex_autorunner.core.pma_delivery_targets import (
     PmaDeliveryTargetsStore,
     target_key,
 )
+from codex_autorunner.core.pma_target_refs import parse_pma_target_ref
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -163,6 +164,41 @@ def _bind_interaction(*, path: str, user_id: str = "user-1") -> dict[str, Any]:
             ],
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected_key"),
+    [
+        ("here", "chat:discord:channel-1"),
+        ("web", "web"),
+        (
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+        ),
+        ("discord:99887766", "chat:discord:99887766"),
+        ("telegram:-100123", "chat:telegram:-100123"),
+        ("telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("chat:discord:99887766", "chat:discord:99887766"),
+        ("chat:telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("telegram:abc", None),
+        ("discord:", None),
+        ("chat:discord:123:456", None),
+    ],
+)
+def test_pma_target_ref_matrix_discord_matches_canonical_parser(
+    ref: str, expected_key: str | None
+) -> None:
+    service = DiscordBotService.__new__(DiscordBotService)
+    parsed = service._parse_pma_target_ref(channel_id="channel-1", ref=ref)
+    canonical = parse_pma_target_ref(
+        ref, here_target={"kind": "chat", "platform": "discord", "chat_id": "channel-1"}
+    )
+    assert parsed == canonical
+    if expected_key is None:
+        assert parsed is None
+        return
+    assert parsed is not None
+    assert target_key(parsed) == expected_key
 
 
 @pytest.mark.anyio
@@ -544,8 +580,13 @@ async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
     gateway = _FakeGateway(
         [
             _pma_target_interaction(action="add", ref="here"),
+            _pma_target_interaction(action="add", ref="web"),
+            _pma_target_interaction(
+                action="add", ref="local:.codex-autorunner/pma/deliveries.jsonl"
+            ),
             _pma_target_interaction(action="add", ref="telegram:-2002:77"),
             _pma_target_interaction(action="add", ref="discord:99887766"),
+            _pma_target_interaction(action="add", ref="chat:telegram:-2002:77"),
             _pma_interaction(subcommand="targets"),
             _pma_target_interaction(action="rm", ref="here"),
             _pma_target_interaction(action="clear"),
@@ -562,17 +603,19 @@ async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 6
-        list_content = rest.interaction_responses[3]["payload"]["data"]["content"]
+        assert len(rest.interaction_responses) == 9
+        list_content = rest.interaction_responses[6]["payload"]["data"]["content"]
+        assert "web" in list_content
+        assert "local:.codex-autorunner/pma/deliveries.jsonl" in list_content
         assert "chat:discord:channel-1" in list_content
         assert "chat:telegram:-2002:77" in list_content
         assert "chat:discord:99887766" in list_content
 
         assert "Removed PMA delivery target: chat:discord:channel-1" in (
-            rest.interaction_responses[4]["payload"]["data"]["content"]
+            rest.interaction_responses[7]["payload"]["data"]["content"]
         )
         assert "Cleared PMA delivery targets." in (
-            rest.interaction_responses[5]["payload"]["data"]["content"]
+            rest.interaction_responses[8]["payload"]["data"]["content"]
         )
         assert PmaDeliveryTargetsStore(tmp_path).load()["targets"] == []
     finally:

@@ -9,6 +9,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from ..core.locks import file_lock
 from ..core.logging_utils import log_event
 from ..core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
+from ..core.pma_target_refs import normalize_pma_target
 from ..core.time_utils import now_iso
 from ..core.utils import is_within
 from ..integrations.chat.text_chunking import chunk_text
@@ -99,23 +100,14 @@ def _parse_int(value: Any) -> Optional[int]:
 def _resolve_telegram_target(
     target: Mapping[str, Any],
 ) -> Optional[tuple[int, Optional[int]]]:
-    kind = target.get("kind")
-    if kind == "telegram":
-        chat_id = target.get("chat_id")
-        thread_id = target.get("thread_id")
-        if not isinstance(chat_id, int):
-            return None
-        if thread_id is not None and not isinstance(thread_id, int):
-            return None
-        return chat_id, thread_id
-    if kind == "chat" and target.get("platform") == "telegram":
-        chat_id = _parse_int(target.get("chat_id"))
+    normalized = normalize_pma_target(target)
+    if not isinstance(normalized, dict):
+        return None
+    if normalized.get("kind") == "chat" and normalized.get("platform") == "telegram":
+        chat_id = _parse_int(normalized.get("chat_id"))
         if chat_id is None:
             return None
-        raw_thread_id = target.get("thread_id")
-        thread_id = _parse_int(raw_thread_id)
-        if raw_thread_id is not None and thread_id is None:
-            return None
+        thread_id = _parse_int(normalized.get("thread_id"))
         return chat_id, thread_id
     return None
 
@@ -123,10 +115,11 @@ def _resolve_telegram_target(
 def _resolve_discord_target(
     target: Mapping[str, Any],
 ) -> Optional[str]:
-    kind = target.get("kind")
-    platform = target.get("platform")
-    if kind == "chat" and platform == "discord":
-        channel_id = target.get("chat_id")
+    normalized = normalize_pma_target(target)
+    if not isinstance(normalized, dict):
+        return None
+    if normalized.get("kind") == "chat" and normalized.get("platform") == "discord":
+        channel_id = normalized.get("chat_id")
         if isinstance(channel_id, str) and channel_id.strip():
             return channel_id.strip()
     return None
@@ -176,13 +169,11 @@ def _resolve_local_target(
     *,
     hub_root: Path,
 ) -> Optional[Path]:
-    if target.get("kind") != "local":
+    normalized = normalize_pma_target(target)
+    if not isinstance(normalized, dict) or normalized.get("kind") != "local":
         return None
-    raw_path = target.get("path")
-    if not isinstance(raw_path, str):
-        return None
-    path_text = raw_path.strip()
-    if not path_text:
+    path_text = normalized.get("path")
+    if not isinstance(path_text, str) or not path_text.strip():
         return None
     configured_path = Path(path_text).expanduser()
     if configured_path.is_absolute():
@@ -219,6 +210,28 @@ async def _deliver_to_local(
     }
     _append_jsonl(path, payload, max_bytes=PMA_DELIVERY_MIRROR_MAX_BYTES)
     return _TargetDeliveryOutcome(success=True, chunk_count=1)
+
+
+def _normalize_target_for_delivery(
+    target: Any, *, index: int
+) -> tuple[str, Optional[dict[str, Any]], Optional[str]]:
+    invalid_key = f"invalid:{index}"
+    if not isinstance(target, Mapping):
+        return invalid_key, None, "invalid_target"
+    original_key = target_key(target)
+    normalized = normalize_pma_target(target)
+    if not isinstance(normalized, dict):
+        if isinstance(original_key, str) and original_key:
+            return original_key, None, "invalid_target"
+        return invalid_key, None, "invalid_target"
+    key = (
+        original_key
+        if isinstance(original_key, str) and original_key
+        else target_key(normalized)
+    )
+    if not isinstance(key, str) or not key:
+        return invalid_key, None, "invalid_target"
+    return key, normalized, None
 
 
 def _normalize_dispatch_record(payload: Any) -> Optional[dict[str, Any]]:
@@ -543,17 +556,19 @@ async def deliver_pma_dispatches_to_delivery_targets(
     chunk_count_by_target: dict[str, int] = {}
     errors: list[dict[str, Any]] = []
 
-    for target in targets:
-        if not isinstance(target, dict):
-            continue
-        key = target_key(target)
-        if not isinstance(key, str):
-            continue
+    for index, target in enumerate(targets):
+        key, normalized_target, target_error = _normalize_target_for_delivery(
+            target, index=index
+        )
         configured_targets += 1
         delivery_target_keys.append(key)
         chunk_count_by_target.setdefault(key, 0)
+        if target_error is not None or normalized_target is None:
+            failed_targets += 1
+            errors.append({"target": key, "error": target_error or "invalid_target"})
+            continue
 
-        if target.get("kind") == "web":
+        if normalized_target.get("kind") == "web":
             delivered_targets += 1
             delivered_target_keys.append(key)
             continue
@@ -563,7 +578,7 @@ async def deliver_pma_dispatches_to_delivery_targets(
             dispatch_id = dispatch.get("dispatch_id")
             message = _render_dispatch_message(dispatch)
             expected_chunk_count = 1
-            if _resolve_discord_target(target):
+            if _resolve_discord_target(normalized_target):
                 expected_chunk_count = len(
                     chunk_text(
                         message,
@@ -571,7 +586,7 @@ async def deliver_pma_dispatches_to_delivery_targets(
                         with_numbering=False,
                     )
                 )
-            elif _resolve_telegram_target(target) is not None:
+            elif _resolve_telegram_target(normalized_target) is not None:
                 expected_chunk_count = len(
                     chunk_text(
                         message,
@@ -581,17 +596,17 @@ async def deliver_pma_dispatches_to_delivery_targets(
                 )
 
             outcome: _TargetDeliveryOutcome
-            if target.get("kind") == "local":
+            if normalized_target.get("kind") == "local":
                 outcome = await _deliver_dispatch_to_local(
                     hub_root=hub_root,
-                    target=target,
+                    target=normalized_target,
                     target_delivery_key=key,
                     dispatch=dispatch,
                     turn_id=turn_id,
                     chunk_count=expected_chunk_count,
                 )
             else:
-                discord_channel_id = _resolve_discord_target(target)
+                discord_channel_id = _resolve_discord_target(normalized_target)
                 if discord_channel_id:
                     outcome = await _deliver_dispatch_to_discord(
                         hub_root=hub_root,
@@ -602,7 +617,7 @@ async def deliver_pma_dispatches_to_delivery_targets(
                         discord_state_path=discord_state_path,
                     )
                 else:
-                    telegram_target = _resolve_telegram_target(target)
+                    telegram_target = _resolve_telegram_target(normalized_target)
                     if telegram_target is None:
                         outcome = _TargetDeliveryOutcome(
                             success=False,
@@ -766,15 +781,17 @@ async def deliver_pma_output_to_active_sink(
     chunk_count_by_target: dict[str, int] = {}
     errors: list[dict[str, Any]] = []
 
-    for target in targets:
-        if not isinstance(target, dict):
-            continue
-        key = target_key(target)
-        if not isinstance(key, str):
-            continue
+    for index, target in enumerate(targets):
+        key, normalized_target, target_error = _normalize_target_for_delivery(
+            target, index=index
+        )
         target_count += 1
         delivery_target_keys.append(key)
         chunk_count_by_target.setdefault(key, 0)
+        if target_error is not None or normalized_target is None:
+            failed_targets += 1
+            errors.append({"target": key, "error": target_error or "invalid_target"})
+            continue
 
         if str(last_delivery_by_target.get(key) or "") == turn_id:
             skipped_duplicates += 1
@@ -782,15 +799,15 @@ async def deliver_pma_output_to_active_sink(
             continue
 
         outcome: _TargetDeliveryOutcome
-        if target.get("kind") == "web":
+        if normalized_target.get("kind") == "web":
             if target_store.mark_delivered(key, turn_id):
                 delivered_targets += 1
                 delivered_target_keys.append(key)
             continue
 
-        if target.get("kind") == "local":
+        if normalized_target.get("kind") == "local":
             outcome = await _deliver_to_local(
-                target=target,
+                target=normalized_target,
                 hub_root=hub_root,
                 assistant_text=assistant_text,
                 turn_id=turn_id,
@@ -811,7 +828,7 @@ async def deliver_pma_output_to_active_sink(
                 )
             continue
 
-        discord_channel_id = _resolve_discord_target(target)
+        discord_channel_id = _resolve_discord_target(normalized_target)
         if discord_channel_id:
             outcome = await _deliver_to_discord(
                 hub_root=hub_root,
@@ -837,7 +854,7 @@ async def deliver_pma_output_to_active_sink(
                 )
             continue
 
-        target_info = _resolve_telegram_target(target)
+        target_info = _resolve_telegram_target(normalized_target)
         if target_info is None:
             failed_targets += 1
             errors.append(

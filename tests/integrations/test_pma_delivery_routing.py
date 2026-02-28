@@ -513,7 +513,7 @@ async def test_pma_delivery_invalid_telegram_thread_id_fails(tmp_path: Path) -> 
     payload = records[0]
     assert payload["turn_id"] == "turn-invalid-thread"
     assert payload["errors"] == [
-        {"target": "chat:telegram:123:invalid-thread", "error": "unsupported_target"}
+        {"target": "chat:telegram:123:invalid-thread", "error": "invalid_target"}
     ]
 
 
@@ -738,7 +738,7 @@ async def test_pma_delivery_duplicate_skip_and_failure_can_coexist(
     assert delivered.skipped_duplicates == 1
     assert delivered.skipped_duplicate_keys == ["web"]
     assert delivered.errors == [
-        {"target": "chat:telegram:123:invalid-thread", "error": "unsupported_target"}
+        {"target": "chat:telegram:123:invalid-thread", "error": "invalid_target"}
     ]
 
     mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
