@@ -1517,6 +1517,43 @@ async def test_pma_no_arg_defaults_to_status(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_pma_aliases_canonicalize_to_discord_actions(tmp_path: Path) -> None:
+    record = TelegramTopicRecord(pma_enabled=False)
+    handler = _PmaTargetsHandler(hub_root=tmp_path / "hub", record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "enable", _RuntimeStub())
+    assert record.pma_enabled is True
+    assert "PMA mode enabled." in handler.sent[-1]
+
+    await handler._handle_pma(message, "show", _RuntimeStub())
+    assert handler.sent[-1] == "PMA mode: enabled"
+
+    await handler._handle_pma(message, "disable", _RuntimeStub())
+    assert record.pma_enabled is False
+    assert "PMA mode disabled." in handler.sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_on_off_status_reject_extra_args(tmp_path: Path) -> None:
+    record = TelegramTopicRecord(pma_enabled=False)
+    handler = _PmaTargetsHandler(hub_root=tmp_path / "hub", record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "on now", _RuntimeStub())
+    assert "Usage:" in handler.sent[-1]
+    assert record.pma_enabled is False
+
+    await handler._handle_pma(message, "status now", _RuntimeStub())
+    assert "Usage:" in handler.sent[-1]
+    assert record.pma_enabled is False
+
+    await handler._handle_pma(message, "off now", _RuntimeStub())
+    assert "Usage:" in handler.sent[-1]
+    assert record.pma_enabled is False
+
+
+@pytest.mark.anyio
 async def test_pma_thread_list_info_archive_resume(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     workspace = tmp_path / "workspace"
@@ -1532,7 +1569,7 @@ async def test_pma_thread_list_info_archive_resume(tmp_path: Path) -> None:
     handler = _PmaTargetsHandler(hub_root=hub_root, record=TelegramTopicRecord())
     message = _make_pma_message(chat_id=-1001, thread_id=55)
 
-    await handler._handle_pma(message, "threads", _RuntimeStub())
+    await handler._handle_pma(message, "thread list", _RuntimeStub())
     assert "Managed PMA threads:" in handler.sent[-1]
     assert managed_thread_id in handler.sent[-1]
 
@@ -1559,6 +1596,53 @@ async def test_pma_thread_list_info_archive_resume(tmp_path: Path) -> None:
     assert updated.get("backend_thread_id") == "backend-42"
 
 
+@pytest.mark.anyio
+async def test_pma_thread_list_supports_filters_and_limit(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    thread_store = PmaThreadStore(hub_root)
+    codex_thread = thread_store.create_thread(
+        "codex",
+        workspace,
+        repo_id="repo-1",
+        name="codex-active",
+    )
+    codex_other_repo = thread_store.create_thread(
+        "codex",
+        workspace,
+        repo_id="repo-2",
+        name="codex-other-repo",
+    )
+    opencode_thread = thread_store.create_thread(
+        "opencode",
+        workspace,
+        repo_id="repo-1",
+        name="opencode-active",
+    )
+    thread_store.archive_thread(str(opencode_thread["managed_thread_id"]))
+
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=TelegramTopicRecord())
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(
+        message, "thread list codex active repo-1 1", _RuntimeStub()
+    )
+    content = handler.sent[-1]
+    codex_thread_id = str(codex_thread["managed_thread_id"])
+    codex_other_repo_id = str(codex_other_repo["managed_thread_id"])
+    opencode_thread_id = str(opencode_thread["managed_thread_id"])
+    assert codex_thread_id in content
+    assert codex_other_repo_id not in content
+    assert opencode_thread_id not in content
+
+    await handler._handle_pma(message, "thread list archived", _RuntimeStub())
+    assert "Invalid thread agent filter." in handler.sent[-1]
+
+    await handler._handle_pma(message, "thread list codex archived", _RuntimeStub())
+    assert "Managed PMA threads: (none)" in handler.sent[-1]
+
+
 class _HelpHandlersStub:
     async def _noop(self, *args: object, **kwargs: object) -> None:
         return None
@@ -1579,8 +1663,7 @@ def test_help_text_mentions_pma_target_management() -> None:
     assert "/pma target add <ref>" in text
     assert "/pma target rm <ref>" in text
     assert "/pma target clear" in text
-    assert "/pma threads" in text
-    assert "/pma thread list" in text
+    assert "/pma thread list [agent] [status] [repo] [limit]" in text
     assert "/pma thread info <id>" in text
     assert "/pma thread archive <id>" in text
     assert "/pma thread resume <id> <backend_id>" in text

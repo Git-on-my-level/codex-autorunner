@@ -145,6 +145,19 @@ _COMMAND_ALIASES = {
     "models": "model",
 }
 
+_PMA_ACTION_ALIASES = {
+    "enable": "on",
+    "disable": "off",
+    "true": "on",
+    "false": "off",
+    "show": "status",
+    "threads": "thread",
+}
+_PMA_THREAD_LIST_VALID_AGENTS = {"codex", "opencode"}
+_PMA_THREAD_LIST_VALID_STATUSES = {"active", "archived"}
+_PMA_THREAD_LIST_DEFAULT_LIMIT = 20
+_PMA_THREAD_LIST_MAX_LIMIT = 50
+
 
 @dataclass
 class _RuntimeStub:
@@ -1044,28 +1057,46 @@ class TelegramCommandHandlers(
                 return
 
         argv = self._parse_command_args(args)
-        action = argv[0].lower() if argv else ""
+        action_raw = argv[0].lower() if argv else ""
+        action = _PMA_ACTION_ALIASES.get(action_raw, action_raw)
+        action_args = argv[1:]
         if action == "targets":
+            if action_args:
+                await self._send_message(
+                    message.chat_id,
+                    self._pma_usage(),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             await self._handle_pma_targets_list(message)
             return
         if action == "target":
-            await self._handle_pma_target_mutation(message, argv[1:])
-            return
-        if action == "threads":
-            await self._handle_pma_thread_command(message, ["list", *argv[1:]])
+            await self._handle_pma_target_mutation(message, action_args)
             return
         if action == "thread":
-            await self._handle_pma_thread_command(message, argv[1:])
+            if action_raw == "threads":
+                await self._handle_pma_thread_command(message, ["list", *action_args])
+                return
+            await self._handle_pma_thread_command(message, action_args)
             return
 
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
         current = bool(record and record.pma_enabled)
-        if action in ("on", "enable", "true"):
+        if action in {"on", "off", "status"} and action_args:
+            await self._send_message(
+                message.chat_id,
+                self._pma_usage(),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if action == "on":
             enabled = True
-        elif action in ("off", "disable", "false"):
+        elif action == "off":
             enabled = False
-        elif action in ("status", "show", ""):
+        elif action in ("status", ""):
             await self._send_message(
                 message.chat_id,
                 f"PMA mode: {'enabled' if current else 'disabled'}",
@@ -1278,15 +1309,7 @@ class TelegramCommandHandlers(
             return
         action = argv[0].lower()
         if action == "list":
-            if len(argv) != 1:
-                await self._send_message(
-                    message.chat_id,
-                    self._pma_usage(),
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            await self._handle_pma_thread_list(message)
+            await self._handle_pma_thread_list(message, argv[1:])
             return
         if action == "info":
             if len(argv) != 2:
@@ -1328,8 +1351,73 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
         )
 
-    async def _handle_pma_thread_list(self, message: TelegramMessage) -> None:
-        threads = PmaThreadStore(Path(self._hub_root)).list_threads(limit=20)
+    async def _handle_pma_thread_list(
+        self, message: TelegramMessage, argv: list[str]
+    ) -> None:
+        agent: Optional[str] = None
+        status: Optional[str] = None
+        repo_id: Optional[str] = None
+        limit = _PMA_THREAD_LIST_DEFAULT_LIMIT
+
+        if len(argv) > 4:
+            await self._send_message(
+                message.chat_id,
+                self._pma_usage(),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if len(argv) == 1:
+            maybe_limit = _coerce_int(argv[0])
+            if maybe_limit is not None:
+                limit = maybe_limit
+            else:
+                agent = argv[0].strip().lower()
+        else:
+            if len(argv) >= 1:
+                agent = argv[0].strip().lower()
+            if len(argv) >= 2:
+                status = argv[1].strip().lower()
+            if len(argv) >= 3:
+                repo_id = argv[2].strip()
+            if len(argv) == 4:
+                parsed_limit = _coerce_int(argv[3])
+                if parsed_limit is None:
+                    await self._send_message(
+                        message.chat_id,
+                        self._pma_usage(),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                limit = parsed_limit
+
+        if agent is not None and agent not in _PMA_THREAD_LIST_VALID_AGENTS:
+            await self._send_message(
+                message.chat_id,
+                "Invalid thread agent filter. Use codex or opencode.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if status is not None and status not in _PMA_THREAD_LIST_VALID_STATUSES:
+            await self._send_message(
+                message.chat_id,
+                "Invalid thread status filter. Use active or archived.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if repo_id == "":
+            repo_id = None
+        limit = max(1, min(limit, _PMA_THREAD_LIST_MAX_LIMIT))
+
+        threads = PmaThreadStore(Path(self._hub_root)).list_threads(
+            agent=agent,
+            status=status,
+            repo_id=repo_id,
+            limit=limit,
+        )
         if not threads:
             text = "Managed PMA threads: (none)"
         else:
@@ -1449,8 +1537,7 @@ class TelegramCommandHandlers(
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
-                "/pma threads",
-                "/pma thread list",
+                "/pma thread list [agent] [status] [repo] [limit]",
                 "/pma thread info <id>",
                 "/pma thread archive <id>",
                 "/pma thread resume <id> <backend_id>",

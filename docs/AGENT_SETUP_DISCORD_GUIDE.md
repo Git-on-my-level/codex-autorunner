@@ -256,6 +256,10 @@ Notes:
 | `/pma target add ref:<target_ref>` | Add a PMA delivery target | Refs: `here`, `web`, `local:<path>`, `telegram:<chat_id>[:<thread_id>]`, `discord:<channel_id>`, `chat:telegram:<chat_id>[:<thread_id>]`, `chat:discord:<channel_id>` |
 | `/pma target rm ref:<target_ref>` | Remove a PMA delivery target | Canonical keys: `web`, `local:<path>`, `chat:telegram:<chat_id>[:<thread_id>]`, `chat:discord:<channel_id>` |
 | `/pma target clear` | Clear PMA delivery targets | Removes all targets |
+| `/pma thread list [agent:<codex\|opencode>] [status:<active\|archived>] [repo:<repo_id>] [limit:<1-50>]` | List managed PMA threads | All filters optional; combines with AND semantics |
+| `/pma thread info id:<managed_thread_id>` | Show managed PMA thread details | Returns agent, status, repo, workspace, backend thread id, and timestamps |
+| `/pma thread archive id:<managed_thread_id>` | Archive a managed PMA thread | Idempotent if already archived |
+| `/pma thread resume id:<managed_thread_id> backend_id:<backend_thread_id>` | Resume and activate a managed PMA thread | Sets backend thread id and marks thread active |
 
 ### PMA Prerequisites
 
