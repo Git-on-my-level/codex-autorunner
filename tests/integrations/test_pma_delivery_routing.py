@@ -472,6 +472,38 @@ async def test_pma_delivery_web_target_is_noop(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_pma_delivery_duplicate_only_when_all_targets_already_marked(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "web"},
+            {"kind": "chat", "platform": "telegram", "chat_id": "123"},
+        ]
+    )
+    assert targets_store.mark_delivered("web", "turn-dup-only")
+    assert targets_store.mark_delivered("chat:telegram:123", "turn-dup-only")
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="all duplicate",
+        turn_id="turn-dup-only",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered.ok is False
+    assert delivered.status == "duplicate_only"
+    assert delivered.configured_targets == 2
+    assert delivered.delivered_targets == 0
+    assert delivered.failed_targets == 0
+    assert delivered.skipped_duplicates == 2
+    assert set(delivered.skipped_duplicate_keys) == {"web", "chat:telegram:123"}
+
+
+@pytest.mark.anyio
 async def test_pma_delivery_invalid_telegram_thread_id_fails(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     targets = PmaDeliveryTargetsStore(hub_root)

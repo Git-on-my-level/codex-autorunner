@@ -15,6 +15,7 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
+from codex_autorunner.integrations.pma_delivery import PmaDeliveryOutcome
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
@@ -54,6 +55,94 @@ def _targets_state_without_updated_at(state: dict[str, object]) -> dict[str, obj
         "last_delivery_by_target": state.get("last_delivery_by_target"),
         "active_target_key": state.get("active_target_key"),
     }
+
+
+def _install_fake_successful_chat_supervisor(
+    app,
+    *,
+    turn_id: str,
+    message: str = "assistant text",
+) -> None:
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = turn_id
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {"agent_messages": [message], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+
+def _delivery_outcome_for_status(status: str) -> PmaDeliveryOutcome:
+    if status == "success":
+        return PmaDeliveryOutcome(
+            status=status,
+            configured_targets=1,
+            delivered_targets=1,
+            failed_targets=0,
+        )
+    if status == "partial_success":
+        return PmaDeliveryOutcome(
+            status=status,
+            configured_targets=2,
+            delivered_targets=1,
+            failed_targets=1,
+        )
+    if status == "failed":
+        return PmaDeliveryOutcome(
+            status=status,
+            configured_targets=1,
+            delivered_targets=0,
+            failed_targets=1,
+        )
+    if status == "duplicate_only":
+        return PmaDeliveryOutcome(
+            status=status,
+            configured_targets=1,
+            delivered_targets=0,
+            failed_targets=0,
+            skipped_duplicates=1,
+            skipped_duplicate_keys=["web"],
+        )
+    return PmaDeliveryOutcome(
+        status="no_targets",
+        configured_targets=0,
+        delivered_targets=0,
+        failed_targets=0,
+    )
 
 
 def test_pma_agents_endpoint(hub_env) -> None:
@@ -385,6 +474,83 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("targets", "turn_id", "pre_marked_keys", "expected_delivery_status"),
+    [
+        (
+            [{"kind": "web"}],
+            "turn-delivery-success",
+            (),
+            "success",
+        ),
+        (
+            [
+                {"kind": "web"},
+                {
+                    "kind": "chat",
+                    "platform": "telegram",
+                    "chat_id": "123",
+                    "thread_id": "invalid-thread",
+                },
+            ],
+            "turn-delivery-partial",
+            (),
+            "partial_success",
+        ),
+        (
+            [
+                {
+                    "kind": "chat",
+                    "platform": "telegram",
+                    "chat_id": "123",
+                    "thread_id": "invalid-thread",
+                }
+            ],
+            "turn-delivery-failed",
+            (),
+            "failed",
+        ),
+        (
+            [{"kind": "web"}],
+            "turn-delivery-duplicate",
+            ("web",),
+            "duplicate_only",
+        ),
+    ],
+)
+def test_pma_chat_exposes_top_level_delivery_status(
+    hub_env,
+    targets: list[dict[str, str]],
+    turn_id: str,
+    pre_marked_keys: tuple[str, ...],
+    expected_delivery_status: str,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    targets_store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    targets_store.set_targets(targets)
+    for key in pre_marked_keys:
+        assert targets_store.mark_delivered(key, turn_id) is True
+
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id=turn_id,
+        message=f"delivery status {expected_delivery_status}",
+    )
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hi"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert payload.get("delivery_status") == expected_delivery_status
+
+    delivery_outcome = payload.get("delivery_outcome")
+    assert isinstance(delivery_outcome, dict)
+    assert delivery_outcome.get("status") == expected_delivery_status
+
+
 def test_pma_chat_does_not_implicitly_set_web_active_target(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -451,9 +617,184 @@ def test_pma_chat_does_not_implicitly_set_web_active_target(hub_env) -> None:
     payload = resp.json()
     assert payload.get("status") == "ok"
     assert (payload.get("delivery_outcome") or {}).get("status") == "success"
+    assert payload.get("delivery_status") == "success"
 
     state = targets_store.load()
     assert state["active_target_key"] == "chat:telegram:-100123:777"
+
+
+@pytest.mark.parametrize(
+    ("delivery_outcome_status", "expected_delivery_status"),
+    [
+        ("success", "success"),
+        ("partial_success", "partial_success"),
+        ("failed", "failed"),
+        ("duplicate_only", "duplicate_only"),
+        ("no_targets", "skipped"),
+    ],
+)
+def test_pma_chat_exposes_delivery_status_summary(
+    hub_env,
+    monkeypatch: pytest.MonkeyPatch,
+    delivery_outcome_status: str,
+    expected_delivery_status: str,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    async def _fake_deliver_output(**kwargs):
+        _ = kwargs
+        return _delivery_outcome_for_status(delivery_outcome_status)
+
+    monkeypatch.setattr(
+        pma_routes, "deliver_pma_output_to_active_sink", _fake_deliver_output
+    )
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-delivery-summary"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["assistant text"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hi"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert (payload.get("delivery_outcome") or {}).get(
+        "status"
+    ) == delivery_outcome_status
+    assert payload.get("delivery_status") == expected_delivery_status
+
+
+def test_pma_chat_delivery_status_reflects_dispatch_failure(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    async def _fake_deliver_output(**kwargs):
+        _ = kwargs
+        return _delivery_outcome_for_status("success")
+
+    async def _fake_deliver_dispatches(**kwargs):
+        _ = kwargs
+        return PmaDeliveryOutcome(
+            status="failed",
+            configured_targets=1,
+            delivered_targets=0,
+            failed_targets=1,
+            dispatch_count=1,
+        )
+
+    monkeypatch.setattr(
+        pma_routes, "deliver_pma_output_to_active_sink", _fake_deliver_output
+    )
+    monkeypatch.setattr(
+        pma_routes,
+        "list_pma_dispatches_for_turn",
+        lambda *_args, **_kwargs: [
+            {
+                "dispatch_id": "dispatch-1",
+                "title": "Dispatch title",
+                "body": "Dispatch body",
+                "priority": "high",
+                "links": [],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        pma_routes,
+        "deliver_pma_dispatches_to_delivery_targets",
+        _fake_deliver_dispatches,
+    )
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-dispatch-failure"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["assistant text"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hi"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert (payload.get("delivery_outcome") or {}).get("status") == "success"
+    assert (payload.get("dispatch_delivery_outcome") or {}).get("status") == "failed"
+    assert payload.get("delivery_status") == "partial_success"
 
 
 def test_pma_chat_github_injection_uses_raw_user_message(

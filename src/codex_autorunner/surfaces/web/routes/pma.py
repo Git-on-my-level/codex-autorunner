@@ -12,7 +12,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -403,6 +403,47 @@ def build_pma_routes() -> APIRouter:
             return text_value
         return text_value[: max(0, limit - 3)] + "..."
 
+    def _normalize_delivery_status(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower()
+        if normalized in {
+            "success",
+            "partial_success",
+            "failed",
+            "duplicate_only",
+            "skipped",
+        }:
+            return normalized
+        if normalized in {"no_targets", "no_content", "invalid"}:
+            return "skipped"
+        return "failed"
+
+    def _summarize_delivery_status(result: Mapping[str, Any]) -> Optional[str]:
+        statuses: list[str] = []
+        for field_name in ("delivery_outcome", "dispatch_delivery_outcome"):
+            outcome = result.get(field_name)
+            if not isinstance(outcome, Mapping):
+                continue
+            status = _normalize_delivery_status(outcome.get("status"))
+            if status:
+                statuses.append(status)
+        if not statuses:
+            return None
+
+        distinct = set(statuses)
+        has_success = "success" in distinct
+        has_failed = "failed" in distinct
+        if "partial_success" in distinct or (has_success and has_failed):
+            return "partial_success"
+        if has_failed:
+            return "failed"
+        if has_success:
+            return "success"
+        if "duplicate_only" in distinct:
+            return "duplicate_only"
+        return "skipped"
+
     def _format_last_result(
         result: dict[str, Any], current: dict[str, Any]
     ) -> dict[str, Any]:
@@ -432,6 +473,9 @@ def build_pma_routes() -> APIRouter:
         dispatch_delivery_outcome = result.get("dispatch_delivery_outcome")
         if isinstance(dispatch_delivery_outcome, dict):
             payload["dispatch_delivery_outcome"] = dispatch_delivery_outcome
+        delivery_status = _summarize_delivery_status(result)
+        if isinstance(delivery_status, str):
+            payload["delivery_status"] = delivery_status
         return payload
 
     def _serialize_delivery_targets_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -712,6 +756,25 @@ def build_pma_routes() -> APIRouter:
         )
         if isinstance(dispatch_delivery_outcome, dict):
             result["dispatch_delivery_outcome"] = dispatch_delivery_outcome
+        delivery_status = _summarize_delivery_status(result)
+        if isinstance(delivery_status, str):
+            result["delivery_status"] = delivery_status
+        if (
+            isinstance(delivery_outcome, dict)
+            or isinstance(dispatch_delivery_outcome, dict)
+            or isinstance(delivery_status, str)
+        ):
+            async with pma_lock:
+                if not isinstance(pma_last_result, dict):
+                    pma_last_result = {}
+                if isinstance(delivery_outcome, dict):
+                    pma_last_result["delivery_outcome"] = dict(delivery_outcome)
+                if isinstance(dispatch_delivery_outcome, dict):
+                    pma_last_result["dispatch_delivery_outcome"] = dict(
+                        dispatch_delivery_outcome
+                    )
+                if isinstance(delivery_status, str):
+                    pma_last_result["delivery_status"] = delivery_status
         _get_safety_checker(request).record_chat_result(
             agent=current_snapshot.get("agent") or "",
             status=status,
