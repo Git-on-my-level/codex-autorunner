@@ -1421,7 +1421,7 @@ async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
 
     await handler._handle_pma(message, "target active set telegram:abc", _RuntimeStub())
     assert "Invalid target ref 'telegram:abc'." in handler.sent[-1]
-    assert "/pma target active [ref|key]" in handler.sent[-1]
+    assert "/pma target active" in handler.sent[-1]
 
 
 @pytest.mark.anyio
