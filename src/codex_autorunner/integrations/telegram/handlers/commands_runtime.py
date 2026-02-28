@@ -1044,17 +1044,25 @@ class TelegramCommandHandlers(
             )
             return
 
-        supervisor = getattr(self, "_hub_supervisor", None)
-        if supervisor and hasattr(supervisor, "hub_config"):
-            pma_config = supervisor.hub_config.pma
-            if not pma_config.enabled:
-                await self._send_message(
-                    message.chat_id,
-                    "PMA is disabled in hub config. Set pma.enabled: true to enable.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
+        config_enabled = getattr(getattr(self, "_config", None), "pma_enabled", None)
+        if config_enabled is None:
+            supervisor = getattr(self, "_hub_supervisor", None)
+            if supervisor and hasattr(supervisor, "hub_config"):
+                config_enabled = bool(
+                    getattr(
+                        getattr(supervisor.hub_config, "pma", None), "enabled", False
+                    )
                 )
-                return
+            else:
+                config_enabled = False
+        if not bool(config_enabled):
+            await self._send_message(
+                message.chat_id,
+                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
 
         argv = self._parse_command_args(args)
         action_raw = argv[0].lower() if argv else ""
@@ -1076,7 +1084,8 @@ class TelegramCommandHandlers(
             return
         if action == "thread":
             if action_raw == "threads":
-                await self._handle_pma_thread_command(message, ["list", *action_args])
+                thread_args = action_args if action_args else ["list"]
+                await self._handle_pma_thread_command(message, thread_args)
                 return
             await self._handle_pma_thread_command(message, action_args)
             return

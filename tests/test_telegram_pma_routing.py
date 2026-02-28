@@ -1254,6 +1254,7 @@ class _PmaTargetsHandler(TelegramCommandHandlers):
     ) -> None:
         self._logger = logging.getLogger("test")
         self._hub_root = hub_root
+        self._config = SimpleNamespace(pma_enabled=pma_enabled)
         self._hub_supervisor = SimpleNamespace(
             hub_config=SimpleNamespace(pma=SimpleNamespace(enabled=pma_enabled))
         )
@@ -1641,6 +1642,47 @@ async def test_pma_thread_list_supports_filters_and_limit(tmp_path: Path) -> Non
 
     await handler._handle_pma(message, "thread list codex archived", _RuntimeStub())
     assert "Managed PMA threads: (none)" in handler.sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_threads_alias_supports_non_list_actions(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        workspace,
+        repo_id="repo-1",
+        name="telegram-test",
+    )
+    managed_thread_id = str(thread["managed_thread_id"])
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=TelegramTopicRecord())
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(
+        message, f"threads info {managed_thread_id}", _RuntimeStub()
+    )
+    assert f"Managed thread: {managed_thread_id}" in handler.sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_disabled_enforced_when_supervisor_unavailable(
+    tmp_path: Path,
+) -> None:
+    handler = _PmaTargetsHandler(
+        hub_root=tmp_path / "hub",
+        record=TelegramTopicRecord(),
+        pma_enabled=False,
+    )
+    handler._hub_supervisor = None
+    message = _make_pma_message()
+
+    await handler._handle_pma(message, "status", _RuntimeStub())
+    assert (
+        handler.sent[-1]
+        == "PMA is disabled in hub config. Set pma.enabled: true to enable."
+    )
 
 
 class _HelpHandlersStub:
