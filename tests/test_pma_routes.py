@@ -52,6 +52,7 @@ def _targets_state_without_updated_at(state: dict[str, object]) -> dict[str, obj
         "version": state.get("version"),
         "targets": state.get("targets"),
         "last_delivery_by_target": state.get("last_delivery_by_target"),
+        "active_target_key": state.get("active_target_key"),
     }
 
 
@@ -180,6 +181,65 @@ def test_pma_targets_reject_invalid_ref(hub_env) -> None:
     assert "Invalid target ref" in invalid_remove.json().get("detail", "")
 
 
+def test_pma_targets_active_get_and_set(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    assert client.post("/hub/pma/targets/add", json={"ref": "web"}).status_code == 200
+    assert (
+        client.post("/hub/pma/targets/add", json={"ref": "telegram:-100123:777"})
+    ).status_code == 200
+
+    initial = client.get("/hub/pma/targets/active")
+    assert initial.status_code == 200
+    initial_payload = initial.json()
+    assert initial_payload["active_target_key"] == "web"
+    assert (initial_payload.get("active_target") or {}).get("key") == "web"
+
+    set_active = client.post(
+        "/hub/pma/targets/active", json={"ref": "telegram:-100123:777"}
+    )
+    assert set_active.status_code == 200
+    set_payload = set_active.json()
+    assert set_payload["status"] == "ok"
+    assert set_payload["changed"] is True
+    assert set_payload["active_target_key"] == "chat:telegram:-100123:777"
+    assert (
+        next(
+            row
+            for row in set_payload["targets"]
+            if row["key"] == "chat:telegram:-100123:777"
+        )["active"]
+        is True
+    )
+
+    set_same = client.post(
+        "/hub/pma/targets/active", json={"key": "chat:telegram:-100123:777"}
+    )
+    assert set_same.status_code == 200
+    assert set_same.json()["changed"] is False
+
+
+def test_pma_targets_active_rejects_invalid_inputs(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+    assert client.post("/hub/pma/targets/add", json={"ref": "web"}).status_code == 200
+
+    missing = client.post("/hub/pma/targets/active", json={})
+    assert missing.status_code == 400
+    assert "ref or key is required" in (missing.json().get("detail") or "")
+
+    invalid_ref = client.post("/hub/pma/targets/active", json={"ref": "discord:"})
+    assert invalid_ref.status_code == 400
+    assert "Invalid target ref" in (invalid_ref.json().get("detail") or "")
+
+    not_found = client.post("/hub/pma/targets/active", json={"key": "chat:discord:42"})
+    assert not_found.status_code == 404
+    assert "Target not found" in (not_found.json().get("detail") or "")
+
+
 def test_pma_targets_web_state_matches_cli_helper(tmp_path: Path) -> None:
     web_root = tmp_path / "web-hub"
     cli_root = tmp_path / "cli-hub"
@@ -300,6 +360,77 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
         "model": "test-model",
         "effort": "high",
     }
+
+
+def test_pma_chat_does_not_implicitly_set_web_active_target(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    targets_store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "web"},
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "-100123",
+                "thread_id": "777",
+            },
+        ]
+    )
+    assert targets_store.set_active_target("chat:telegram:-100123:777") is True
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-keep-active"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["assistant text"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hi"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert (payload.get("delivery_outcome") or {}).get("status") == "success"
+
+    state = targets_store.load()
+    assert state["active_target_key"] == "chat:telegram:-100123:777"
 
 
 def test_pma_chat_github_injection_uses_raw_user_message(

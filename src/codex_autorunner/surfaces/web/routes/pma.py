@@ -322,20 +322,20 @@ def build_pma_routes() -> APIRouter:
         current: dict[str, Any],
         lifecycle_event: Optional[dict[str, Any]],
         turn_id: Optional[str] = None,
-    ) -> None:
+    ) -> Optional[dict[str, Any]]:
         status = result.get("status") or "error"
         if status != "ok":
-            return
+            return None
         assistant_text = _resolve_transcript_text(result)
         if not assistant_text.strip():
-            return
+            return None
 
         hub_root = request.app.state.config.root
         if not isinstance(turn_id, str) or not turn_id:
             turn_id = _resolve_transcript_turn_id(result, current)
         state_path = _resolve_telegram_state_path(request)
         discord_state_path = _resolve_discord_state_path(request)
-        await deliver_pma_output_to_active_sink(
+        outcome = await deliver_pma_output_to_active_sink(
             hub_root=hub_root,
             assistant_text=assistant_text,
             turn_id=turn_id,
@@ -343,31 +343,40 @@ def build_pma_routes() -> APIRouter:
             telegram_state_path=state_path,
             discord_state_path=discord_state_path,
         )
+        return outcome.to_dict()
 
     async def _deliver_dispatches_to_active_sink(
         *,
         request: Request,
         turn_id: Optional[str],
-    ) -> None:
+    ) -> Optional[dict[str, Any]]:
         if not isinstance(turn_id, str) or not turn_id:
-            return
+            return None
         hub_root = request.app.state.config.root
         dispatches = list_pma_dispatches_for_turn(hub_root, turn_id)
         if not dispatches:
-            return
+            return None
 
         state_path = _resolve_telegram_state_path(request)
         discord_state_path = _resolve_discord_state_path(request)
         try:
-            await deliver_pma_dispatches_to_delivery_targets(
+            outcome = await deliver_pma_dispatches_to_delivery_targets(
                 hub_root=hub_root,
                 turn_id=turn_id,
                 dispatches=dispatches,
                 telegram_state_path=state_path,
                 discord_state_path=discord_state_path,
             )
+            return outcome.to_dict()
         except Exception:
             logger.exception("Failed to deliver PMA dispatches to delivery targets")
+            return {
+                "status": "failed",
+                "configured_targets": 0,
+                "delivered_targets": 0,
+                "failed_targets": 1,
+                "errors": [{"target": "dispatch_delivery", "error": "delivery_failed"}],
+            }
 
     async def _persist_state(store: Optional[PmaStateStore]) -> None:
         if store is None:
@@ -402,7 +411,7 @@ def build_pma_routes() -> APIRouter:
         detail = result.get("detail")
         text = message if isinstance(message, str) and message else detail
         summary = _truncate_text(text or "", PMA_MAX_TEXT)
-        return {
+        payload = {
             "status": status,
             "message": summary,
             "detail": (
@@ -417,11 +426,19 @@ def build_pma_routes() -> APIRouter:
             "started_at": current.get("started_at"),
             "finished_at": now_iso(),
         }
+        delivery_outcome = result.get("delivery_outcome")
+        if isinstance(delivery_outcome, dict):
+            payload["delivery_outcome"] = delivery_outcome
+        dispatch_delivery_outcome = result.get("dispatch_delivery_outcome")
+        if isinstance(dispatch_delivery_outcome, dict):
+            payload["dispatch_delivery_outcome"] = dispatch_delivery_outcome
+        return payload
 
     def _serialize_delivery_targets_state(state: dict[str, Any]) -> dict[str, Any]:
         targets = [
             target for target in state.get("targets", []) if isinstance(target, dict)
         ]
+        active_target_key = state.get("active_target_key")
         rows: list[dict[str, Any]] = []
         for target in targets:
             key = target_key(target)
@@ -432,10 +449,16 @@ def build_pma_routes() -> APIRouter:
                     "key": key,
                     "label": format_pma_target_label(target),
                     "target": target,
+                    "active": key == active_target_key,
                 }
             )
         return {
             "updated_at": state.get("updated_at"),
+            "active_target_key": (
+                active_target_key
+                if isinstance(active_target_key, str) and active_target_key
+                else None
+            ),
             "targets": rows,
         }
 
@@ -674,17 +697,21 @@ def build_pma_routes() -> APIRouter:
             candidate = pma_last_result.get("turn_id")
             if isinstance(candidate, str) and candidate:
                 delivery_turn_id = candidate
-        await _deliver_to_active_sink(
+        delivery_outcome = await _deliver_to_active_sink(
             request=request,
             result=result,
             current=current_snapshot,
             lifecycle_event=lifecycle_event,
             turn_id=delivery_turn_id,
         )
-        await _deliver_dispatches_to_active_sink(
+        if isinstance(delivery_outcome, dict):
+            result["delivery_outcome"] = delivery_outcome
+        dispatch_delivery_outcome = await _deliver_dispatches_to_active_sink(
             request=request,
             turn_id=delivery_turn_id,
         )
+        if isinstance(dispatch_delivery_outcome, dict):
+            result["dispatch_delivery_outcome"] = dispatch_delivery_outcome
         _get_safety_checker(request).record_chat_result(
             agent=current_snapshot.get("agent") or "",
             status=status,
@@ -1063,6 +1090,70 @@ def build_pma_routes() -> APIRouter:
     def pma_targets_list(request: Request) -> dict[str, Any]:
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
         return _serialize_delivery_targets_state(store.load())
+
+    @router.get("/targets/active")
+    def pma_targets_active(request: Request) -> dict[str, Any]:
+        sink_store = PmaActiveSinkStore(request.app.state.config.root)
+        store = PmaDeliveryTargetsStore(request.app.state.config.root)
+        state = store.load()
+        payload = _serialize_delivery_targets_state(state)
+        active_key = sink_store.get_active_target_key() or payload.get(
+            "active_target_key"
+        )
+        active_row = next(
+            (
+                row
+                for row in payload.get("targets", [])
+                if isinstance(row, dict) and row.get("key") == active_key
+            ),
+            None,
+        )
+        payload["active_target"] = active_row
+        return payload
+
+    @router.post("/targets/active")
+    async def pma_targets_set_active(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be an object"
+            )
+
+        ref = str(body.get("ref") or "").strip()
+        key = str(body.get("key") or "").strip()
+        if ref:
+            target = parse_pma_target_ref(ref)
+            if target is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid target ref '{ref}'.\n{pma_targets_usage()}",
+                )
+            parsed_key = target_key(target)
+            if not isinstance(parsed_key, str):
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid target ref '{ref}'."
+                )
+            key = parsed_key
+        if not key:
+            raise HTTPException(status_code=400, detail="ref or key is required")
+
+        sink_store = PmaActiveSinkStore(request.app.state.config.root)
+        store = PmaDeliveryTargetsStore(request.app.state.config.root)
+        state = store.load()
+        available_keys = {
+            row_key
+            for row_key in (target_key(item) for item in state.get("targets", []))
+            if isinstance(row_key, str)
+        }
+        if key not in available_keys:
+            raise HTTPException(status_code=404, detail=f"Target not found: {key}")
+
+        changed = sink_store.set_active_target(key)
+        payload = _serialize_delivery_targets_state(store.load())
+        payload.update(
+            {"status": "ok", "action": "set_active", "key": key, "changed": changed}
+        )
+        return payload
 
     @router.post("/targets/add")
     async def pma_targets_add(request: Request) -> dict[str, Any]:
@@ -2048,10 +2139,6 @@ def build_pma_routes() -> APIRouter:
             )
 
         hub_root = request.app.state.config.root
-        try:
-            PmaActiveSinkStore(hub_root).set_web()
-        except Exception:
-            logger.exception("Failed to update PMA active sink for web")
         queue = _get_pma_queue(request)
 
         lane_id = "pma:default"

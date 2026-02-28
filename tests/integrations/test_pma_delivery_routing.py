@@ -39,7 +39,7 @@ async def test_pma_delivery_legacy_telegram_sink_still_enqueues_outbox(
         lifecycle_event={"event_type": "flow_completed"},
         telegram_state_path=hub_root / "telegram_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
 
     store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     try:
@@ -66,7 +66,7 @@ async def test_pma_delivery_telegram_chunking_has_no_part_prefix(
         lifecycle_event={"event_type": "flow_completed"},
         telegram_state_path=hub_root / "telegram_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
 
     store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     try:
@@ -101,7 +101,7 @@ async def test_pma_delivery_chat_discord_enqueues_to_discord_outbox(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=discord_state_path,
     )
-    assert delivered is True
+    assert delivered.ok is True
     assert "pma.delivery.discord" in caplog.text
 
     store = DiscordStateStore(discord_state_path)
@@ -135,7 +135,7 @@ async def test_pma_delivery_discord_chunking_has_no_part_prefix(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=discord_state_path,
     )
-    assert delivered is True
+    assert delivered.ok is True
 
     store = DiscordStateStore(discord_state_path)
     try:
@@ -193,7 +193,7 @@ async def test_pma_delivery_discord_allows_non_lifecycle_turns(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
 
     store = DiscordStateStore(hub_root / ".codex-autorunner" / "discord_state.sqlite3")
     try:
@@ -222,7 +222,7 @@ async def test_pma_delivery_same_turn_allowed_after_sink_target_changes(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=state_path,
     )
-    assert first is True
+    assert first.ok is True
 
     sink_store.set_chat("discord", chat_id="222222222222222222")
     second = await deliver_pma_output_to_active_sink(
@@ -233,7 +233,7 @@ async def test_pma_delivery_same_turn_allowed_after_sink_target_changes(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=state_path,
     )
-    assert second is True
+    assert second.ok is True
 
     store = DiscordStateStore(state_path)
     try:
@@ -279,7 +279,7 @@ async def test_pma_delivery_fanout_telegram_and_discord(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
     assert "pma.delivery.multi_target" in caplog.text
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
@@ -332,7 +332,7 @@ async def test_pma_delivery_fanout_two_telegram_targets(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     try:
@@ -379,7 +379,7 @@ async def test_pma_delivery_fanout_two_discord_targets(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
 
     discord_store = DiscordStateStore(
         hub_root / ".codex-autorunner" / "discord_state.sqlite3"
@@ -418,7 +418,7 @@ async def test_pma_delivery_local_target_writes_jsonl(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
     assert local_path.exists()
 
     raw_lines = [
@@ -464,7 +464,7 @@ async def test_pma_delivery_web_target_is_noop(tmp_path: Path) -> None:
         finally:
             await discord_store.close()
 
-    assert delivered is True
+    assert delivered.ok is True
     assert telegram_outbox == []
     assert discord_outbox == []
     state = PmaDeliveryTargetsStore(hub_root).load()
@@ -494,7 +494,11 @@ async def test_pma_delivery_invalid_telegram_thread_id_fails(tmp_path: Path) -> 
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is False
+    assert delivered.ok is False
+    assert delivered.status == "failed"
+    assert delivered.configured_targets == 1
+    assert delivered.delivered_targets == 0
+    assert delivered.failed_targets == 1
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     try:
@@ -541,7 +545,12 @@ async def test_pma_delivery_partial_failure_isolation(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is False
+    assert delivered.ok is True
+    assert delivered.status == "partial_success"
+    assert delivered.configured_targets == 2
+    assert delivered.delivered_targets == 1
+    assert delivered.failed_targets == 1
+    assert delivered.skipped_duplicates == 0
 
     delivery_state = targets.load()
     assert delivery_state["last_delivery_by_target"] == {
@@ -557,7 +566,11 @@ async def test_pma_delivery_partial_failure_isolation(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert retry_delivered is True
+    assert retry_delivered.ok is True
+    assert retry_delivered.status == "success"
+    assert retry_delivered.delivered_targets == 1
+    assert retry_delivered.failed_targets == 0
+    assert retry_delivered.skipped_duplicates == 1
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     discord_store = DiscordStateStore(
@@ -609,7 +622,7 @@ async def test_pma_delivery_writes_mirror_record_with_target_keys(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
 
     mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
     records = _read_jsonl(mirror_path)
@@ -617,6 +630,11 @@ async def test_pma_delivery_writes_mirror_record_with_target_keys(
     payload = records[0]
     assert payload["turn_id"] == "turn-mirror-1"
     assert payload["event_type"] == "flow_completed"
+    assert payload["status"] == "success"
+    assert payload["configured_targets"] == 2
+    assert payload["delivered_targets_count"] == 2
+    assert payload["failed_targets_count"] == 0
+    assert payload["skipped_duplicates_count"] == 0
     assert set(payload["delivery_targets"]) == {
         "chat:telegram:123:456",
         "chat:discord:987654321",
@@ -654,13 +672,22 @@ async def test_pma_delivery_mirror_includes_errors_when_targets_fail(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is False
+    assert delivered.ok is True
+    assert delivered.status == "partial_success"
+    assert delivered.configured_targets == 2
+    assert delivered.delivered_targets == 1
+    assert delivered.failed_targets == 1
 
     mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
     records = _read_jsonl(mirror_path)
     assert len(records) == 1
     payload = records[0]
     assert payload["turn_id"] == "turn-mirror-failure"
+    assert payload["status"] == "partial_success"
+    assert payload["configured_targets"] == 2
+    assert payload["delivered_targets_count"] == 1
+    assert payload["failed_targets_count"] == 1
+    assert payload["skipped_duplicates_count"] == 0
     assert set(payload["delivery_targets"]) == {
         "chat:discord:111",
         "chat:telegram:222",
@@ -674,6 +701,56 @@ async def test_pma_delivery_mirror_includes_errors_when_targets_fail(
     assert len(errors) == 1
     assert errors[0]["target"] == "chat:discord:111"
     assert "discord write failed" in errors[0]["error"]
+
+
+@pytest.mark.anyio
+async def test_pma_delivery_duplicate_skip_and_failure_can_coexist(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets = PmaDeliveryTargetsStore(hub_root)
+    targets.set_targets(
+        [
+            {"kind": "web"},
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "123",
+                "thread_id": "invalid-thread",
+            },
+        ]
+    )
+    assert targets.mark_delivered("web", "turn-dup-fail")
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="duplicate and failure",
+        turn_id="turn-dup-fail",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered.ok is False
+    assert delivered.status == "failed"
+    assert delivered.configured_targets == 2
+    assert delivered.delivered_targets == 0
+    assert delivered.failed_targets == 1
+    assert delivered.skipped_duplicates == 1
+    assert delivered.skipped_duplicate_keys == ["web"]
+    assert delivered.errors == [
+        {"target": "chat:telegram:123:invalid-thread", "error": "unsupported_target"}
+    ]
+
+    mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
+    records = _read_jsonl(mirror_path)
+    assert len(records) == 1
+    payload = records[0]
+    assert payload["status"] == "failed"
+    assert payload["configured_targets"] == 2
+    assert payload["delivered_targets_count"] == 0
+    assert payload["failed_targets_count"] == 1
+    assert payload["skipped_duplicates_count"] == 1
+    assert payload["skipped_duplicates"] == ["web"]
 
 
 @pytest.mark.anyio
@@ -701,8 +778,8 @@ async def test_pma_delivery_mirror_rotates_when_file_exceeds_cap(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert first is True
-    assert second is True
+    assert first.ok is True
+    assert second.ok is True
 
     mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
     rotated_path = mirror_path.with_suffix(".jsonl.1")

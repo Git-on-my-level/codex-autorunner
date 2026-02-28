@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from ..core.locks import file_lock
 from ..core.logging_utils import log_event
@@ -33,6 +33,54 @@ class _TargetDeliveryOutcome:
     success: bool
     chunk_count: int
     error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class PmaDeliveryOutcome:
+    status: Literal[
+        "invalid",
+        "no_content",
+        "no_targets",
+        "duplicate_only",
+        "success",
+        "partial_success",
+        "failed",
+    ]
+    configured_targets: int
+    delivered_targets: int
+    failed_targets: int
+    skipped_duplicates: int = 0
+    delivery_targets: list[str] = field(default_factory=list)
+    delivered_target_keys: list[str] = field(default_factory=list)
+    skipped_duplicate_keys: list[str] = field(default_factory=list)
+    chunk_count_by_target: dict[str, int] = field(default_factory=dict)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    dispatch_count: int = 0
+
+    @property
+    def delivered_any(self) -> bool:
+        return self.delivered_targets > 0
+
+    @property
+    def ok(self) -> bool:
+        return self.status in {"success", "partial_success"}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "configured_targets": self.configured_targets,
+            "delivered_targets": self.delivered_targets,
+            "failed_targets": self.failed_targets,
+            "skipped_duplicates": self.skipped_duplicates,
+            "delivery_targets": list(self.delivery_targets),
+            "delivered_target_keys": list(self.delivered_target_keys),
+            "skipped_duplicate_keys": list(self.skipped_duplicate_keys),
+            "chunk_count_by_target": dict(self.chunk_count_by_target),
+            "errors": list(self.errors),
+            "dispatch_count": self.dispatch_count,
+            "ok": self.ok,
+            "delivered_any": self.delivered_any,
+        }
 
 
 def _parse_int(value: Any) -> Optional[int]:
@@ -424,6 +472,30 @@ async def _deliver_dispatch_to_discord(
     return _TargetDeliveryOutcome(success=True, chunk_count=len(chunks))
 
 
+def _delivery_status(
+    *,
+    configured_targets: int,
+    delivered_targets: int,
+    failed_targets: int,
+    skipped_duplicates: int = 0,
+) -> Literal[
+    "no_targets",
+    "duplicate_only",
+    "success",
+    "partial_success",
+    "failed",
+]:
+    if configured_targets <= 0:
+        return "no_targets"
+    if delivered_targets <= 0 and failed_targets <= 0 and skipped_duplicates > 0:
+        return "duplicate_only"
+    if delivered_targets > 0 and failed_targets > 0:
+        return "partial_success"
+    if delivered_targets > 0:
+        return "success"
+    return "failed"
+
+
 async def deliver_pma_dispatches_to_delivery_targets(
     *,
     hub_root: Path,
@@ -431,26 +503,45 @@ async def deliver_pma_dispatches_to_delivery_targets(
     dispatches: Sequence[Any],
     telegram_state_path: Path,
     discord_state_path: Optional[Path] = None,
-) -> bool:
+) -> PmaDeliveryOutcome:
     if not isinstance(turn_id, str) or not turn_id:
-        return False
+        return PmaDeliveryOutcome(
+            status="invalid",
+            configured_targets=0,
+            delivered_targets=0,
+            failed_targets=0,
+        )
     normalized_dispatches = [
         item
         for item in (_normalize_dispatch_record(dispatch) for dispatch in dispatches)
         if isinstance(item, dict)
     ]
     if not normalized_dispatches:
-        return False
+        return PmaDeliveryOutcome(
+            status="invalid",
+            configured_targets=0,
+            delivered_targets=0,
+            failed_targets=0,
+        )
 
     state = PmaDeliveryTargetsStore(hub_root).load()
     targets = state.get("targets")
     if not isinstance(targets, list) or not targets:
-        return False
+        return PmaDeliveryOutcome(
+            status="no_targets",
+            configured_targets=0,
+            delivered_targets=0,
+            failed_targets=0,
+            dispatch_count=len(normalized_dispatches),
+        )
 
-    delivered_any = False
     configured_targets = 0
     failed_targets = 0
     delivered_targets = 0
+    delivery_target_keys: list[str] = []
+    delivered_target_keys: list[str] = []
+    chunk_count_by_target: dict[str, int] = {}
+    errors: list[dict[str, Any]] = []
 
     for target in targets:
         if not isinstance(target, dict):
@@ -459,14 +550,17 @@ async def deliver_pma_dispatches_to_delivery_targets(
         if not isinstance(key, str):
             continue
         configured_targets += 1
+        delivery_target_keys.append(key)
+        chunk_count_by_target.setdefault(key, 0)
 
         if target.get("kind") == "web":
-            delivered_any = True
             delivered_targets += 1
+            delivered_target_keys.append(key)
             continue
 
         target_failed = False
         for dispatch in normalized_dispatches:
+            dispatch_id = dispatch.get("dispatch_id")
             message = _render_dispatch_message(dispatch)
             expected_chunk_count = 1
             if _resolve_discord_target(target):
@@ -527,17 +621,33 @@ async def deliver_pma_dispatches_to_delivery_targets(
                             telegram_state_path=telegram_state_path,
                         )
 
+            chunk_count_by_target[key] = chunk_count_by_target.get(key, 0) + max(
+                outcome.chunk_count, 0
+            )
             if not outcome.success:
                 target_failed = True
+                errors.append(
+                    {
+                        "target": key,
+                        "dispatch_id": dispatch_id,
+                        "error": outcome.error or "delivery_failed",
+                    }
+                )
 
         if target_failed:
             failed_targets += 1
             continue
 
-        delivered_any = True
         delivered_targets += 1
+        delivered_target_keys.append(key)
 
-    if delivered_any:
+    status = _delivery_status(
+        configured_targets=configured_targets,
+        delivered_targets=delivered_targets,
+        failed_targets=failed_targets,
+    )
+
+    if delivered_targets > 0:
         log_event(
             logger,
             logging.INFO,
@@ -545,9 +655,21 @@ async def deliver_pma_dispatches_to_delivery_targets(
             turn_id=turn_id,
             delivered_targets=delivered_targets,
             configured_targets=configured_targets,
+            failed_targets=failed_targets,
             dispatch_count=len(normalized_dispatches),
+            status=status,
         )
-    return delivered_any and failed_targets == 0
+    return PmaDeliveryOutcome(
+        status=status,
+        configured_targets=configured_targets,
+        delivered_targets=delivered_targets,
+        failed_targets=failed_targets,
+        delivery_targets=delivery_target_keys,
+        delivered_target_keys=delivered_target_keys,
+        chunk_count_by_target=chunk_count_by_target,
+        errors=errors,
+        dispatch_count=len(normalized_dispatches),
+    )
 
 
 def _write_delivery_mirror_record(
@@ -555,6 +677,11 @@ def _write_delivery_mirror_record(
     hub_root: Path,
     turn_id: str,
     event_type: Optional[str],
+    status: str,
+    configured_targets: int,
+    delivered_targets_count: int,
+    failed_targets_count: int,
+    skipped_duplicates_count: int,
     delivery_targets: list[str],
     chunk_count_by_target: dict[str, int],
     errors: list[dict[str, Any]],
@@ -566,6 +693,11 @@ def _write_delivery_mirror_record(
         "ts": now_iso(),
         "turn_id": turn_id,
         "event_type": event_type,
+        "status": status,
+        "configured_targets": configured_targets,
+        "delivered_targets_count": delivered_targets_count,
+        "failed_targets_count": failed_targets_count,
+        "skipped_duplicates_count": skipped_duplicates_count,
         "delivery_targets": delivery_targets,
         "delivered_targets": delivered_targets,
         "skipped_duplicates": skipped_duplicates,
@@ -583,11 +715,21 @@ async def deliver_pma_output_to_active_sink(
     lifecycle_event: Optional[dict[str, Any]],
     telegram_state_path: Path,
     discord_state_path: Optional[Path] = None,
-) -> bool:
+) -> PmaDeliveryOutcome:
     if not assistant_text or not assistant_text.strip():
-        return False
+        return PmaDeliveryOutcome(
+            status="no_content",
+            configured_targets=0,
+            delivered_targets=0,
+            failed_targets=0,
+        )
     if not isinstance(turn_id, str) or not turn_id:
-        return False
+        return PmaDeliveryOutcome(
+            status="invalid",
+            configured_targets=0,
+            delivered_targets=0,
+            failed_targets=0,
+        )
 
     event_type = (
         lifecycle_event.get("event_type")
@@ -600,7 +742,12 @@ async def deliver_pma_output_to_active_sink(
     state = target_store.load()
     targets = state.get("targets")
     if not isinstance(targets, list) or not targets:
-        return False
+        return PmaDeliveryOutcome(
+            status="no_targets",
+            configured_targets=0,
+            delivered_targets=0,
+            failed_targets=0,
+        )
 
     last_delivery_by_target_raw = state.get("last_delivery_by_target")
     last_delivery_by_target: dict[str, Any] = (
@@ -609,7 +756,6 @@ async def deliver_pma_output_to_active_sink(
         else {}
     )
 
-    delivered_any = False
     delivered_targets = 0
     target_count = 0
     failed_targets = 0
@@ -639,7 +785,6 @@ async def deliver_pma_output_to_active_sink(
         if target.get("kind") == "web":
             if target_store.mark_delivered(key, turn_id):
                 delivered_targets += 1
-                delivered_any = True
                 delivered_target_keys.append(key)
             continue
 
@@ -653,7 +798,6 @@ async def deliver_pma_output_to_active_sink(
             )
             chunk_count_by_target[key] = max(outcome.chunk_count, 0)
             if outcome.success:
-                delivered_any = True
                 if target_store.mark_delivered(key, turn_id):
                     delivered_targets += 1
                     delivered_target_keys.append(key)
@@ -680,7 +824,6 @@ async def deliver_pma_output_to_active_sink(
             )
             chunk_count_by_target[key] = max(outcome.chunk_count, 0)
             if outcome.success:
-                delivered_any = True
                 if target_store.mark_delivered(key, turn_id):
                     delivered_targets += 1
                     delivered_target_keys.append(key)
@@ -717,7 +860,6 @@ async def deliver_pma_output_to_active_sink(
         )
         chunk_count_by_target[key] = max(outcome.chunk_count, 0)
         if outcome.success:
-            delivered_any = True
             if target_store.mark_delivered(key, turn_id):
                 delivered_targets += 1
                 delivered_target_keys.append(key)
@@ -730,11 +872,23 @@ async def deliver_pma_output_to_active_sink(
                 }
             )
 
+    status = _delivery_status(
+        configured_targets=target_count,
+        delivered_targets=delivered_targets,
+        failed_targets=failed_targets,
+        skipped_duplicates=skipped_duplicates,
+    )
+
     if target_count > 0:
         _write_delivery_mirror_record(
             hub_root=hub_root,
             turn_id=turn_id,
             event_type=event_type,
+            status=status,
+            configured_targets=target_count,
+            delivered_targets_count=delivered_targets,
+            failed_targets_count=failed_targets,
+            skipped_duplicates_count=skipped_duplicates,
             delivery_targets=delivery_target_keys,
             chunk_count_by_target=chunk_count_by_target,
             errors=errors,
@@ -742,7 +896,7 @@ async def deliver_pma_output_to_active_sink(
             skipped_duplicates=skipped_duplicate_keys,
         )
 
-    if target_count > 0 and skipped_duplicates == target_count:
+    if status == "duplicate_only":
         log_event(
             logger,
             logging.INFO,
@@ -750,9 +904,20 @@ async def deliver_pma_output_to_active_sink(
             turn_id=turn_id,
             event_type=event_type,
         )
-        return False
+        return PmaDeliveryOutcome(
+            status=status,
+            configured_targets=target_count,
+            delivered_targets=delivered_targets,
+            failed_targets=failed_targets,
+            skipped_duplicates=skipped_duplicates,
+            delivery_targets=delivery_target_keys,
+            delivered_target_keys=delivered_target_keys,
+            skipped_duplicate_keys=skipped_duplicate_keys,
+            chunk_count_by_target=chunk_count_by_target,
+            errors=errors,
+        )
 
-    if delivered_any:
+    if delivered_targets > 0:
         log_event(
             logger,
             logging.INFO,
@@ -760,10 +925,22 @@ async def deliver_pma_output_to_active_sink(
             turn_id=turn_id,
             delivered_targets=delivered_targets,
             configured_targets=target_count,
+            failed_targets=failed_targets,
             event_type=event_type,
+            status=status,
         )
-
-    return delivered_any and failed_targets == 0
+    return PmaDeliveryOutcome(
+        status=status,
+        configured_targets=target_count,
+        delivered_targets=delivered_targets,
+        failed_targets=failed_targets,
+        skipped_duplicates=skipped_duplicates,
+        delivery_targets=delivery_target_keys,
+        delivered_target_keys=delivered_target_keys,
+        skipped_duplicate_keys=skipped_duplicate_keys,
+        chunk_count_by_target=chunk_count_by_target,
+        errors=errors,
+    )
 
 
 async def _deliver_to_telegram(
@@ -897,6 +1074,7 @@ async def _deliver_to_discord(
 
 
 __all__ = [
+    "PmaDeliveryOutcome",
     "deliver_pma_output_to_active_sink",
     "deliver_pma_dispatches_to_delivery_targets",
 ]

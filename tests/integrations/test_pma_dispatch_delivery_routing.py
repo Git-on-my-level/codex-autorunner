@@ -58,7 +58,12 @@ async def test_pma_dispatch_delivery_fanout_telegram_and_discord(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=state_path,
     )
-    assert delivered is True
+    assert delivered.ok is True
+    assert delivered.status == "success"
+    assert delivered.dispatch_count == 1
+    assert delivered.configured_targets == 2
+    assert delivered.delivered_targets == 2
+    assert delivered.failed_targets == 0
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     discord_store = DiscordStateStore(state_path)
@@ -115,7 +120,12 @@ async def test_pma_dispatch_delivery_fanout_two_telegram_targets(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
+    assert delivered.status == "success"
+    assert delivered.dispatch_count == 1
+    assert delivered.configured_targets == 2
+    assert delivered.delivered_targets == 2
+    assert delivered.failed_targets == 0
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     try:
@@ -152,7 +162,12 @@ async def test_pma_dispatch_delivery_local_target_writes_jsonl(tmp_path: Path) -
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
+    assert delivered.status == "success"
+    assert delivered.dispatch_count == 1
+    assert delivered.configured_targets == 1
+    assert delivered.delivered_targets == 1
+    assert delivered.failed_targets == 0
 
     rows = _read_jsonl(local_path)
     assert len(rows) == 1
@@ -188,7 +203,12 @@ async def test_pma_dispatch_delivery_invalid_telegram_thread_id_fails(
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is False
+    assert delivered.ok is False
+    assert delivered.status == "failed"
+    assert delivered.dispatch_count == 1
+    assert delivered.configured_targets == 1
+    assert delivered.delivered_targets == 0
+    assert delivered.failed_targets == 1
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     try:
@@ -216,7 +236,12 @@ async def test_pma_dispatch_delivery_invalid_local_target_fails(tmp_path: Path) 
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is False
+    assert delivered.ok is False
+    assert delivered.status == "failed"
+    assert delivered.dispatch_count == 1
+    assert delivered.configured_targets == 1
+    assert delivered.delivered_targets == 0
+    assert delivered.failed_targets == 1
     assert not outside_path.exists()
     assert not fallback_path.exists()
 
@@ -233,7 +258,12 @@ async def test_pma_dispatch_delivery_web_target_is_noop(tmp_path: Path) -> None:
         telegram_state_path=hub_root / "telegram_state.sqlite3",
         discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
     )
-    assert delivered is True
+    assert delivered.ok is True
+    assert delivered.status == "success"
+    assert delivered.dispatch_count == 1
+    assert delivered.configured_targets == 1
+    assert delivered.delivered_targets == 1
+    assert delivered.failed_targets == 0
 
     telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
     discord_store = DiscordStateStore(

@@ -74,10 +74,11 @@ def test_set_web_preserves_non_web_targets(tmp_path: Path) -> None:
 
     state = targets_store.load()
     assert state["targets"] == [
-        {"kind": "web"},
         {"kind": "chat", "platform": "telegram", "chat_id": "111"},
         {"kind": "local", "path": str(local_path)},
+        {"kind": "web"},
     ]
+    assert state["active_target_key"] == "web"
     assert state["last_delivery_by_target"]["chat:telegram:111"] == "turn-42"
 
 
@@ -100,10 +101,12 @@ def test_set_chat_preserves_non_chat_targets(tmp_path: Path) -> None:
 
     state = targets_store.load()
     assert state["targets"] == [
-        {"kind": "chat", "platform": "discord", "chat_id": "new-channel"},
+        {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
         {"kind": "local", "path": str(local_path)},
         {"kind": "web"},
+        {"kind": "chat", "platform": "discord", "chat_id": "new-channel"},
     ]
+    assert state["active_target_key"] == "chat:discord:new-channel"
 
 
 def test_set_telegram_preserves_non_chat_targets(tmp_path: Path) -> None:
@@ -125,12 +128,14 @@ def test_set_telegram_preserves_non_chat_targets(tmp_path: Path) -> None:
 
     state = targets_store.load()
     assert state["targets"] == [
+        {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
+        {"kind": "local", "path": str(local_path)},
+        {"kind": "web"},
         {
             "kind": "chat",
             "platform": "telegram",
             "chat_id": "111",
             "thread_id": "222",
         },
-        {"kind": "local", "path": str(local_path)},
-        {"kind": "web"},
     ]
+    assert state["active_target_key"] == "chat:telegram:111:222"
