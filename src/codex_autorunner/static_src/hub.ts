@@ -1260,13 +1260,12 @@ async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
             ? { kind: "docker", image: selectedDockerImage }
             : { kind: "local" };
         try {
-          await api(`/hub/repos/${encodeURIComponent(repo.id)}/destination`, {
+          await api(`/hub/repos/${encodeURIComponent(repo.id)}/settings`, {
             method: "POST",
-            body: { destination: destinationPayload },
-          });
-          await api(`/hub/repos/${encodeURIComponent(repo.id)}/worktree-setup`, {
-            method: "POST",
-            body: { commands },
+            body: {
+              destination: destinationPayload,
+              commands,
+            },
           });
           flash(
             `Saved settings for ${repo.id}: ${

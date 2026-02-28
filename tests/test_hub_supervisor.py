@@ -1196,6 +1196,103 @@ def test_set_repo_destination_route_updates_manifest(tmp_path: Path):
     assert entry.destination == expected
 
 
+def test_set_repo_destination_route_accepts_direct_destination_payload(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    expected = {"kind": "docker", "image": "ghcr.io/acme/base:edge"}
+    resp = client.post(
+        "/hub/repos/base/destination",
+        json=expected,
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["effective_destination"] == expected
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.destination == expected
+
+
+def test_set_repo_settings_route_updates_manifest_atomically(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    destination = {"kind": "docker", "image": "ghcr.io/acme/base:atomic"}
+    commands = ["make setup", "pre-commit install", "  "]
+    resp = client.post(
+        "/hub/repos/base/settings",
+        json={"destination": destination, "commands": commands},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["effective_destination"] == destination
+    assert payload["worktree_setup_commands"] == ["make setup", "pre-commit install"]
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.destination == destination
+    assert entry.worktree_setup_commands == ["make setup", "pre-commit install"]
+
+
+def test_set_repo_settings_route_validation_failure_is_atomic(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+    supervisor.set_repo_destination("base", {"kind": "local"})
+    supervisor.set_worktree_setup_commands("base", ["echo initial"])
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/repos/base/settings",
+        json={
+            "destination": {"kind": "docker"},
+            "commands": ["echo changed"],
+        },
+    )
+    assert resp.status_code == 400
+    assert "requires non-empty 'image'" in resp.json()["detail"]
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.destination == {"kind": "local"}
+    assert entry.worktree_setup_commands == ["echo initial"]
+
+
 def test_set_repo_destination_route_rejects_invalid_payload(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

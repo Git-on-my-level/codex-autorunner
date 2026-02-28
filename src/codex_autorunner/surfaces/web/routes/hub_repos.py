@@ -495,6 +495,47 @@ def build_hub_repo_routes(
         await mount_manager.refresh_mounts([snapshot], full_refresh=False)
         return _enrich_repo(snapshot)
 
+    @router.post("/hub/repos/{repo_id}/settings")
+    async def set_repo_settings(repo_id: str, payload: Annotated[Any, Body()] = None):
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="body must be an object with destination and commands",
+            )
+        destination_raw = payload.get("destination")
+        if not isinstance(destination_raw, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="destination must be an object with kind (local|docker)",
+            )
+        commands_raw = payload.get("commands", [])
+        if commands_raw is None:
+            commands_raw = []
+        if not isinstance(commands_raw, list):
+            raise HTTPException(status_code=400, detail="commands must be a list")
+        commands = [str(item) for item in commands_raw if str(item).strip()]
+        safe_log(
+            context.logger,
+            logging.INFO,
+            "Hub set settings repo=%s kind=%s commands=%d"
+            % (
+                repo_id,
+                str(destination_raw.get("kind", "")).strip() or "<missing>",
+                len(commands),
+            ),
+        )
+        try:
+            snapshot = await asyncio.to_thread(
+                context.supervisor.set_repo_settings,
+                repo_id,
+                destination_raw,
+                commands,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        return _enrich_repo(snapshot)
+
     @router.post("/hub/repos/{repo_id}/pin")
     async def pin_parent_repo(
         repo_id: str, payload: Optional[HubPinRepoRequest] = None

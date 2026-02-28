@@ -887,6 +887,31 @@ class HubSupervisor:
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_repo(repo_id)
 
+    def set_repo_settings(
+        self, repo_id: str, destination: Any, commands: List[str]
+    ) -> RepoSnapshot:
+        self._invalidate_list_cache()
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(repo_id)
+        if not entry:
+            raise ValueError(f"Repo not found: {repo_id}")
+        if entry.kind != "base":
+            raise ValueError(
+                "Repo settings can only be configured on base repos; worktrees inherit destination from their base repo"
+            )
+        if not isinstance(commands, list):
+            raise ValueError("commands must be a list")
+        normalized = [str(cmd).strip() for cmd in commands if str(cmd).strip()]
+        parsed = parse_destination_config(
+            destination, context=f"repo '{repo_id}' destination"
+        )
+        if not parsed.valid:
+            raise ValueError("; ".join(parsed.errors))
+        entry.destination = parsed.destination.to_dict()
+        entry.worktree_setup_commands = normalized or None
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        return self._snapshot_for_repo(repo_id)
+
     def run_setup_commands_for_workspace(
         self,
         workspace_path: Path,
