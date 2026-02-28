@@ -489,6 +489,21 @@ def _render_ticket_flow_summary(summary: Optional[dict[str, Any]]) -> str:
     return " ".join(parts)
 
 
+def _render_destination_summary(destination: Any, *, max_field_chars: int) -> str:
+    if not isinstance(destination, dict):
+        return "local"
+    kind_raw = destination.get("kind")
+    kind = str(kind_raw).strip().lower() if kind_raw is not None else ""
+    if not kind or kind == "local":
+        return "local"
+    if kind == "docker":
+        image = str(destination.get("image", "")).strip()
+        if image:
+            return f"docker image={_truncate(image, max_field_chars)}"
+        return "docker image=<missing>"
+    return _truncate(kind, max_field_chars)
+
+
 def _render_hub_snapshot(
     snapshot: dict[str, Any],
     *,
@@ -572,6 +587,10 @@ def _render_hub_snapshot(
             ticket_flow = _render_ticket_flow_summary(repo.get("ticket_flow"))
             run_state = repo.get("run_state") or {}
             state = _truncate(str(run_state.get("state", "")), max_field_chars)
+            destination = _render_destination_summary(
+                repo.get("effective_destination"),
+                max_field_chars=max_field_chars,
+            )
             blocking_reason = _truncate(
                 str(run_state.get("blocking_reason", "")), max_text_chars
             )
@@ -581,7 +600,7 @@ def _render_hub_snapshot(
             lines.append(
                 f"- {repo_id} ({display_name}): status={status} "
                 f"last_run_id={last_run_id} last_exit_code={last_exit} "
-                f"ticket_flow={ticket_flow} state={state}"
+                f"ticket_flow={ticket_flow} state={state} destination={destination}"
             )
             if blocking_reason:
                 lines.append(f"  blocking_reason: {blocking_reason}")
@@ -1410,6 +1429,7 @@ async def build_hub_snapshot(
             "last_run_started_at": snap.last_run_started_at,
             "last_run_finished_at": snap.last_run_finished_at,
             "last_exit_code": snap.last_exit_code,
+            "effective_destination": snap.effective_destination,
             "ticket_flow": None,
             "run_state": None,
         }

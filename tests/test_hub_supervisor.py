@@ -1164,3 +1164,69 @@ def test_set_worktree_setup_commands_route_accepts_legacy_array_payload(tmp_path
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["worktree_setup_commands"] == ["make setup", "pre-commit install"]
+
+
+def test_set_repo_destination_route_updates_manifest(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    expected = {"kind": "docker", "image": "ghcr.io/acme/base:latest"}
+    resp = client.post(
+        "/hub/repos/base/destination",
+        json={"destination": expected},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["effective_destination"] == expected
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.destination == expected
+
+
+def test_set_repo_destination_route_rejects_invalid_payload(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/destination-route-reject",
+        start_point="HEAD",
+    )
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    invalid = client.post(
+        "/hub/repos/base/destination",
+        json={"destination": {"kind": "docker"}},
+    )
+    assert invalid.status_code == 400
+    assert "requires non-empty 'image'" in invalid.json()["detail"]
+
+    wrong_repo_kind = client.post(
+        f"/hub/repos/{worktree.id}/destination",
+        json={"kind": "local"},
+    )
+    assert wrong_repo_kind.status_code == 400
+    assert "only be configured on base repos" in wrong_repo_kind.json()["detail"]

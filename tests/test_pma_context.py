@@ -542,6 +542,9 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert first["repo_id"] == hub_env.repo_id
     assert first["status"] == "active"
     assert "last_message_preview" in first
+    repos = snapshot.get("repos") or []
+    assert repos
+    assert repos[0]["effective_destination"] == {"kind": "local"}
 
     rendered = _render_hub_snapshot(snapshot)
     assert "PMA Managed Threads:" in rendered
@@ -549,6 +552,7 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert f"repo_id={hub_env.repo_id}" in rendered
     assert "agent=codex" in rendered
     assert "status=active" in rendered
+    assert "destination=local" in rendered
 
 
 def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(
@@ -649,6 +653,38 @@ def test_render_hub_snapshot_pma_files_only(tmp_path: Path) -> None:
     assert "PMA File Inbox:" in result
     assert "inbox: [ticket-pack.md]" in result
     assert "next_action: process_uploaded_file" in result
+
+
+def test_render_hub_snapshot_includes_repo_destination_details(tmp_path: Path) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [],
+        "repos": [
+            {
+                "id": "repo-1",
+                "display_name": "Repo One",
+                "status": "idle",
+                "last_run_id": 3,
+                "last_exit_code": 0,
+                "ticket_flow": None,
+                "run_state": {},
+                "effective_destination": {
+                    "kind": "docker",
+                    "image": "ghcr.io/acme/repo-one:latest",
+                },
+            }
+        ],
+        "pma_files": {"inbox": [], "outbox": []},
+        "pma_files_detail": {"inbox": [], "outbox": []},
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Repos:" in result
+    assert "destination=docker image=ghcr.io/acme/repo-one:latest" in result
 
 
 def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:

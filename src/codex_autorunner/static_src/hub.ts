@@ -319,6 +319,43 @@ function formatLastActivity(repo: HubRepo): string {
   return formatTimeCompact(time);
 }
 
+function destinationKind(destination: Record<string, unknown> | null | undefined): string {
+  const kind = destination?.kind;
+  if (typeof kind !== "string") return "local";
+  const normalized = kind.trim().toLowerCase();
+  return normalized || "local";
+}
+
+function destinationImage(destination: Record<string, unknown> | null | undefined): string {
+  const image = destination?.image;
+  if (typeof image !== "string") return "";
+  return image.trim();
+}
+
+function truncateMiddle(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const left = Math.max(1, Math.floor((maxChars - 3) / 2));
+  const right = Math.max(1, maxChars - left - 3);
+  return `${value.slice(0, left)}...${value.slice(value.length - right)}`;
+}
+
+function formatDestinationSummary(
+  destination: Record<string, unknown> | null | undefined
+): string {
+  const kind = destinationKind(destination);
+  if (kind === "docker") {
+    const image = destinationImage(destination);
+    if (image) {
+      return `dest: docker (${truncateMiddle(image, 52)})`;
+    }
+    return "dest: docker (missing image)";
+  }
+  if (kind === "local") {
+    return "dest: local";
+  }
+  return `dest: ${kind}`;
+}
+
 function setButtonLoading(scanning: boolean): void {
   const buttons = [
     document.getElementById("hub-scan"),
@@ -1129,6 +1166,46 @@ async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
   const body = document.createElement("div");
   body.className = "modal-body";
 
+  const destinationSection = document.createElement("div");
+  destinationSection.className = "form-group";
+  const destinationLabel = document.createElement("label");
+  destinationLabel.textContent = "Execution Destination";
+  const destinationHint = document.createElement("p");
+  destinationHint.className = "muted small";
+  destinationHint.textContent =
+    "Choose where this base repo runs by default. Worktrees inherit this destination.";
+  const destinationSelect = document.createElement("select");
+  destinationSelect.style.width = "100%";
+  destinationSelect.innerHTML = `
+    <option value="local">Local machine</option>
+    <option value="docker">Docker container</option>
+  `;
+  const destinationKindValue = destinationKind(repo.effective_destination);
+  destinationSelect.value = destinationKindValue === "docker" ? "docker" : "local";
+  const dockerImageWrap = document.createElement("div");
+  dockerImageWrap.style.marginTop = "0.5rem";
+  const dockerImageLabel = document.createElement("label");
+  dockerImageLabel.textContent = "Docker Image";
+  const dockerImageInput = document.createElement("input");
+  dockerImageInput.type = "text";
+  dockerImageInput.placeholder = "ghcr.io/acme/project:latest";
+  dockerImageInput.style.width = "100%";
+  dockerImageInput.value = destinationImage(repo.effective_destination);
+  dockerImageWrap.append(dockerImageLabel, dockerImageInput);
+  const refreshDestinationInputs = () => {
+    dockerImageWrap.style.display =
+      destinationSelect.value === "docker" ? "block" : "none";
+  };
+  refreshDestinationInputs();
+  destinationSelect.addEventListener("change", refreshDestinationInputs);
+  destinationSection.append(
+    destinationLabel,
+    destinationHint,
+    destinationSelect,
+    dockerImageWrap
+  );
+  body.appendChild(destinationSection);
+
   const worktreeSection = document.createElement("div");
   worktreeSection.className = "form-group";
   const worktreeLabel = document.createElement("label");
@@ -1166,28 +1243,37 @@ async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
 
     const finalize = async (saved: boolean) => {
       if (settled) return;
-      settled = true;
-      if (closeModal) {
-        const close = closeModal;
-        closeModal = null;
-        close();
-      }
-      overlay.remove();
-
       if (saved) {
         const commands = textarea.value
           .split("\n")
           .map((line) => line.trim())
           .filter(Boolean);
+        const selectedKind = destinationSelect.value === "docker" ? "docker" : "local";
+        const selectedDockerImage = dockerImageInput.value.trim();
+        if (selectedKind === "docker" && !selectedDockerImage) {
+          flash("Docker destination requires an image (for example: ghcr.io/org/app:latest).", "error");
+          dockerImageInput.focus();
+          return;
+        }
+        const destinationPayload =
+          selectedKind === "docker"
+            ? { kind: "docker", image: selectedDockerImage }
+            : { kind: "local" };
         try {
+          await api(`/hub/repos/${encodeURIComponent(repo.id)}/destination`, {
+            method: "POST",
+            body: { destination: destinationPayload },
+          });
           await api(`/hub/repos/${encodeURIComponent(repo.id)}/worktree-setup`, {
             method: "POST",
             body: { commands },
           });
           flash(
-            commands.length
-              ? `Saved ${commands.length} setup command(s) for ${repo.id}`
-              : `Cleared setup commands for ${repo.id}`,
+            `Saved settings for ${repo.id}: ${
+              commands.length
+                ? `${commands.length} setup command(s)`
+                : "no setup commands"
+            }, ${formatDestinationSummary(destinationPayload)}`,
             "success"
           );
           await refreshHub();
@@ -1196,8 +1282,16 @@ async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
             (err as Error).message || "Failed to save settings",
             "error"
           );
+          return;
         }
       }
+      settled = true;
+      if (closeModal) {
+        const close = closeModal;
+        closeModal = null;
+        close();
+      }
+      overlay.remove();
       resolve();
     };
 
@@ -1517,6 +1611,7 @@ function renderRepos(repos: HubRepo[]): void {
     if (lastActivity) {
       infoItems.push(lastActivity);
     }
+    infoItems.push(formatDestinationSummary(repo.effective_destination));
     const infoLine =
       infoItems.length > 0
         ? `<span class="hub-repo-info-line">${escapeHtml(

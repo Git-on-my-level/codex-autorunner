@@ -466,6 +466,35 @@ def build_hub_repo_routes(
         await mount_manager.refresh_mounts([snapshot], full_refresh=False)
         return _enrich_repo(snapshot)
 
+    @router.post("/hub/repos/{repo_id}/destination")
+    async def set_repo_destination(
+        repo_id: str, payload: Annotated[Any, Body()] = None
+    ):
+        destination_raw = payload
+        if isinstance(payload, dict) and "destination" in payload:
+            destination_raw = payload.get("destination")
+        if not isinstance(destination_raw, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="destination must be an object with kind (local|docker)",
+            )
+        safe_log(
+            context.logger,
+            logging.INFO,
+            "Hub set destination repo=%s kind=%s"
+            % (repo_id, str(destination_raw.get("kind", "")).strip() or "<missing>"),
+        )
+        try:
+            snapshot = await asyncio.to_thread(
+                context.supervisor.set_repo_destination,
+                repo_id,
+                destination_raw,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        return _enrich_repo(snapshot)
+
     @router.post("/hub/repos/{repo_id}/pin")
     async def pin_parent_repo(
         repo_id: str, payload: Optional[HubPinRepoRequest] = None
