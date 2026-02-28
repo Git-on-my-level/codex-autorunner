@@ -235,6 +235,47 @@
         </div>
       </div>
       <div class="pma-docs-content">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-header-left">
+              <span class="label">Delivery Targets</span>
+            </div>
+            <button class="ghost sm" id="pma-targets-refresh">Refresh</button>
+          </div>
+          <div class="form-group">
+            <label for="pma-target-ref">Target ref</label>
+            <input type="text" id="pma-target-ref" placeholder="web | discord:123 | chat:telegram:-1001:55" />
+            <span class="form-hint">Supported: web, local:&lt;path&gt;, telegram:&lt;chat_id&gt;[:&lt;thread_id&gt;], discord:&lt;channel_id&gt;, chat:telegram:..., chat:discord:...</span>
+          </div>
+          <div class="pma-docs-actions">
+            <button class="primary sm" id="pma-targets-add">Add target</button>
+            <button class="ghost sm" id="pma-targets-clear">Clear all</button>
+          </div>
+          <div class="messages-thread-list" id="pma-targets-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-header-left">
+              <span class="label">Managed Threads</span>
+            </div>
+            <button class="ghost sm" id="pma-managed-threads-refresh">Refresh</button>
+          </div>
+          <div class="messages-thread-list" id="pma-managed-threads-list"></div>
+          <div class="messages-thread-detail" id="pma-managed-thread-detail">
+            <div class="messages-empty-state">
+              <div class="messages-empty-title">Select a managed thread</div>
+              <div class="messages-empty-hint">Pick a thread above to inspect details and archive/resume.</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="pma-managed-thread-backend-id">Backend thread ID (for resume)</label>
+            <input type="text" id="pma-managed-thread-backend-id" placeholder="backend-thread-id" />
+          </div>
+          <div class="pma-docs-actions">
+            <button class="ghost sm" id="pma-managed-thread-archive" disabled>Archive</button>
+            <button class="primary sm" id="pma-managed-thread-resume" disabled>Resume</button>
+          </div>
+        </div>
         <div class="pma-docs-meta" id="pma-docs-meta"></div>
         <div class="pma-docs-editor-wrapper">
           <textarea id="pma-docs-editor" class="pma-docs-editor" spellcheck="false"></textarea>

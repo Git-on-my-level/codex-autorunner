@@ -42,6 +42,12 @@ from ....core.pma_context import (
     get_active_context_auto_prune_meta,
     load_pma_prompt,
 )
+from ....core.pma_delivery_targets import (
+    PmaDeliveryTargetsStore,
+    normalize_delivery_target,
+    parse_delivery_target_ref,
+    target_key,
+)
 from ....core.pma_dispatches import (
     find_pma_dispatch_path,
     list_pma_dispatches,
@@ -300,6 +306,84 @@ def build_pma_routes() -> APIRouter:
         if sanitized in {"PMA chat timed out", "PMA chat interrupted"}:
             return sanitized
         return MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
+
+    def _format_delivery_target_label(target: dict[str, Any]) -> str:
+        label = _normalize_optional_text(target.get("label"))
+        if label is not None:
+            return label
+
+        kind = target.get("kind")
+        if kind == "web":
+            return "web"
+        if kind == "local":
+            path = _normalize_optional_text(target.get("path"))
+            return path or "local"
+        if kind == "chat":
+            platform = _normalize_optional_text(target.get("platform"))
+            chat_id = _normalize_optional_text(target.get("chat_id"))
+            thread_id = _normalize_optional_text(target.get("thread_id"))
+            if platform and chat_id and thread_id:
+                return f"{platform}:{chat_id}:{thread_id}"
+            if platform and chat_id:
+                return f"{platform}:{chat_id}"
+        return "target"
+
+    def _serialize_delivery_targets_state(state: dict[str, Any]) -> dict[str, Any]:
+        targets_raw = state.get("targets")
+        if not isinstance(targets_raw, list):
+            targets_raw = []
+        last_by_target = state.get("last_delivery_by_target")
+        if not isinstance(last_by_target, dict):
+            last_by_target = {}
+
+        targets: list[dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
+        for candidate in targets_raw:
+            if not isinstance(candidate, dict):
+                continue
+            normalized = normalize_delivery_target(candidate)
+            if normalized is None:
+                continue
+            key = target_key(normalized)
+            if not isinstance(key, str) or not key:
+                continue
+            last_delivery = last_by_target.get(key)
+            items.append(
+                {
+                    "key": key,
+                    "label": _format_delivery_target_label(normalized),
+                    "target": normalized,
+                    "last_delivery_turn_id": (
+                        last_delivery
+                        if isinstance(last_delivery, str) and last_delivery
+                        else None
+                    ),
+                }
+            )
+            targets.append(normalized)
+
+        return {
+            "updated_at": state.get("updated_at"),
+            "count": len(items),
+            "targets": targets,
+            "items": items,
+        }
+
+    def _resolve_delivery_target_from_ref(ref: Any) -> dict[str, Any]:
+        normalized_ref = _normalize_optional_text(ref)
+        if normalized_ref is None:
+            raise HTTPException(status_code=400, detail="ref is required")
+        parsed = parse_delivery_target_ref(normalized_ref)
+        if parsed is None:
+            raise HTTPException(status_code=400, detail="target ref is invalid")
+        return parsed
+
+    def _resolve_delivery_target_key(target_or_ref: str) -> Optional[str]:
+        parsed = parse_delivery_target_ref(target_or_ref)
+        if parsed is None:
+            normalized = _normalize_optional_text(target_or_ref)
+            return normalized
+        return target_key(parsed)
 
     def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
         return (
@@ -2652,6 +2736,51 @@ def build_pma_routes() -> APIRouter:
                 status_code=500, detail=f"Failed to read history entry: {exc}"
             ) from exc
         return {"name": name, "version_id": version_id, "content": content}
+
+    @router.get("/targets")
+    def list_pma_delivery_targets(request: Request) -> dict[str, Any]:
+        hub_root = request.app.state.config.root
+        store = PmaDeliveryTargetsStore(hub_root)
+        return _serialize_delivery_targets_state(store.load())
+
+    @router.post("/targets")
+    def add_pma_delivery_target(
+        request: Request, body: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="request body is required")
+        target = _resolve_delivery_target_from_ref(body.get("ref"))
+
+        hub_root = request.app.state.config.root
+        store = PmaDeliveryTargetsStore(hub_root)
+        try:
+            state = store.add_target(target)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _serialize_delivery_targets_state(state)
+
+    @router.delete("/targets/{target_ref:path}")
+    def remove_pma_delivery_target(target_ref: str, request: Request) -> dict[str, Any]:
+        resolved_key = _resolve_delivery_target_key(target_ref)
+        if not isinstance(resolved_key, str) or not resolved_key:
+            raise HTTPException(status_code=400, detail="target ref is invalid")
+
+        hub_root = request.app.state.config.root
+        store = PmaDeliveryTargetsStore(hub_root)
+        removed = store.remove_target(resolved_key)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Target not found")
+        return {"status": "ok", "target_key": resolved_key}
+
+    @router.delete("/targets")
+    def clear_pma_delivery_targets(request: Request) -> dict[str, Any]:
+        hub_root = request.app.state.config.root
+        store = PmaDeliveryTargetsStore(hub_root)
+        existing = store.load()
+        targets = existing.get("targets")
+        count = len(targets) if isinstance(targets, list) else 0
+        store.set_targets([])
+        return {"status": "ok", "cleared": count}
 
     @router.get("/dispatches")
     def list_pma_dispatches_endpoint(

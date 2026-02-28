@@ -66,6 +66,39 @@ type PMADocUpdate = {
   status: string;
 };
 
+type PMADeliveryTargetItem = {
+  key: string;
+  label?: string;
+  target?: Record<string, unknown>;
+  last_delivery_turn_id?: string | null;
+};
+
+type PMADeliveryTargetsResponse = {
+  items?: PMADeliveryTargetItem[];
+};
+
+type PMAManagedThread = {
+  managed_thread_id: string;
+  agent?: string;
+  status?: string;
+  repo_id?: string | null;
+  workspace_root?: string;
+  backend_thread_id?: string | null;
+  last_turn_id?: string | null;
+  updated_at?: string;
+  created_at?: string;
+  last_message_preview?: string | null;
+  compact_seed?: string | null;
+};
+
+type PMAManagedThreadsResponse = {
+  threads?: PMAManagedThread[];
+};
+
+type PMAManagedThreadResponse = {
+  thread?: PMAManagedThread;
+};
+
 const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
 let activeContextMaxLines = 200;
 
@@ -96,6 +129,10 @@ let currentDocName: string | null = null;
 const docsInfo: Map<string, PMADocInfo> = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
+let pmaDeliveryTargets: PMADeliveryTargetItem[] = [];
+let pmaManagedThreads: PMAManagedThread[] = [];
+let selectedManagedThreadId: string | null = null;
+let selectedManagedThread: PMAManagedThread | null = null;
 type PMAView = "chat" | "memory";
 
 type PendingTurn = {
@@ -168,6 +205,363 @@ function setPMAView(view: PMAView, options: { persist?: boolean } = {}): void {
   });
   elements.chatSection?.classList.toggle("hidden", view !== "chat");
   elements.docsSection?.classList.toggle("hidden", view !== "memory");
+  if (view === "memory") {
+    void loadPMADeliveryTargets({ silent: true });
+    void loadPMAManagedThreads({ silent: true });
+  }
+}
+
+function buildDeliveryTargetKey(target: Record<string, unknown> | undefined): string {
+  if (!target || typeof target !== "object") return "";
+  const kind = typeof target.kind === "string" ? target.kind : "";
+  if (kind === "web") return "web";
+  if (kind === "local") {
+    const path = typeof target.path === "string" ? target.path.trim() : "";
+    return path ? `local:${path}` : "";
+  }
+  if (kind === "chat") {
+    const platform = typeof target.platform === "string" ? target.platform.trim() : "";
+    const chatId = typeof target.chat_id === "string" ? target.chat_id.trim() : "";
+    const threadId = typeof target.thread_id === "string" ? target.thread_id.trim() : "";
+    if (!platform || !chatId) return "";
+    return threadId ? `chat:${platform}:${chatId}:${threadId}` : `chat:${platform}:${chatId}`;
+  }
+  return "";
+}
+
+function renderPMADeliveryTargets(): void {
+  const elements = getElements();
+  if (!elements.targetsList) return;
+  const listEl = elements.targetsList;
+  listEl.innerHTML = "";
+
+  if (!pmaDeliveryTargets.length) {
+    listEl.innerHTML = '<div class="muted small">No delivery targets configured.</div>';
+    return;
+  }
+
+  pmaDeliveryTargets.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "messages-thread";
+    row.style.cursor = "default";
+
+    const header = document.createElement("div");
+    header.className = "messages-thread-header";
+
+    const title = document.createElement("div");
+    title.className = "messages-thread-title";
+    title.textContent = item.key;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "ghost sm";
+    removeBtn.textContent = "Remove";
+    removeBtn.type = "button";
+    removeBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void removePMADeliveryTarget(item.key);
+    });
+
+    header.append(title, removeBtn);
+    row.append(header);
+
+    const subtitle = document.createElement("div");
+    subtitle.className = "messages-thread-subtitle muted";
+    subtitle.textContent = item.label && item.label !== item.key ? item.label : "Configured target";
+    row.append(subtitle);
+
+    if (item.last_delivery_turn_id) {
+      const meta = document.createElement("div");
+      meta.className = "messages-thread-meta-line";
+      meta.textContent = `Last delivery: ${item.last_delivery_turn_id}`;
+      row.append(meta);
+    }
+
+    listEl.append(row);
+  });
+}
+
+async function loadPMADeliveryTargets(options: { silent?: boolean } = {}): Promise<void> {
+  const { silent = false } = options;
+  try {
+    const payload = (await api("/hub/pma/targets", { method: "GET" })) as PMADeliveryTargetsResponse;
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    pmaDeliveryTargets = items
+      .map((item) => {
+        const key =
+          typeof item?.key === "string" && item.key.trim()
+            ? item.key.trim()
+            : buildDeliveryTargetKey(item?.target);
+        if (!key) return null;
+        return {
+          key,
+          label: typeof item?.label === "string" ? item.label : undefined,
+          target: item?.target && typeof item.target === "object" ? item.target : undefined,
+          last_delivery_turn_id:
+            typeof item?.last_delivery_turn_id === "string" && item.last_delivery_turn_id
+              ? item.last_delivery_turn_id
+              : null,
+        } as PMADeliveryTargetItem;
+      })
+      .filter((item): item is PMADeliveryTargetItem => item !== null);
+    renderPMADeliveryTargets();
+  } catch (err) {
+    if (!silent) {
+      flash("Failed to load delivery targets", "error");
+    }
+  }
+}
+
+async function addPMADeliveryTarget(): Promise<void> {
+  const elements = getElements();
+  const input = elements.targetsRefInput;
+  if (!input) return;
+  const ref = input.value.trim();
+  if (!ref) return;
+  try {
+    await api("/hub/pma/targets", {
+      method: "POST",
+      body: { ref },
+    });
+    input.value = "";
+    await loadPMADeliveryTargets({ silent: true });
+    flash("Target added", "info");
+  } catch (err) {
+    flash((err as Error).message || "Failed to add target", "error");
+  }
+}
+
+async function removePMADeliveryTarget(targetKey: string): Promise<void> {
+  if (!targetKey) return;
+  try {
+    await api(`/hub/pma/targets/${encodeURIComponent(targetKey)}`, {
+      method: "DELETE",
+    });
+    await loadPMADeliveryTargets({ silent: true });
+    flash(`Removed target: ${targetKey}`, "info");
+  } catch (err) {
+    flash((err as Error).message || "Failed to remove target", "error");
+  }
+}
+
+async function clearPMADeliveryTargets(): Promise<void> {
+  if (!window.confirm("Clear all PMA delivery targets?")) return;
+  try {
+    await api("/hub/pma/targets", { method: "DELETE" });
+    await loadPMADeliveryTargets({ silent: true });
+    flash("Cleared delivery targets", "info");
+  } catch (err) {
+    flash((err as Error).message || "Failed to clear targets", "error");
+  }
+}
+
+function renderPMAManagedThreadDetail(): void {
+  const elements = getElements();
+  if (!elements.managedThreadDetail) return;
+
+  const detailEl = elements.managedThreadDetail;
+  const archiveBtn = elements.managedThreadArchiveBtn;
+  const resumeBtn = elements.managedThreadResumeBtn;
+  const backendInput = elements.managedThreadBackendInput;
+  const thread = selectedManagedThread;
+
+  if (!thread || !selectedManagedThreadId) {
+    detailEl.innerHTML = `
+      <div class="messages-empty-state">
+        <div class="messages-empty-title">Select a managed thread</div>
+        <div class="messages-empty-hint">Pick a thread to inspect details and archive/resume.</div>
+      </div>
+    `;
+    if (archiveBtn) archiveBtn.disabled = true;
+    if (resumeBtn) resumeBtn.disabled = true;
+    if (backendInput) backendInput.value = "";
+    return;
+  }
+
+  const status = String(thread.status || "unknown");
+  const statusClass = status === "archived" ? "pill-warn" : "pill-idle";
+  detailEl.innerHTML = `
+    <div class="messages-thread-header">
+      <div class="messages-thread-title">${escapeHtml(thread.managed_thread_id)}</div>
+      <span class="pill pill-small ${statusClass}">${escapeHtml(status)}</span>
+    </div>
+    <div class="messages-thread-subtitle">Agent: ${escapeHtml(thread.agent || "-")}</div>
+    <div class="messages-thread-subtitle">Repo: ${escapeHtml(thread.repo_id || "-")}</div>
+    <div class="messages-thread-subtitle">Workspace: ${escapeHtml(thread.workspace_root || "-")}</div>
+    <div class="messages-thread-subtitle">Backend thread: ${escapeHtml(thread.backend_thread_id || "-")}</div>
+    <div class="messages-thread-subtitle">Last turn: ${escapeHtml(thread.last_turn_id || "-")}</div>
+    <div class="messages-thread-subtitle">Updated: ${escapeHtml(thread.updated_at || "-")}</div>
+  `;
+
+  if (backendInput && document.activeElement !== backendInput) {
+    backendInput.value = String(thread.backend_thread_id || "");
+  }
+  if (archiveBtn) {
+    archiveBtn.disabled = status === "archived";
+  }
+  if (resumeBtn) {
+    resumeBtn.disabled = false;
+  }
+}
+
+function renderPMAManagedThreadsList(): void {
+  const elements = getElements();
+  if (!elements.managedThreadsList) return;
+  const listEl = elements.managedThreadsList;
+  listEl.innerHTML = "";
+
+  if (!pmaManagedThreads.length) {
+    listEl.innerHTML = '<div class="muted small">No managed threads found.</div>';
+    return;
+  }
+
+  pmaManagedThreads.forEach((thread) => {
+    const threadId = String(thread.managed_thread_id || "");
+    if (!threadId) return;
+
+    const row = document.createElement("div");
+    row.className = "messages-thread";
+    row.dataset.managedThreadId = threadId;
+    if (threadId === selectedManagedThreadId) {
+      row.style.borderColor = "var(--accent)";
+    }
+
+    const header = document.createElement("div");
+    header.className = "messages-thread-header";
+
+    const title = document.createElement("div");
+    title.className = "messages-thread-title";
+    title.textContent = threadId.slice(0, 16);
+    title.title = threadId;
+
+    const status = String(thread.status || "unknown");
+    const pill = document.createElement("span");
+    pill.className = `pill pill-small ${status === "archived" ? "pill-warn" : "pill-idle"}`;
+    pill.textContent = status;
+
+    header.append(title, pill);
+    row.append(header);
+
+    const subtitle = document.createElement("div");
+    subtitle.className = "messages-thread-subtitle muted";
+    subtitle.textContent = `${thread.agent || "unknown"} · ${thread.repo_id || "no-repo"}`;
+    row.append(subtitle);
+
+    listEl.append(row);
+  });
+}
+
+async function inspectPMAManagedThread(
+  managedThreadId: string,
+  options: { silent?: boolean } = {}
+): Promise<void> {
+  const { silent = false } = options;
+  if (!managedThreadId) return;
+  try {
+    const payload = (await api(
+      `/hub/pma/threads/${encodeURIComponent(managedThreadId)}`,
+      { method: "GET" }
+    )) as PMAManagedThreadResponse;
+    const thread = payload?.thread;
+    if (!thread || !thread.managed_thread_id) {
+      throw new Error("Managed thread not found");
+    }
+    selectedManagedThreadId = thread.managed_thread_id;
+    selectedManagedThread = thread;
+    renderPMAManagedThreadsList();
+    renderPMAManagedThreadDetail();
+  } catch (err) {
+    if (!silent) {
+      flash((err as Error).message || "Failed to inspect managed thread", "error");
+    }
+  }
+}
+
+async function loadPMAManagedThreads(
+  options: { silent?: boolean; preserveSelection?: boolean } = {}
+): Promise<void> {
+  const { silent = false, preserveSelection = true } = options;
+  try {
+    const payload = (await api("/hub/pma/threads?limit=50", {
+      method: "GET",
+    })) as PMAManagedThreadsResponse;
+    const threads = Array.isArray(payload?.threads) ? payload.threads : [];
+    pmaManagedThreads = threads.filter(
+      (thread): thread is PMAManagedThread =>
+        !!thread && typeof thread.managed_thread_id === "string" && !!thread.managed_thread_id
+    );
+    renderPMAManagedThreadsList();
+
+    if (preserveSelection && selectedManagedThreadId) {
+      const exists = pmaManagedThreads.some(
+        (thread) => thread.managed_thread_id === selectedManagedThreadId
+      );
+      if (exists) {
+        await inspectPMAManagedThread(selectedManagedThreadId, { silent: true });
+      } else {
+        selectedManagedThreadId = null;
+        selectedManagedThread = null;
+        renderPMAManagedThreadDetail();
+      }
+    } else if (!selectedManagedThreadId) {
+      renderPMAManagedThreadDetail();
+    }
+  } catch (err) {
+    if (!silent) {
+      flash("Failed to load managed threads", "error");
+    }
+  }
+}
+
+async function archiveSelectedPMAManagedThread(): Promise<void> {
+  if (!selectedManagedThreadId) {
+    flash("Select a managed thread first", "error");
+    return;
+  }
+  try {
+    const payload = (await api(
+      `/hub/pma/threads/${encodeURIComponent(selectedManagedThreadId)}/archive`,
+      { method: "POST" }
+    )) as PMAManagedThreadResponse;
+    if (payload?.thread?.managed_thread_id) {
+      selectedManagedThread = payload.thread;
+    }
+    await loadPMAManagedThreads({ silent: true, preserveSelection: true });
+    renderPMAManagedThreadDetail();
+    flash(`Archived managed thread: ${selectedManagedThreadId}`, "info");
+  } catch (err) {
+    flash((err as Error).message || "Failed to archive managed thread", "error");
+  }
+}
+
+async function resumeSelectedPMAManagedThread(): Promise<void> {
+  const elements = getElements();
+  if (!selectedManagedThreadId) {
+    flash("Select a managed thread first", "error");
+    return;
+  }
+  const backendThreadId = elements.managedThreadBackendInput?.value?.trim() || "";
+  if (!backendThreadId) {
+    flash("backend_thread_id is required", "error");
+    return;
+  }
+  try {
+    const payload = (await api(
+      `/hub/pma/threads/${encodeURIComponent(selectedManagedThreadId)}/resume`,
+      {
+        method: "POST",
+        body: { backend_thread_id: backendThreadId },
+      }
+    )) as PMAManagedThreadResponse;
+    if (payload?.thread?.managed_thread_id) {
+      selectedManagedThread = payload.thread;
+    }
+    await loadPMAManagedThreads({ silent: true, preserveSelection: true });
+    renderPMAManagedThreadDetail();
+    flash(`Resumed managed thread: ${selectedManagedThreadId}`, "info");
+  } catch (err) {
+    flash((err as Error).message || "Failed to resume managed thread", "error");
+  }
 }
 
 async function initFileBoxUI(): Promise<void> {
@@ -524,6 +918,17 @@ function getElements() {
     docsSaveBtn: document.getElementById("pma-docs-save") as HTMLButtonElement | null,
     docsResetBtn: document.getElementById("pma-docs-reset") as HTMLButtonElement | null,
     docsSnapshotBtn: document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null,
+    targetsRefreshBtn: document.getElementById("pma-targets-refresh") as HTMLButtonElement | null,
+    targetsRefInput: document.getElementById("pma-target-ref") as HTMLInputElement | null,
+    targetsAddBtn: document.getElementById("pma-targets-add") as HTMLButtonElement | null,
+    targetsClearBtn: document.getElementById("pma-targets-clear") as HTMLButtonElement | null,
+    targetsList: document.getElementById("pma-targets-list"),
+    managedThreadsRefreshBtn: document.getElementById("pma-managed-threads-refresh") as HTMLButtonElement | null,
+    managedThreadsList: document.getElementById("pma-managed-threads-list"),
+    managedThreadDetail: document.getElementById("pma-managed-thread-detail"),
+    managedThreadBackendInput: document.getElementById("pma-managed-thread-backend-id") as HTMLInputElement | null,
+    managedThreadArchiveBtn: document.getElementById("pma-managed-thread-archive") as HTMLButtonElement | null,
+    managedThreadResumeBtn: document.getElementById("pma-managed-thread-resume") as HTMLButtonElement | null,
   };
 }
 
@@ -611,6 +1016,8 @@ async function initPMA(): Promise<void> {
   await loadPMAThreadInfo();
   await initFileBoxUI();
   await loadPMADocs();
+  await loadPMADeliveryTargets();
+  await loadPMAManagedThreads();
   attachHandlers();
   setPMAView(loadPMAView(), { persist: false });
   initNotificationBell();
@@ -642,6 +1049,8 @@ async function initPMA(): Promise<void> {
   setInterval(() => {
     void loadPMAThreadInfo();
     void fileBoxCtrl?.refresh();
+    void loadPMADeliveryTargets({ silent: true });
+    void loadPMAManagedThreads({ silent: true });
   }, 30000);
 }
 
@@ -1235,6 +1644,71 @@ function attachHandlers(): void {
     const value = (btn.dataset.view || "chat") as PMAView;
     setPMAView(value);
   });
+
+  if (elements.targetsAddBtn) {
+    elements.targetsAddBtn.addEventListener("click", () => {
+      void addPMADeliveryTarget();
+    });
+  }
+
+  if (elements.targetsRefInput) {
+    elements.targetsRefInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void addPMADeliveryTarget();
+      }
+    });
+  }
+
+  if (elements.targetsRefreshBtn) {
+    elements.targetsRefreshBtn.addEventListener("click", () => {
+      void loadPMADeliveryTargets();
+    });
+  }
+
+  if (elements.targetsClearBtn) {
+    elements.targetsClearBtn.addEventListener("click", () => {
+      void clearPMADeliveryTargets();
+    });
+  }
+
+  if (elements.managedThreadsRefreshBtn) {
+    elements.managedThreadsRefreshBtn.addEventListener("click", () => {
+      void loadPMAManagedThreads();
+    });
+  }
+
+  if (elements.managedThreadsList) {
+    elements.managedThreadsList.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement | null;
+      const threadRow = target?.closest?.("[data-managed-thread-id]") as HTMLElement | null;
+      const managedThreadId = threadRow?.dataset?.managedThreadId || "";
+      if (managedThreadId) {
+        void inspectPMAManagedThread(managedThreadId);
+      }
+    });
+  }
+
+  if (elements.managedThreadArchiveBtn) {
+    elements.managedThreadArchiveBtn.addEventListener("click", () => {
+      void archiveSelectedPMAManagedThread();
+    });
+  }
+
+  if (elements.managedThreadResumeBtn) {
+    elements.managedThreadResumeBtn.addEventListener("click", () => {
+      void resumeSelectedPMAManagedThread();
+    });
+  }
+
+  if (elements.managedThreadBackendInput) {
+    elements.managedThreadBackendInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void resumeSelectedPMAManagedThread();
+      }
+    });
+  }
 
   if (elements.sendBtn) {
     elements.sendBtn.addEventListener("click", () => {

@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import anyio
 import httpx
@@ -13,6 +14,10 @@ from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
+from codex_autorunner.core.pma_delivery_targets import (
+    PmaDeliveryTargetsStore,
+    target_key,
+)
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
@@ -87,6 +92,78 @@ def test_pma_routes_disabled_by_config(hub_env) -> None:
     client = TestClient(app)
     assert client.get("/hub/pma/agents").status_code == 404
     assert client.post("/hub/pma/chat", json={"message": "hi"}).status_code == 404
+
+
+def test_pma_delivery_targets_list_add_remove_clear(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    client = TestClient(app)
+
+    initial = client.get("/hub/pma/targets")
+    assert initial.status_code == 200
+    assert initial.json()["items"] == []
+
+    add_web = client.post("/hub/pma/targets", json={"ref": "web"})
+    assert add_web.status_code == 200
+
+    add_telegram = client.post(
+        "/hub/pma/targets",
+        json={"ref": "telegram:-2002:77"},
+    )
+    assert add_telegram.status_code == 200
+
+    add_local = client.post(
+        "/hub/pma/targets",
+        json={"ref": "local:./notes/pma.md"},
+    )
+    assert add_local.status_code == 200
+
+    list_resp = client.get("/hub/pma/targets")
+    assert list_resp.status_code == 200
+    payload = list_resp.json()
+    keys = {item["key"] for item in payload["items"]}
+    assert keys == {"web", "chat:telegram:-2002:77", "local:./notes/pma.md"}
+
+    state_keys = {
+        key
+        for key in (target_key(target) for target in store.load()["targets"])
+        if isinstance(key, str)
+    }
+    assert state_keys == keys
+
+    remove_telegram = client.delete("/hub/pma/targets/telegram:-2002:77")
+    assert remove_telegram.status_code == 200
+    assert remove_telegram.json()["target_key"] == "chat:telegram:-2002:77"
+
+    remove_local = client.delete(
+        f"/hub/pma/targets/{quote('local:./notes/pma.md', safe='')}"
+    )
+    assert remove_local.status_code == 200
+    assert remove_local.json()["target_key"] == "local:./notes/pma.md"
+
+    clear_resp = client.delete("/hub/pma/targets")
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["status"] == "ok"
+    assert store.load()["targets"] == []
+
+
+def test_pma_delivery_targets_reject_invalid_refs(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    add_invalid = client.post("/hub/pma/targets", json={"ref": "telegram:abc"})
+    assert add_invalid.status_code == 400
+    assert "invalid" in (add_invalid.json().get("detail") or "").lower()
+
+    add_missing = client.post("/hub/pma/targets", json={})
+    assert add_missing.status_code == 400
+    assert add_missing.json().get("detail") == "ref is required"
+
+    remove_missing = client.delete("/hub/pma/targets/telegram:-9000:1")
+    assert remove_missing.status_code == 404
+    assert remove_missing.json().get("detail") == "Target not found"
 
 
 def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
