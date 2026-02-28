@@ -1,6 +1,7 @@
 import dataclasses
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
@@ -239,6 +240,33 @@ def save_manifest(manifest_path: Path, manifest: Manifest, hub_root: Path) -> No
         "version": MANIFEST_VERSION,
         "repos": [repo.to_dict(hub_root) for repo in manifest.repos],
     }
-    with manifest_path.open("w", encoding="utf-8") as f:
-        f.write(MANIFEST_HEADER)
-        yaml.safe_dump(payload, f, sort_keys=False)
+    content = MANIFEST_HEADER + yaml.safe_dump(payload, sort_keys=False)
+    _atomic_write_text(manifest_path, content)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise

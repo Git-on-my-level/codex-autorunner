@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 
+import pytest
 import yaml
 
 from codex_autorunner.bootstrap import GITIGNORE_CONTENT, seed_repo_files
@@ -11,7 +13,12 @@ from codex_autorunner.core.config import (
     load_repo_config,
 )
 from codex_autorunner.discovery import discover_and_init
-from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
+from codex_autorunner.manifest import (
+    MANIFEST_HEADER,
+    load_manifest,
+    sanitize_repo_id,
+    save_manifest,
+)
 from tests.conftest import write_test_config
 
 
@@ -93,6 +100,62 @@ def test_load_manifest_ignores_invalid_destination_shapes(tmp_path: Path):
     assert worktree is not None
     assert base.destination is None
     assert worktree.destination is None
+
+
+def test_save_manifest_atomic_write_keeps_header_and_uses_replace(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    repo_dir = hub_root / "projects" / "demo-repo"
+    repo_dir.mkdir(parents=True)
+    manifest.ensure_repo(hub_root, repo_dir, repo_id="demo")
+
+    real_replace = os.replace
+    seen: dict[str, Path] = {}
+
+    def _capture_replace(src: Path, dst: Path) -> None:
+        seen["src"] = src
+        seen["dst"] = dst
+        real_replace(src, dst)
+
+    monkeypatch.setattr("codex_autorunner.manifest.os.replace", _capture_replace)
+
+    save_manifest(manifest_path, manifest, hub_root)
+
+    text = manifest_path.read_text(encoding="utf-8")
+    assert text.startswith(MANIFEST_HEADER)
+    assert seen["dst"] == manifest_path
+    assert seen["src"].parent == manifest_path.parent
+    assert seen["src"].name.startswith(f".{manifest_path.name}.")
+    assert seen["src"].suffix == ".tmp"
+
+
+def test_save_manifest_atomic_write_replace_failure_leaves_existing_manifest_intact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    initial_content = "version: 2\nrepos: []\n"
+    manifest_path.write_text(initial_content, encoding="utf-8")
+
+    manifest = load_manifest(manifest_path, hub_root)
+    repo_dir = hub_root / "projects" / "demo-repo"
+    repo_dir.mkdir(parents=True)
+    manifest.ensure_repo(hub_root, repo_dir, repo_id="demo")
+
+    def _fail_replace(_src: Path, _dst: Path) -> None:
+        raise OSError("replace interrupted")
+
+    monkeypatch.setattr("codex_autorunner.manifest.os.replace", _fail_replace)
+
+    with pytest.raises(OSError, match="replace interrupted"):
+        save_manifest(manifest_path, manifest, hub_root)
+
+    assert manifest_path.read_text(encoding="utf-8") == initial_content
+    assert not list(manifest_path.parent.glob(f".{manifest_path.name}.*.tmp"))
 
 
 def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
