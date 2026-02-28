@@ -30,8 +30,12 @@ def _proc(
     )
 
 
-def _inspect_stdout(*, running: bool, spec_fingerprint: str | None) -> str:
+def _inspect_stdout(
+    *, running: bool, spec_fingerprint: str | None, managed: bool | None = None
+) -> str:
     labels = {}
+    if managed is not None:
+        labels["ca.managed"] = "true" if managed else "false"
     if spec_fingerprint is not None:
         labels["ca.spec-fingerprint"] = spec_fingerprint
     return json.dumps(
@@ -206,7 +210,11 @@ def test_ensure_container_running_recreates_when_spec_fingerprint_mismatches() -
         if cmd[1] == "inspect":
             return _proc(
                 cmd,
-                stdout=_inspect_stdout(running=True, spec_fingerprint="stale-fp"),
+                stdout=_inspect_stdout(
+                    running=True,
+                    spec_fingerprint="stale-fp",
+                    managed=True,
+                ),
             )
         if cmd[1] == "rm":
             return _proc(cmd, stdout="demo\n")
@@ -221,6 +229,35 @@ def test_ensure_container_running_recreates_when_spec_fingerprint_mismatches() -
     run_call = calls[2]
     assert "ca.managed=true" in run_call
     assert f"ca.spec-fingerprint={fingerprint}" in run_call
+
+
+def test_ensure_container_running_fails_for_non_managed_spec_mismatch() -> None:
+    calls: list[list[str]] = []
+    spec = build_docker_container_spec(
+        name="demo",
+        image="busybox:latest",
+        repo_root=Path("/tmp/repo"),
+    )
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        _ = kwargs
+        if cmd[1] == "inspect":
+            return _proc(
+                cmd,
+                stdout=_inspect_stdout(
+                    running=True,
+                    spec_fingerprint="stale-fp",
+                    managed=False,
+                ),
+            )
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    with pytest.raises(DockerRuntimeError, match="not CAR-managed"):
+        runtime.ensure_container_running(spec)
+
+    assert [call[1] for call in calls] == ["inspect"]
 
 
 def test_build_docker_container_spec_ignores_invalid_explicit_env(

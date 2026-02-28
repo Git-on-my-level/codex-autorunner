@@ -49,6 +49,7 @@ class DockerContainerSpec:
 
 
 _SPEC_FINGERPRINT_LABEL = "ca.spec-fingerprint"
+_MANAGED_LABEL = "ca.managed"
 
 
 def _container_spec_fingerprint(spec: DockerContainerSpec) -> str:
@@ -260,6 +261,15 @@ class DockerRuntime:
                 label_map = labels if isinstance(labels, dict) else {}
                 current_fingerprint = label_map.get(_SPEC_FINGERPRINT_LABEL)
                 if current_fingerprint != expected_fingerprint:
+                    managed_label = (
+                        str(label_map.get(_MANAGED_LABEL, "")).strip().lower()
+                    )
+                    if managed_label != "true":
+                        raise DockerRuntimeError(
+                            f"Container {spec.name} exists with non-matching config, but is "
+                            "not CAR-managed (missing label ca.managed=true). "
+                            "Refusing to remove it; rename or remove the container manually."
+                        )
                     logger.info(
                         "Recreating docker container %s due to config drift "
                         "(current=%r desired=%r)",
