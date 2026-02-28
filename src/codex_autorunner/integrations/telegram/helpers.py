@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ...core.coercion import coerce_int
+from ...core.pma_delivery_targets import pma_delivery_target_ref_usage
 from ...core.redaction import redact_text
 from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
@@ -952,6 +953,15 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("(Use /pma for full flow controls via web app)")
         if "reply" in command_specs:
             lines.append("/reply <message> (legacy)")
+
+    if "pma" in command_specs:
+        lines.append("")
+        lines.append("PMA:")
+        lines.append("/pma on|off|status|targets")
+        lines.append("/pma target add <ref>")
+        lines.append("/pma target rm <ref>")
+        lines.append("/pma target clear")
+        lines.append(pma_delivery_target_ref_usage(include_here=True))
 
     lines.append("")
     lines.append("Other:")

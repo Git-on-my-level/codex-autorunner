@@ -247,11 +247,15 @@ Notes:
 
 ### PMA Commands
 
-| Command | Description |
-|---------|-------------|
-| `/pma on` | Enable PMA mode for this channel |
-| `/pma off` | Disable PMA mode and restore previous binding |
-| `/pma status` | Show current PMA mode status |
+| Command | Description | Canonical refs / notes |
+|---------|-------------|------------------------|
+| `/pma on` | Enable PMA mode for this channel | Auto-adds current channel as PMA target |
+| `/pma off` | Disable PMA mode and restore previous binding | Keeps PMA delivery targets unchanged |
+| `/pma status` | Show current PMA mode status | - |
+| `/pma targets` | List PMA delivery targets | Lists canonical target keys |
+| `/pma target add ref:<target_ref>` | Add a PMA delivery target | Refs: `here`, `web`, `local:<path>`, `telegram:<chat_id>[:<thread_id>]`, `discord:<channel_id>`, `chat:telegram:<chat_id>[:<thread_id>]`, `chat:discord:<channel_id>` |
+| `/pma target rm ref:<target_ref>` | Remove a PMA delivery target | Canonical keys: `web`, `local:<path>`, `chat:telegram:<chat_id>[:<thread_id>]`, `chat:discord:<channel_id>` |
+| `/pma target clear` | Clear PMA delivery targets | Removes all targets |
 
 ### PMA Prerequisites
 

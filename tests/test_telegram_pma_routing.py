@@ -1517,5 +1517,11 @@ def test_help_text_mentions_pma_target_management() -> None:
     specs = build_command_specs(_HelpHandlersStub())
     text = _format_help_text(specs)
     assert "/pma - PMA mode and delivery targets" in text
+    assert "PMA:" in text
+    assert "/pma on|off|status|targets" in text
+    assert "/pma target add <ref>" in text
+    assert "/pma target rm <ref>" in text
+    assert "/pma target clear" in text
+    assert "Refs: here | web | local:<path>" in text
     assert "/flow runs [N]" in text
     assert "/flow restart" not in text
