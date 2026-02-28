@@ -2,6 +2,7 @@ import concurrent.futures
 import json
 import shutil
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -1638,6 +1639,86 @@ def test_set_repo_settings_invalidates_cached_runner(tmp_path: Path):
     assert new_runner is not old_runner
 
 
+def test_set_repo_settings_serializes_manifest_updates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+
+    monkeypatch.setattr(
+        supervisor, "_stop_and_invalidate_runners", lambda *_args, **_kwargs: None
+    )
+
+    first_save_ready = threading.Event()
+    allow_first_save = threading.Event()
+    first_save_done = threading.Event()
+    errors: list[Exception] = []
+
+    def gated_save_manifest(path: Path, manifest, root: Path) -> None:
+        thread_name = threading.current_thread().name
+        if thread_name == "settings-thread":
+            first_save_ready.set()
+            assert allow_first_save.wait(timeout=3.0)
+            save_manifest(path, manifest, root)
+            first_save_done.set()
+            return
+        if thread_name == "destination-thread":
+            assert first_save_done.wait(timeout=3.0)
+            save_manifest(path, manifest, root)
+            return
+        save_manifest(path, manifest, root)
+
+    monkeypatch.setattr("codex_autorunner.core.hub.save_manifest", gated_save_manifest)
+
+    destination_settings = {"kind": "docker", "image": "ghcr.io/acme/base:settings"}
+    destination_final = {"kind": "docker", "image": "ghcr.io/acme/base:final"}
+
+    def run_settings() -> None:
+        try:
+            supervisor.set_repo_settings(
+                "base", destination_settings, ["echo from-settings"]
+            )
+        except Exception as exc:  # pragma: no cover - assertion below inspects errors.
+            errors.append(exc)
+
+    def run_destination() -> None:
+        try:
+            assert first_save_ready.wait(timeout=3.0)
+            supervisor.set_repo_destination("base", destination_final)
+        except Exception as exc:  # pragma: no cover - assertion below inspects errors.
+            errors.append(exc)
+
+    settings_thread = threading.Thread(target=run_settings, name="settings-thread")
+    destination_thread = threading.Thread(
+        target=run_destination, name="destination-thread"
+    )
+    settings_thread.start()
+    destination_thread.start()
+    assert first_save_ready.wait(timeout=3.0)
+    allow_first_save.set()
+    settings_thread.join(timeout=3.0)
+    destination_thread.join(timeout=3.0)
+
+    assert settings_thread.is_alive() is False
+    assert destination_thread.is_alive() is False
+    assert errors == []
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.destination == destination_final
+    assert entry.worktree_setup_commands == ["echo from-settings"]
+
+
 def test_set_repo_settings_save_failure_keeps_runners_and_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1782,6 +1863,73 @@ def test_set_repo_settings_stop_failure_keeps_manifest_and_failed_runner_cached(
     assert snapshot.worktree_setup_commands == ["echo recovered"]
     assert "base" not in supervisor._runners
     assert worktree.id not in supervisor._runners
+
+
+def test_set_repo_destination_rollback_save_failure_restores_runners_with_once_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/settings-rollback-save-failure",
+        start_point="HEAD",
+    )
+
+    base_runner = supervisor._ensure_runner("base")
+    worktree_runner = supervisor._ensure_runner(worktree.id)
+    assert base_runner is not None
+    assert worktree_runner is not None
+    base_runner._last_once = True
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.RepoRunner.running",
+        property(lambda self: self.repo_id == "base"),
+    )
+
+    def flaky_stop(self) -> None:
+        if self.repo_id == worktree.id:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("codex_autorunner.core.hub.RepoRunner.stop", flaky_stop)
+
+    start_calls: list[tuple[str, bool]] = []
+
+    def fake_start(self, once: bool = False) -> None:
+        start_calls.append((self.repo_id, once))
+
+    monkeypatch.setattr("codex_autorunner.core.hub.RepoRunner.start", fake_start)
+
+    save_calls = 0
+
+    def fail_on_rollback(path: Path, manifest, root: Path) -> None:
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls > 1:
+            raise OSError("rollback write failed")
+        save_manifest(path, manifest, root)
+
+    monkeypatch.setattr("codex_autorunner.core.hub.save_manifest", fail_on_rollback)
+
+    with pytest.raises(ValueError, match="Failed to roll back manifest"):
+        supervisor.set_repo_destination(
+            "base",
+            {"kind": "docker", "image": "ghcr.io/acme/base:rollback-failure"},
+        )
+
+    assert supervisor._runners.get("base") is base_runner
+    assert supervisor._runners.get(worktree.id) is worktree_runner
+    assert start_calls == [("base", True)]
 
 
 def test_set_repo_settings_route_validation_failure_is_atomic(tmp_path: Path):

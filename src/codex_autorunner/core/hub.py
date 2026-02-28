@@ -297,6 +297,7 @@ class RepoRunner:
         agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         self.repo_id = repo_id
+        self._last_once = False
         backend_orchestrator = (
             backend_orchestrator_builder(repo_root, repo_config)
             if backend_orchestrator_builder is not None
@@ -317,8 +318,13 @@ class RepoRunner:
     def running(self) -> bool:
         return self._controller.running
 
+    @property
+    def last_once(self) -> bool:
+        return self._last_once
+
     def start(self, once: bool = False) -> None:
         self._controller.start(once=once)
+        self._last_once = once
 
     def stop(self) -> None:
         self._controller.stop()
@@ -328,6 +334,7 @@ class RepoRunner:
 
     def resume(self, once: bool = False) -> None:
         self._controller.resume(once=once)
+        self._last_once = once
 
 
 class RunnerInvalidationError(ValueError):
@@ -335,7 +342,7 @@ class RunnerInvalidationError(ValueError):
         self,
         message: str,
         *,
-        stopped_runners: Optional[Dict[str, Tuple[RepoRunner, bool]]] = None,
+        stopped_runners: Optional[Dict[str, Tuple[RepoRunner, bool, bool]]] = None,
     ) -> None:
         super().__init__(message)
         self.stopped_runners = stopped_runners or {}
@@ -369,6 +376,7 @@ class HubSupervisor:
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
         self._list_lock = threading.Lock()
+        self._base_repo_settings_lock = threading.Lock()
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
         self._lifecycle_task_lock = threading.Lock()
         self._lifecycle_stop_event = threading.Event()
@@ -919,65 +927,86 @@ class HubSupervisor:
         reason: str,
         kind_error: str,
     ) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(repo_id)
-        if not entry:
-            raise ValueError(f"Repo not found: {repo_id}")
-        if entry.kind != "base":
-            raise ValueError(kind_error)
-        normalized_commands: Optional[List[str]] = None
-        if commands is not None:
-            if not isinstance(commands, list):
-                raise ValueError("commands must be a list")
-            normalized_commands = [
-                str(cmd).strip() for cmd in commands if str(cmd).strip()
-            ]
-        parsed = parse_destination_config(
-            destination, context=f"repo '{repo_id}' destination"
-        )
-        if not parsed.valid:
-            raise ValueError("; ".join(parsed.errors))
-        affected_repo_ids = self._destination_owner_and_dependent_repo_ids(
-            manifest, base_repo_id=entry.id
-        )
-        previous_destination = entry.destination.copy() if entry.destination else None
-        previous_commands = (
-            list(entry.worktree_setup_commands)
-            if entry.worktree_setup_commands is not None
-            else None
-        )
-
-        entry.destination = parsed.destination.to_dict()
-        if commands is not None:
-            entry.worktree_setup_commands = normalized_commands or None
-        try:
-            save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        except Exception:
-            entry.destination = previous_destination
+        with self._base_repo_settings_lock:
+            self._invalidate_list_cache()
+            manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+            entry = manifest.get(repo_id)
+            if not entry:
+                raise ValueError(f"Repo not found: {repo_id}")
+            if entry.kind != "base":
+                raise ValueError(kind_error)
+            normalized_commands: Optional[List[str]] = None
             if commands is not None:
-                entry.worktree_setup_commands = previous_commands
-            raise
+                if not isinstance(commands, list):
+                    raise ValueError("commands must be a list")
+                normalized_commands = [
+                    str(cmd).strip() for cmd in commands if str(cmd).strip()
+                ]
+            parsed = parse_destination_config(
+                destination, context=f"repo '{repo_id}' destination"
+            )
+            if not parsed.valid:
+                raise ValueError("; ".join(parsed.errors))
+            affected_repo_ids = self._destination_owner_and_dependent_repo_ids(
+                manifest, base_repo_id=entry.id
+            )
+            previous_destination = (
+                entry.destination.copy() if entry.destination else None
+            )
+            previous_commands = (
+                list(entry.worktree_setup_commands)
+                if entry.worktree_setup_commands is not None
+                else None
+            )
 
-        try:
-            self._stop_and_invalidate_runners(affected_repo_ids, reason=reason)
-        except RunnerInvalidationError as stop_exc:
-            entry.destination = previous_destination
+            entry.destination = parsed.destination.to_dict()
             if commands is not None:
-                entry.worktree_setup_commands = previous_commands
+                entry.worktree_setup_commands = normalized_commands or None
             try:
                 save_manifest(
                     self.hub_config.manifest_path, manifest, self.hub_config.root
                 )
-            except Exception as rollback_exc:
-                raise ValueError(
-                    f"Failed to roll back manifest after {reason}: {rollback_exc}"
-                ) from stop_exc
-            self._restore_stopped_runners_after_failure(
-                stop_exc.stopped_runners, reason=reason
-            )
-            raise
-        return self._snapshot_for_repo(repo_id)
+            except Exception:
+                entry.destination = previous_destination
+                if commands is not None:
+                    entry.worktree_setup_commands = previous_commands
+                raise
+
+            try:
+                self._stop_and_invalidate_runners(affected_repo_ids, reason=reason)
+            except RunnerInvalidationError as stop_exc:
+                entry.destination = previous_destination
+                if commands is not None:
+                    entry.worktree_setup_commands = previous_commands
+                rollback_exc: Optional[Exception] = None
+                try:
+                    save_manifest(
+                        self.hub_config.manifest_path, manifest, self.hub_config.root
+                    )
+                except Exception as exc:
+                    rollback_exc = exc
+
+                restore_exc: Optional[Exception] = None
+                try:
+                    self._restore_stopped_runners_after_failure(
+                        stop_exc.stopped_runners, reason=reason
+                    )
+                except Exception as exc:
+                    restore_exc = exc
+
+                if rollback_exc is not None and restore_exc is not None:
+                    raise ValueError(
+                        f"Failed to roll back manifest after {reason}: {rollback_exc}; "
+                        f"additionally failed to restore runner state: {restore_exc}"
+                    ) from stop_exc
+                if rollback_exc is not None:
+                    raise ValueError(
+                        f"Failed to roll back manifest after {reason}: {rollback_exc}"
+                    ) from stop_exc
+                if restore_exc is not None:
+                    raise restore_exc from stop_exc
+                raise
+            return self._snapshot_for_repo(repo_id)
 
     def _destination_owner_and_dependent_repo_ids(
         self, manifest: Manifest, *, base_repo_id: str
@@ -994,7 +1023,7 @@ class HubSupervisor:
 
     def _stop_and_invalidate_runners(self, repo_ids: List[str], *, reason: str) -> None:
         self._ensure_runner_handles_for_repo_ids(repo_ids)
-        stopped_runners: Dict[str, Tuple[RepoRunner, bool]] = {}
+        stopped_runners: Dict[str, Tuple[RepoRunner, bool, bool]] = {}
         failures: List[str] = []
         with self._runners_lock:
             for repo_id in repo_ids:
@@ -1002,13 +1031,14 @@ class HubSupervisor:
                 if not runner:
                     continue
                 was_running = runner.running
+                was_once = runner.last_once
                 try:
                     runner.stop()
                 except Exception as exc:
                     failures.append(f"{repo_id}: {exc}")
                     continue
                 self._runners.pop(repo_id, None)
-                stopped_runners[repo_id] = (runner, was_running)
+                stopped_runners[repo_id] = (runner, was_running, was_once)
         if failures:
             detail = "; ".join(failures)
             raise RunnerInvalidationError(
@@ -1017,18 +1047,18 @@ class HubSupervisor:
             )
 
     def _restore_stopped_runners_after_failure(
-        self, stopped_runners: Dict[str, Tuple[RepoRunner, bool]], *, reason: str
+        self, stopped_runners: Dict[str, Tuple[RepoRunner, bool, bool]], *, reason: str
     ) -> None:
         if not stopped_runners:
             return
         restart_failures: List[str] = []
         with self._runners_lock:
-            for repo_id, (runner, was_running) in stopped_runners.items():
+            for repo_id, (runner, was_running, was_once) in stopped_runners.items():
                 self._runners[repo_id] = runner
                 if not was_running:
                     continue
                 try:
-                    runner.start(once=False)
+                    runner.start(once=was_once)
                 except Exception as exc:
                     restart_failures.append(f"{repo_id}: {exc}")
         if restart_failures:
