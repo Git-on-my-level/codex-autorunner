@@ -47,6 +47,7 @@ from ...core.pma_delivery_targets import (
     pma_delivery_target_ref_usage,
     target_key,
 )
+from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
@@ -2209,14 +2210,19 @@ class DiscordBotService:
             pass
         elif subcommand == "target":
             pass
+        elif subcommand == "thread":
+            pass
         else:
-            hint = "Unknown PMA subcommand. Use on, off, or status."
+            hint = (
+                "Unknown PMA subcommand. Use on, off, status, targets, target, or "
+                "thread."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 (
                     f"{hint}\n"
-                    "Additional PMA commands: targets, target add|rm|clear.\n"
+                    "Thread management: thread list|info|archive|resume.\n"
                     f"{self._pma_usage_text()}"
                 ),
             )
@@ -2962,6 +2968,7 @@ class DiscordBotService:
             "/car files clear [target] - Clear inbox/outbox",
             "",
             "**PMA Commands:**",
+            "/pma (no subcommand) - Show PMA status",
             "/pma on - Enable PMA mode",
             "/pma off - Disable PMA mode",
             "/pma status - Show PMA status",
@@ -2969,6 +2976,10 @@ class DiscordBotService:
             "/pma target add <ref> - Add a PMA delivery target",
             "/pma target rm <ref> - Remove a PMA delivery target",
             "/pma target clear - Clear PMA delivery targets",
+            "/pma thread list [agent] [status] [repo] [limit] - List managed PMA threads",
+            "/pma thread info <id> - Show managed PMA thread details",
+            "/pma thread archive <id> - Archive a managed PMA thread",
+            "/pma thread resume <id> <backend_id> - Resume and activate a managed PMA thread",
             "",
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",
@@ -5083,14 +5094,25 @@ class DiscordBotService:
                 action=action,
                 options=command_options,
             )
+        elif subcommand == "thread":
+            action = command_path[2] if len(command_path) > 2 else ""
+            await self._handle_pma_thread_command(
+                interaction_id,
+                interaction_token,
+                action=action,
+                options=command_options,
+            )
         else:
-            hint = "Unknown PMA subcommand. Use on, off, or status."
+            hint = (
+                "Unknown PMA subcommand. Use on, off, status, targets, target, or "
+                "thread."
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 (
                     f"{hint}\n"
-                    "Additional PMA commands: targets, target add|rm|clear.\n"
+                    "Thread management: thread list|info|archive|resume.\n"
                     f"{self._pma_usage_text()}"
                 ),
             )
@@ -5346,14 +5368,257 @@ class DiscordBotService:
             ),
         )
 
+    async def _handle_pma_thread_command(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        action: str,
+        options: dict[str, Any],
+    ) -> None:
+        action_norm = action.strip().lower()
+        if action_norm == "list":
+            await self._handle_pma_thread_list(
+                interaction_id,
+                interaction_token,
+                options=options,
+            )
+            return
+        if action_norm == "info":
+            await self._handle_pma_thread_info(
+                interaction_id,
+                interaction_token,
+                options=options,
+            )
+            return
+        if action_norm == "archive":
+            await self._handle_pma_thread_archive(
+                interaction_id,
+                interaction_token,
+                options=options,
+            )
+            return
+        if action_norm == "resume":
+            await self._handle_pma_thread_resume(
+                interaction_id,
+                interaction_token,
+                options=options,
+            )
+            return
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            self._pma_usage_text(),
+        )
+
+    async def _handle_pma_thread_list(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        limit_raw = options.get("limit")
+        limit = limit_raw if isinstance(limit_raw, int) else 20
+        limit = max(1, min(limit, 50))
+
+        agent_raw = options.get("agent")
+        status_raw = options.get("status")
+        repo_raw = options.get("repo")
+        agent = (
+            agent_raw.strip().lower()
+            if isinstance(agent_raw, str) and agent_raw.strip()
+            else None
+        )
+        status = (
+            status_raw.strip().lower()
+            if isinstance(status_raw, str) and status_raw.strip()
+            else None
+        )
+        repo_id = (
+            repo_raw.strip() if isinstance(repo_raw, str) and repo_raw.strip() else None
+        )
+
+        if agent not in {None, "codex", "opencode"}:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Invalid thread agent filter. Use codex or opencode.",
+            )
+            return
+        if status not in {None, "active", "archived"}:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Invalid thread status filter. Use active or archived.",
+            )
+            return
+
+        threads = PmaThreadStore(self._config.root).list_threads(
+            agent=agent,
+            status=status,
+            repo_id=repo_id,
+            limit=limit,
+        )
+        if not threads:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Managed PMA threads: (none)",
+            )
+            return
+        lines = ["Managed PMA threads:"]
+        for thread in threads:
+            managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+            if not managed_thread_id:
+                continue
+            agent_value = str(thread.get("agent") or "-")
+            status_value = str(thread.get("status") or "-")
+            repo_value = str(thread.get("repo_id") or "-")
+            line = (
+                f"- {managed_thread_id} "
+                f"(agent={agent_value}, status={status_value}, repo={repo_value})"
+            )
+            lines.append(line)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "\n".join(lines),
+        )
+
+    async def _handle_pma_thread_info(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        raw_thread_id = options.get("id")
+        managed_thread_id = (
+            raw_thread_id.strip() if isinstance(raw_thread_id, str) else ""
+        )
+        if not managed_thread_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                self._pma_usage_text(),
+            )
+            return
+        thread = PmaThreadStore(self._config.root).get_thread(managed_thread_id)
+        if not thread:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Managed thread not found: {managed_thread_id}",
+            )
+            return
+        lines = [
+            f"Managed thread: {managed_thread_id}",
+            f"Agent: {thread.get('agent') or '-'}",
+            f"Status: {thread.get('status') or '-'}",
+            f"Repo: {thread.get('repo_id') or '-'}",
+            f"Workspace: {thread.get('workspace_root') or '-'}",
+            f"Backend thread id: {thread.get('backend_thread_id') or '-'}",
+            f"Last turn id: {thread.get('last_turn_id') or '-'}",
+            f"Updated at: {thread.get('updated_at') or '-'}",
+        ]
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "\n".join(lines),
+        )
+
+    async def _handle_pma_thread_archive(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        raw_thread_id = options.get("id")
+        managed_thread_id = (
+            raw_thread_id.strip() if isinstance(raw_thread_id, str) else ""
+        )
+        if not managed_thread_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                self._pma_usage_text(),
+            )
+            return
+        store = PmaThreadStore(self._config.root)
+        thread = store.get_thread(managed_thread_id)
+        if not thread:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Managed thread not found: {managed_thread_id}",
+            )
+            return
+        if str(thread.get("status") or "").strip().lower() == "archived":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Managed thread already archived: {managed_thread_id}",
+            )
+            return
+        store.archive_thread(managed_thread_id)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Archived managed thread: {managed_thread_id}",
+        )
+
+    async def _handle_pma_thread_resume(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        raw_thread_id = options.get("id")
+        raw_backend_id = options.get("backend_id")
+        managed_thread_id = (
+            raw_thread_id.strip() if isinstance(raw_thread_id, str) else ""
+        )
+        backend_id = raw_backend_id.strip() if isinstance(raw_backend_id, str) else ""
+        if not managed_thread_id or not backend_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                self._pma_usage_text(),
+            )
+            return
+        store = PmaThreadStore(self._config.root)
+        thread = store.get_thread(managed_thread_id)
+        if not thread:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Managed thread not found: {managed_thread_id}",
+            )
+            return
+        store.set_thread_backend_id(managed_thread_id, backend_id)
+        store.activate_thread(managed_thread_id)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Resumed managed thread: {managed_thread_id} (backend={backend_id})",
+        )
+
     def _pma_usage_text(self) -> str:
         return "\n".join(
             [
                 "Usage:",
+                "/pma (no subcommand) => status",
                 "/pma on|off|status|targets",
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
+                "/pma thread list [agent] [status] [repo] [limit]",
+                "/pma thread info <id>",
+                "/pma thread archive <id>",
+                "/pma thread resume <id> <backend_id>",
                 pma_delivery_target_ref_usage(include_here=True),
             ]
         )

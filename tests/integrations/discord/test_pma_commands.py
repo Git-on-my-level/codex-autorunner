@@ -11,6 +11,7 @@ from codex_autorunner.core.pma_delivery_targets import (
     PmaDeliveryTargetsStore,
     target_key,
 )
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -122,6 +123,20 @@ def _pma_interaction(*, subcommand: str, user_id: str = "user-1") -> dict[str, A
     }
 
 
+def _pma_root_interaction(*, user_id: str = "user-1") -> dict[str, Any]:
+    return {
+        "id": "inter-root",
+        "token": "token-root",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": user_id}},
+        "data": {
+            "name": "pma",
+            "options": [],
+        },
+    }
+
+
 def _pma_target_interaction(
     *, action: str, ref: str | None = None, user_id: str = "user-1"
 ) -> dict[str, Any]:
@@ -141,6 +156,50 @@ def _pma_target_interaction(
         "data": {
             "name": "pma",
             "options": [{"type": 2, "name": "target", "options": [subcommand]}],
+        },
+    }
+
+
+def _pma_thread_interaction(
+    *,
+    action: str,
+    managed_thread_id: str | None = None,
+    backend_id: str | None = None,
+    agent: str | None = None,
+    status: str | None = None,
+    repo: str | None = None,
+    limit: int | None = None,
+    user_id: str = "user-1",
+) -> dict[str, Any]:
+    subcommand_options: list[dict[str, Any]] = []
+    if managed_thread_id is not None:
+        subcommand_options.append({"type": 3, "name": "id", "value": managed_thread_id})
+    if backend_id is not None:
+        subcommand_options.append(
+            {"type": 3, "name": "backend_id", "value": backend_id}
+        )
+    if agent is not None:
+        subcommand_options.append({"type": 3, "name": "agent", "value": agent})
+    if status is not None:
+        subcommand_options.append({"type": 3, "name": "status", "value": status})
+    if repo is not None:
+        subcommand_options.append({"type": 3, "name": "repo", "value": repo})
+    if limit is not None:
+        subcommand_options.append({"type": 4, "name": "limit", "value": limit})
+    subcommand: dict[str, Any] = {
+        "type": 1,
+        "name": action,
+        "options": subcommand_options,
+    }
+    return {
+        "id": "inter-thread",
+        "token": "token-thread",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": user_id}},
+        "data": {
+            "name": "pma",
+            "options": [{"type": 2, "name": "thread", "options": [subcommand]}],
         },
     }
 
@@ -387,6 +446,46 @@ async def test_pma_status_unbound_channel_reports_disabled(tmp_path: Path) -> No
 
 
 @pytest.mark.anyio
+async def test_pma_no_subcommand_defaults_to_status(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(tmp_path),
+        repo_id="repo-1",
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=None,
+        pma_prev_repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_root_interaction()])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "PMA mode: enabled" in content
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding.get("pma_enabled") is True
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pma_off_unbound_channel_is_idempotent(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -451,6 +550,77 @@ async def test_pma_disabled_in_config_returns_actionable_message(
 
 
 @pytest.mark.anyio
+async def test_pma_thread_list_info_archive_resume(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    thread_store = PmaThreadStore(tmp_path)
+    thread = thread_store.create_thread(
+        "codex",
+        workspace,
+        repo_id="repo-1",
+        name="Integration test thread",
+    )
+    managed_thread_id = str(thread["managed_thread_id"])
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _pma_thread_interaction(action="list"),
+            _pma_thread_interaction(action="info", managed_thread_id=managed_thread_id),
+            _pma_thread_interaction(
+                action="archive", managed_thread_id=managed_thread_id
+            ),
+            _pma_thread_interaction(
+                action="resume",
+                managed_thread_id=managed_thread_id,
+                backend_id="backend-42",
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 4
+        assert (
+            "Managed PMA threads:"
+            in rest.interaction_responses[0]["payload"]["data"]["content"]
+        )
+        assert (
+            managed_thread_id
+            in rest.interaction_responses[0]["payload"]["data"]["content"]
+        )
+        assert (
+            f"Managed thread: {managed_thread_id}"
+            in rest.interaction_responses[1]["payload"]["data"]["content"]
+        )
+        assert (
+            f"Archived managed thread: {managed_thread_id}"
+            in rest.interaction_responses[2]["payload"]["data"]["content"]
+        )
+        assert (
+            f"Resumed managed thread: {managed_thread_id} (backend=backend-42)"
+            in rest.interaction_responses[3]["payload"]["data"]["content"]
+        )
+
+        updated = thread_store.get_thread(managed_thread_id)
+        assert updated is not None
+        assert updated.get("status") == "active"
+        assert updated.get("backend_thread_id") == "backend-42"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pma_command_registration_includes_pma_commands() -> None:
     from codex_autorunner.integrations.discord.commands import (
         build_application_commands,
@@ -467,12 +637,19 @@ async def test_pma_command_registration_includes_pma_commands() -> None:
     assert "status" in subcommand_names
     assert "targets" in subcommand_names
     assert "target" in subcommand_names
+    assert "thread" in subcommand_names
 
     target_group = next(
         opt for opt in pma_cmd.get("options", []) if opt.get("name") == "target"
     )
     target_subcommands = {opt["name"] for opt in target_group.get("options", [])}
     assert target_subcommands == {"add", "rm", "clear"}
+
+    thread_group = next(
+        opt for opt in pma_cmd.get("options", []) if opt.get("name") == "thread"
+    )
+    thread_subcommands = {opt["name"] for opt in thread_group.get("options", [])}
+    assert thread_subcommands == {"list", "info", "archive", "resume"}
 
 
 @pytest.mark.anyio
@@ -559,6 +736,7 @@ async def test_pma_unknown_subcommand_returns_updated_usage(tmp_path: Path) -> N
         assert "/pma on|off|status|targets" in content
         assert "/pma target add <ref>" in content
         assert "/pma target rm <ref>" in content
+        assert "/pma thread list" in content
     finally:
         await store.close()
 

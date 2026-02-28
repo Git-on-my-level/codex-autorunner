@@ -16,6 +16,7 @@ from codex_autorunner.core.pma_delivery_targets import (
     PmaDeliveryTargetsStore,
     target_key,
 )
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
 )
@@ -1503,6 +1504,61 @@ async def test_pma_status_does_not_mutate_targets(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.anyio
+async def test_pma_no_arg_defaults_to_status(tmp_path: Path) -> None:
+    record = TelegramTopicRecord(pma_enabled=True)
+    handler = _PmaTargetsHandler(hub_root=tmp_path / "hub", record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "", _RuntimeStub())
+
+    assert handler.sent[-1] == "PMA mode: enabled"
+    assert record.pma_enabled is True
+
+
+@pytest.mark.anyio
+async def test_pma_thread_list_info_archive_resume(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        workspace,
+        repo_id="repo-1",
+        name="telegram-test",
+    )
+    managed_thread_id = str(thread["managed_thread_id"])
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=TelegramTopicRecord())
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "threads", _RuntimeStub())
+    assert "Managed PMA threads:" in handler.sent[-1]
+    assert managed_thread_id in handler.sent[-1]
+
+    await handler._handle_pma(
+        message, f"thread info {managed_thread_id}", _RuntimeStub()
+    )
+    assert f"Managed thread: {managed_thread_id}" in handler.sent[-1]
+
+    await handler._handle_pma(
+        message, f"thread archive {managed_thread_id}", _RuntimeStub()
+    )
+    assert f"Archived managed thread: {managed_thread_id}" in handler.sent[-1]
+
+    await handler._handle_pma(
+        message, f"thread resume {managed_thread_id} backend-42", _RuntimeStub()
+    )
+    assert (
+        f"Resumed managed thread: {managed_thread_id} (backend=backend-42)"
+        in handler.sent[-1]
+    )
+    updated = thread_store.get_thread(managed_thread_id)
+    assert updated is not None
+    assert updated.get("status") == "active"
+    assert updated.get("backend_thread_id") == "backend-42"
+
+
 class _HelpHandlersStub:
     async def _noop(self, *args: object, **kwargs: object) -> None:
         return None
@@ -1516,12 +1572,18 @@ class _HelpHandlersStub:
 def test_help_text_mentions_pma_target_management() -> None:
     specs = build_command_specs(_HelpHandlersStub())
     text = _format_help_text(specs)
-    assert "/pma - PMA mode and delivery targets" in text
+    assert "/pma - PMA mode, delivery targets, and managed threads" in text
     assert "PMA:" in text
+    assert "/pma (or /pma status)" in text
     assert "/pma on|off|status|targets" in text
     assert "/pma target add <ref>" in text
     assert "/pma target rm <ref>" in text
     assert "/pma target clear" in text
+    assert "/pma threads" in text
+    assert "/pma thread list" in text
+    assert "/pma thread info <id>" in text
+    assert "/pma thread archive <id>" in text
+    assert "/pma thread resume <id> <backend_id>" in text
     assert "Refs: here | web | local:<path>" in text
     assert "/flow runs [N]" in text
     assert "/flow restart" not in text

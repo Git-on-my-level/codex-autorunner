@@ -20,6 +20,7 @@ from ....core.pma_delivery_targets import (
     pma_delivery_target_ref_usage,
     target_key,
 )
+from ....core.pma_thread_store import PmaThreadStore
 from ....core.state import now_iso
 from ....core.update import (
     _available_update_target_options,
@@ -1050,6 +1051,12 @@ class TelegramCommandHandlers(
         if action == "target":
             await self._handle_pma_target_mutation(message, argv[1:])
             return
+        if action == "threads":
+            await self._handle_pma_thread_command(message, ["list", *argv[1:]])
+            return
+        if action == "thread":
+            await self._handle_pma_thread_command(message, argv[1:])
+            return
 
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
@@ -1058,7 +1065,7 @@ class TelegramCommandHandlers(
             enabled = True
         elif action in ("off", "disable", "false"):
             enabled = False
-        elif action in ("status", "show"):
+        elif action in ("status", "show", ""):
             await self._send_message(
                 message.chat_id,
                 f"PMA mode: {'enabled' if current else 'disabled'}",
@@ -1074,8 +1081,6 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
-        else:
-            enabled = not current
 
         if record is None:
             record = await self._router.ensure_topic(message.chat_id, message.thread_id)
@@ -1260,14 +1265,195 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
         )
 
+    async def _handle_pma_thread_command(
+        self, message: TelegramMessage, argv: list[str]
+    ) -> None:
+        if not argv:
+            await self._send_message(
+                message.chat_id,
+                self._pma_usage(),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        action = argv[0].lower()
+        if action == "list":
+            if len(argv) != 1:
+                await self._send_message(
+                    message.chat_id,
+                    self._pma_usage(),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._handle_pma_thread_list(message)
+            return
+        if action == "info":
+            if len(argv) != 2:
+                await self._send_message(
+                    message.chat_id,
+                    self._pma_usage(),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._handle_pma_thread_info(message, argv[1])
+            return
+        if action == "archive":
+            if len(argv) != 2:
+                await self._send_message(
+                    message.chat_id,
+                    self._pma_usage(),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._handle_pma_thread_archive(message, argv[1])
+            return
+        if action == "resume":
+            if len(argv) != 3:
+                await self._send_message(
+                    message.chat_id,
+                    self._pma_usage(),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._handle_pma_thread_resume(message, argv[1], argv[2])
+            return
+        await self._send_message(
+            message.chat_id,
+            self._pma_usage(),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_pma_thread_list(self, message: TelegramMessage) -> None:
+        threads = PmaThreadStore(Path(self._hub_root)).list_threads(limit=20)
+        if not threads:
+            text = "Managed PMA threads: (none)"
+        else:
+            lines = ["Managed PMA threads:"]
+            for thread in threads:
+                managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+                if not managed_thread_id:
+                    continue
+                agent_value = str(thread.get("agent") or "-")
+                status_value = str(thread.get("status") or "-")
+                repo_value = str(thread.get("repo_id") or "-")
+                line = (
+                    f"- {managed_thread_id} "
+                    f"(agent={agent_value}, status={status_value}, repo={repo_value})"
+                )
+                lines.append(line)
+            text = "\n".join(lines)
+        await self._send_message(
+            message.chat_id,
+            text,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_pma_thread_info(
+        self, message: TelegramMessage, managed_thread_id: str
+    ) -> None:
+        thread = PmaThreadStore(Path(self._hub_root)).get_thread(managed_thread_id)
+        if not thread:
+            await self._send_message(
+                message.chat_id,
+                f"Managed thread not found: {managed_thread_id}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        lines = [
+            f"Managed thread: {managed_thread_id}",
+            f"Agent: {thread.get('agent') or '-'}",
+            f"Status: {thread.get('status') or '-'}",
+            f"Repo: {thread.get('repo_id') or '-'}",
+            f"Workspace: {thread.get('workspace_root') or '-'}",
+            f"Backend thread id: {thread.get('backend_thread_id') or '-'}",
+            f"Last turn id: {thread.get('last_turn_id') or '-'}",
+            f"Updated at: {thread.get('updated_at') or '-'}",
+        ]
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_pma_thread_archive(
+        self, message: TelegramMessage, managed_thread_id: str
+    ) -> None:
+        store = PmaThreadStore(Path(self._hub_root))
+        thread = store.get_thread(managed_thread_id)
+        if not thread:
+            await self._send_message(
+                message.chat_id,
+                f"Managed thread not found: {managed_thread_id}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if str(thread.get("status") or "").strip().lower() == "archived":
+            await self._send_message(
+                message.chat_id,
+                f"Managed thread already archived: {managed_thread_id}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        store.archive_thread(managed_thread_id)
+        await self._send_message(
+            message.chat_id,
+            f"Archived managed thread: {managed_thread_id}",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_pma_thread_resume(
+        self,
+        message: TelegramMessage,
+        managed_thread_id: str,
+        backend_thread_id: str,
+    ) -> None:
+        store = PmaThreadStore(Path(self._hub_root))
+        thread = store.get_thread(managed_thread_id)
+        if not thread:
+            await self._send_message(
+                message.chat_id,
+                f"Managed thread not found: {managed_thread_id}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        store.set_thread_backend_id(managed_thread_id, backend_thread_id)
+        store.activate_thread(managed_thread_id)
+        await self._send_message(
+            message.chat_id,
+            (
+                "Resumed managed thread: "
+                f"{managed_thread_id} (backend={backend_thread_id})"
+            ),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     def _pma_usage(self) -> str:
         return "\n".join(
             [
                 "Usage:",
+                "/pma (or /pma status)",
                 "/pma on|off|status|targets",
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
+                "/pma threads",
+                "/pma thread list",
+                "/pma thread info <id>",
+                "/pma thread archive <id>",
+                "/pma thread resume <id> <backend_id>",
                 pma_delivery_target_ref_usage(include_here=True),
             ]
         )

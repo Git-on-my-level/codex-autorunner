@@ -434,7 +434,7 @@ def _check_discord_known_commands_not_in_generic_fallback(
         ),
         "pma_specific_fallback_present": _module_has_string_literal(
             discord_service_ast,
-            exact="Unknown PMA subcommand. Use on, off, or status.",
+            contains="Unknown PMA subcommand.",
         ),
     }
 

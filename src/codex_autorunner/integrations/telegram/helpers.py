@@ -957,10 +957,16 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
     if "pma" in command_specs:
         lines.append("")
         lines.append("PMA:")
+        lines.append("/pma (or /pma status)")
         lines.append("/pma on|off|status|targets")
         lines.append("/pma target add <ref>")
         lines.append("/pma target rm <ref>")
         lines.append("/pma target clear")
+        lines.append("/pma threads")
+        lines.append("/pma thread list")
+        lines.append("/pma thread info <id>")
+        lines.append("/pma thread archive <id>")
+        lines.append("/pma thread resume <id> <backend_id>")
         lines.append(pma_delivery_target_ref_usage(include_here=True))
 
     lines.append("")

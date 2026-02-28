@@ -81,10 +81,18 @@ def test_build_application_commands_structure_is_stable() -> None:
         "status",
         "targets",
         "target",
+        "thread",
     ]
 
     pma_target = _find_option(pma_options, "target")
     assert [opt["name"] for opt in pma_target["options"]] == ["add", "rm", "clear"]
+    pma_thread = _find_option(pma_options, "thread")
+    assert [opt["name"] for opt in pma_thread["options"]] == [
+        "list",
+        "info",
+        "archive",
+        "resume",
+    ]
 
 
 def test_required_options_are_marked_required() -> None:
@@ -125,3 +133,18 @@ def test_required_options_are_marked_required() -> None:
     rm_ref = _find_option(_find_option(target_group["options"], "rm")["options"], "ref")
     assert add_ref["required"] is True
     assert rm_ref["required"] is True
+
+    thread_group = _find_option(pma_options, "thread")
+    info_id = _find_option(
+        _find_option(thread_group["options"], "info")["options"], "id"
+    )
+    archive_id = _find_option(
+        _find_option(thread_group["options"], "archive")["options"], "id"
+    )
+    resume_options = _find_option(thread_group["options"], "resume")["options"]
+    resume_id = _find_option(resume_options, "id")
+    resume_backend_id = _find_option(resume_options, "backend_id")
+    assert info_id["required"] is True
+    assert archive_id["required"] is True
+    assert resume_id["required"] is True
+    assert resume_backend_id["required"] is True

@@ -484,6 +484,89 @@ def build_application_commands() -> list[dict[str, Any]]:
                         },
                     ],
                 },
+                {
+                    "type": SUB_COMMAND_GROUP,
+                    "name": "thread",
+                    "description": "Manage PMA managed threads",
+                    "options": [
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "list",
+                            "description": "List managed PMA threads",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "agent",
+                                    "description": "Optional filter: codex or opencode",
+                                    "required": False,
+                                },
+                                {
+                                    "type": STRING,
+                                    "name": "status",
+                                    "description": "Optional filter: active or archived",
+                                    "required": False,
+                                },
+                                {
+                                    "type": STRING,
+                                    "name": "repo",
+                                    "description": "Optional filter: repo id",
+                                    "required": False,
+                                },
+                                {
+                                    "type": INTEGER,
+                                    "name": "limit",
+                                    "description": "Optional max threads to list (1-50)",
+                                    "required": False,
+                                },
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "info",
+                            "description": "Show managed PMA thread details",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "id",
+                                    "description": "Managed PMA thread id",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "archive",
+                            "description": "Archive a managed PMA thread",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "id",
+                                    "description": "Managed PMA thread id",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "resume",
+                            "description": "Resume a managed PMA thread with backend id",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "id",
+                                    "description": "Managed PMA thread id",
+                                    "required": True,
+                                },
+                                {
+                                    "type": STRING,
+                                    "name": "backend_id",
+                                    "description": "Backend thread/session id",
+                                    "required": True,
+                                },
+                            ],
+                        },
+                    ],
+                },
             ],
         },
     ]
