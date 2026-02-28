@@ -1579,8 +1579,9 @@ def test_set_repo_destination_stop_failure_keeps_failed_runner_cached(
             {"kind": "docker", "image": "ghcr.io/acme/base:stop-failure"},
         )
 
-    assert "base" not in supervisor._runners
+    assert supervisor._runners.get("base") is base_runner
     assert supervisor._runners.get(worktree.id) is worktree_runner
+    assert supervisor._ensure_runner("base") is base_runner
     assert supervisor._ensure_runner(worktree.id) is worktree_runner
     manifest = load_manifest(manifest_path, hub_root)
     entry = manifest.get("base")
@@ -1600,6 +1601,7 @@ def test_set_repo_destination_stop_failure_keeps_failed_runner_cached(
         "kind": "docker",
         "image": "ghcr.io/acme/base:recovered",
     }
+    assert "base" not in supervisor._runners
     assert worktree.id not in supervisor._runners
 
 
@@ -1755,8 +1757,9 @@ def test_set_repo_settings_stop_failure_keeps_manifest_and_failed_runner_cached(
             ["echo new"],
         )
 
-    assert "base" not in supervisor._runners
+    assert supervisor._runners.get("base") is base_runner
     assert supervisor._runners.get(worktree.id) is worktree_runner
+    assert supervisor._ensure_runner("base") is base_runner
     manifest = load_manifest(manifest_path, hub_root)
     entry = manifest.get("base")
     assert entry is not None
@@ -1777,6 +1780,7 @@ def test_set_repo_settings_stop_failure_keeps_manifest_and_failed_runner_cached(
         "image": "ghcr.io/acme/base:settings-recovered",
     }
     assert snapshot.worktree_setup_commands == ["echo recovered"]
+    assert "base" not in supervisor._runners
     assert worktree.id not in supervisor._runners
 
 

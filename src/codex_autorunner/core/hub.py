@@ -330,6 +330,17 @@ class RepoRunner:
         self._controller.resume(once=once)
 
 
+class RunnerInvalidationError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        stopped_runners: Optional[Dict[str, Tuple[RepoRunner, bool]]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.stopped_runners = stopped_runners or {}
+
+
 class HubSupervisor:
     def __init__(
         self,
@@ -346,6 +357,7 @@ class HubSupervisor:
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
         self._runners: Dict[str, RepoRunner] = {}
+        self._runners_lock = threading.RLock()
         self._spawn_fn = spawn_fn
         self._backend_factory_builder = backend_factory_builder
         self._app_server_supervisor_factory_builder = (
@@ -476,27 +488,31 @@ class HubSupervisor:
                 )
 
     def run_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id)
-        assert runner is not None
-        runner.start(once=once)
+        with self._runners_lock:
+            runner = self._ensure_runner(repo_id)
+            assert runner is not None
+            runner.start(once=once)
         return self._snapshot_for_repo(repo_id)
 
     def stop_repo(self, repo_id: str) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
-        if runner:
-            runner.stop()
+        with self._runners_lock:
+            runner = self._ensure_runner(repo_id, allow_uninitialized=True)
+            if runner:
+                runner.stop()
         return self._snapshot_for_repo(repo_id)
 
     def resume_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id)
-        assert runner is not None
-        runner.resume(once=once)
+        with self._runners_lock:
+            runner = self._ensure_runner(repo_id)
+            assert runner is not None
+            runner.resume(once=once)
         return self._snapshot_for_repo(repo_id)
 
     def kill_repo(self, repo_id: str) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
-        if runner:
-            runner.kill()
+        with self._runners_lock:
+            runner = self._ensure_runner(repo_id, allow_uninitialized=True)
+            if runner:
+                runner.kill()
         return self._snapshot_for_repo(repo_id)
 
     def init_repo(self, repo_id: str) -> RepoSnapshot:
@@ -945,7 +961,7 @@ class HubSupervisor:
 
         try:
             self._stop_and_invalidate_runners(affected_repo_ids, reason=reason)
-        except Exception as stop_exc:
+        except RunnerInvalidationError as stop_exc:
             entry.destination = previous_destination
             if commands is not None:
                 entry.worktree_setup_commands = previous_commands
@@ -957,6 +973,9 @@ class HubSupervisor:
                 raise ValueError(
                     f"Failed to roll back manifest after {reason}: {rollback_exc}"
                 ) from stop_exc
+            self._restore_stopped_runners_after_failure(
+                stop_exc.stopped_runners, reason=reason
+            )
             raise
         return self._snapshot_for_repo(repo_id)
 
@@ -975,27 +994,55 @@ class HubSupervisor:
 
     def _stop_and_invalidate_runners(self, repo_ids: List[str], *, reason: str) -> None:
         self._ensure_runner_handles_for_repo_ids(repo_ids)
+        stopped_runners: Dict[str, Tuple[RepoRunner, bool]] = {}
         failures: List[str] = []
-        for repo_id in repo_ids:
-            runner = self._runners.get(repo_id)
-            if not runner:
-                continue
-            try:
-                runner.stop()
-            except Exception as exc:
-                failures.append(f"{repo_id}: {exc}")
-                continue
-            self._runners.pop(repo_id, None)
+        with self._runners_lock:
+            for repo_id in repo_ids:
+                runner = self._runners.get(repo_id)
+                if not runner:
+                    continue
+                was_running = runner.running
+                try:
+                    runner.stop()
+                except Exception as exc:
+                    failures.append(f"{repo_id}: {exc}")
+                    continue
+                self._runners.pop(repo_id, None)
+                stopped_runners[repo_id] = (runner, was_running)
         if failures:
             detail = "; ".join(failures)
+            raise RunnerInvalidationError(
+                f"Failed to stop runner(s) after {reason}; resolve and retry: {detail}",
+                stopped_runners=stopped_runners,
+            )
+
+    def _restore_stopped_runners_after_failure(
+        self, stopped_runners: Dict[str, Tuple[RepoRunner, bool]], *, reason: str
+    ) -> None:
+        if not stopped_runners:
+            return
+        restart_failures: List[str] = []
+        with self._runners_lock:
+            for repo_id, (runner, was_running) in stopped_runners.items():
+                self._runners[repo_id] = runner
+                if not was_running:
+                    continue
+                try:
+                    runner.start(once=False)
+                except Exception as exc:
+                    restart_failures.append(f"{repo_id}: {exc}")
+        if restart_failures:
+            detail = "; ".join(restart_failures)
             raise ValueError(
-                f"Failed to stop runner(s) after {reason}; resolve and retry: {detail}"
+                f"Manifest was rolled back after {reason}, but failed to restore "
+                f"runner state: {detail}"
             )
 
     def _ensure_runner_handles_for_repo_ids(self, repo_ids: List[str]) -> None:
         for repo_id in repo_ids:
-            if repo_id in self._runners:
-                continue
+            with self._runners_lock:
+                if repo_id in self._runners:
+                    continue
             self._ensure_runner(repo_id, allow_uninitialized=True)
 
     def run_setup_commands_for_workspace(
@@ -1383,10 +1430,11 @@ class HubSupervisor:
             ):
                 raise ValueError("Repo has unpushed commits; use force to remove")
 
-        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
-        if runner:
-            runner.stop()
-        self._runners.pop(repo_id, None)
+        with self._runners_lock:
+            runner = self._ensure_runner(repo_id, allow_uninitialized=True)
+            if runner:
+                runner.stop()
+            self._runners.pop(repo_id, None)
 
         if delete_dir and repo_root.exists():
             shutil.rmtree(repo_root)
@@ -1399,33 +1447,36 @@ class HubSupervisor:
     def _ensure_runner(
         self, repo_id: str, allow_uninitialized: bool = False
     ) -> Optional[RepoRunner]:
-        if repo_id in self._runners:
-            return self._runners[repo_id]
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        repo = manifest.get(repo_id)
-        if not repo:
-            raise ValueError(f"Repo {repo_id} not found in manifest")
-        repo_root = (self.hub_config.root / repo.path).resolve()
-        tickets_dir = repo_root / ".codex-autorunner" / "tickets"
-        if not allow_uninitialized and not tickets_dir.exists():
-            raise ValueError(f"Repo {repo_id} is not initialized")
-        if not tickets_dir.exists():
-            return None
-        repo_config = derive_repo_config(self.hub_config, repo_root, load_env=False)
-        runner = RepoRunner(
-            repo_id,
-            repo_root,
-            repo_config=repo_config,
-            spawn_fn=self._spawn_fn,
-            backend_factory_builder=self._backend_factory_builder,
-            app_server_supervisor_factory_builder=(
-                self._app_server_supervisor_factory_builder
-            ),
-            backend_orchestrator_builder=self._backend_orchestrator_builder,
-            agent_id_validator=self._agent_id_validator,
-        )
-        self._runners[repo_id] = runner
-        return runner
+        with self._runners_lock:
+            if repo_id in self._runners:
+                return self._runners[repo_id]
+            manifest = load_manifest(
+                self.hub_config.manifest_path, self.hub_config.root
+            )
+            repo = manifest.get(repo_id)
+            if not repo:
+                raise ValueError(f"Repo {repo_id} not found in manifest")
+            repo_root = (self.hub_config.root / repo.path).resolve()
+            tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+            if not allow_uninitialized and not tickets_dir.exists():
+                raise ValueError(f"Repo {repo_id} is not initialized")
+            if not tickets_dir.exists():
+                return None
+            repo_config = derive_repo_config(self.hub_config, repo_root, load_env=False)
+            runner = RepoRunner(
+                repo_id,
+                repo_root,
+                repo_config=repo_config,
+                spawn_fn=self._spawn_fn,
+                backend_factory_builder=self._backend_factory_builder,
+                app_server_supervisor_factory_builder=(
+                    self._app_server_supervisor_factory_builder
+                ),
+                backend_orchestrator_builder=self._backend_orchestrator_builder,
+                agent_id_validator=self._agent_id_validator,
+            )
+            self._runners[repo_id] = runner
+            return runner
 
     def _manifest_records(
         self, manifest_only: bool = False
