@@ -503,7 +503,8 @@ function stopTurnEventsStream() {
 function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
-async function loadPMADocs() {
+async function loadPMADocs(options = {}) {
+    const { silent = false } = options;
     try {
         const payload = (await api("/hub/pma/docs", { method: "GET" }));
         docsInfo.clear();
@@ -520,7 +521,9 @@ async function loadPMADocs() {
         renderPMADocsMeta();
     }
     catch (err) {
-        flash("Failed to load PMA docs", "error");
+        if (!silent) {
+            flash("Failed to load PMA docs", "error");
+        }
     }
 }
 async function loadPMADocContent(name) {
@@ -882,9 +885,9 @@ async function initPMA() {
     await refreshAgentControls({ force: true, reason: "initial" });
     await loadPMAThreadInfo();
     await initFileBoxUI();
-    await loadPMADocs();
-    await loadPMADeliveryTargets();
-    await loadPMAManagedThreads();
+    await loadPMADocs({ silent: true });
+    await loadPMADeliveryTargets({ silent: true });
+    await loadPMAManagedThreads({ silent: true });
     attachHandlers();
     setPMAView(loadPMAView(), { persist: false });
     initNotificationBell();

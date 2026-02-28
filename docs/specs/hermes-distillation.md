@@ -184,7 +184,6 @@ car chat channels list --query discord --json --path <hub_root>
 
 ```bash
 tail -n 50 <hub_root>/.codex-autorunner/pma/deliveries.jsonl
-tail -n 50 <hub_root>/.codex-autorunner/pma/dispatch_deliveries.jsonl
 tail -n 50 <repo_root>/.codex-autorunner/flows/<run_id>/chat/inbound.jsonl
 tail -n 50 <repo_root>/.codex-autorunner/flows/<run_id>/chat/outbound.jsonl
 ```

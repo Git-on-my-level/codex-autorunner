@@ -20,6 +20,7 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.locks import read_lock_info, write_lock_info
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.integrations.agents.backend_orchestrator import (
@@ -156,7 +157,11 @@ def test_locked_status_reported(tmp_path: Path):
     seed_repo_files(repo_dir, git_required=False)
 
     lock_path = repo_dir / ".codex-autorunner" / "lock"
-    lock_path.write_text("999999", encoding="utf-8")
+    lock_started_at = "2025-01-01T00:00:00Z"
+    write_lock_info(lock_path, 999999, started_at=lock_started_at)
+    lock_info = read_lock_info(lock_path)
+    assert lock_info.pid == 999999
+    assert lock_info.started_at == lock_started_at
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
