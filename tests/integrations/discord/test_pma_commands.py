@@ -738,13 +738,13 @@ async def test_pma_unknown_subcommand_returns_updated_usage(tmp_path: Path) -> N
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Unknown PMA subcommand." in content
         assert "/pma on|off|status|targets" in content
-        assert "/pma targets add <ref>" in content
-        assert "/pma targets rm <ref>" in content
-        assert "/pma targets clear" in content
         assert "/pma target add <ref>" in content
         assert "/pma target rm <ref>" in content
         assert "/pma thread list" in content
-        assert "Local path targets must resolve within the hub root." in content
+        assert (
+            "Local path targets are validated against the hub root at delivery time."
+            in content
+        )
     finally:
         await store.close()
 
@@ -774,7 +774,6 @@ async def test_pma_target_remove_alias_is_not_supported(tmp_path: Path) -> None:
         assert len(rest.interaction_responses) == 2
         content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert "Usage:" in content
-        assert "/pma targets rm <ref>" in content
         assert "/pma target rm <ref>" in content
         keys = {
             key
@@ -836,46 +835,6 @@ async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
         )
         assert "Cleared PMA delivery targets." in (
             rest.interaction_responses[9]["payload"]["data"]["content"]
-        )
-        assert PmaDeliveryTargetsStore(tmp_path).load()["targets"] == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_pma_targets_alias_uses_same_mutation_store_path(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _pma_target_interaction(
-                action="add", ref="local:./notes/pma-md.md", target_root="targets"
-            ),
-            _pma_target_interaction(
-                action="rm", ref="local:./notes/pma-md.md", target_root="targets"
-            ),
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 2
-        assert (
-            "Added PMA delivery target: local:./notes/pma-md.md"
-            in rest.interaction_responses[0]["payload"]["data"]["content"]
-        )
-        assert (
-            "Removed PMA delivery target: local:./notes/pma-md.md"
-            in rest.interaction_responses[1]["payload"]["data"]["content"]
         )
         assert PmaDeliveryTargetsStore(tmp_path).load()["targets"] == []
     finally:

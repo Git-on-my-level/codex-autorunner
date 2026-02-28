@@ -502,7 +502,10 @@ def test_pma_targets_add_help_lists_concrete_ref_examples() -> None:
     assert "discord:123456789012345678" in result.output
     assert "chat:telegram:-100123:777" in result.output
     assert "local:./notes/pma.md" in result.output
-    assert "Local path refs must resolve within the hub root." in result.output
+    assert (
+        "Local path refs are validated against the hub root at delivery time."
+        in result.output
+    )
 
 
 def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
@@ -596,4 +599,7 @@ def test_pma_targets_add_rejects_invalid_ref(tmp_path: Path) -> None:
     assert "web" in result.output
     assert "local:<path>" in result.output
     assert "chat:telegram:<chat_id>[:<thread_id>]" in result.output
-    assert "Local path refs must resolve within the hub root." in result.output
+    assert (
+        "Local path refs are validated against the hub root at delivery time."
+        in result.output
+    )

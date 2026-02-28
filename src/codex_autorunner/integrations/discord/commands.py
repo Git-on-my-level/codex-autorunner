@@ -459,7 +459,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                 {
                                     "type": STRING,
                                     "name": "ref",
-                                    "description": "here | web | local:<path> (must resolve within hub root) | telegram:<chat>[:<thread>] | discord:<channel> | chat:<platform>:...",
+                                    "description": "here | web | local:<path> (validated against hub root at delivery time) | telegram:<chat>[:<thread>] | discord:<channel> | chat:<platform>:...",
                                     "required": True,
                                 }
                             ],
@@ -472,7 +472,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                 {
                                     "type": STRING,
                                     "name": "ref",
-                                    "description": "here | web | local:<path> (must resolve within hub root) | telegram:<chat>[:<thread>] | discord:<channel> | chat:<platform>:...",
+                                    "description": "here | web | local:<path> (validated against hub root at delivery time) | telegram:<chat>[:<thread>] | discord:<channel> | chat:<platform>:...",
                                     "required": True,
                                 }
                             ],

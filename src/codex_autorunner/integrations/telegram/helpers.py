@@ -970,7 +970,9 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/pma thread archive <id>")
         lines.append("/pma thread resume <id> <backend_id>")
         lines.append(pma_delivery_target_ref_usage(include_here=True))
-        lines.append("Local path targets must resolve within the hub root.")
+        lines.append(
+            "Local path targets are validated against the hub root at delivery time."
+        )
 
     lines.append("")
     lines.append("Other:")

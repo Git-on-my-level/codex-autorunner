@@ -1728,6 +1728,9 @@ def test_help_text_mentions_pma_target_management() -> None:
     assert "/pma thread archive <id>" in text
     assert "/pma thread resume <id> <backend_id>" in text
     assert "Refs: here | web | local:<path>" in text
-    assert "Local path targets must resolve within the hub root." in text
+    assert (
+        "Local path targets are validated against the hub root at delivery time."
+        in text
+    )
     assert "/flow runs [N]" in text
     assert "/flow restart" not in text

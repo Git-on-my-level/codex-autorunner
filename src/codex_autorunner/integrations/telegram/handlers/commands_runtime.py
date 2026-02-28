@@ -1549,7 +1549,7 @@ class TelegramCommandHandlers(
                 "/pma thread archive <id>",
                 "/pma thread resume <id> <backend_id>",
                 pma_delivery_target_ref_usage(include_here=True),
-                "Local path targets must resolve within the hub root.",
+                "Local path targets are validated against the hub root at delivery time.",
             ]
         )
 

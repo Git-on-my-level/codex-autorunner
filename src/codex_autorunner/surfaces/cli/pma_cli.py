@@ -33,7 +33,7 @@ pma_app.add_typer(targets_app, name="targets")
 _TARGET_REF_ARG_HELP = (
     "Target ref (e.g. here, telegram:-100123:777, discord:123456789012345678, "
     "chat:telegram:-100123:777, local:./notes/pma.md, web). "
-    "Local path refs must resolve within the hub root."
+    "Local path refs are validated against the hub root at delivery time."
 )
 
 
@@ -99,7 +99,7 @@ def _pma_targets_usage() -> str:
             "targets add <ref>",
             "targets rm <ref>",
             "targets clear",
-            "Local path refs must resolve within the hub root.",
+            "Local path refs are validated against the hub root at delivery time.",
             pma_delivery_target_ref_usage(multiline=True),
         ]
     )
@@ -652,7 +652,7 @@ def pma_targets_add(
 ):
     """Add a PMA delivery target.
 
-    Local path refs must resolve within the hub root.
+    Local path refs are validated against the hub root at delivery time.
     """
     target = _parse_pma_target_ref(ref)
     if target is None:
@@ -677,7 +677,7 @@ def pma_targets_rm(
 ):
     """Remove a PMA delivery target.
 
-    Local path refs must resolve within the hub root.
+    Local path refs are validated against the hub root at delivery time.
     """
     target = _parse_pma_target_ref(ref)
     if target is None:
