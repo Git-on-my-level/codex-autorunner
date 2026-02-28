@@ -26,3 +26,13 @@ FastAPI web UI, API routes, and web-specific workflows.
 - `runner_manager.py`: Runner process lifecycle management
 - `terminal_sessions.py`: PTY session management for TUI
 - `static_assets.py`: Static asset management and caching
+
+## Discoverability Entry Points
+
+- PMA web/API surface: `routes/pma.py` (`/hub/pma/*`)
+  - CLI companion: `car pma --help` (`surfaces/cli/pma_cli.py`)
+- Hub repo destination management: `routes/hub_repos.py` (`POST /hub/repos/{repo_id}/destination`)
+  - CLI companion: `car hub destination --help` and `car hub destination show|set` (`surfaces/cli/commands/hub.py`)
+- Setup docs for operators:
+  - `docs/AGENT_SETUP_GUIDE.md`
+  - `docs/configuration/destinations.md`

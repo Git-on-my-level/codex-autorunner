@@ -110,7 +110,33 @@ In Telegram, verify this sequence:
 
 If `trigger_mode: mentions`, also verify a message without mention does not trigger, while `@<bot_username> ...` does trigger.
 
-### Step 7: Group Permission Checklist
+### Step 7: PMA Usage and Discovery (Optional)
+
+Telegram supports PMA mode for hub-scoped turns and PMA delivery target management.
+
+1. Enable PMA mode in a chat/topic:
+   - `/pma on`
+2. Verify PMA mode and targets:
+   - `/pma status`
+   - `/pma targets`
+3. Manage PMA delivery targets:
+   - `/pma target add <ref>`
+   - `/pma target rm <ref>`
+   - `/pma target clear`
+4. Exit PMA mode:
+   - `/pma off`
+
+Discovery shortcuts:
+- `/help` (Telegram command catalog)
+- `/pma` (prints PMA usage + accepted target refs)
+- `car pma --help`
+- `car pma targets --help`
+
+Notes:
+- If PMA is disabled in hub config, `/pma` returns an actionable error (`pma.enabled: true`).
+- In PMA mode (or unbound context), `/flow status` and `/flow runs` show hub-wide flow overview.
+
+### Step 8: Group Permission Checklist
 
 Required or likely-needed permissions in group contexts:
 

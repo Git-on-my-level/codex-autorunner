@@ -123,6 +123,24 @@ car hub clone https://github.com/your/repo.git
 car hub create my-new-project
 ```
 
+### Step 8: Discover PMA and Destination Surfaces (Hub Mode)
+
+Once hub setup is working, surface these two command families so users can find them quickly:
+
+```bash
+# PMA command surface
+car pma --help
+car pma chat "hello from setup" --path <hub_root>
+car pma targets --help
+
+# Repo/worktree destination controls
+car hub destination --help
+car hub destination show <repo_id> --path <hub_root>
+car hub destination set <repo_id> local --path <hub_root>
+```
+
+For Docker destination examples and inheritance rules, see `docs/configuration/destinations.md`.
+
 ## Key Concepts to Explain
 
 If the user asks, explain these concepts:
@@ -222,7 +240,18 @@ Once basic setup is complete, suggest these next steps:
 | `car hub clone <url>` | Clone a repo into the hub |
 | `car hub create <name>` | Create a new repo in the hub |
 | `car hub worktree create <base_repo_id> <branch>` | Create a hub-owned worktree (defaults to `origin/<default-branch>`) |
+| `car hub destination show <repo_id>` | Show configured + effective destination for a repo/worktree |
+| `car hub destination set <repo_id> <local|docker>` | Set destination execution mode for a repo/worktree |
 | `car doctor` | Validate hub/repo setup |
+
+### PMA Commands (hub-level)
+
+| Command | Description |
+|---------|-------------|
+| `car pma --help` | Discover PMA subcommands |
+| `car pma chat "<message>" --path <hub_root>` | Send a PMA turn via CLI |
+| `car pma thread --help` | Discover managed PMA thread operations |
+| `car pma targets --help` | Discover PMA delivery target controls |
 
 ### Repo Commands (run from within a repo, or use `--repo`)
 
