@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-discord-contract check preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
+.PHONY: install dev hooks build test test-discord-contract check hermes-readiness preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -91,6 +91,9 @@ check:
 	else \
 		echo "Skipping frontend checks (node_modules missing). Run 'make npm-install' first." >&2; \
 	fi
+
+hermes-readiness:
+	$(PYTHON) scripts/hermes_readiness_scorecard.py --ci-smoke
 
 preflight-hub-startup:
 	$(PYTHON) -m pytest -q tests/test_hub_app_context.py::test_hub_lifespan_reaper_uses_config_root

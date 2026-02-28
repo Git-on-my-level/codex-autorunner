@@ -112,6 +112,9 @@ fi
 echo "Running tests (pytest)..."
 "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
 
+echo "Hermes readiness scorecard (ci-smoke)..."
+"$PYTHON_BIN" scripts/hermes_readiness_scorecard.py --ci-smoke
+
 echo "Dead-code check (heuristic)..."
 "$PYTHON_BIN" scripts/deadcode.py --check
 
