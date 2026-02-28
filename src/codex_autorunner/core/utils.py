@@ -6,13 +6,11 @@ import os
 import shlex
 import shutil
 import subprocess
-import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     Iterable,
     Mapping,
@@ -157,50 +155,21 @@ def atomic_write(
     path: Path,
     content: str,
     durable: bool = False,
-    *,
-    temp_prefix: Optional[str] = None,
-    temp_suffix: str = ".tmp",
-    replace_fn: Optional[Callable[[Path, Path], None]] = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    replace = replace_fn or os.replace
-    tmp_path: Optional[Path] = None
-    try:
-        if temp_prefix is None and temp_suffix == ".tmp":
-            tmp_path = path.with_suffix(path.suffix + ".tmp")
-            with tmp_path.open("w", encoding="utf-8") as f:
-                f.write(content)
-                if durable:
-                    f.flush()
-                    os.fsync(f.fileno())
-        else:
-            fd, tmp_name = tempfile.mkstemp(
-                prefix=temp_prefix or f".{path.name}.",
-                suffix=temp_suffix,
-                dir=path.parent,
-                text=True,
-            )
-            tmp_path = Path(tmp_name)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
-                if durable:
-                    f.flush()
-                    os.fsync(f.fileno())
-
-        replace(tmp_path, path)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        f.write(content)
         if durable:
-            dir_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-    except Exception:
-        if tmp_path is not None:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        raise
+            f.flush()
+            os.fsync(f.fileno())
+    tmp_path.replace(path)
+    if durable:
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 def read_json(path: Path) -> Optional[dict]:
