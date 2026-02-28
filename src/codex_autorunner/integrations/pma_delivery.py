@@ -58,13 +58,16 @@ def _resolve_telegram_target(
         if not isinstance(chat_id, int):
             return None
         if thread_id is not None and not isinstance(thread_id, int):
-            thread_id = None
+            return None
         return chat_id, thread_id
     if kind == "chat" and target.get("platform") == "telegram":
         chat_id = _parse_int(target.get("chat_id"))
         if chat_id is None:
             return None
-        thread_id = _parse_int(target.get("thread_id"))
+        raw_thread_id = target.get("thread_id")
+        thread_id = _parse_int(raw_thread_id)
+        if raw_thread_id is not None and thread_id is None:
+            return None
         return chat_id, thread_id
     return None
 

@@ -79,3 +79,58 @@ def test_set_web_preserves_non_web_targets(tmp_path: Path) -> None:
         {"kind": "local", "path": str(local_path)},
     ]
     assert state["last_delivery_by_target"]["chat:telegram:111"] == "turn-42"
+
+
+def test_set_chat_preserves_non_chat_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    local_path = hub_root / ".codex-autorunner" / "pma" / "local_sink.jsonl"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
+            {"kind": "local", "path": str(local_path)},
+            {"kind": "web"},
+        ]
+    )
+
+    payload = PmaActiveSinkStore(hub_root).set_chat("discord", chat_id="new-channel")
+    assert payload["kind"] == "chat"
+    assert payload["platform"] == "discord"
+    assert payload["chat_id"] == "new-channel"
+
+    state = targets_store.load()
+    assert state["targets"] == [
+        {"kind": "chat", "platform": "discord", "chat_id": "new-channel"},
+        {"kind": "local", "path": str(local_path)},
+        {"kind": "web"},
+    ]
+
+
+def test_set_telegram_preserves_non_chat_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    local_path = hub_root / ".codex-autorunner" / "pma" / "local_sink.jsonl"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
+            {"kind": "local", "path": str(local_path)},
+            {"kind": "web"},
+        ]
+    )
+
+    payload = PmaActiveSinkStore(hub_root).set_telegram(chat_id=111, thread_id=222)
+    assert payload["kind"] == "telegram"
+    assert payload["chat_id"] == 111
+    assert payload["thread_id"] == 222
+
+    state = targets_store.load()
+    assert state["targets"] == [
+        {
+            "kind": "chat",
+            "platform": "telegram",
+            "chat_id": "111",
+            "thread_id": "222",
+        },
+        {"kind": "local", "path": str(local_path)},
+        {"kind": "web"},
+    ]

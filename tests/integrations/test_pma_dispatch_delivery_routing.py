@@ -166,6 +166,39 @@ async def test_pma_dispatch_delivery_local_target_writes_jsonl(tmp_path: Path) -
 
 
 @pytest.mark.anyio
+async def test_pma_dispatch_delivery_invalid_telegram_thread_id_fails(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    PmaDeliveryTargetsStore(hub_root).set_targets(
+        [
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "123",
+                "thread_id": "invalid-thread",
+            }
+        ]
+    )
+
+    delivered = await deliver_pma_dispatches_to_delivery_targets(
+        hub_root=hub_root,
+        turn_id="turn-dispatch-invalid-thread",
+        dispatches=[_dispatch_record("dispatch-invalid-thread-1")],
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered is False
+
+    telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
+    try:
+        outbox = await telegram_store.list_outbox()
+    finally:
+        await telegram_store.close()
+    assert outbox == []
+
+
+@pytest.mark.anyio
 async def test_pma_dispatch_delivery_invalid_local_target_fails(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     outside_path = tmp_path / "outside-dispatch-target.jsonl"

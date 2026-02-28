@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from .pma_delivery_targets import PmaDeliveryTargetsStore, target_key
 from .time_utils import now_iso
@@ -21,19 +21,9 @@ class PmaActiveSinkStore:
         return self._payload_from_state(self._delivery_targets.load())
 
     def set_web(self) -> dict[str, Any]:
-        existing_state = self._delivery_targets.load()
-        existing_targets = existing_state.get("targets")
-        preserved_targets: list[dict[str, Any]] = []
-        if isinstance(existing_targets, list):
-            for target in existing_targets:
-                if not isinstance(target, dict):
-                    continue
-                if target.get("kind") == "web":
-                    continue
-                preserved_targets.append(target)
-
-        state = self._delivery_targets.set_targets(
-            [{"kind": "web"}, *preserved_targets]
+        state = self._set_primary_target(
+            {"kind": "web"},
+            preserve=lambda target: target.get("kind") != "web",
         )
         payload = self._payload_from_state(state)
         if payload is not None:
@@ -61,7 +51,10 @@ class PmaActiveSinkStore:
             target["thread_id"] = str(int(thread_id))
         if topic_key:
             target["conversation_key"] = topic_key
-        state = self._delivery_targets.set_targets([target])
+        state = self._set_primary_target(
+            target,
+            preserve=lambda candidate: candidate.get("kind") != "chat",
+        )
         updated_at = state.get("updated_at")
         if not isinstance(updated_at, str) or not updated_at:
             updated_at = now_iso()
@@ -114,7 +107,10 @@ class PmaActiveSinkStore:
         if conversation_key_norm:
             target["conversation_key"] = conversation_key_norm
 
-        state = self._delivery_targets.set_targets([target])
+        state = self._set_primary_target(
+            target,
+            preserve=lambda candidate: candidate.get("kind") != "chat",
+        )
         updated_at = state.get("updated_at")
         if not isinstance(updated_at, str) or not updated_at:
             updated_at = now_iso()
@@ -195,6 +191,23 @@ class PmaActiveSinkStore:
         if isinstance(last_delivery_turn_id, str) and last_delivery_turn_id:
             return last_delivery_turn_id
         return None
+
+    def _set_primary_target(
+        self,
+        target: Mapping[str, Any],
+        *,
+        preserve: Callable[[dict[str, Any]], bool],
+    ) -> dict[str, Any]:
+        existing_state = self._delivery_targets.load()
+        existing_targets = existing_state.get("targets")
+        preserved_targets: list[dict[str, Any]] = []
+        if isinstance(existing_targets, list):
+            for candidate in existing_targets:
+                if not isinstance(candidate, dict):
+                    continue
+                if preserve(candidate):
+                    preserved_targets.append(candidate)
+        return self._delivery_targets.set_targets([dict(target), *preserved_targets])
 
     def _to_legacy_payload(
         self,

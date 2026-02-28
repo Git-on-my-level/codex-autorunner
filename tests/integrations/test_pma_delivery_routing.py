@@ -472,6 +472,48 @@ async def test_pma_delivery_web_target_is_noop(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_pma_delivery_invalid_telegram_thread_id_fails(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    targets = PmaDeliveryTargetsStore(hub_root)
+    targets.set_targets(
+        [
+            {
+                "kind": "chat",
+                "platform": "telegram",
+                "chat_id": "123",
+                "thread_id": "invalid-thread",
+            }
+        ]
+    )
+
+    delivered = await deliver_pma_output_to_active_sink(
+        hub_root=hub_root,
+        assistant_text="thread validation",
+        turn_id="turn-invalid-thread",
+        lifecycle_event={"event_type": "flow_completed"},
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered is False
+
+    telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
+    try:
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await telegram_store.close()
+    assert telegram_outbox == []
+
+    mirror_path = hub_root / ".codex-autorunner" / "pma" / "deliveries.jsonl"
+    records = _read_jsonl(mirror_path)
+    assert len(records) == 1
+    payload = records[0]
+    assert payload["turn_id"] == "turn-invalid-thread"
+    assert payload["errors"] == [
+        {"target": "chat:telegram:123:invalid-thread", "error": "unsupported_target"}
+    ]
+
+
+@pytest.mark.anyio
 async def test_pma_delivery_partial_failure_isolation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
