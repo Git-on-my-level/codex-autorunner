@@ -205,10 +205,7 @@ class HubMountManager:
             snapshot.id
             for snapshot in snapshots_list
             if getattr(snapshot, "exists_on_disk", False)
-            and (
-                getattr(snapshot, "initialized", False)
-                or snapshot.id in force_remount_ids
-            )
+            and getattr(snapshot, "initialized", False)
         }
         mount_lock = await self._get_mount_lock()
         async with mount_lock:

@@ -925,11 +925,39 @@ class HubSupervisor:
         affected_repo_ids = self._destination_owner_and_dependent_repo_ids(
             manifest, base_repo_id=entry.id
         )
-        self._stop_and_invalidate_runners(affected_repo_ids, reason=reason)
+        previous_destination = entry.destination.copy() if entry.destination else None
+        previous_commands = (
+            list(entry.worktree_setup_commands)
+            if entry.worktree_setup_commands is not None
+            else None
+        )
+
         entry.destination = parsed.destination.to_dict()
         if commands is not None:
             entry.worktree_setup_commands = normalized_commands or None
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        try:
+            save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        except Exception:
+            entry.destination = previous_destination
+            if commands is not None:
+                entry.worktree_setup_commands = previous_commands
+            raise
+
+        try:
+            self._stop_and_invalidate_runners(affected_repo_ids, reason=reason)
+        except Exception as stop_exc:
+            entry.destination = previous_destination
+            if commands is not None:
+                entry.worktree_setup_commands = previous_commands
+            try:
+                save_manifest(
+                    self.hub_config.manifest_path, manifest, self.hub_config.root
+                )
+            except Exception as rollback_exc:
+                raise ValueError(
+                    f"Failed to roll back manifest after {reason}: {rollback_exc}"
+                ) from stop_exc
+            raise
         return self._snapshot_for_repo(repo_id)
 
     def _destination_owner_and_dependent_repo_ids(

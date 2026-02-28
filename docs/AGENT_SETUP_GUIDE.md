@@ -128,10 +128,20 @@ car hub create my-new-project
 Once hub setup is working, surface these two command families so users can find them quickly:
 
 ```bash
-# PMA command surface
+# PMA command surface (chat, threads, targets)
 car pma --help
 car pma chat "hello from setup" --path <hub_root>
+car pma thread --help
 car pma targets --help
+
+# PMA docs/context/files surfaces
+car pma docs show active --path <hub_root>
+car pma context snapshot --path <hub_root>
+car pma context compact --dry-run --path <hub_root>
+car pma files --path <hub_root>
+car pma upload inbox ./notes.txt --path <hub_root>
+car pma download outbox response.txt --path <hub_root>
+car pma delete inbox --all --path <hub_root>
 
 # Repo/worktree destination controls
 car hub destination --help
@@ -139,7 +149,10 @@ car hub destination show <repo_id> --path <hub_root>
 car hub destination set <repo_id> local --path <hub_root>
 ```
 
-For Docker destination examples and inheritance rules, see `docs/configuration/destinations.md`.
+Destination/reference links:
+- API endpoints: `POST /hub/repos/{repo_id}/destination` and `POST /hub/repos/{repo_id}/settings`
+- Web/API surface map: `src/codex_autorunner/surfaces/web/README.md`
+- Docker destination examples + inheritance: `docs/configuration/destinations.md`
 
 ## Key Concepts to Explain
 
@@ -252,6 +265,12 @@ Once basic setup is complete, suggest these next steps:
 | `car pma chat "<message>" --path <hub_root>` | Send a PMA turn via CLI |
 | `car pma thread --help` | Discover managed PMA thread operations |
 | `car pma targets --help` | Discover PMA delivery target controls |
+| `car pma docs show <agents|active|log> --path <hub_root>` | Print PMA docs from `.codex-autorunner/pma/docs` |
+| `car pma context snapshot --path <hub_root>` | Append current `active_context.md` into `context_log.md` |
+| `car pma context compact --dry-run --path <hub_root>` | Preview deterministic active-context compaction |
+| `car pma files --path <hub_root>` | List PMA inbox/outbox files |
+| `car pma upload <inbox|outbox> <file...> --path <hub_root>` | Upload local files into PMA FileBox |
+| `car pma download <inbox|outbox> <filename> --path <hub_root>` | Download a PMA file locally |
 
 ### Repo Commands (run from within a repo, or use `--repo`)
 

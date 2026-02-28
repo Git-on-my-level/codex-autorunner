@@ -1342,6 +1342,52 @@ def test_set_repo_settings_route_remounts_base_and_dependents(tmp_path: Path):
         assert worktree_after is not worktree_before
 
 
+def test_set_repo_destination_route_force_remount_skips_uninitialized_dependents(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/destination-route-uninitialized-dependent",
+        start_point="HEAD",
+    )
+    app = create_hub_app(hub_root)
+
+    with TestClient(app) as client:
+        assert _get_mounted_app(app, f"/repos/{worktree.id}") is not None
+
+        tickets_dir = worktree.path / ".codex-autorunner" / "tickets"
+        shutil.rmtree(tickets_dir)
+        assert not tickets_dir.exists()
+
+        resp = client.post(
+            "/hub/repos/base/destination",
+            json={"destination": {"kind": "local"}},
+        )
+        assert resp.status_code == 200
+
+        assert _get_mounted_app(app, "/repos/base") is not None
+        assert _get_mounted_app(app, f"/repos/{worktree.id}") is None
+
+        list_resp = client.get("/hub/repos")
+        assert list_resp.status_code == 200
+        repos = list_resp.json()["repos"]
+        worktree_payload = next(item for item in repos if item["id"] == worktree.id)
+        assert worktree_payload["initialized"] is False
+        assert worktree_payload["mounted"] is False
+
+
 def test_set_repo_destination_invalidates_cached_runners_for_dependents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1422,6 +1468,69 @@ def test_set_repo_destination_invalidates_uncached_runners_for_dependents(
     assert snapshot.effective_destination == destination
     assert set(stopped) == {"base", worktree.id}
     assert supervisor._runners == {}
+
+
+def test_set_repo_destination_save_failure_keeps_runners_and_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/destination-save-failure",
+        start_point="HEAD",
+    )
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    previous_destination = {"kind": "docker", "image": "ghcr.io/acme/base:before-save"}
+    manifest = load_manifest(manifest_path, hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    entry.destination = previous_destination
+    save_manifest(manifest_path, manifest, hub_root)
+
+    base_runner = supervisor._ensure_runner("base")
+    worktree_runner = supervisor._ensure_runner(worktree.id)
+    assert base_runner is not None
+    assert worktree_runner is not None
+
+    stopped: list[str] = []
+
+    def fake_stop(self) -> None:
+        stopped.append(self.repo_id)
+
+    monkeypatch.setattr("codex_autorunner.core.hub.RepoRunner.stop", fake_stop)
+
+    def failing_save_manifest(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.save_manifest", failing_save_manifest
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        supervisor.set_repo_destination(
+            "base",
+            {"kind": "docker", "image": "ghcr.io/acme/base:after-save"},
+        )
+
+    assert stopped == []
+    assert supervisor._runners.get("base") is base_runner
+    assert supervisor._runners.get(worktree.id) is worktree_runner
+    manifest = load_manifest(manifest_path, hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.destination == previous_destination
 
 
 def test_set_repo_destination_stop_failure_keeps_failed_runner_cached(
@@ -1525,6 +1634,76 @@ def test_set_repo_settings_invalidates_cached_runner(tmp_path: Path):
     new_runner = supervisor._ensure_runner("base")
     assert new_runner is not None
     assert new_runner is not old_runner
+
+
+def test_set_repo_settings_save_failure_keeps_runners_and_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/settings-save-failure",
+        start_point="HEAD",
+    )
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    previous_destination = {
+        "kind": "docker",
+        "image": "ghcr.io/acme/base:settings-before-save",
+    }
+    previous_commands = ["echo before"]
+    manifest = load_manifest(manifest_path, hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    entry.destination = previous_destination
+    entry.worktree_setup_commands = previous_commands
+    save_manifest(manifest_path, manifest, hub_root)
+
+    base_runner = supervisor._ensure_runner("base")
+    worktree_runner = supervisor._ensure_runner(worktree.id)
+    assert base_runner is not None
+    assert worktree_runner is not None
+
+    stopped: list[str] = []
+
+    def fake_stop(self) -> None:
+        stopped.append(self.repo_id)
+
+    monkeypatch.setattr("codex_autorunner.core.hub.RepoRunner.stop", fake_stop)
+
+    def failing_save_manifest(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.save_manifest", failing_save_manifest
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        supervisor.set_repo_settings(
+            "base",
+            {"kind": "docker", "image": "ghcr.io/acme/base:settings-after-save"},
+            ["echo after"],
+        )
+
+    assert stopped == []
+    assert supervisor._runners.get("base") is base_runner
+    assert supervisor._runners.get(worktree.id) is worktree_runner
+    manifest = load_manifest(manifest_path, hub_root)
+    entry = manifest.get("base")
+    assert entry is not None
+    assert entry.destination == previous_destination
+    assert entry.worktree_setup_commands == previous_commands
 
 
 def test_set_repo_settings_stop_failure_keeps_manifest_and_failed_runner_cached(
