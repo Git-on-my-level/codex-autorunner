@@ -1663,24 +1663,69 @@ def test_set_repo_settings_serializes_manifest_updates(
         supervisor, "_stop_and_invalidate_runners", lambda *_args, **_kwargs: None
     )
 
-    first_save_ready = threading.Event()
+    first_in_lock = threading.Event()
+    first_left_lock = threading.Event()
+    second_blocked_on_lock = threading.Event()
+    second_entered_lock = threading.Event()
     allow_first_save = threading.Event()
-    first_save_done = threading.Event()
+    first_save_called = threading.Event()
     errors: list[Exception] = []
+
+    class ObservedLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._owner: Optional[str] = None
+
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            acquired = self._lock.acquire(False)
+            if acquired:
+                self._owner = threading.current_thread().name
+                if self._owner == "settings-thread":
+                    first_in_lock.set()
+                elif self._owner == "destination-thread":
+                    second_entered_lock.set()
+                return True
+            if threading.current_thread().name == "destination-thread":
+                second_blocked_on_lock.set()
+            acquired = self._lock.acquire(blocking, timeout)
+            if acquired:
+                self._owner = threading.current_thread().name
+                if self._owner == "settings-thread":
+                    first_in_lock.set()
+                elif self._owner == "destination-thread":
+                    second_entered_lock.set()
+            return acquired
+
+        def release(self) -> None:
+            owner = self._owner
+            self._owner = None
+            if owner == "settings-thread":
+                first_left_lock.set()
+            self._lock.release()
+
+        def __enter__(self) -> "ObservedLock":
+            self.acquire()
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb) -> bool:
+            self.release()
+            return False
+
+    supervisor._base_repo_settings_lock = ObservedLock()
+
+    original_save_manifest = save_manifest
 
     def gated_save_manifest(path: Path, manifest, root: Path) -> None:
         thread_name = threading.current_thread().name
         if thread_name == "settings-thread":
-            first_save_ready.set()
+            first_save_called.set()
             assert allow_first_save.wait(timeout=3.0)
-            save_manifest(path, manifest, root)
-            first_save_done.set()
+            original_save_manifest(path, manifest, root)
             return
         if thread_name == "destination-thread":
-            assert first_save_done.wait(timeout=3.0)
-            save_manifest(path, manifest, root)
+            original_save_manifest(path, manifest, root)
             return
-        save_manifest(path, manifest, root)
+        original_save_manifest(path, manifest, root)
 
     monkeypatch.setattr("codex_autorunner.core.hub.save_manifest", gated_save_manifest)
 
@@ -1697,19 +1742,23 @@ def test_set_repo_settings_serializes_manifest_updates(
 
     def run_destination() -> None:
         try:
-            assert first_save_ready.wait(timeout=3.0)
             supervisor.set_repo_destination("base", destination_final)
         except Exception as exc:  # pragma: no cover - assertion below inspects errors.
             errors.append(exc)
 
     settings_thread = threading.Thread(target=run_settings, name="settings-thread")
+    settings_thread.start()
+    assert first_in_lock.wait(timeout=3.0)
     destination_thread = threading.Thread(
         target=run_destination, name="destination-thread"
     )
-    settings_thread.start()
     destination_thread.start()
-    assert first_save_ready.wait(timeout=3.0)
+    assert first_save_called.wait(timeout=3.0)
+    assert second_blocked_on_lock.wait(timeout=3.0)
+    assert first_left_lock.is_set() is False
     allow_first_save.set()
+    assert first_left_lock.wait(timeout=3.0)
+    assert second_entered_lock.wait(timeout=3.0)
     settings_thread.join(timeout=3.0)
     destination_thread.join(timeout=3.0)
 
