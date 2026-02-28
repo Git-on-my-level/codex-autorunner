@@ -120,8 +120,8 @@ Telegram supports PMA mode for hub-scoped turns and PMA delivery target manageme
    - `/pma status`
    - `/pma targets`
 3. Manage PMA delivery targets:
-   - `/pma target add ref:<ref>`
-   - `/pma target rm ref:<ref>`
+   - `/pma target add <ref>`
+   - `/pma target rm <ref>`
    - `/pma target clear`
    - Canonical target refs:
      - `here`
@@ -139,7 +139,7 @@ Discovery shortcuts:
 - `/pma` (prints PMA usage + accepted target refs)
 - `car pma --help`
 - `car pma targets --help`
-- `car pma targets --json --path <hub_root>` (for discoverability + validation)
+- `car pma targets list --json --path <hub_root>` (for discoverability + validation)
 
 Notes:
 - If PMA is disabled in hub config, `/pma` returns an actionable error (`pma.enabled: true`).
