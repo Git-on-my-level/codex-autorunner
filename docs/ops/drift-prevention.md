@@ -39,7 +39,12 @@ python scripts/hermes_readiness_scorecard.py --signals-json docs/ops/hermes-read
 ### Pass criteria
 
 - The command exits `0` only when all category thresholds and overall threshold pass.
-- Signals include both:
-  - feature checks from source contracts (route/field availability)
-  - behavior checks from targeted pytest nodes (web mutations, chat/CLI parity, fallback semantics)
+- Signals are **behavior-first**:
+  - targeted pytest checks are the primary scoring weight in each category
+  - static source-contract checks are lightweight anchors only
+- CI-smoke behavior signals cover concrete flows:
+  - web target mutation behavior
+  - web active-target visibility behavior
+  - destination set/show + channel-directory behavior
+  - fallback partial-success reporting behavior
 - `scripts/check.sh` runs this scorecard in CI-smoke mode so drift is caught during normal validation.

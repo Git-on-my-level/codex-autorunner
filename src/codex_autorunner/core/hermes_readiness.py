@@ -114,10 +114,10 @@ class HermesReadinessScorecard:
 
 DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
     HermesReadinessSignalSpec(
-        signal_id="web.feature_routes_static",
+        signal_id="web.contract_routes_static",
         category=CATEGORY_WEB,
-        description="Web PMA target + destination/channel routes are present in source",
-        weight=3.0,
+        description="Web PMA target-management route contracts are present in source",
+        weight=1.0,
         kind="static_contains",
         path="src/codex_autorunner/surfaces/web/routes/pma.py",
         patterns=(
@@ -128,35 +128,32 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         ),
     ),
     HermesReadinessSignalSpec(
-        signal_id="web.feature_destination_routes_static",
+        signal_id="web.behavior_target_management_api",
         category=CATEGORY_WEB,
-        description="Web hub destination + channel-directory routes are present in source",
-        weight=2.0,
-        kind="static_contains",
-        path="src/codex_autorunner/surfaces/web/routes/hub_repos.py",
-        patterns=(
-            '@router.get("/hub/repos/{repo_id}/destination")',
-            '@router.post("/hub/repos/{repo_id}/destination")',
-            '@router.get("/hub/chat/channels")',
-        ),
-    ),
-    HermesReadinessSignalSpec(
-        signal_id="web.tests_target_management",
-        category=CATEGORY_WEB,
-        description="Web PMA target management API behavior",
+        description="Web PMA target add/list/remove/clear behavior",
         weight=3.0,
         kind="pytest",
         nodeids=(
             "tests/test_pma_routes.py::test_pma_targets_add_list_remove_clear",
-            "tests/test_pma_routes.py::test_pma_targets_active_get_and_set",
             "tests/test_pma_routes.py::test_pma_targets_reject_invalid_ref",
         ),
     ),
     HermesReadinessSignalSpec(
-        signal_id="web.tests_destination_channels",
+        signal_id="web.behavior_active_target_visibility",
         category=CATEGORY_WEB,
-        description="Web destination mutation + channel directory behavior",
-        weight=2.0,
+        description="Web PMA active-target show/set visibility and validation",
+        weight=3.0,
+        kind="pytest",
+        nodeids=(
+            "tests/test_pma_routes.py::test_pma_targets_active_get_and_set",
+            "tests/test_pma_routes.py::test_pma_targets_active_rejects_invalid_inputs",
+        ),
+    ),
+    HermesReadinessSignalSpec(
+        signal_id="web.behavior_destination_set_show",
+        category=CATEGORY_WEB,
+        description="Web destination set/show and channel-directory route behavior",
+        weight=3.0,
         kind="pytest",
         nodeids=(
             "tests/surfaces/web/test_hub_destination_and_channels.py::test_hub_destination_routes_show_set_and_persist",
@@ -167,7 +164,7 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         signal_id="chat.tests_telegram_target_matrix",
         category=CATEGORY_CHAT,
         description="Telegram target parser/command matrix behavior",
-        weight=4.0,
+        weight=3.0,
         kind="pytest",
         nodeids=(
             "tests/test_telegram_pma_routing.py::test_pma_target_ref_matrix_telegram_matches_canonical_parser",
@@ -178,7 +175,7 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         signal_id="chat.tests_discord_target_matrix",
         category=CATEGORY_CHAT,
         description="Discord target parser/command matrix behavior",
-        weight=4.0,
+        weight=3.0,
         kind="pytest",
         nodeids=(
             "tests/integrations/discord/test_pma_commands.py::test_pma_target_ref_matrix_discord_matches_canonical_parser",
@@ -196,10 +193,21 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         ),
     ),
     HermesReadinessSignalSpec(
+        signal_id="chat.tests_active_target_controls",
+        category=CATEGORY_CHAT,
+        description="Telegram + Discord active-target show/set behavior",
+        weight=2.0,
+        kind="pytest",
+        nodeids=(
+            "tests/test_telegram_pma_routing.py::test_pma_target_active_show_and_set",
+            "tests/integrations/discord/test_pma_commands.py::test_pma_target_active_show_and_set",
+        ),
+    ),
+    HermesReadinessSignalSpec(
         signal_id="cli.tests_target_commands",
         category=CATEGORY_CLI,
         description="CLI PMA target add/list/remove/clear + invalid ref handling",
-        weight=5.0,
+        weight=4.0,
         kind="pytest",
         nodeids=(
             "tests/test_pma_cli.py::test_pma_targets_add_list_rm_clear",
@@ -207,20 +215,28 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         ),
     ),
     HermesReadinessSignalSpec(
+        signal_id="cli.tests_active_target_commands",
+        category=CATEGORY_CLI,
+        description="CLI PMA active-target show/set behavior",
+        weight=3.0,
+        kind="pytest",
+        nodeids=("tests/test_pma_cli.py::test_pma_targets_active_show_and_set",),
+    ),
+    HermesReadinessSignalSpec(
         signal_id="cli.tests_target_matrix",
         category=CATEGORY_CLI,
         description="CLI target parser matrix parity with canonical parser",
-        weight=5.0,
+        weight=3.0,
         kind="pytest",
         nodeids=(
             "tests/test_pma_cli.py::test_pma_target_ref_matrix_cli_matches_canonical_parser",
         ),
     ),
     HermesReadinessSignalSpec(
-        signal_id="fallback.feature_outcome_fields_static",
+        signal_id="fallback.contract_outcome_fields_static",
         category=CATEGORY_FALLBACK,
-        description="Web PMA route exposes structured delivery outcomes",
-        weight=2.0,
+        description="Web PMA route includes delivery outcome fields in responses",
+        weight=1.0,
         kind="static_contains",
         path="src/codex_autorunner/surfaces/web/routes/pma.py",
         patterns=(
@@ -232,7 +248,7 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         signal_id="fallback.tests_partial_success",
         category=CATEGORY_FALLBACK,
         description="Partial-success delivery keeps successful targets and records failures",
-        weight=4.0,
+        weight=5.0,
         kind="pytest",
         nodeids=(
             "tests/integrations/test_pma_delivery_routing.py::test_pma_delivery_partial_failure_isolation",
@@ -274,6 +290,24 @@ def _last_nonempty_line(text: str) -> str:
         if candidate:
             return candidate
     return ""
+
+
+def _first_prefixed_line(text: str, prefixes: tuple[str, ...]) -> str:
+    for line in text.splitlines():
+        candidate = line.strip()
+        if candidate.startswith(prefixes):
+            return candidate
+    return ""
+
+
+def _nodeids_summary(nodeids: Sequence[str]) -> str:
+    if not nodeids:
+        return ""
+    if len(nodeids) == 1:
+        return nodeids[0]
+    if len(nodeids) == 2:
+        return f"{nodeids[0]}, {nodeids[1]}"
+    return f"{nodeids[0]}, {nodeids[1]}, ... ({len(nodeids)} nodes)"
 
 
 def _run_static_contains(
@@ -346,13 +380,29 @@ def _run_pytest_signal(
         chunk for chunk in [completed.stdout.strip(), completed.stderr.strip()] if chunk
     )
     summary = _last_nonempty_line(output) or f"exit={completed.returncode}"
+    nodeids_summary = _nodeids_summary(spec.nodeids)
+    if completed.returncode == 0:
+        details = (
+            f"{summary}; pytest -q {nodeids_summary}" if nodeids_summary else summary
+        )
+    else:
+        failure_anchor = _first_prefixed_line(output, ("FAILED ", "ERROR "))
+        if failure_anchor:
+            if nodeids_summary:
+                details = f"{failure_anchor}; pytest -q {nodeids_summary}"
+            else:
+                details = failure_anchor
+        elif nodeids_summary:
+            details = f"{summary}; pytest -q {nodeids_summary}"
+        else:
+            details = summary
     return HermesReadinessSignalResult(
         signal_id=spec.signal_id,
         category=spec.category,
         description=spec.description,
         weight=spec.weight,
         passed=completed.returncode == 0,
-        details=summary,
+        details=details,
     )
 
 
