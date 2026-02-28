@@ -929,7 +929,9 @@ class HubSupervisor:
     ) -> RepoSnapshot:
         with self._base_repo_settings_lock:
             self._invalidate_list_cache()
-            manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+            manifest = load_manifest(
+                self.hub_config.manifest_path, self.hub_config.root
+            )
             entry = manifest.get(repo_id)
             if not entry:
                 raise ValueError(f"Repo not found: {repo_id}")
