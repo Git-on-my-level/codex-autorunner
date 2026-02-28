@@ -942,13 +942,15 @@ class HubSupervisor:
     def _stop_and_invalidate_runners(self, repo_ids: List[str], *, reason: str) -> None:
         failures: List[str] = []
         for repo_id in repo_ids:
-            runner = self._runners.pop(repo_id, None)
+            runner = self._runners.get(repo_id)
             if not runner:
                 continue
             try:
                 runner.stop()
             except Exception as exc:
                 failures.append(f"{repo_id}: {exc}")
+                continue
+            self._runners.pop(repo_id, None)
         if failures:
             detail = "; ".join(failures)
             raise ValueError(

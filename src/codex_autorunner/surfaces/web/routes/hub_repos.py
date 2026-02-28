@@ -189,16 +189,35 @@ class HubMountManager:
                 self._mount_repo_sync(snapshot.id, snapshot.path)
 
     async def refresh_mounts(
-        self, snapshots: Iterable[Any], *, full_refresh: bool = True
+        self,
+        snapshots: Iterable[Any],
+        *,
+        full_refresh: bool = True,
+        force_remount_repo_ids: Optional[Iterable[str]] = None,
     ):
+        snapshots_list = list(snapshots)
+        force_remount_ids = {
+            str(repo_id).strip()
+            for repo_id in (force_remount_repo_ids or [])
+            if str(repo_id).strip()
+        }
         desired = {
             snapshot.id
-            for snapshot in snapshots
-            if getattr(snapshot, "initialized", False)
-            and getattr(snapshot, "exists_on_disk", False)
+            for snapshot in snapshots_list
+            if getattr(snapshot, "exists_on_disk", False)
+            and (
+                getattr(snapshot, "initialized", False)
+                or snapshot.id in force_remount_ids
+            )
         }
         mount_lock = await self._get_mount_lock()
         async with mount_lock:
+            if force_remount_ids:
+                for prefix in sorted(force_remount_ids):
+                    if prefix in self._mounted_repos:
+                        await self._unmount_repo_locked(prefix)
+                    self._mount_errors.pop(prefix, None)
+
             if full_refresh:
                 for prefix in list(self._mounted_repos):
                     if prefix not in desired:
@@ -207,7 +226,7 @@ class HubMountManager:
                     if prefix not in desired:
                         self._mount_errors.pop(prefix, None)
 
-            for snapshot in snapshots:
+            for snapshot in snapshots_list:
                 if snapshot.id not in desired:
                     continue
                 if (
@@ -492,7 +511,20 @@ def build_hub_repo_routes(
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        snapshots = await asyncio.to_thread(
+            context.supervisor.list_repos, use_cache=False
+        )
+        affected_repo_ids = {snapshot.id}
+        affected_repo_ids.update(
+            candidate.id
+            for candidate in snapshots
+            if (candidate.worktree_of or "").strip() == snapshot.id
+        )
+        await mount_manager.refresh_mounts(
+            snapshots,
+            full_refresh=False,
+            force_remount_repo_ids=affected_repo_ids,
+        )
         return _enrich_repo(snapshot)
 
     @router.post("/hub/repos/{repo_id}/settings")
@@ -533,7 +565,20 @@ def build_hub_repo_routes(
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        snapshots = await asyncio.to_thread(
+            context.supervisor.list_repos, use_cache=False
+        )
+        affected_repo_ids = {snapshot.id}
+        affected_repo_ids.update(
+            candidate.id
+            for candidate in snapshots
+            if (candidate.worktree_of or "").strip() == snapshot.id
+        )
+        await mount_manager.refresh_mounts(
+            snapshots,
+            full_refresh=False,
+            force_remount_repo_ids=affected_repo_ids,
+        )
         return _enrich_repo(snapshot)
 
     @router.post("/hub/repos/{repo_id}/pin")

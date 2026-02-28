@@ -1259,6 +1259,89 @@ def test_set_repo_settings_route_updates_manifest_atomically(tmp_path: Path):
     assert entry.worktree_setup_commands == ["make setup", "pre-commit install"]
 
 
+def test_set_repo_destination_route_remounts_base_and_dependents(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/destination-route-remount",
+        start_point="HEAD",
+    )
+    app = create_hub_app(hub_root)
+
+    with TestClient(app) as client:
+        base_before = _get_mounted_app(app, "/repos/base")
+        worktree_before = _get_mounted_app(app, f"/repos/{worktree.id}")
+        assert base_before is not None
+        assert worktree_before is not None
+
+        resp = client.post(
+            "/hub/repos/base/destination",
+            json={"destination": {"kind": "local"}},
+        )
+        assert resp.status_code == 200
+
+        base_after = _get_mounted_app(app, "/repos/base")
+        worktree_after = _get_mounted_app(app, f"/repos/{worktree.id}")
+        assert base_after is not None
+        assert worktree_after is not None
+        assert base_after is not base_before
+        assert worktree_after is not worktree_before
+
+
+def test_set_repo_settings_route_remounts_base_and_dependents(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/settings-route-remount",
+        start_point="HEAD",
+    )
+    app = create_hub_app(hub_root)
+
+    with TestClient(app) as client:
+        base_before = _get_mounted_app(app, "/repos/base")
+        worktree_before = _get_mounted_app(app, f"/repos/{worktree.id}")
+        assert base_before is not None
+        assert worktree_before is not None
+
+        resp = client.post(
+            "/hub/repos/base/settings",
+            json={
+                "destination": {"kind": "local"},
+                "commands": ["make setup"],
+            },
+        )
+        assert resp.status_code == 200
+
+        base_after = _get_mounted_app(app, "/repos/base")
+        worktree_after = _get_mounted_app(app, f"/repos/{worktree.id}")
+        assert base_after is not None
+        assert worktree_after is not None
+        assert base_after is not base_before
+        assert worktree_after is not worktree_before
+
+
 def test_set_repo_destination_invalidates_cached_runners_for_dependents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1303,6 +1386,64 @@ def test_set_repo_destination_invalidates_cached_runners_for_dependents(
     rebuilt = supervisor._ensure_runner("base")
     assert rebuilt is not None
     assert rebuilt is not base_runner
+
+
+def test_set_repo_destination_stop_failure_keeps_failed_runner_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/destination-invalidation-stop-failure",
+        start_point="HEAD",
+    )
+
+    base_runner = supervisor._ensure_runner("base")
+    worktree_runner = supervisor._ensure_runner(worktree.id)
+    assert base_runner is not None
+    assert worktree_runner is not None
+
+    def flaky_stop(self) -> None:
+        if self.repo_id == worktree.id:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("codex_autorunner.core.hub.RepoRunner.stop", flaky_stop)
+
+    with pytest.raises(ValueError, match="Failed to stop runner\\(s\\)"):
+        supervisor.set_repo_destination(
+            "base",
+            {"kind": "docker", "image": "ghcr.io/acme/base:stop-failure"},
+        )
+
+    assert "base" not in supervisor._runners
+    assert supervisor._runners.get(worktree.id) is worktree_runner
+    assert supervisor._ensure_runner(worktree.id) is worktree_runner
+
+    def successful_stop(self) -> None:
+        return None
+
+    monkeypatch.setattr("codex_autorunner.core.hub.RepoRunner.stop", successful_stop)
+
+    snapshot = supervisor.set_repo_destination(
+        "base",
+        {"kind": "docker", "image": "ghcr.io/acme/base:recovered"},
+    )
+    assert snapshot.effective_destination == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/base:recovered",
+    }
+    assert worktree.id not in supervisor._runners
 
 
 def test_set_repo_settings_invalidates_cached_runner(tmp_path: Path):
