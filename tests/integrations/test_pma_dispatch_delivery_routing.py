@@ -166,6 +166,29 @@ async def test_pma_dispatch_delivery_local_target_writes_jsonl(tmp_path: Path) -
 
 
 @pytest.mark.anyio
+async def test_pma_dispatch_delivery_invalid_local_target_fails(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    outside_path = tmp_path / "outside-dispatch-target.jsonl"
+    fallback_path = hub_root / ".codex-autorunner" / "pma" / "dispatch_deliveries.jsonl"
+    PmaDeliveryTargetsStore(hub_root).set_targets(
+        [
+            {"kind": "local", "path": str(outside_path)},
+        ]
+    )
+
+    delivered = await deliver_pma_dispatches_to_delivery_targets(
+        hub_root=hub_root,
+        turn_id="turn-dispatch-local-invalid",
+        dispatches=[_dispatch_record("dispatch-local-invalid-1")],
+        telegram_state_path=hub_root / "telegram_state.sqlite3",
+        discord_state_path=hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+    )
+    assert delivered is False
+    assert not outside_path.exists()
+    assert not fallback_path.exists()
+
+
+@pytest.mark.anyio
 async def test_pma_dispatch_delivery_web_target_is_noop(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     PmaDeliveryTargetsStore(hub_root).set_targets([{"kind": "web"}])

@@ -26,9 +26,6 @@ logger = logging.getLogger(__name__)
 LOCAL_PREVIEW_MAX_CHARS = 200
 PMA_DELIVERY_MIRROR_REL_PATH = Path(".codex-autorunner/pma/deliveries.jsonl")
 PMA_DELIVERY_MIRROR_MAX_BYTES = 25 * 1024 * 1024
-PMA_DISPATCH_DELIVERY_MIRROR_REL_PATH = Path(
-    ".codex-autorunner/pma/dispatch_deliveries.jsonl"
-)
 
 
 @dataclass(frozen=True)
@@ -86,10 +83,6 @@ def _resolve_discord_target(
 
 def _resolve_mirror_path(hub_root: Path) -> Path:
     return (hub_root / PMA_DELIVERY_MIRROR_REL_PATH).resolve()
-
-
-def _resolve_dispatch_mirror_path(hub_root: Path) -> Path:
-    return (hub_root / PMA_DISPATCH_DELIVERY_MIRROR_REL_PATH).resolve()
 
 
 def _outbox_record_id(
@@ -245,11 +238,8 @@ def _resolve_dispatch_local_target_path(
     *,
     target: Mapping[str, Any],
     hub_root: Path,
-) -> Path:
-    resolved = _resolve_local_target(target, hub_root=hub_root)
-    if resolved is not None:
-        return resolved
-    return _resolve_dispatch_mirror_path(hub_root)
+) -> Optional[Path]:
+    return _resolve_local_target(target, hub_root=hub_root)
 
 
 async def _deliver_dispatch_to_local(
@@ -269,6 +259,12 @@ async def _deliver_dispatch_to_local(
             error="missing_dispatch_id",
         )
     path = _resolve_dispatch_local_target_path(target=target, hub_root=hub_root)
+    if path is None:
+        return _TargetDeliveryOutcome(
+            success=False,
+            chunk_count=0,
+            error="invalid_local_target_path",
+        )
     payload = {
         "ts": now_iso(),
         "kind": "dispatch",

@@ -21,7 +21,20 @@ class PmaActiveSinkStore:
         return self._payload_from_state(self._delivery_targets.load())
 
     def set_web(self) -> dict[str, Any]:
-        state = self._delivery_targets.set_targets([{"kind": "web"}])
+        existing_state = self._delivery_targets.load()
+        existing_targets = existing_state.get("targets")
+        preserved_targets: list[dict[str, Any]] = []
+        if isinstance(existing_targets, list):
+            for target in existing_targets:
+                if not isinstance(target, dict):
+                    continue
+                if target.get("kind") == "web":
+                    continue
+                preserved_targets.append(target)
+
+        state = self._delivery_targets.set_targets(
+            [{"kind": "web"}, *preserved_targets]
+        )
         payload = self._payload_from_state(state)
         if payload is not None:
             return payload

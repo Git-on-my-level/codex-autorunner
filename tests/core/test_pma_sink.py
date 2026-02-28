@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_sink import PmaActiveSinkStore
 
 
@@ -54,3 +55,27 @@ def test_set_telegram_preserves_last_delivery_for_same_target(tmp_path: Path) ->
 
     payload = store.set_telegram(chat_id=111, thread_id=222)
     assert payload["last_delivery_turn_id"] == "turn-42"
+
+
+def test_set_web_preserves_non_web_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    local_path = hub_root / ".codex-autorunner" / "pma" / "local_sink.jsonl"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "chat", "platform": "telegram", "chat_id": "111"},
+            {"kind": "local", "path": str(local_path)},
+        ]
+    )
+    assert targets_store.mark_delivered("chat:telegram:111", "turn-42") is True
+
+    payload = PmaActiveSinkStore(hub_root).set_web()
+    assert payload["kind"] == "web"
+
+    state = targets_store.load()
+    assert state["targets"] == [
+        {"kind": "web"},
+        {"kind": "chat", "platform": "telegram", "chat_id": "111"},
+        {"kind": "local", "path": str(local_path)},
+    ]
+    assert state["last_delivery_by_target"]["chat:telegram:111"] == "turn-42"
