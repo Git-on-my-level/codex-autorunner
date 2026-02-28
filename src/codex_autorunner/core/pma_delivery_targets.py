@@ -83,6 +83,13 @@ def _parse_telegram_target_parts(
     return target
 
 
+def _parse_discord_channel_id(chat_id_raw: str) -> Optional[str]:
+    chat_id = _parse_intish(chat_id_raw)
+    if chat_id is None or chat_id <= 0:
+        return None
+    return str(chat_id)
+
+
 def parse_delivery_target_ref(
     ref: str, *, here_target: Optional[Mapping[str, Any]] = None
 ) -> Optional[dict[str, Any]]:
@@ -112,8 +119,8 @@ def parse_delivery_target_ref(
             parts[1], parts[2] if len(parts) == 3 else None
         )
     elif lowered.startswith("discord:"):
-        chat_id = value.split(":", 1)[1].strip()
-        if not chat_id:
+        chat_id = _parse_discord_channel_id(value.split(":", 1)[1].strip())
+        if chat_id is None:
             return None
         candidate = {"kind": "chat", "platform": "discord", "chat_id": chat_id}
     elif lowered.startswith("chat:"):
@@ -128,8 +135,8 @@ def parse_delivery_target_ref(
         elif platform == "discord":
             if len(parts) != 3:
                 return None
-            chat_id = parts[2].strip()
-            if not chat_id:
+            chat_id = _parse_discord_channel_id(parts[2].strip())
+            if chat_id is None:
                 return None
             candidate = {"kind": "chat", "platform": "discord", "chat_id": chat_id}
 

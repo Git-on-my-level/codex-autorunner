@@ -5,6 +5,7 @@ from pathlib import Path
 
 from codex_autorunner.core.pma_delivery_targets import (
     PmaDeliveryTargetsStore,
+    parse_delivery_target_ref,
     target_key,
 )
 
@@ -179,4 +180,24 @@ def test_mark_delivered_is_per_target_and_deduped(tmp_path: Path) -> None:
     assert state["last_delivery_by_target"] == {
         "chat:discord:123": "turn-1",
         "chat:telegram:456:7": "turn-1",
+    }
+
+
+def test_parse_delivery_target_ref_rejects_invalid_discord_channel_ids() -> None:
+    assert parse_delivery_target_ref("discord:abc") is None
+    assert parse_delivery_target_ref("discord:123:456") is None
+    assert parse_delivery_target_ref("discord:-1") is None
+    assert parse_delivery_target_ref("chat:discord:abc") is None
+
+
+def test_parse_delivery_target_ref_accepts_discord_channel_ids() -> None:
+    assert parse_delivery_target_ref("discord:1234567890") == {
+        "kind": "chat",
+        "platform": "discord",
+        "chat_id": "1234567890",
+    }
+    assert parse_delivery_target_ref("chat:discord:998877") == {
+        "kind": "chat",
+        "platform": "discord",
+        "chat_id": "998877",
     }
