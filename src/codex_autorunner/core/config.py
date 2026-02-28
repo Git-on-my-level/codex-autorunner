@@ -1925,13 +1925,36 @@ def _resolve_repo_effective_destination(
 ) -> Dict[str, Any]:
     try:
         manifest = load_manifest(hub.manifest_path, hub.root)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to load manifest at %s while resolving destination for %s; "
+            "falling back to local destination: %s",
+            hub.manifest_path,
+            repo_root,
+            exc,
+        )
         return default_local_destination()
     repo = manifest.get_by_path(hub.root, repo_root)
     if repo is None:
+        logger.warning(
+            "Repo path %s not found in manifest at %s; falling back to local destination",
+            repo_root,
+            hub.manifest_path,
+        )
         return default_local_destination()
     repos_by_id = {entry.id: entry for entry in manifest.repos}
     resolution = resolve_effective_repo_destination(repo, repos_by_id)
+    if resolution.issues:
+        logger.warning(
+            "Destination resolution for repo %s reported issues: %s",
+            repo.id,
+            "; ".join(resolution.issues),
+        )
+    if resolution.source == "default":
+        logger.warning(
+            "Destination resolution for repo %s fell back to local default",
+            repo.id,
+        )
     return resolution.to_dict()
 
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+from codex_autorunner.core import config as config_module
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     REPO_OVERRIDE_FILENAME,
@@ -9,7 +11,11 @@ from codex_autorunner.core.config import (
     load_hub_config,
     load_repo_config,
 )
-from codex_autorunner.integrations.agents.destination_wrapping import WrappedCommand
+from codex_autorunner.core.destinations import DockerDestination
+from codex_autorunner.integrations.agents.destination_wrapping import (
+    WrappedCommand,
+    wrap_command_for_destination,
+)
 from codex_autorunner.integrations.agents.wiring import (
     AgentBackendFactory,
     build_app_server_supervisor_factory,
@@ -215,3 +221,67 @@ def test_derive_repo_config_sets_effective_destination_from_manifest(
         "kind": "docker",
         "image": "ghcr.io/acme/base:latest",
     }
+
+
+def test_wrap_command_for_destination_propagates_destination_workdir(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeRuntime:
+        def ensure_container_running(self, spec):  # type: ignore[no-untyped-def]
+            captured["spec_workdir"] = spec.workdir
+
+        def build_exec_command(  # type: ignore[no-untyped-def]
+            self,
+            container_name,
+            command,
+            *,
+            workdir=None,
+            env=None,
+        ):
+            captured["container_name"] = container_name
+            captured["workdir"] = workdir
+            captured["command"] = list(command)
+            captured["env"] = dict(env or {})
+            return ["docker", "exec", container_name, *[str(part) for part in command]]
+
+    destination = DockerDestination(
+        image="busybox:latest",
+        container_name="ctr-demo",
+        workdir="${REPO_ROOT}/nested",
+    )
+    wrapped = wrap_command_for_destination(
+        command=["pwd"],
+        destination=destination,
+        repo_root=tmp_path,
+        docker_runtime=_FakeRuntime(),  # type: ignore[arg-type]
+    )
+
+    expected_workdir = str((tmp_path.resolve() / "nested"))
+    assert captured["container_name"] == "ctr-demo"
+    assert captured["command"] == ["pwd"]
+    assert captured["spec_workdir"] == expected_workdir
+    assert captured["workdir"] == expected_workdir
+    assert wrapped.command == ["docker", "exec", "ctr-demo", "pwd"]
+
+
+def test_resolve_repo_effective_destination_logs_manifest_load_failure(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    hub_config = load_hub_config(hub_root)
+
+    def _raise_manifest_error(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        raise RuntimeError("manifest parse failed")
+
+    monkeypatch.setattr(config_module, "load_manifest", _raise_manifest_error)
+    caplog.set_level(logging.WARNING, logger="codex_autorunner.core.config")
+
+    resolved = config_module._resolve_repo_effective_destination(hub_config, repo_root)
+    assert resolved == {"kind": "local"}
+    assert "Failed to load manifest" in caplog.text
+    assert str(hub_config.manifest_path) in caplog.text

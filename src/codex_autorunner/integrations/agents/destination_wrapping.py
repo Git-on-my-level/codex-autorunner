@@ -72,7 +72,7 @@ def wrap_command_for_destination(
     wrapped = runtime.build_exec_command(
         container_name,
         command,
-        workdir=str(repo_abs),
+        workdir=spec.workdir,
         env=spec.env,
     )
 

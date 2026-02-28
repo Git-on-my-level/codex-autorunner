@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import subprocess
 from pathlib import Path
 from typing import Sequence
@@ -11,6 +12,7 @@ from codex_autorunner.integrations.docker.runtime import (
     DockerRuntime,
     DockerRuntimeError,
     DockerUnavailableError,
+    _container_spec_fingerprint,
     build_docker_container_spec,
     normalize_mounts,
     select_passthrough_env,
@@ -25,6 +27,20 @@ def _proc(
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(
         args=list(args), returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def _inspect_stdout(*, running: bool, spec_fingerprint: str | None) -> str:
+    labels = {}
+    if spec_fingerprint is not None:
+        labels["ca.spec-fingerprint"] = spec_fingerprint
+    return json.dumps(
+        [
+            {
+                "State": {"Running": running},
+                "Config": {"Labels": labels},
+            }
+        ]
     )
 
 
@@ -109,24 +125,28 @@ def test_normalize_mounts_adds_repo_root_mount(tmp_path: Path) -> None:
 
 def test_ensure_container_running_starts_existing_stopped_container() -> None:
     calls: list[list[str]] = []
-
-    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(list(cmd))
-        _ = kwargs
-        if cmd[1] == "inspect":
-            return _proc(cmd, stdout="false\n")
-        if cmd[1] == "start":
-            return _proc(cmd, stdout="demo\n")
-        raise AssertionError(f"Unexpected command: {cmd}")
-
-    runtime = DockerRuntime(run_fn=_run)
     spec = build_docker_container_spec(
         name="demo",
         image="busybox:latest",
         repo_root=Path("/tmp/repo"),
     )
+    fingerprint = _container_spec_fingerprint(spec)
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        _ = kwargs
+        if cmd[1] == "inspect":
+            return _proc(
+                cmd,
+                stdout=_inspect_stdout(running=False, spec_fingerprint=fingerprint),
+            )
+        if cmd[1] == "start":
+            return _proc(cmd, stdout="demo\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
     runtime.ensure_container_running(spec)
-    assert calls[0][:3] == ["docker", "inspect", "--format"]
+    assert calls[0] == ["docker", "inspect", "demo"]
     assert calls[1] == ["docker", "start", "demo"]
 
 
@@ -157,6 +177,8 @@ def test_ensure_container_running_runs_new_container_when_missing(
     runtime.ensure_container_running(spec)
     run_call = calls[1]
     assert run_call[:5] == ["docker", "run", "-d", "--name", "demo"]
+    assert "ca.managed=true" in run_call
+    assert any(part.startswith("ca.spec-fingerprint=") for part in run_call)
     assert "-v" in run_call
     assert f"{tmp_path.resolve()}:{tmp_path.resolve()}" in run_call
     assert "-w" in run_call
@@ -166,6 +188,39 @@ def test_ensure_container_running_runs_new_container_when_missing(
     assert "-e" in run_call
     assert "CAR_TOKEN=abc" in run_call
     assert "EXTRA=1" in run_call
+
+
+def test_ensure_container_running_recreates_when_spec_fingerprint_mismatches() -> None:
+    calls: list[list[str]] = []
+
+    spec = build_docker_container_spec(
+        name="demo",
+        image="busybox:latest",
+        repo_root=Path("/tmp/repo"),
+    )
+    fingerprint = _container_spec_fingerprint(spec)
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        _ = kwargs
+        if cmd[1] == "inspect":
+            return _proc(
+                cmd,
+                stdout=_inspect_stdout(running=True, spec_fingerprint="stale-fp"),
+            )
+        if cmd[1] == "rm":
+            return _proc(cmd, stdout="demo\n")
+        if cmd[1] == "run":
+            return _proc(cmd, stdout="container-id")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    runtime.ensure_container_running(spec)
+
+    assert [call[1] for call in calls] == ["inspect", "rm", "run"]
+    run_call = calls[2]
+    assert "ca.managed=true" in run_call
+    assert f"ca.spec-fingerprint={fingerprint}" in run_call
 
 
 def test_build_docker_container_spec_ignores_invalid_explicit_env(

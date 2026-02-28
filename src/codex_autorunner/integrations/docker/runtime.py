@@ -3,6 +3,8 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import fnmatch
+import hashlib
+import json
 import logging
 import os
 import subprocess
@@ -44,6 +46,35 @@ class DockerContainerSpec:
     mounts: tuple[DockerMount, ...]
     env: dict[str, str]
     workdir: str
+
+
+_SPEC_FINGERPRINT_LABEL = "ca.spec-fingerprint"
+
+
+def _container_spec_fingerprint(spec: DockerContainerSpec) -> str:
+    payload = {
+        "image": spec.image,
+        "mounts": [
+            {
+                "source": mount.source,
+                "target": mount.target,
+                "read_only": bool(mount.read_only),
+            }
+            for mount in sorted(
+                spec.mounts,
+                key=lambda item: (item.source, item.target, item.read_only),
+            )
+        ],
+        "env": [[key, value] for key, value in sorted(spec.env.items())],
+        "workdir": spec.workdir,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _container_not_found(details: str) -> bool:
+    lowered = details.lower()
+    return "no such object" in lowered or "no such container" in lowered
 
 
 def _expand_template(value: str, *, repo_root: Path, home_dir: Path) -> str:
@@ -215,25 +246,75 @@ class DockerRuntime:
         )
 
     def ensure_container_running(self, spec: DockerContainerSpec) -> None:
-        inspect_proc = self._run(
-            ["inspect", "--format", "{{.State.Running}}", spec.name],
-            check=False,
-            timeout_seconds=15,
-        )
-        if inspect_proc.returncode == 0:
-            running = (inspect_proc.stdout or "").strip().lower() == "true"
-            if running:
-                return
-            self._run(["start", spec.name], timeout_seconds=30)
-            return
-
-        details = (inspect_proc.stderr or inspect_proc.stdout or "").lower()
-        if "no such object" not in details and "no such container" not in details:
-            raise DockerRuntimeError(
-                f"Unable to inspect container {spec.name}: "
-                f"{(inspect_proc.stderr or inspect_proc.stdout or '').strip()}"
+        expected_fingerprint = _container_spec_fingerprint(spec)
+        for _ in range(2):
+            inspect_proc = self._run(
+                ["inspect", spec.name],
+                check=False,
+                timeout_seconds=15,
             )
+            if inspect_proc.returncode == 0:
+                inspect_payload = self._parse_inspect_payload(spec.name, inspect_proc)
+                running = bool(inspect_payload.get("State", {}).get("Running"))
+                labels = inspect_payload.get("Config", {}).get("Labels")
+                label_map = labels if isinstance(labels, dict) else {}
+                current_fingerprint = label_map.get(_SPEC_FINGERPRINT_LABEL)
+                if current_fingerprint != expected_fingerprint:
+                    logger.info(
+                        "Recreating docker container %s due to config drift "
+                        "(current=%r desired=%r)",
+                        spec.name,
+                        current_fingerprint,
+                        expected_fingerprint,
+                    )
+                    self._run(["rm", "-f", spec.name], timeout_seconds=30)
+                    if self._create_container(spec, expected_fingerprint):
+                        return
+                    continue
+                if running:
+                    return
+                self._run(["start", spec.name], timeout_seconds=30)
+                return
 
+            details = (inspect_proc.stderr or inspect_proc.stdout or "").strip()
+            if not _container_not_found(details):
+                raise DockerRuntimeError(
+                    f"Unable to inspect container {spec.name}: {details}"
+                )
+            if self._create_container(spec, expected_fingerprint):
+                return
+
+        raise DockerRuntimeError(
+            f"Failed to reconcile container {spec.name}: name conflict persisted"
+        )
+
+    def _parse_inspect_payload(
+        self,
+        container_name: str,
+        proc: subprocess.CompletedProcess[str],
+    ) -> dict[str, Any]:
+        raw = (proc.stdout or "").strip()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise DockerRuntimeError(
+                f"Unable to parse inspect output for container {container_name}"
+            ) from exc
+        if (
+            not isinstance(payload, list)
+            or not payload
+            or not isinstance(payload[0], dict)
+        ):
+            raise DockerRuntimeError(
+                f"Unexpected inspect payload for container {container_name}"
+            )
+        return payload[0]
+
+    def _create_container(
+        self,
+        spec: DockerContainerSpec,
+        fingerprint: str,
+    ) -> bool:
         cmd: list[str] = [
             "run",
             "-d",
@@ -241,6 +322,8 @@ class DockerRuntime:
             spec.name,
             "--label",
             "ca.managed=true",
+            "--label",
+            f"{_SPEC_FINGERPRINT_LABEL}={fingerprint}",
         ]
         for mount in spec.mounts:
             cmd.extend(["-v", mount.to_bind_spec()])
@@ -251,11 +334,10 @@ class DockerRuntime:
         cmd.extend([spec.image, "tail", "-f", "/dev/null"])
         run_proc = self._run(cmd, check=False, timeout_seconds=120)
         if run_proc.returncode == 0:
-            return
+            return True
         run_details = (run_proc.stderr or run_proc.stdout or "").lower()
         if "already in use by container" in run_details:
-            self._run(["start", spec.name], timeout_seconds=30)
-            return
+            return False
         raise DockerRuntimeError(
             f"Failed to create container {spec.name}: "
             f"{(run_proc.stderr or run_proc.stdout or '').strip()}"
