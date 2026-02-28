@@ -42,6 +42,7 @@ from ....core.pma_context import (
     get_active_context_auto_prune_meta,
     load_pma_prompt,
 )
+from ....core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
 from ....core.pma_dispatches import (
     find_pma_dispatch_path,
     list_pma_dispatches,
@@ -54,6 +55,11 @@ from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_sink import PmaActiveSinkStore
 from ....core.pma_state import PmaStateStore
+from ....core.pma_target_refs import (
+    format_pma_target_label,
+    parse_pma_target_ref,
+    pma_targets_usage,
+)
 from ....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -410,6 +416,27 @@ def build_pma_routes() -> APIRouter:
             "turn_id": result.get("turn_id") or current.get("turn_id"),
             "started_at": current.get("started_at"),
             "finished_at": now_iso(),
+        }
+
+    def _serialize_delivery_targets_state(state: dict[str, Any]) -> dict[str, Any]:
+        targets = [
+            target for target in state.get("targets", []) if isinstance(target, dict)
+        ]
+        rows: list[dict[str, Any]] = []
+        for target in targets:
+            key = target_key(target)
+            if not isinstance(key, str):
+                continue
+            rows.append(
+                {
+                    "key": key,
+                    "label": format_pma_target_label(target),
+                    "target": target,
+                }
+            )
+        return {
+            "updated_at": state.get("updated_at"),
+            "targets": rows,
         }
 
     def _resolve_transcript_turn_id(
@@ -1031,6 +1058,75 @@ def build_pma_routes() -> APIRouter:
             if current.get("client_turn_id") != client_turn_id:
                 current = {}
         return {"active": active, "current": current, "last_result": last_result}
+
+    @router.get("/targets")
+    def pma_targets_list(request: Request) -> dict[str, Any]:
+        store = PmaDeliveryTargetsStore(request.app.state.config.root)
+        return _serialize_delivery_targets_state(store.load())
+
+    @router.post("/targets/add")
+    async def pma_targets_add(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be an object"
+            )
+        ref = str(body.get("ref") or "").strip()
+        if not ref:
+            raise HTTPException(status_code=400, detail="ref is required")
+
+        target = parse_pma_target_ref(ref)
+        if target is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid target ref '{ref}'.\n{pma_targets_usage()}",
+            )
+        key = target_key(target)
+        if not isinstance(key, str):
+            raise HTTPException(status_code=400, detail=f"Invalid target ref '{ref}'.")
+
+        store = PmaDeliveryTargetsStore(request.app.state.config.root)
+        store.add_target(target)
+        payload = _serialize_delivery_targets_state(store.load())
+        payload.update({"status": "ok", "action": "add", "key": key})
+        return payload
+
+    @router.post("/targets/remove")
+    async def pma_targets_remove(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be an object"
+            )
+        ref = str(body.get("ref") or "").strip()
+        if not ref:
+            raise HTTPException(status_code=400, detail="ref is required")
+
+        target = parse_pma_target_ref(ref)
+        if target is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid target ref '{ref}'.\n{pma_targets_usage()}",
+            )
+        key = target_key(target)
+        if not isinstance(key, str):
+            raise HTTPException(status_code=400, detail=f"Invalid target ref '{ref}'.")
+
+        store = PmaDeliveryTargetsStore(request.app.state.config.root)
+        removed = store.remove_target(target)
+        payload = _serialize_delivery_targets_state(store.load())
+        payload.update(
+            {"status": "ok", "action": "remove", "key": key, "removed": bool(removed)}
+        )
+        return payload
+
+    @router.post("/targets/clear")
+    def pma_targets_clear(request: Request) -> dict[str, Any]:
+        store = PmaDeliveryTargetsStore(request.app.state.config.root)
+        store.set_targets([])
+        payload = _serialize_delivery_targets_state(store.load())
+        payload.update({"status": "ok", "action": "clear"})
+        return payload
 
     @router.get("/history")
     def list_pma_history(request: Request, limit: int = 50) -> dict[str, Any]:

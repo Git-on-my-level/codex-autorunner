@@ -13,8 +13,10 @@ from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
+from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from tests.conftest import write_test_config
 
@@ -43,6 +45,14 @@ def _disable_pma(hub_root: Path) -> None:
     cfg.setdefault("pma", {})
     cfg["pma"]["enabled"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
+def _targets_state_without_updated_at(state: dict[str, object]) -> dict[str, object]:
+    return {
+        "version": state.get("version"),
+        "targets": state.get("targets"),
+        "last_delivery_by_target": state.get("last_delivery_by_target"),
+    }
 
 
 def test_pma_agents_endpoint(hub_env) -> None:
@@ -87,6 +97,152 @@ def test_pma_routes_disabled_by_config(hub_env) -> None:
     client = TestClient(app)
     assert client.get("/hub/pma/agents").status_code == 404
     assert client.post("/hub/pma/chat", json={"message": "hi"}).status_code == 404
+
+
+def test_pma_targets_add_list_remove_clear(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    initial = client.get("/hub/pma/targets")
+    assert initial.status_code == 200
+    assert initial.json()["targets"] == []
+
+    add_web = client.post("/hub/pma/targets/add", json={"ref": "web"})
+    assert add_web.status_code == 200
+    assert add_web.json()["key"] == "web"
+
+    add_local = client.post(
+        "/hub/pma/targets/add",
+        json={"ref": "local:.codex-autorunner/pma/deliveries.jsonl"},
+    )
+    assert add_local.status_code == 200
+    assert add_local.json()["key"] == "local:.codex-autorunner/pma/deliveries.jsonl"
+
+    add_telegram = client.post(
+        "/hub/pma/targets/add",
+        json={"ref": "telegram:-100123:777"},
+    )
+    assert add_telegram.status_code == 200
+    assert add_telegram.json()["key"] == "chat:telegram:-100123:777"
+
+    add_discord = client.post(
+        "/hub/pma/targets/add",
+        json={"ref": "discord:987654321"},
+    )
+    assert add_discord.status_code == 200
+    assert add_discord.json()["key"] == "chat:discord:987654321"
+
+    listed = client.get("/hub/pma/targets")
+    assert listed.status_code == 200
+    listed_keys = {row["key"] for row in listed.json()["targets"]}
+    assert listed_keys == {
+        "web",
+        "local:.codex-autorunner/pma/deliveries.jsonl",
+        "chat:telegram:-100123:777",
+        "chat:discord:987654321",
+    }
+
+    remove = client.post(
+        "/hub/pma/targets/remove",
+        json={"ref": "chat:telegram:-100123:777"},
+    )
+    assert remove.status_code == 200
+    assert remove.json()["removed"] is True
+
+    clear = client.post("/hub/pma/targets/clear", json={})
+    assert clear.status_code == 200
+    assert clear.json()["targets"] == []
+
+    state = PmaDeliveryTargetsStore(hub_env.hub_root).load()
+    assert state["targets"] == []
+
+
+def test_pma_targets_reject_invalid_ref(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    invalid_add = client.post(
+        "/hub/pma/targets/add",
+        json={"ref": "telegram:not-a-number"},
+    )
+    assert invalid_add.status_code == 400
+    detail = invalid_add.json().get("detail", "")
+    assert "Invalid target ref" in detail
+    assert "telegram:<chat_id>" in detail
+
+    invalid_remove = client.post(
+        "/hub/pma/targets/remove",
+        json={"ref": "discord:"},
+    )
+    assert invalid_remove.status_code == 400
+    assert "Invalid target ref" in invalid_remove.json().get("detail", "")
+
+
+def test_pma_targets_web_state_matches_cli_helper(tmp_path: Path) -> None:
+    web_root = tmp_path / "web-hub"
+    cli_root = tmp_path / "cli-hub"
+
+    seed_hub_files(web_root, force=True)
+    seed_hub_files(cli_root, force=True)
+    _enable_pma(web_root)
+
+    web_app = create_hub_app(web_root)
+    client = TestClient(web_app)
+
+    add_refs = [
+        "web",
+        "local:.codex-autorunner/pma/deliveries.jsonl",
+        "telegram:-100123:777",
+        "discord:987654321",
+        "chat:telegram:-100123:777",
+    ]
+    remove_refs = ["telegram:-100123:777"]
+
+    for ref in add_refs:
+        resp = client.post("/hub/pma/targets/add", json={"ref": ref})
+        assert resp.status_code == 200, ref
+
+    for ref in remove_refs:
+        resp = client.post("/hub/pma/targets/remove", json={"ref": ref})
+        assert resp.status_code == 200, ref
+
+    web_state = PmaDeliveryTargetsStore(web_root).load()
+
+    cli_store = PmaDeliveryTargetsStore(cli_root)
+    for ref in add_refs:
+        parsed = pma_cli._parse_pma_target_ref(ref)
+        assert parsed is not None
+        cli_store.add_target(parsed)
+    for ref in remove_refs:
+        parsed = pma_cli._parse_pma_target_ref(ref)
+        assert parsed is not None
+        cli_store.remove_target(parsed)
+
+    cli_state = cli_store.load()
+    assert _targets_state_without_updated_at(
+        web_state
+    ) == _targets_state_without_updated_at(cli_state)
+
+
+def test_pma_ui_target_management_controls_present() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    index_html = (
+        repo_root / "src" / "codex_autorunner" / "static" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert 'id="pma-targets-list"' in index_html
+    assert 'id="pma-target-ref-input"' in index_html
+    assert 'id="pma-target-add"' in index_html
+    assert 'id="pma-targets-clear"' in index_html
+
+    pma_source = (
+        repo_root / "src" / "codex_autorunner" / "static_src" / "pma.ts"
+    ).read_text(encoding="utf-8")
+    assert "/hub/pma/targets" in pma_source
+    assert "/hub/pma/targets/add" in pma_source
+    assert "/hub/pma/targets/remove" in pma_source
+    assert "/hub/pma/targets/clear" in pma_source
 
 
 def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:

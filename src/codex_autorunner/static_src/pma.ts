@@ -66,6 +66,21 @@ type PMADocUpdate = {
   status: string;
 };
 
+type PMATargetRow = {
+  key: string;
+  label?: string;
+  target?: Record<string, unknown>;
+};
+
+type PMATargetsResponse = {
+  status?: string;
+  action?: string;
+  key?: string;
+  removed?: boolean;
+  updated_at?: string;
+  targets?: PMATargetRow[];
+};
+
 const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
 let activeContextMaxLines = 200;
 
@@ -524,6 +539,11 @@ function getElements() {
     docsSaveBtn: document.getElementById("pma-docs-save") as HTMLButtonElement | null,
     docsResetBtn: document.getElementById("pma-docs-reset") as HTMLButtonElement | null,
     docsSnapshotBtn: document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null,
+    targetRefInput: document.getElementById("pma-target-ref-input") as HTMLInputElement | null,
+    targetAddBtn: document.getElementById("pma-target-add") as HTMLButtonElement | null,
+    targetsRefreshBtn: document.getElementById("pma-targets-refresh") as HTMLButtonElement | null,
+    targetsClearBtn: document.getElementById("pma-targets-clear") as HTMLButtonElement | null,
+    targetsList: document.getElementById("pma-targets-list"),
   };
 }
 
@@ -610,6 +630,7 @@ async function initPMA(): Promise<void> {
   await refreshAgentControls({ force: true, reason: "initial" });
   await loadPMAThreadInfo();
   await initFileBoxUI();
+  await loadPMATargets();
   await loadPMADocs();
   attachHandlers();
   setPMAView(loadPMAView(), { persist: false });
@@ -642,6 +663,7 @@ async function initPMA(): Promise<void> {
   setInterval(() => {
     void loadPMAThreadInfo();
     void fileBoxCtrl?.refresh();
+    void loadPMATargets();
   }, 30000);
 }
 
@@ -693,6 +715,113 @@ async function loadPMAThreadInfo(): Promise<void> {
     elements.threadInfo.classList.remove("hidden");
   } catch {
     elements.threadInfo?.classList.add("hidden");
+  }
+}
+
+function renderPMATargets(rows: PMATargetRow[]): void {
+  const elements = getElements();
+  if (!elements.targetsList) return;
+
+  elements.targetsList.innerHTML = "";
+  if (!rows.length) {
+    elements.targetsList.textContent = "No delivery targets configured.";
+    elements.targetsList.classList.add("muted", "small");
+    return;
+  }
+
+  elements.targetsList.classList.remove("muted", "small");
+  const fragment = document.createDocumentFragment();
+  rows.forEach((row) => {
+    if (!row || typeof row.key !== "string" || !row.key) return;
+    const item = document.createElement("div");
+    item.className = "pma-target-item";
+
+    const key = document.createElement("code");
+    key.className = "pma-target-key";
+    key.textContent = row.key;
+    item.appendChild(key);
+
+    if (row.label) {
+      const label = document.createElement("span");
+      label.className = "pma-target-label muted";
+      label.textContent = row.label;
+      item.appendChild(label);
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "ghost sm";
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.dataset.targetRef = row.key;
+    item.appendChild(removeBtn);
+
+    fragment.appendChild(item);
+  });
+  elements.targetsList.appendChild(fragment);
+}
+
+async function loadPMATargets(): Promise<void> {
+  const elements = getElements();
+  if (!elements.targetsList) return;
+  try {
+    const payload = (await api("/hub/pma/targets", { method: "GET" })) as PMATargetsResponse;
+    const rows = Array.isArray(payload?.targets)
+      ? payload.targets.filter(
+          (row): row is PMATargetRow => Boolean(row && typeof row.key === "string")
+        )
+      : [];
+    renderPMATargets(rows);
+  } catch {
+    elements.targetsList.textContent = "Failed to load delivery targets.";
+    elements.targetsList.classList.add("muted", "small");
+  }
+}
+
+async function addPMATarget(): Promise<void> {
+  const elements = getElements();
+  const ref = elements.targetRefInput?.value?.trim() || "";
+  if (!ref) {
+    flash("Target ref is required", "error");
+    return;
+  }
+  try {
+    await api("/hub/pma/targets/add", { method: "POST", body: { ref } });
+    if (elements.targetRefInput) {
+      elements.targetRefInput.value = "";
+    }
+    flash("Delivery target added", "info");
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to add delivery target", "error");
+  }
+}
+
+async function removePMATarget(ref: string): Promise<void> {
+  if (!ref) return;
+  try {
+    const payload = (await api("/hub/pma/targets/remove", {
+      method: "POST",
+      body: { ref },
+    })) as PMATargetsResponse;
+    if (payload?.removed) {
+      flash(`Removed ${ref}`, "info");
+    } else {
+      flash(`Target not found: ${ref}`, "info");
+    }
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to remove delivery target", "error");
+  }
+}
+
+async function clearPMATargets(): Promise<void> {
+  if (!window.confirm("Clear all PMA delivery targets?")) return;
+  try {
+    await api("/hub/pma/targets/clear", { method: "POST" });
+    flash("Cleared delivery targets", "info");
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to clear delivery targets", "error");
   }
 }
 
@@ -1310,6 +1439,44 @@ function attachHandlers(): void {
   if (elements.outboxClear) {
     elements.outboxClear.addEventListener("click", () => {
       void clearPMABox("outbox");
+    });
+  }
+
+  if (elements.targetAddBtn) {
+    elements.targetAddBtn.addEventListener("click", () => {
+      void addPMATarget();
+    });
+  }
+
+  if (elements.targetRefInput) {
+    elements.targetRefInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void addPMATarget();
+      }
+    });
+  }
+
+  if (elements.targetsRefreshBtn) {
+    elements.targetsRefreshBtn.addEventListener("click", () => {
+      void loadPMATargets();
+    });
+  }
+
+  if (elements.targetsClearBtn) {
+    elements.targetsClearBtn.addEventListener("click", () => {
+      void clearPMATargets();
+    });
+  }
+
+  if (elements.targetsList) {
+    elements.targetsList.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement | null;
+      const removeBtn = target?.closest("button[data-target-ref]") as HTMLButtonElement | null;
+      if (!removeBtn) return;
+      const ref = removeBtn.dataset.targetRef || "";
+      if (!ref) return;
+      void removePMATarget(ref);
     });
   }
 
