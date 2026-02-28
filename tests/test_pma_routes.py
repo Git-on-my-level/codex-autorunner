@@ -259,6 +259,8 @@ def test_pma_targets_web_state_matches_cli_helper(tmp_path: Path) -> None:
         "chat:telegram:-100123:777",
     ]
     remove_refs = ["telegram:-100123:777"]
+    set_active_refs = ["discord:987654321"]
+    set_active_keys = ["web"]
 
     for ref in add_refs:
         resp = client.post("/hub/pma/targets/add", json={"ref": ref})
@@ -267,6 +269,14 @@ def test_pma_targets_web_state_matches_cli_helper(tmp_path: Path) -> None:
     for ref in remove_refs:
         resp = client.post("/hub/pma/targets/remove", json={"ref": ref})
         assert resp.status_code == 200, ref
+
+    for ref in set_active_refs:
+        resp = client.post("/hub/pma/targets/active", json={"ref": ref})
+        assert resp.status_code == 200, ref
+
+    for key in set_active_keys:
+        resp = client.post("/hub/pma/targets/active", json={"key": key})
+        assert resp.status_code == 200, key
 
     web_state = PmaDeliveryTargetsStore(web_root).load()
 
@@ -280,10 +290,18 @@ def test_pma_targets_web_state_matches_cli_helper(tmp_path: Path) -> None:
         assert parsed is not None
         cli_store.remove_target(parsed)
 
+    for ref in set_active_refs:
+        parsed = pma_cli._parse_pma_target_ref(ref)
+        assert parsed is not None
+        cli_store.set_active_target(parsed)
+    for key in set_active_keys:
+        cli_store.set_active_target(key)
+
     cli_state = cli_store.load()
     assert _targets_state_without_updated_at(
         web_state
     ) == _targets_state_without_updated_at(cli_state)
+    assert web_state.get("active_target_key") == "web"
 
 
 def test_pma_ui_target_management_controls_present() -> None:
@@ -300,9 +318,11 @@ def test_pma_ui_target_management_controls_present() -> None:
         repo_root / "src" / "codex_autorunner" / "static_src" / "pma.ts"
     ).read_text(encoding="utf-8")
     assert "/hub/pma/targets" in pma_source
+    assert "/hub/pma/targets/active" in pma_source
     assert "/hub/pma/targets/add" in pma_source
     assert "/hub/pma/targets/remove" in pma_source
     assert "/hub/pma/targets/clear" in pma_source
+    assert "Set active" in pma_source
 
 
 def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:

@@ -13721,6 +13721,11 @@ button.filebox-delete:hover {
   background: var(--bg);
 }
 
+.pma-target-item.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
 .pma-target-key {
   font-size: 11px;
   color: var(--text);
@@ -13731,6 +13736,19 @@ button.filebox-delete:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pma-target-active-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px;
+  padding: 1px 6px;
+  line-height: 1.5;
 }
 
 .pma-target-item > button {

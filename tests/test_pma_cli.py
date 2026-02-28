@@ -448,6 +448,8 @@ def test_pma_targets_group_has_required_commands() -> None:
     assert "add" in output
     assert "rm" in output
     assert "clear" in output
+    assert "active" in output
+    assert "set-active" in output
 
 
 def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
@@ -531,6 +533,67 @@ def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
         if isinstance(key, str)
     }
     assert keys == set()
+
+
+def test_pma_targets_active_show_and_set(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    runner = CliRunner()
+
+    add_web = runner.invoke(pma_app, ["targets", "add", "web", "--path", str(tmp_path)])
+    assert add_web.exit_code == 0
+    assert (
+        runner.invoke(
+            pma_app,
+            ["targets", "add", "telegram:-100123:777", "--path", str(tmp_path)],
+        ).exit_code
+        == 0
+    )
+
+    show_result = runner.invoke(
+        pma_app,
+        ["targets", "active", "--path", str(tmp_path)],
+    )
+    assert show_result.exit_code == 0
+    assert "Active PMA delivery target: web" in show_result.stdout
+
+    set_result = runner.invoke(
+        pma_app,
+        ["targets", "set-active", "telegram:-100123:777", "--path", str(tmp_path)],
+    )
+    assert set_result.exit_code == 0
+    assert (
+        "Set active PMA delivery target: chat:telegram:-100123:777" in set_result.stdout
+    )
+
+    set_same_result = runner.invoke(
+        pma_app,
+        [
+            "targets",
+            "set-active",
+            "chat:telegram:-100123:777",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    assert set_same_result.exit_code == 0
+    assert (
+        "PMA delivery target already active: chat:telegram:-100123:777"
+        in set_same_result.stdout
+    )
+
+    missing_result = runner.invoke(
+        pma_app,
+        ["targets", "set-active", "chat:discord:42", "--path", str(tmp_path)],
+    )
+    assert missing_result.exit_code == 1
+    assert "PMA delivery target not found: chat:discord:42" in missing_result.output
+
+    invalid_result = runner.invoke(
+        pma_app,
+        ["targets", "set-active", "telegram:not-a-number", "--path", str(tmp_path)],
+    )
+    assert invalid_result.exit_code == 1
+    assert "Invalid target ref" in invalid_result.output
 
 
 def test_pma_targets_add_rejects_invalid_ref(tmp_path: Path) -> None:

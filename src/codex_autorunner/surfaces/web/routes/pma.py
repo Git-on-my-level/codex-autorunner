@@ -1100,12 +1100,18 @@ def build_pma_routes() -> APIRouter:
         active_key = sink_store.get_active_target_key() or payload.get(
             "active_target_key"
         )
+        rows = [row for row in payload.get("targets", []) if isinstance(row, dict)]
+        normalized_rows: list[dict[str, Any]] = []
+        for row in rows:
+            normalized = dict(row)
+            normalized["active"] = normalized.get("key") == active_key
+            normalized_rows.append(normalized)
+        payload["targets"] = normalized_rows
+        payload["active_target_key"] = (
+            active_key if isinstance(active_key, str) and active_key else None
+        )
         active_row = next(
-            (
-                row
-                for row in payload.get("targets", [])
-                if isinstance(row, dict) and row.get("key") == active_key
-            ),
+            (row for row in normalized_rows if row.get("key") == active_key),
             None,
         )
         payload["active_target"] = active_row

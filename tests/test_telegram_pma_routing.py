@@ -1388,6 +1388,43 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
 
 
 @pytest.mark.anyio
+async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=TelegramTopicRecord())
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "target add web", _RuntimeStub())
+    await handler._handle_pma(message, "target add telegram:-2002:77", _RuntimeStub())
+
+    await handler._handle_pma(message, "target active", _RuntimeStub())
+    assert "Active PMA delivery target: web" in handler.sent[-1]
+
+    await handler._handle_pma(
+        message, "target active set telegram:-2002:77", _RuntimeStub()
+    )
+    assert "Set active PMA delivery target: chat:telegram:-2002:77" in handler.sent[-1]
+
+    await handler._handle_pma(message, "target active show", _RuntimeStub())
+    assert "Active PMA delivery target: chat:telegram:-2002:77" in handler.sent[-1]
+
+    await handler._handle_pma(
+        message, "target active chat:telegram:-2002:77", _RuntimeStub()
+    )
+    assert (
+        "PMA delivery target already active: chat:telegram:-2002:77" in handler.sent[-1]
+    )
+
+    await handler._handle_pma(
+        message, "target active set chat:discord:42", _RuntimeStub()
+    )
+    assert "PMA delivery target not found: chat:discord:42" in handler.sent[-1]
+
+    await handler._handle_pma(message, "target active set telegram:abc", _RuntimeStub())
+    assert "Invalid target ref 'telegram:abc'." in handler.sent[-1]
+    assert "/pma target active [ref|key]" in handler.sent[-1]
+
+
+@pytest.mark.anyio
 async def test_pma_target_add_invalid_ref_reports_usage(tmp_path: Path) -> None:
     handler = _PmaTargetsHandler(
         hub_root=tmp_path / "hub",
@@ -1422,6 +1459,8 @@ async def test_pma_target_ref_sequence_matches_cli_store_payload(
         await handler._handle_pma(message, f"target add {ref}", _RuntimeStub())
     for ref in remove_refs:
         await handler._handle_pma(message, f"target rm {ref}", _RuntimeStub())
+    await handler._handle_pma(message, "target active discord:99887766", _RuntimeStub())
+    await handler._handle_pma(message, "target active web", _RuntimeStub())
 
     telegram_state = PmaDeliveryTargetsStore(telegram_root).load()
 
@@ -1434,6 +1473,12 @@ async def test_pma_target_ref_sequence_matches_cli_store_payload(
         parsed = pma_cli._parse_pma_target_ref(ref)
         assert parsed is not None
         cli_store.remove_target(parsed)
+    parsed_discord_active = pma_cli._parse_pma_target_ref("discord:99887766")
+    assert parsed_discord_active is not None
+    cli_store.set_active_target(parsed_discord_active)
+    parsed_web_active = pma_cli._parse_pma_target_ref("web")
+    assert parsed_web_active is not None
+    cli_store.set_active_target(parsed_web_active)
     cli_state = cli_store.load()
 
     assert _targets_state_without_updated_at(

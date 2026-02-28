@@ -317,6 +317,15 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         required_capabilities=("pma_delivery_targets",),
     ),
     CommandContractEntry(
+        id="pma.target.active",
+        path=("pma", "target", "active"),
+        requires_bound_workspace=False,
+        status="stable",
+        telegram_commands=("pma",),
+        discord_paths=(("pma", "target", "active"),),
+        required_capabilities=("pma_delivery_targets",),
+    ),
+    CommandContractEntry(
         id="car.resume",
         path=("car", "resume"),
         requires_bound_workspace=True,

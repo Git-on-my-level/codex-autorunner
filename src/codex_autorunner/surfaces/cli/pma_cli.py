@@ -563,6 +563,7 @@ def pma_targets_list(
     hub_root = _resolve_hub_path(path)
     store = PmaDeliveryTargetsStore(hub_root)
     state = store.load()
+    active_target_key = store.get_active_target_key()
     targets = [
         target for target in state.get("targets", []) if isinstance(target, dict)
     ]
@@ -577,11 +578,16 @@ def pma_targets_list(
                 "key": key,
                 "label": _format_pma_target_label(target),
                 "target": target,
+                "active": key == active_target_key,
             }
         )
 
     if output_json:
-        typer.echo(json.dumps({"targets": rows}, indent=2))
+        typer.echo(
+            json.dumps(
+                {"active_target_key": active_target_key, "targets": rows}, indent=2
+            )
+        )
         return
 
     if not rows:
@@ -591,11 +597,119 @@ def pma_targets_list(
     for row in rows:
         key = row["key"]
         label = row.get("label")
+        active_suffix = " [active]" if row.get("active") else ""
         if isinstance(label, str) and label:
-            lines.append(f"- {key} ({label})")
+            lines.append(f"- {key} ({label}){active_suffix}")
         else:
-            lines.append(f"- {key}")
+            lines.append(f"- {key}{active_suffix}")
     typer.echo("\n".join(lines))
+
+
+def _resolve_active_target_key(
+    store: PmaDeliveryTargetsStore, ref_or_key: str
+) -> tuple[Optional[str], Optional[str]]:
+    candidate = ref_or_key.strip()
+    if not candidate:
+        return None, "Target ref or key is required."
+
+    state = store.load()
+    known_keys = {
+        key
+        for key in (target_key(item) for item in state.get("targets", []))
+        if isinstance(key, str)
+    }
+    parsed = _parse_pma_target_ref(candidate)
+    if parsed is None:
+        if candidate in known_keys:
+            return candidate, None
+        return None, _invalid_pma_target_ref_message(candidate)
+
+    key = target_key(parsed)
+    if not isinstance(key, str):
+        return None, f"Invalid target ref '{candidate}'."
+    if key not in known_keys:
+        return None, f"PMA delivery target not found: {key}"
+    return key, None
+
+
+@targets_app.command("active")
+def pma_targets_active(
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Show the active PMA delivery target."""
+    hub_root = _resolve_hub_path(path)
+    store = PmaDeliveryTargetsStore(hub_root)
+    state = store.load()
+    targets = [
+        target for target in state.get("targets", []) if isinstance(target, dict)
+    ]
+    active_target_key = store.get_active_target_key()
+    active_target = next(
+        (target for target in targets if target_key(target) == active_target_key),
+        None,
+    )
+
+    if output_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "active_target_key": active_target_key,
+                    "active_target": active_target,
+                    "targets": targets,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    if not isinstance(active_target_key, str):
+        typer.echo("Active PMA delivery target: (none)")
+        return
+    label = (
+        _format_pma_target_label(active_target)
+        if isinstance(active_target, dict)
+        else ""
+    )
+    if label:
+        typer.echo(f"Active PMA delivery target: {active_target_key} ({label})")
+        return
+    typer.echo(f"Active PMA delivery target: {active_target_key}")
+
+
+@targets_app.command("set-active")
+@targets_app.command("activate")
+def pma_targets_set_active(
+    ref_or_key: str = typer.Argument(..., help="Target ref or key"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Set the active PMA delivery target by ref or key."""
+    hub_root = _resolve_hub_path(path)
+    store = PmaDeliveryTargetsStore(hub_root)
+    key, error = _resolve_active_target_key(store, ref_or_key)
+    if error:
+        typer.echo(error, err=True)
+        raise typer.Exit(code=1) from None
+    if not isinstance(key, str):
+        typer.echo("Unable to resolve target key.", err=True)
+        raise typer.Exit(code=1) from None
+
+    changed = store.set_active_target(key)
+    payload = {
+        "status": "ok",
+        "action": "set_active",
+        "key": key,
+        "changed": changed,
+        "active_target_key": store.get_active_target_key(),
+    }
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    if changed:
+        typer.echo(f"Set active PMA delivery target: {key}")
+        return
+    typer.echo(f"PMA delivery target already active: {key}")
 
 
 @targets_app.command("add")

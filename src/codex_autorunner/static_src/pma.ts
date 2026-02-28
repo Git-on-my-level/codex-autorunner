@@ -69,6 +69,7 @@ type PMADocUpdate = {
 type PMATargetRow = {
   key: string;
   label?: string;
+  active?: boolean;
   target?: Record<string, unknown>;
 };
 
@@ -76,7 +77,10 @@ type PMATargetsResponse = {
   status?: string;
   action?: string;
   key?: string;
+  changed?: boolean;
   removed?: boolean;
+  active_target_key?: string | null;
+  active_target?: PMATargetRow | null;
   updated_at?: string;
   targets?: PMATargetRow[];
 };
@@ -735,6 +739,9 @@ function renderPMATargets(rows: PMATargetRow[]): void {
     if (!row || typeof row.key !== "string" || !row.key) return;
     const item = document.createElement("div");
     item.className = "pma-target-item";
+    if (row.active) {
+      item.classList.add("is-active");
+    }
 
     const key = document.createElement("code");
     key.className = "pma-target-key";
@@ -746,6 +753,20 @@ function renderPMATargets(rows: PMATargetRow[]): void {
       label.className = "pma-target-label muted";
       label.textContent = row.label;
       item.appendChild(label);
+    }
+
+    if (row.active) {
+      const badge = document.createElement("span");
+      badge.className = "pma-target-active-badge";
+      badge.textContent = "active";
+      item.appendChild(badge);
+    } else {
+      const activeBtn = document.createElement("button");
+      activeBtn.className = "ghost sm";
+      activeBtn.type = "button";
+      activeBtn.textContent = "Set active";
+      activeBtn.dataset.targetSetActiveKey = row.key;
+      item.appendChild(activeBtn);
     }
 
     const removeBtn = document.createElement("button");
@@ -764,7 +785,7 @@ async function loadPMATargets(): Promise<void> {
   const elements = getElements();
   if (!elements.targetsList) return;
   try {
-    const payload = (await api("/hub/pma/targets", { method: "GET" })) as PMATargetsResponse;
+    const payload = (await api("/hub/pma/targets/active", { method: "GET" })) as PMATargetsResponse;
     const rows = Array.isArray(payload?.targets)
       ? payload.targets.filter(
           (row): row is PMATargetRow => Boolean(row && typeof row.key === "string")
@@ -811,6 +832,24 @@ async function removePMATarget(ref: string): Promise<void> {
     await loadPMATargets();
   } catch (err) {
     flash((err as Error).message || "Failed to remove delivery target", "error");
+  }
+}
+
+async function setPMAActiveTarget(key: string): Promise<void> {
+  if (!key) return;
+  try {
+    const payload = (await api("/hub/pma/targets/active", {
+      method: "POST",
+      body: { key },
+    })) as PMATargetsResponse;
+    if (payload?.changed) {
+      flash(`Set active target: ${key}`, "info");
+    } else {
+      flash(`Target already active: ${key}`, "info");
+    }
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to set active target", "error");
   }
 }
 
@@ -1472,6 +1511,13 @@ function attachHandlers(): void {
   if (elements.targetsList) {
     elements.targetsList.addEventListener("click", (event) => {
       const target = event.target as HTMLElement | null;
+      const activeBtn = target?.closest("button[data-target-set-active-key]") as HTMLButtonElement | null;
+      if (activeBtn) {
+        const key = activeBtn.dataset.targetSetActiveKey || "";
+        if (!key) return;
+        void setPMAActiveTarget(key);
+        return;
+      }
       const removeBtn = target?.closest("button[data-target-ref]") as HTMLButtonElement | null;
       if (!removeBtn) return;
       const ref = removeBtn.dataset.targetRef || "";

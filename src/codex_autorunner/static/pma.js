@@ -640,6 +640,9 @@ function renderPMATargets(rows) {
             return;
         const item = document.createElement("div");
         item.className = "pma-target-item";
+        if (row.active) {
+            item.classList.add("is-active");
+        }
         const key = document.createElement("code");
         key.className = "pma-target-key";
         key.textContent = row.key;
@@ -649,6 +652,20 @@ function renderPMATargets(rows) {
             label.className = "pma-target-label muted";
             label.textContent = row.label;
             item.appendChild(label);
+        }
+        if (row.active) {
+            const badge = document.createElement("span");
+            badge.className = "pma-target-active-badge";
+            badge.textContent = "active";
+            item.appendChild(badge);
+        }
+        else {
+            const activeBtn = document.createElement("button");
+            activeBtn.className = "ghost sm";
+            activeBtn.type = "button";
+            activeBtn.textContent = "Set active";
+            activeBtn.dataset.targetSetActiveKey = row.key;
+            item.appendChild(activeBtn);
         }
         const removeBtn = document.createElement("button");
         removeBtn.className = "ghost sm";
@@ -665,7 +682,7 @@ async function loadPMATargets() {
     if (!elements.targetsList)
         return;
     try {
-        const payload = (await api("/hub/pma/targets", { method: "GET" }));
+        const payload = (await api("/hub/pma/targets/active", { method: "GET" }));
         const rows = Array.isArray(payload?.targets)
             ? payload.targets.filter((row) => Boolean(row && typeof row.key === "string"))
             : [];
@@ -713,6 +730,26 @@ async function removePMATarget(ref) {
     }
     catch (err) {
         flash(err.message || "Failed to remove delivery target", "error");
+    }
+}
+async function setPMAActiveTarget(key) {
+    if (!key)
+        return;
+    try {
+        const payload = (await api("/hub/pma/targets/active", {
+            method: "POST",
+            body: { key },
+        }));
+        if (payload?.changed) {
+            flash(`Set active target: ${key}`, "info");
+        }
+        else {
+            flash(`Target already active: ${key}`, "info");
+        }
+        await loadPMATargets();
+    }
+    catch (err) {
+        flash(err.message || "Failed to set active target", "error");
     }
 }
 async function clearPMATargets() {
@@ -1315,6 +1352,14 @@ function attachHandlers() {
     if (elements.targetsList) {
         elements.targetsList.addEventListener("click", (event) => {
             const target = event.target;
+            const activeBtn = target?.closest("button[data-target-set-active-key]");
+            if (activeBtn) {
+                const key = activeBtn.dataset.targetSetActiveKey || "";
+                if (!key)
+                    return;
+                void setPMAActiveTarget(key);
+                return;
+            }
             const removeBtn = target?.closest("button[data-target-ref]");
             if (!removeBtn)
                 return;

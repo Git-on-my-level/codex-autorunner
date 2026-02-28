@@ -2958,6 +2958,7 @@ class DiscordBotService:
             "/pma target add <ref> - Add a PMA delivery target",
             "/pma target rm <ref> - Remove a PMA delivery target",
             "/pma target clear - Clear PMA delivery targets",
+            "/pma target active [ref|key] - Show/set active PMA delivery target",
             "",
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",
@@ -5209,7 +5210,9 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        state = PmaDeliveryTargetsStore(self._config.root).load()
+        store = PmaDeliveryTargetsStore(self._config.root)
+        state = store.load()
+        active_key = store.get_active_target_key()
         targets = [
             target for target in state.get("targets", []) if isinstance(target, dict)
         ]
@@ -5222,10 +5225,11 @@ class DiscordBotService:
                 if not isinstance(key, str):
                     continue
                 label = self._format_pma_target_label(target)
+                active_suffix = " [active]" if key == active_key else ""
                 if label:
-                    lines.append(f"- {key} ({label})")
+                    lines.append(f"- {key} ({label}){active_suffix}")
                 else:
-                    lines.append(f"- {key}")
+                    lines.append(f"- {key}{active_suffix}")
             text = "\n".join(lines)
         await self._respond_ephemeral(interaction_id, interaction_token, text)
 
@@ -5246,6 +5250,47 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 "Cleared PMA delivery targets.",
+            )
+            return
+
+        if action_norm == "active":
+            raw_ref = options.get("ref")
+            ref_or_key = raw_ref.strip() if isinstance(raw_ref, str) else ""
+            if not ref_or_key:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    self._format_pma_active_target(store),
+                )
+                return
+            key, error = self._resolve_pma_target_key_for_active(
+                channel_id=channel_id,
+                store=store,
+                ref_or_key=ref_or_key,
+            )
+            if error:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    error,
+                )
+                return
+            if not isinstance(key, str):
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Unable to resolve target key.",
+                )
+                return
+            changed = store.set_active_target(key)
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    f"Set active PMA delivery target: {key}"
+                    if changed
+                    else f"PMA delivery target already active: {key}"
+                ),
             )
             return
 
@@ -5311,9 +5356,60 @@ class DiscordBotService:
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
+                "/pma target active [ref|key]",
                 pma_targets_usage(include_here=True),
             ]
         )
+
+    def _format_pma_active_target(self, store: PmaDeliveryTargetsStore) -> str:
+        active_key = store.get_active_target_key()
+        if not isinstance(active_key, str):
+            return "Active PMA delivery target: (none)"
+        state = store.load()
+        active_target = next(
+            (
+                target
+                for target in state.get("targets", [])
+                if isinstance(target, dict) and target_key(target) == active_key
+            ),
+            None,
+        )
+        label = (
+            self._format_pma_target_label(active_target)
+            if isinstance(active_target, dict)
+            else ""
+        )
+        if label:
+            return f"Active PMA delivery target: {active_key} ({label})"
+        return f"Active PMA delivery target: {active_key}"
+
+    def _resolve_pma_target_key_for_active(
+        self,
+        *,
+        channel_id: str,
+        store: PmaDeliveryTargetsStore,
+        ref_or_key: str,
+    ) -> tuple[Optional[str], Optional[str]]:
+        candidate = ref_or_key.strip()
+        if not candidate:
+            return None, self._pma_usage_text()
+        state = store.load()
+        known_keys = {
+            key
+            for key in (target_key(target) for target in state.get("targets", []))
+            if isinstance(key, str)
+        }
+        target = self._parse_pma_target_ref(channel_id=channel_id, ref=candidate)
+        if target is None:
+            if candidate in known_keys:
+                return candidate, None
+            return None, f"Invalid target ref '{candidate}'.\n{self._pma_usage_text()}"
+        key = target_key(target)
+        if not isinstance(key, str):
+            return None, f"Invalid target ref '{candidate}'."
+        if key not in known_keys:
+            return None, f"PMA delivery target not found: {key}"
+        return key, None
 
     def _pma_here_target(self, channel_id: str) -> dict[str, Any]:
         return {
