@@ -1,6 +1,7 @@
 """Tests for PMA CLI commands."""
 
 from pathlib import Path
+from typing import Optional
 
 from typer.testing import CliRunner
 
@@ -9,7 +10,7 @@ from codex_autorunner.core.pma_delivery_targets import (
     PmaDeliveryTargetsStore,
     target_key,
 )
-from codex_autorunner.surfaces.cli.pma_cli import pma_app
+from codex_autorunner.surfaces.cli.pma_cli import _resolve_hub_path, pma_app
 
 
 def test_pma_cli_has_required_commands():
@@ -71,6 +72,46 @@ def test_pma_cli_thread_list_help_shows_json_option():
     assert result.exit_code == 0
     output = result.stdout
     assert "--json" in output, "PMA thread list should support --json"
+
+
+def test_resolve_hub_path_prefers_repo_root_for_config_file(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    assert _resolve_hub_path(tmp_path) == tmp_path.resolve()
+
+
+def test_pma_thread_list_limits_default_and_max(monkeypatch, tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    captured: dict[str, object] = {}
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload: Optional[dict] = None,
+        token_env: Optional[str] = None,
+        params: Optional[dict] = None,
+    ) -> dict:
+        captured["params"] = dict(params or {})
+        return {"threads": []}
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.pma_cli._request_json",
+        _fake_request_json,
+    )
+
+    runner = CliRunner()
+    default_result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--path", str(tmp_path)],
+    )
+    assert default_result.exit_code == 0
+    assert captured.get("params", {}).get("limit") == 50
+
+    capped_result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--path", str(tmp_path), "--limit", "99"],
+    )
+    assert capped_result.exit_code == 0
+    assert captured.get("params", {}).get("limit") == 50
 
 
 def test_pma_cli_thread_send_help_shows_json_option():

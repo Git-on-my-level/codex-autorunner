@@ -1095,10 +1095,12 @@ def build_pma_routes() -> APIRouter:
         agent: Optional[str] = None,
         status: Optional[str] = None,
         repo_id: Optional[str] = None,
-        limit: int = 200,
+        limit: int = 50,
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        if limit > 50:
+            limit = 50
         store = PmaThreadStore(request.app.state.config.root)
         threads = store.list_threads(
             agent=_normalize_optional_text(agent),

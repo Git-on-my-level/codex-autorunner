@@ -55,7 +55,12 @@ def _resolve_hub_path(path: Optional[Path]) -> Path:
             if not candidate.exists():
                 candidate = path / ".codex-autorunner" / "config.yml"
         if candidate.exists():
-            return candidate.parent.parent.resolve()
+            if (
+                candidate.name == "config.yml"
+                and candidate.parent.name == ".codex-autorunner"
+            ):
+                return candidate.parent.parent.resolve()
+            return candidate.parent.resolve()
     return Path.cwd()
 
 
@@ -761,12 +766,13 @@ def pma_thread_list(
     agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
     status: Optional[str] = typer.Option(None, "--status", help="Filter by status"),
     repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
-    limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
+    limit: int = typer.Option(50, "--limit", min=1, help="Maximum rows to return"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """List managed PMA threads."""
     hub_root = _resolve_hub_path(path)
+    limit = min(limit, 50)
     params = {
         key: value
         for key, value in {

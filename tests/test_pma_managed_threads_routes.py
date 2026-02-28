@@ -114,6 +114,52 @@ def test_list_managed_threads_returns_created_thread(hub_env) -> None:
     assert any(thread["managed_thread_id"] == created_id for thread in threads)
 
 
+def test_list_managed_threads_default_limit_is_fifty(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        for i in range(60):
+            create_resp = client.post(
+                "/hub/pma/threads",
+                json={
+                    "agent": "codex",
+                    "repo_id": hub_env.repo_id,
+                    "name": f"Thread {i}",
+                },
+            )
+            assert create_resp.status_code == 200
+
+        list_resp = client.get("/hub/pma/threads")
+
+    assert list_resp.status_code == 200
+    threads = list_resp.json()["threads"]
+    assert isinstance(threads, list)
+    assert len(threads) == 50
+
+
+def test_list_managed_threads_respects_limit_cap_of_fifty(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        for i in range(60):
+            create_resp = client.post(
+                "/hub/pma/threads",
+                json={
+                    "agent": "codex",
+                    "repo_id": hub_env.repo_id,
+                    "name": f"Thread {i}",
+                },
+            )
+            assert create_resp.status_code == 200
+
+        list_resp = client.get("/hub/pma/threads", params={"limit": 200})
+
+    assert list_resp.status_code == 200
+    threads = list_resp.json()["threads"]
+    assert isinstance(threads, list)
+    assert len(threads) == 50
+
+
 def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
