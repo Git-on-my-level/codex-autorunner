@@ -1156,6 +1156,15 @@ def build_pma_routes() -> APIRouter:
 
         changed = sink_store.set_active_target(key)
         payload = _serialize_delivery_targets_state(store.load())
+        payload["active_target"] = next(
+            (
+                row
+                for row in payload.get("targets", [])
+                if isinstance(row, dict)
+                and row.get("key") == payload.get("active_target_key")
+            ),
+            None,
+        )
         payload.update(
             {"status": "ok", "action": "set_active", "key": key, "changed": changed}
         )

@@ -205,6 +205,9 @@ def test_pma_targets_active_get_and_set(hub_env) -> None:
     assert set_payload["status"] == "ok"
     assert set_payload["changed"] is True
     assert set_payload["active_target_key"] == "chat:telegram:-100123:777"
+    assert (set_payload.get("active_target") or {}).get(
+        "key"
+    ) == "chat:telegram:-100123:777"
     assert (
         next(
             row
