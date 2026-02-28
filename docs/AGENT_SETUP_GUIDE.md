@@ -146,11 +146,16 @@ car pma delete inbox --all --path <hub_root>
 # Repo/worktree destination controls
 car hub destination --help
 car hub destination show <repo_id> --path <hub_root>
+car hub destination show <repo_id> --json --path <hub_root>
 car hub destination set <repo_id> local --path <hub_root>
+car hub destination set <repo_id> local --json --path <hub_root>
+car hub destination set <repo_id> docker --image ghcr.io/example/my-codex-runner:latest --json --path <hub_root>
 ```
 
+Use `car hub destination show ... --json` when validating destination changes; output includes `configured_destination`, `effective_destination`, `source`, and `issues` for quick scriptable checks.
+
 Destination/reference links:
-- API endpoints: `POST /hub/repos/{repo_id}/destination` and `POST /hub/repos/{repo_id}/settings`
+- API endpoints: `GET /hub/repos`, `POST /hub/repos/{repo_id}/destination`, and `POST /hub/repos/{repo_id}/settings`
 - Web/API surface map: `src/codex_autorunner/surfaces/web/README.md`
 - Docker destination examples + inheritance: `docs/configuration/destinations.md`
 

@@ -120,9 +120,17 @@ Telegram supports PMA mode for hub-scoped turns and PMA delivery target manageme
    - `/pma status`
    - `/pma targets`
 3. Manage PMA delivery targets:
-   - `/pma target add <ref>`
-   - `/pma target rm <ref>`
+   - `/pma target add ref:<ref>`
+   - `/pma target rm ref:<ref>`
    - `/pma target clear`
+   - Canonical target refs:
+     - `here`
+     - `web`
+     - `local:<path>`
+     - `telegram:<chat_id>[:<thread_id>]`
+     - `discord:<channel_id>`
+     - `chat:telegram:<chat_id>[:<thread_id>]`
+     - `chat:discord:<channel_id>`
 4. Exit PMA mode:
    - `/pma off`
 
@@ -131,10 +139,12 @@ Discovery shortcuts:
 - `/pma` (prints PMA usage + accepted target refs)
 - `car pma --help`
 - `car pma targets --help`
+- `car pma targets --json --path <hub_root>` (for discoverability + validation)
 
 Notes:
 - If PMA is disabled in hub config, `/pma` returns an actionable error (`pma.enabled: true`).
 - In PMA mode (or unbound context), `/flow status` and `/flow runs` show hub-wide flow overview.
+- `/pma target add` and `/pma target rm` validate against canonical refs and return actionable format errors.
 
 ### Step 8: Group Permission Checklist
 

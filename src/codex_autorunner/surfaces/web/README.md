@@ -37,9 +37,10 @@ FastAPI web UI, API routes, and web-specific workflows.
   - Queue + dispatch + model/safety discovery: `GET /hub/pma/queue`, `GET /hub/pma/dispatches`, `POST /hub/pma/dispatches/{dispatch_id}/resolve`, `GET /hub/pma/agents`, `GET /hub/pma/agents/{agent}/models`, `GET /hub/pma/audit/recent`, `GET /hub/pma/safety/stats`
   - CLI companion: `car pma --help` plus `car pma thread|targets|docs|context --help` (`surfaces/cli/pma_cli.py`)
 - Hub repo destination/settings management: `routes/hub_repos.py`
-  - Destination only: `POST /hub/repos/{repo_id}/destination`
-  - Combined destination + worktree setup commands: `POST /hub/repos/{repo_id}/settings`
-  - Commands only: `POST /hub/repos/{repo_id}/worktree-setup`
+  - Destination source of truth for effective destination: `GET /hub/repos` (repo list includes `effective_destination` and related repo metadata)
+  - Destination update: `POST /hub/repos/{repo_id}/destination`
+  - Combined destination + worktree setup: `POST /hub/repos/{repo_id}/settings`
+  - Worktree setup-only update: `POST /hub/repos/{repo_id}/worktree-setup`
   - CLI companion: `car hub destination --help` and `car hub destination show|set` (`surfaces/cli/commands/hub.py`)
 - Setup docs for operators:
   - `docs/AGENT_SETUP_GUIDE.md`
