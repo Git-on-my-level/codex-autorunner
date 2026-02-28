@@ -869,33 +869,39 @@ class HubSupervisor:
         return self._snapshot_for_repo(repo_id)
 
     def set_repo_destination(self, repo_id: str, destination: Any) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(repo_id)
-        if not entry:
-            raise ValueError(f"Repo not found: {repo_id}")
-        if entry.kind != "base":
-            raise ValueError(
-                "Destination can only be configured on base repos; worktrees inherit destination from their base repo"
-            )
-        parsed = parse_destination_config(
-            destination, context=f"repo '{repo_id}' destination"
+        return self._set_base_repo_settings(
+            repo_id,
+            destination=destination,
+            commands=None,
+            reason=f"destination change on base repo {repo_id}",
+            kind_error=(
+                "Destination can only be configured on base repos; worktrees inherit "
+                "destination from their base repo"
+            ),
         )
-        if not parsed.valid:
-            raise ValueError("; ".join(parsed.errors))
-        affected_repo_ids = self._destination_owner_and_dependent_repo_ids(
-            manifest, base_repo_id=entry.id
-        )
-        entry.destination = parsed.destination.to_dict()
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self._stop_and_invalidate_runners(
-            affected_repo_ids,
-            reason=f"destination change on base repo {entry.id}",
-        )
-        return self._snapshot_for_repo(repo_id)
 
     def set_repo_settings(
         self, repo_id: str, destination: Any, commands: List[str]
+    ) -> RepoSnapshot:
+        return self._set_base_repo_settings(
+            repo_id,
+            destination=destination,
+            commands=commands,
+            reason=f"settings change on base repo {repo_id}",
+            kind_error=(
+                "Repo settings can only be configured on base repos; worktrees inherit "
+                "destination from their base repo"
+            ),
+        )
+
+    def _set_base_repo_settings(
+        self,
+        repo_id: str,
+        *,
+        destination: Any,
+        commands: Optional[List[str]],
+        reason: str,
+        kind_error: str,
     ) -> RepoSnapshot:
         self._invalidate_list_cache()
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
@@ -903,12 +909,14 @@ class HubSupervisor:
         if not entry:
             raise ValueError(f"Repo not found: {repo_id}")
         if entry.kind != "base":
-            raise ValueError(
-                "Repo settings can only be configured on base repos; worktrees inherit destination from their base repo"
-            )
-        if not isinstance(commands, list):
-            raise ValueError("commands must be a list")
-        normalized = [str(cmd).strip() for cmd in commands if str(cmd).strip()]
+            raise ValueError(kind_error)
+        normalized_commands: Optional[List[str]] = None
+        if commands is not None:
+            if not isinstance(commands, list):
+                raise ValueError("commands must be a list")
+            normalized_commands = [
+                str(cmd).strip() for cmd in commands if str(cmd).strip()
+            ]
         parsed = parse_destination_config(
             destination, context=f"repo '{repo_id}' destination"
         )
@@ -917,13 +925,11 @@ class HubSupervisor:
         affected_repo_ids = self._destination_owner_and_dependent_repo_ids(
             manifest, base_repo_id=entry.id
         )
+        self._stop_and_invalidate_runners(affected_repo_ids, reason=reason)
         entry.destination = parsed.destination.to_dict()
-        entry.worktree_setup_commands = normalized or None
+        if commands is not None:
+            entry.worktree_setup_commands = normalized_commands or None
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self._stop_and_invalidate_runners(
-            affected_repo_ids,
-            reason=f"settings change on base repo {entry.id}",
-        )
         return self._snapshot_for_repo(repo_id)
 
     def _destination_owner_and_dependent_repo_ids(
@@ -940,6 +946,7 @@ class HubSupervisor:
         return repo_ids
 
     def _stop_and_invalidate_runners(self, repo_ids: List[str], *, reason: str) -> None:
+        self._ensure_runner_handles_for_repo_ids(repo_ids)
         failures: List[str] = []
         for repo_id in repo_ids:
             runner = self._runners.get(repo_id)
@@ -956,6 +963,12 @@ class HubSupervisor:
             raise ValueError(
                 f"Failed to stop runner(s) after {reason}; resolve and retry: {detail}"
             )
+
+    def _ensure_runner_handles_for_repo_ids(self, repo_ids: List[str]) -> None:
+        for repo_id in repo_ids:
+            if repo_id in self._runners:
+                continue
+            self._ensure_runner(repo_id, allow_uninitialized=True)
 
     def run_setup_commands_for_workspace(
         self,
