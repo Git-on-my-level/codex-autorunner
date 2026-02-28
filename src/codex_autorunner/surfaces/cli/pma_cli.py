@@ -30,6 +30,11 @@ pma_app.add_typer(context_app)
 pma_app.add_typer(thread_app, name="thread")
 pma_app.add_typer(targets_app, name="targets")
 
+_TARGET_REF_ARG_HELP = (
+    "Target ref (e.g. here, telegram:-100123:777, discord:123456789012345678, "
+    "chat:telegram:-100123:777, local:./notes/pma.md, web)"
+)
+
 
 def _pma_docs_path(hub_root: Path, doc_name: str) -> Path:
     return pma_doc_path(hub_root, doc_name)
@@ -82,7 +87,15 @@ def _format_pma_target_label(target: dict[str, Any]) -> str:
 
 
 def _pma_targets_usage() -> str:
-    return pma_delivery_target_ref_usage(multiline=True)
+    return "\n".join(
+        [
+            "Usage:",
+            "targets add <ref>",
+            "targets rm <ref>",
+            "targets clear",
+            pma_delivery_target_ref_usage(multiline=True),
+        ]
+    )
 
 
 def _request_json(
@@ -627,7 +640,7 @@ def pma_targets_list(
 
 @targets_app.command("add")
 def pma_targets_add(
-    ref: str = typer.Argument(..., help="Target ref"),
+    ref: str = typer.Argument(..., help=_TARGET_REF_ARG_HELP),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """Add a PMA delivery target."""
@@ -648,9 +661,8 @@ def pma_targets_add(
 
 
 @targets_app.command("rm")
-@targets_app.command("remove")
 def pma_targets_rm(
-    ref: str = typer.Argument(..., help="Target ref"),
+    ref: str = typer.Argument(..., help=_TARGET_REF_ARG_HELP),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """Remove a PMA delivery target."""

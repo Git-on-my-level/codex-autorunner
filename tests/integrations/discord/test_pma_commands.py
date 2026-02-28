@@ -537,6 +537,74 @@ async def test_pma_off_keeps_delivery_targets(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_pma_unknown_subcommand_returns_updated_usage(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="unknown")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Unknown PMA subcommand." in content
+        assert "/pma on|off|status|targets" in content
+        assert "/pma target add <ref>" in content
+        assert "/pma target rm <ref>" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_target_remove_alias_is_not_supported(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _pma_target_interaction(action="add", ref="here"),
+            _pma_target_interaction(action="remove", ref="here"),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        assert "Usage:" in content
+        assert "/pma target rm <ref>" in content
+        keys = {
+            key
+            for key in (
+                target_key(target)
+                for target in PmaDeliveryTargetsStore(tmp_path)
+                .load()
+                .get("targets", [])
+            )
+            if isinstance(key, str)
+        }
+        assert "chat:discord:channel-1" in keys
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()

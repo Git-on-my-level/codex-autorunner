@@ -446,6 +446,23 @@ def test_pma_targets_group_has_required_commands() -> None:
     assert "clear" in output
 
 
+def test_pma_targets_remove_alias_is_not_supported() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["targets", "remove", "web"])
+    assert result.exit_code != 0
+    assert "No such command 'remove'" in result.output
+
+
+def test_pma_targets_add_help_lists_concrete_ref_examples() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["targets", "add", "--help"])
+    assert result.exit_code == 0
+    assert "telegram:-100123:777" in result.output
+    assert "discord:123456789012345678" in result.output
+    assert "chat:telegram:-100123:777" in result.output
+    assert "local:./notes/pma.md" in result.output
+
+
 def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
     runner = CliRunner()

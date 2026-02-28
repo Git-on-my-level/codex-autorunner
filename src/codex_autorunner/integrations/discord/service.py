@@ -2210,10 +2210,15 @@ class DiscordBotService:
         elif subcommand == "target":
             pass
         else:
+            hint = "Unknown PMA subcommand. Use on, off, or status."
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
+                (
+                    f"{hint}\n"
+                    "Additional PMA commands: targets, target add|rm|clear.\n"
+                    f"{self._pma_usage_text()}"
+                ),
             )
             return
         await self._handle_pma_command(
@@ -5079,10 +5084,15 @@ class DiscordBotService:
                 options=command_options,
             )
         else:
+            hint = "Unknown PMA subcommand. Use on, off, or status."
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
+                (
+                    f"{hint}\n"
+                    "Additional PMA commands: targets, target add|rm|clear.\n"
+                    f"{self._pma_usage_text()}"
+                ),
             )
 
     async def _handle_pma_on(
@@ -5282,7 +5292,7 @@ class DiscordBotService:
             )
             return
 
-        if action_norm not in {"add", "rm", "remove"}:
+        if action_norm not in {"add", "rm"}:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,

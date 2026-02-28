@@ -1212,7 +1212,7 @@ class TelegramCommandHandlers(
             )
             return
 
-        if action not in {"add", "rm", "remove"} or len(argv) < 2:
+        if action not in {"add", "rm"} or len(argv) < 2:
             await self._send_message(
                 message.chat_id,
                 self._pma_usage(),
@@ -1264,7 +1264,7 @@ class TelegramCommandHandlers(
         return "\n".join(
             [
                 "Usage:",
-                "/pma [on|off|status|targets]",
+                "/pma on|off|status|targets",
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
