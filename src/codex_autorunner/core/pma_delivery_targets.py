@@ -64,6 +64,103 @@ def _parse_intish(value: Any) -> Optional[int]:
     return None
 
 
+def _parse_telegram_target_parts(
+    chat_id_raw: str, thread_id_raw: Optional[str] = None
+) -> Optional[dict[str, Any]]:
+    chat_id = _parse_intish(chat_id_raw)
+    if chat_id is None:
+        return None
+    target: dict[str, Any] = {
+        "kind": "chat",
+        "platform": "telegram",
+        "chat_id": str(chat_id),
+    }
+    if thread_id_raw is not None:
+        thread_id = _parse_intish(thread_id_raw)
+        if thread_id is None:
+            return None
+        target["thread_id"] = str(thread_id)
+    return target
+
+
+def parse_delivery_target_ref(
+    ref: str, *, here_target: Optional[Mapping[str, Any]] = None
+) -> Optional[dict[str, Any]]:
+    value = _optional_text(ref)
+    if value is None:
+        return None
+
+    lowered = value.lower()
+    if lowered == "here":
+        if here_target is None:
+            return None
+        return normalize_delivery_target(here_target)
+
+    candidate: Optional[dict[str, Any]] = None
+    if lowered == "web":
+        candidate = {"kind": "web"}
+    elif lowered.startswith("local:"):
+        local_path = value.split(":", 1)[1].strip()
+        if not local_path:
+            return None
+        candidate = {"kind": "local", "path": local_path}
+    elif lowered.startswith("telegram:"):
+        parts = value.split(":")
+        if len(parts) not in {2, 3}:
+            return None
+        candidate = _parse_telegram_target_parts(
+            parts[1], parts[2] if len(parts) == 3 else None
+        )
+    elif lowered.startswith("discord:"):
+        chat_id = value.split(":", 1)[1].strip()
+        if not chat_id:
+            return None
+        candidate = {"kind": "chat", "platform": "discord", "chat_id": chat_id}
+    elif lowered.startswith("chat:"):
+        parts = value.split(":")
+        if len(parts) not in {3, 4}:
+            return None
+        platform = parts[1].strip().lower()
+        if platform == "telegram":
+            candidate = _parse_telegram_target_parts(
+                parts[2], parts[3] if len(parts) == 4 else None
+            )
+        elif platform == "discord":
+            if len(parts) != 3:
+                return None
+            chat_id = parts[2].strip()
+            if not chat_id:
+                return None
+            candidate = {"kind": "chat", "platform": "discord", "chat_id": chat_id}
+
+    if candidate is None:
+        return None
+    return normalize_delivery_target(candidate)
+
+
+def pma_delivery_target_ref_formats(*, include_here: bool = False) -> tuple[str, ...]:
+    formats = [
+        "web",
+        "local:<path>",
+        "telegram:<chat_id>[:<thread_id>]",
+        "discord:<channel_id>",
+        "chat:telegram:<chat_id>[:<thread_id>]",
+        "chat:discord:<channel_id>",
+    ]
+    if include_here:
+        formats.insert(0, "here")
+    return tuple(formats)
+
+
+def pma_delivery_target_ref_usage(
+    *, include_here: bool = False, multiline: bool = False
+) -> str:
+    formats = pma_delivery_target_ref_formats(include_here=include_here)
+    if multiline:
+        return "\n".join(["Refs:", *formats])
+    return f"Refs: {' | '.join(formats)}"
+
+
 def normalize_delivery_target(target: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     kind = _optional_text(target.get("kind"), lower=True)
     if kind == "web":
@@ -379,6 +476,9 @@ __all__ = [
     "PmaDeliveryTargetsStore",
     "default_delivery_targets_path",
     "default_delivery_targets_state",
+    "parse_delivery_target_ref",
     "normalize_delivery_target",
+    "pma_delivery_target_ref_formats",
+    "pma_delivery_target_ref_usage",
     "target_key",
 ]

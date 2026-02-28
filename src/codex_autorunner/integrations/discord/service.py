@@ -41,7 +41,12 @@ from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
-from ...core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
+from ...core.pma_delivery_targets import (
+    PmaDeliveryTargetsStore,
+    parse_delivery_target_ref,
+    pma_delivery_target_ref_usage,
+    target_key,
+)
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
@@ -2349,11 +2354,13 @@ class DiscordBotService:
                         actor="car",
                         text=chunk,
                         chat_id=channel_id,
-                        thread_id=binding.get("guild_id"),
-                        message_id=record_id,
+                        thread_id=None,
+                        message_id=None,
                         meta={
+                            "guild_id": binding.get("guild_id"),
                             "dispatch_seq": snapshot.dispatch_seq,
                             "chunk_index": index,
+                            "outbox_record_id": record_id,
                         },
                     )
                 except Exception as exc:
@@ -4099,9 +4106,13 @@ class DiscordBotService:
             actor="user",
             text="/car flow status",
             chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
-            meta={"interaction_token": interaction_token},
+            thread_id=None,
+            message_id=None,
+            meta={
+                "interaction_id": interaction_id,
+                "interaction_token": interaction_token,
+                "guild_id": guild_id,
+            },
         )
         run_mirror.mirror_outbound(
             run_id=record.id,
@@ -4111,8 +4122,13 @@ class DiscordBotService:
             actor="car",
             text=response_text,
             chat_id=channel_id,
-            thread_id=guild_id,
-            meta={"response_type": "ephemeral"},
+            thread_id=None,
+            message_id=None,
+            meta={
+                "interaction_id": interaction_id,
+                "guild_id": guild_id,
+                "response_type": "ephemeral",
+            },
         )
 
         status_buttons = build_flow_status_buttons(
@@ -4449,8 +4465,9 @@ class DiscordBotService:
             actor="user",
             text="/car flow resume",
             chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
+            thread_id=None,
+            message_id=None,
+            meta={"interaction_id": interaction_id, "guild_id": guild_id},
         )
         controller = build_ticket_flow_controller(workspace_root)
         try:
@@ -4477,7 +4494,9 @@ class DiscordBotService:
             actor="car",
             text=outbound_text,
             chat_id=channel_id,
-            thread_id=guild_id,
+            thread_id=None,
+            message_id=None,
+            meta={"interaction_id": interaction_id, "guild_id": guild_id},
         )
 
     async def _handle_flow_stop(
@@ -4562,8 +4581,9 @@ class DiscordBotService:
             actor="user",
             text="/car flow stop",
             chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
+            thread_id=None,
+            message_id=None,
+            meta={"interaction_id": interaction_id, "guild_id": guild_id},
         )
         controller = build_ticket_flow_controller(workspace_root)
         try:
@@ -4586,8 +4606,13 @@ class DiscordBotService:
             actor="car",
             text=outbound_text,
             chat_id=channel_id,
-            thread_id=guild_id,
-            meta={"status": updated.status.value},
+            thread_id=None,
+            message_id=None,
+            meta={
+                "interaction_id": interaction_id,
+                "guild_id": guild_id,
+                "status": updated.status.value,
+            },
         )
 
     async def _handle_flow_archive(
@@ -4669,8 +4694,9 @@ class DiscordBotService:
             actor="user",
             text="/car flow archive",
             chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
+            thread_id=None,
+            message_id=None,
+            meta={"interaction_id": interaction_id, "guild_id": guild_id},
         )
         try:
             summary = archive_flow_run_artifacts(
@@ -4697,8 +4723,13 @@ class DiscordBotService:
             actor="car",
             text=outbound_text,
             chat_id=channel_id,
-            thread_id=guild_id,
-            meta={"archived_runs": summary.get("archived_runs")},
+            thread_id=None,
+            message_id=None,
+            meta={
+                "interaction_id": interaction_id,
+                "guild_id": guild_id,
+                "archived_runs": summary.get("archived_runs"),
+            },
         )
 
     async def _handle_flow_reply(
@@ -4798,8 +4829,9 @@ class DiscordBotService:
             actor="user",
             text=text,
             chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
+            thread_id=None,
+            message_id=None,
+            meta={"interaction_id": interaction_id, "guild_id": guild_id},
         )
         reply_path = self._write_user_reply(workspace_root, target, text)
 
@@ -4830,7 +4862,9 @@ class DiscordBotService:
             actor="car",
             text=outbound_text,
             chat_id=channel_id,
-            thread_id=guild_id,
+            thread_id=None,
+            message_id=None,
+            meta={"interaction_id": interaction_id, "guild_id": guild_id},
         )
 
     def _write_user_reply(
@@ -5310,7 +5344,7 @@ class DiscordBotService:
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
-                "Refs: here | discord:<channel_id> | telegram:<chat_id>[:<thread_id>]",
+                pma_delivery_target_ref_usage(include_here=True),
             ]
         )
 
@@ -5324,40 +5358,9 @@ class DiscordBotService:
     def _parse_pma_target_ref(
         self, *, channel_id: str, ref: str
     ) -> Optional[dict[str, Any]]:
-        value = ref.strip()
-        if not value:
-            return None
-        lowered = value.lower()
-        if lowered == "here":
-            return self._pma_here_target(channel_id)
-        if lowered.startswith("discord:"):
-            chat_id = value.split(":", 1)[1].strip()
-            if not chat_id:
-                return None
-            return {
-                "kind": "chat",
-                "platform": "discord",
-                "chat_id": chat_id,
-            }
-        if lowered.startswith("telegram:"):
-            parts = value.split(":")
-            if len(parts) < 2 or len(parts) > 3:
-                return None
-            chat_id_raw = parts[1].strip()
-            if not chat_id_raw or not chat_id_raw.lstrip("-").isdigit():
-                return None
-            target: dict[str, Any] = {
-                "kind": "chat",
-                "platform": "telegram",
-                "chat_id": str(int(chat_id_raw)),
-            }
-            if len(parts) == 3:
-                thread_raw = parts[2].strip()
-                if not thread_raw or not thread_raw.lstrip("-").isdigit():
-                    return None
-                target["thread_id"] = str(int(thread_raw))
-            return target
-        return None
+        return parse_delivery_target_ref(
+            ref, here_target=self._pma_here_target(channel_id)
+        )
 
     def _format_pma_target_label(self, target: dict[str, Any]) -> str:
         label = target.get("label")

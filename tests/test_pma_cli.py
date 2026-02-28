@@ -450,12 +450,15 @@ def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
     runner = CliRunner()
 
-    add_result = runner.invoke(
+    add_telegram_result = runner.invoke(
         pma_app,
         ["targets", "add", "telegram:-100123:777", "--path", str(tmp_path)],
     )
-    assert add_result.exit_code == 0
-    assert "Added PMA delivery target: chat:telegram:-100123:777" in add_result.stdout
+    assert add_telegram_result.exit_code == 0
+    assert (
+        "Added PMA delivery target: chat:telegram:-100123:777"
+        in add_telegram_result.stdout
+    )
 
     add_discord_result = runner.invoke(
         pma_app,
@@ -466,10 +469,37 @@ def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
         "Added PMA delivery target: chat:discord:987654321" in add_discord_result.stdout
     )
 
+    add_explicit_chat_result = runner.invoke(
+        pma_app,
+        ["targets", "add", "chat:discord:12345", "--path", str(tmp_path)],
+    )
+    assert add_explicit_chat_result.exit_code == 0
+    assert (
+        "Added PMA delivery target: chat:discord:12345"
+        in add_explicit_chat_result.stdout
+    )
+
+    add_local_result = runner.invoke(
+        pma_app,
+        ["targets", "add", "local:./notes/pma.md", "--path", str(tmp_path)],
+    )
+    assert add_local_result.exit_code == 0
+    assert "Added PMA delivery target: local:./notes/pma.md" in add_local_result.stdout
+
+    add_web_result = runner.invoke(
+        pma_app,
+        ["targets", "add", "web", "--path", str(tmp_path)],
+    )
+    assert add_web_result.exit_code == 0
+    assert "Added PMA delivery target: web" in add_web_result.stdout
+
     list_result = runner.invoke(pma_app, ["targets", "list", "--path", str(tmp_path)])
     assert list_result.exit_code == 0
     assert "chat:telegram:-100123:777" in list_result.stdout
     assert "chat:discord:987654321" in list_result.stdout
+    assert "chat:discord:12345" in list_result.stdout
+    assert "local:./notes/pma.md" in list_result.stdout
+    assert "web" in list_result.stdout
 
     rm_result = runner.invoke(
         pma_app,
@@ -503,3 +533,7 @@ def test_pma_targets_add_rejects_invalid_ref(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "Invalid target ref" in result.output
+    assert "Refs:" in result.output
+    assert "web" in result.output
+    assert "local:<path>" in result.output
+    assert "chat:telegram:<chat_id>[:<thread_id>]" in result.output

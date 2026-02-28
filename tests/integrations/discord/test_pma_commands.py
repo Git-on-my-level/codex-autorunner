@@ -546,6 +546,10 @@ async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
             _pma_target_interaction(action="add", ref="here"),
             _pma_target_interaction(action="add", ref="telegram:-2002:77"),
             _pma_target_interaction(action="add", ref="discord:99887766"),
+            _pma_target_interaction(action="add", ref="chat:telegram:-3003:88"),
+            _pma_target_interaction(action="add", ref="chat:discord:66554433"),
+            _pma_target_interaction(action="add", ref="web"),
+            _pma_target_interaction(action="add", ref="local:./notes/pma.md"),
             _pma_interaction(subcommand="targets"),
             _pma_target_interaction(action="rm", ref="here"),
             _pma_target_interaction(action="clear"),
@@ -562,17 +566,21 @@ async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 6
-        list_content = rest.interaction_responses[3]["payload"]["data"]["content"]
+        assert len(rest.interaction_responses) == 10
+        list_content = rest.interaction_responses[7]["payload"]["data"]["content"]
         assert "chat:discord:channel-1" in list_content
         assert "chat:telegram:-2002:77" in list_content
         assert "chat:discord:99887766" in list_content
+        assert "chat:telegram:-3003:88" in list_content
+        assert "chat:discord:66554433" in list_content
+        assert "web" in list_content
+        assert "local:./notes/pma.md" in list_content
 
         assert "Removed PMA delivery target: chat:discord:channel-1" in (
-            rest.interaction_responses[4]["payload"]["data"]["content"]
+            rest.interaction_responses[8]["payload"]["data"]["content"]
         )
         assert "Cleared PMA delivery targets." in (
-            rest.interaction_responses[5]["payload"]["data"]["content"]
+            rest.interaction_responses[9]["payload"]["data"]["content"]
         )
         assert PmaDeliveryTargetsStore(tmp_path).load()["targets"] == []
     finally:
@@ -600,6 +608,10 @@ async def test_pma_target_add_invalid_ref_returns_usage(tmp_path: Path) -> None:
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Invalid target ref" in content
         assert "/pma target add <ref>" in content
+        assert "Refs:" in content
+        assert "web" in content
+        assert "local:<path>" in content
+        assert "chat:telegram:<chat_id>[:<thread_id>]" in content
     finally:
         await store.close()
 

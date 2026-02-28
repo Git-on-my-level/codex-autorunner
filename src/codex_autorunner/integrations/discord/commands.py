@@ -459,7 +459,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                 {
                                     "type": STRING,
                                     "name": "ref",
-                                    "description": "here | discord:<channel_id> | telegram:<chat_id>[:<thread_id>]",
+                                    "description": "here | web | local:<path> | telegram:<chat>[:<thread>] | discord:<channel> | chat:<platform>:...",
                                     "required": True,
                                 }
                             ],
@@ -472,7 +472,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                 {
                                     "type": STRING,
                                     "name": "ref",
-                                    "description": "here | discord:<channel_id> | telegram:<chat_id>[:<thread_id>]",
+                                    "description": "here | web | local:<path> | telegram:<chat>[:<thread>] | discord:<channel> | chat:<platform>:...",
                                     "required": True,
                                 }
                             ],

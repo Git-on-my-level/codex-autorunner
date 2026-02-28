@@ -165,6 +165,10 @@ async def test_pause_bridge_dedupes_by_run_and_dispatch_seq(tmp_path: Path) -> N
         assert mirrored[-1]["event_type"] == "flow_pause_dispatch_notice"
         assert mirrored[-1]["kind"] == "dispatch"
         assert mirrored[-1]["actor"] == "car"
+        assert mirrored[-1]["thread_id"] is None
+        assert mirrored[-1]["message_id"] is None
+        assert mirrored[-1]["meta"].get("guild_id") == "guild-1"
+        assert mirrored[-1]["meta"].get("outbox_record_id", "").startswith("pause:")
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None

@@ -248,6 +248,11 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert latest["kind"] == "notice"
         assert latest["actor"] == "car"
         assert "Run:" in latest["text"]
+        assert latest["thread_id"] is None
+        assert latest["message_id"] is None
+        assert "guild_id" in latest["meta"]
+        assert isinstance(latest["meta"].get("interaction_id"), str)
+        assert latest["meta"].get("interaction_id")
     finally:
         await store.close()
 
@@ -482,6 +487,17 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         assert inbound_records[-1]["kind"] == "command"
         assert outbound_records[-1]["event_type"] == "flow_reply_notice"
         assert outbound_records[-1]["kind"] == "notice"
+        assert inbound_records[-1]["thread_id"] is None
+        assert inbound_records[-1]["message_id"] is None
+        assert "guild_id" in inbound_records[-1]["meta"]
+        assert isinstance(inbound_records[-1]["meta"].get("interaction_id"), str)
+        assert inbound_records[-1]["meta"].get("interaction_id")
+        assert outbound_records[-1]["thread_id"] is None
+        assert outbound_records[-1]["message_id"] is None
+        assert "guild_id" in outbound_records[-1]["meta"]
+        assert outbound_records[-1]["meta"].get("interaction_id") == inbound_records[
+            -1
+        ]["meta"].get("interaction_id")
     finally:
         await store.close()
 

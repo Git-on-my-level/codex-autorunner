@@ -1297,6 +1297,14 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
     await handler._handle_pma(message, "target add here", _RuntimeStub())
     await handler._handle_pma(message, "target add telegram:-2002:77", _RuntimeStub())
     await handler._handle_pma(message, "target add discord:99887766", _RuntimeStub())
+    await handler._handle_pma(
+        message, "target add chat:telegram:-3003:88", _RuntimeStub()
+    )
+    await handler._handle_pma(message, "target add chat:discord:556677", _RuntimeStub())
+    await handler._handle_pma(message, "target add web", _RuntimeStub())
+    await handler._handle_pma(
+        message, "target add local:./notes/pma.md", _RuntimeStub()
+    )
 
     store = PmaDeliveryTargetsStore(hub_root)
     state = store.load()
@@ -1306,14 +1314,22 @@ async def test_pma_target_add_list_rm_clear_mutates_store(tmp_path: Path) -> Non
         if isinstance(key, str)
     }
     assert keys == {
+        "web",
+        "local:./notes/pma.md",
         "chat:discord:99887766",
+        "chat:discord:556677",
         "chat:telegram:-1001:55",
         "chat:telegram:-2002:77",
+        "chat:telegram:-3003:88",
     }
 
     await handler._handle_pma(message, "targets", _RuntimeStub())
     assert "chat:telegram:-1001:55" in handler.sent[-1]
     assert "chat:discord:99887766" in handler.sent[-1]
+    assert "chat:discord:556677" in handler.sent[-1]
+    assert "chat:telegram:-3003:88" in handler.sent[-1]
+    assert "local:./notes/pma.md" in handler.sent[-1]
+    assert "web" in handler.sent[-1]
 
     await handler._handle_pma(message, "target rm here", _RuntimeStub())
     state = store.load()
@@ -1339,6 +1355,23 @@ async def test_pma_target_add_invalid_ref_reports_usage(tmp_path: Path) -> None:
     await handler._handle_pma(message, "target add telegram:abc", _RuntimeStub())
     assert "Invalid target ref" in handler.sent[-1]
     assert "/pma target add <ref>" in handler.sent[-1]
+    assert "Refs:" in handler.sent[-1]
+    assert "web" in handler.sent[-1]
+    assert "local:<path>" in handler.sent[-1]
+    assert "chat:telegram:<chat_id>[:<thread_id>]" in handler.sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_target_clear_rejects_extra_args(tmp_path: Path) -> None:
+    handler = _PmaTargetsHandler(
+        hub_root=tmp_path / "hub",
+        record=TelegramTopicRecord(),
+    )
+    message = _make_pma_message()
+
+    await handler._handle_pma(message, "target clear now", _RuntimeStub())
+    assert "Usage:" in handler.sent[-1]
+    assert "/pma target clear" in handler.sent[-1]
 
 
 @pytest.mark.anyio
