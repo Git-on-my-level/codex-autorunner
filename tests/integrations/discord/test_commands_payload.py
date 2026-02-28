@@ -148,3 +148,24 @@ def test_required_options_are_marked_required() -> None:
     assert archive_id["required"] is True
     assert resume_id["required"] is True
     assert resume_backend_id["required"] is True
+
+
+def test_application_command_descriptions_fit_discord_limits() -> None:
+    commands = build_application_commands()
+
+    def _assert_description_limit(option: dict, path: str) -> None:
+        description = option.get("description")
+        assert isinstance(description, str)
+        assert (
+            len(description) <= 100
+        ), f"{path} description exceeds 100 chars ({len(description)}): {description}"
+
+        child_options = option.get("options")
+        if isinstance(child_options, list):
+            for child in child_options:
+                child_name = str(child.get("name", "<unnamed>"))
+                _assert_description_limit(child, f"{path}/{child_name}")
+
+    for command in commands:
+        command_name = str(command.get("name", "<unnamed>"))
+        _assert_description_limit(command, command_name)
