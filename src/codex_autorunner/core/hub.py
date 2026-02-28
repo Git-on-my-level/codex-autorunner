@@ -883,8 +883,15 @@ class HubSupervisor:
         )
         if not parsed.valid:
             raise ValueError("; ".join(parsed.errors))
+        affected_repo_ids = self._destination_owner_and_dependent_repo_ids(
+            manifest, base_repo_id=entry.id
+        )
         entry.destination = parsed.destination.to_dict()
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self._stop_and_invalidate_runners(
+            affected_repo_ids,
+            reason=f"destination change on base repo {entry.id}",
+        )
         return self._snapshot_for_repo(repo_id)
 
     def set_repo_settings(
@@ -907,10 +914,46 @@ class HubSupervisor:
         )
         if not parsed.valid:
             raise ValueError("; ".join(parsed.errors))
+        affected_repo_ids = self._destination_owner_and_dependent_repo_ids(
+            manifest, base_repo_id=entry.id
+        )
         entry.destination = parsed.destination.to_dict()
         entry.worktree_setup_commands = normalized or None
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self._stop_and_invalidate_runners(
+            affected_repo_ids,
+            reason=f"settings change on base repo {entry.id}",
+        )
         return self._snapshot_for_repo(repo_id)
+
+    def _destination_owner_and_dependent_repo_ids(
+        self, manifest: Manifest, *, base_repo_id: str
+    ) -> List[str]:
+        repo_ids = [base_repo_id]
+        dependents = sorted(
+            entry.id
+            for entry in manifest.repos
+            if entry.kind == "worktree"
+            and (entry.worktree_of or "").strip() == base_repo_id
+        )
+        repo_ids.extend(dependents)
+        return repo_ids
+
+    def _stop_and_invalidate_runners(self, repo_ids: List[str], *, reason: str) -> None:
+        failures: List[str] = []
+        for repo_id in repo_ids:
+            runner = self._runners.pop(repo_id, None)
+            if not runner:
+                continue
+            try:
+                runner.stop()
+            except Exception as exc:
+                failures.append(f"{repo_id}: {exc}")
+        if failures:
+            detail = "; ".join(failures)
+            raise ValueError(
+                f"Failed to stop runner(s) after {reason}; resolve and retry: {detail}"
+            )
 
     def run_setup_commands_for_workspace(
         self,

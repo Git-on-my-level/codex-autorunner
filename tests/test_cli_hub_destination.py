@@ -108,7 +108,7 @@ def test_hub_destination_set_docker_updates_manifest_and_preserves_header(
     }
 
 
-def test_hub_destination_set_local_allows_worktree_override(tmp_path: Path) -> None:
+def test_hub_destination_set_local_rejects_worktree_override(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     manifest_path, base_id, worktree_id = _seed_hub_with_base_and_worktree(hub_root)
 
@@ -131,10 +131,8 @@ def test_hub_destination_set_local_allows_worktree_override(tmp_path: Path) -> N
             str(hub_root),
         ],
     )
-    assert set_result.exit_code == 0
-    set_payload = json.loads(set_result.output)
-    assert set_payload["effective_destination"] == {"kind": "local"}
-    assert set_payload["source"] == "repo"
+    assert set_result.exit_code != 0
+    assert "only be configured on base repos" in set_result.output
 
     show_result = runner.invoke(
         app,
@@ -142,6 +140,9 @@ def test_hub_destination_set_local_allows_worktree_override(tmp_path: Path) -> N
     )
     assert show_result.exit_code == 0
     show_payload = json.loads(show_result.output)
-    assert show_payload["configured_destination"] == {"kind": "local"}
-    assert show_payload["effective_destination"] == {"kind": "local"}
-    assert show_payload["source"] == "repo"
+    assert show_payload["configured_destination"] is None
+    assert show_payload["effective_destination"] == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/base:latest",
+    }
+    assert show_payload["source"] == "base"

@@ -1259,6 +1259,85 @@ def test_set_repo_settings_route_updates_manifest_atomically(tmp_path: Path):
     assert entry.worktree_setup_commands == ["make setup", "pre-commit install"]
 
 
+def test_set_repo_destination_invalidates_cached_runners_for_dependents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/destination-invalidation",
+        start_point="HEAD",
+    )
+
+    stopped: list[str] = []
+
+    def fake_stop(self) -> None:
+        stopped.append(self.repo_id)
+
+    monkeypatch.setattr("codex_autorunner.core.hub.RepoRunner.stop", fake_stop)
+
+    base_runner = supervisor._ensure_runner("base")
+    worktree_runner = supervisor._ensure_runner(worktree.id)
+    assert base_runner is not None
+    assert worktree_runner is not None
+    assert set(supervisor._runners) == {"base", worktree.id}
+
+    destination = {"kind": "docker", "image": "ghcr.io/acme/base:invalidate"}
+    snapshot = supervisor.set_repo_destination("base", destination)
+    assert snapshot.effective_destination == destination
+    assert set(stopped) == {"base", worktree.id}
+    assert "base" not in supervisor._runners
+    assert worktree.id not in supervisor._runners
+
+    rebuilt = supervisor._ensure_runner("base")
+    assert rebuilt is not None
+    assert rebuilt is not base_runner
+
+
+def test_set_repo_settings_invalidates_cached_runner(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    supervisor.create_repo("base")
+
+    old_runner = supervisor._ensure_runner("base")
+    assert old_runner is not None
+
+    snapshot = supervisor.set_repo_settings(
+        "base",
+        {"kind": "docker", "image": "ghcr.io/acme/base:settings"},
+        ["make setup", "pre-commit install"],
+    )
+    assert snapshot.effective_destination == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/base:settings",
+    }
+    assert snapshot.worktree_setup_commands == ["make setup", "pre-commit install"]
+    assert "base" not in supervisor._runners
+
+    new_runner = supervisor._ensure_runner("base")
+    assert new_runner is not None
+    assert new_runner is not old_runner
+
+
 def test_set_repo_settings_route_validation_failure_is_atomic(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

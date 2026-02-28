@@ -8,7 +8,7 @@ import uvicorn
 from ....core.config import HubConfig
 from ....core.destinations import resolve_effective_repo_destination
 from ....core.hub import HubSupervisor
-from ....manifest import load_manifest, normalize_manifest_destination, save_manifest
+from ....manifest import load_manifest
 from ...web.app import create_hub_app
 
 
@@ -113,7 +113,6 @@ def register_hub_commands(
         ),
     ):
         config = require_hub_config(path)
-        manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
 
         normalized_kind = kind.strip().lower()
         destination: dict[str, Any]
@@ -136,17 +135,18 @@ def register_hub_commands(
                 f"Unsupported destination kind: {kind!r}. Use 'local' or 'docker'."
             )
 
-        normalized_destination = normalize_manifest_destination(destination)
-        if normalized_destination is None:
-            raise_exit(f"Invalid destination payload: {destination!r}")
-        repo.destination = normalized_destination
-        save_manifest(config.manifest_path, manifest, config.root)
+        supervisor = build_supervisor(config)
+        try:
+            snapshot = supervisor.set_repo_destination(repo_id, destination)
+        except Exception as exc:
+            raise_exit(str(exc), cause=exc)
 
+        _, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
         resolution = resolve_effective_repo_destination(repo, repos_by_id)
         payload = {
-            "repo_id": repo.id,
+            "repo_id": snapshot.id,
             "configured_destination": repo.destination,
-            "effective_destination": resolution.to_dict(),
+            "effective_destination": snapshot.effective_destination,
             "source": resolution.source,
             "issues": list(resolution.issues),
         }
