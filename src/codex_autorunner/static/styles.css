@@ -1273,6 +1273,46 @@ main {
   overflow: auto;
 }
 
+.hub-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.hub-channel-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  background: var(--bg);
+}
+
+.hub-channel-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hub-channel-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.hub-channel-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Hub worktrees (worktree repos grouped under a base repo) */
 .hub-worktree-list {
   display: flex;
@@ -7284,6 +7324,15 @@ button.loading::after {
 
   .hub-repo-list {
     gap: 4px;
+  }
+
+  .hub-channel-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hub-channel-row button {
+    align-self: flex-end;
   }
 
   .hub-repo-card {

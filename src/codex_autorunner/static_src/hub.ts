@@ -68,6 +68,26 @@ interface HubData {
   pinned_parent_repo_ids?: string[];
 }
 
+interface HubDestinationResponse {
+  repo_id: string;
+  configured_destination: Record<string, unknown> | null;
+  effective_destination: Record<string, unknown>;
+  source: string;
+  issues?: string[];
+}
+
+interface HubChannelEntry {
+  key: string;
+  display?: string | null;
+  seen_at?: string | null;
+  meta?: Record<string, unknown> | null;
+  entry?: Record<string, unknown> | null;
+}
+
+interface HubChannelDirectoryResponse {
+  entries: HubChannelEntry[];
+}
+
 interface HubUsageRepo {
   id: string;
   totals?: {
@@ -199,6 +219,16 @@ const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const pmaVersionEl = document.getElementById("pma-version");
+const hubChannelQueryInput = document.getElementById(
+  "hub-channel-query"
+) as HTMLInputElement | null;
+const hubChannelSearchBtn = document.getElementById(
+  "hub-channel-search"
+) as HTMLButtonElement | null;
+const hubChannelRefreshBtn = document.getElementById(
+  "hub-channel-refresh"
+) as HTMLButtonElement | null;
+const hubChannelListEl = document.getElementById("hub-channel-list");
 const hubFlowFilterEl = document.getElementById(
   "hub-flow-filter"
 ) as HTMLSelectElement | null;
@@ -317,6 +347,19 @@ function formatLastActivity(repo: HubRepo): string {
   const time = repo.last_run_finished_at || repo.last_run_started_at;
   if (!time) return "";
   return formatTimeCompact(time);
+}
+
+function formatDestinationSummary(
+  destination: Record<string, unknown> | null | undefined
+): string {
+  if (!destination || typeof destination !== "object") return "local";
+  const kindRaw = destination.kind;
+  const kind = typeof kindRaw === "string" ? kindRaw.trim().toLowerCase() : "local";
+  if (kind === "docker") {
+    const image = typeof destination.image === "string" ? destination.image.trim() : "";
+    return image ? `docker:${image}` : "docker";
+  }
+  return "local";
 }
 
 function setButtonLoading(scanning: boolean): void {
@@ -1074,6 +1117,14 @@ function buildActions(repo: HubRepo): RepoAction[] {
   } else if (!missing && !repo.initialized) {
     actions.push({ key: "init", label: "Init", kind: "primary" });
   }
+  if (!missing) {
+    actions.push({
+      key: "set_destination",
+      label: "Destination",
+      kind: "ghost",
+      title: "Set execution destination (local or docker)",
+    });
+  }
   if (!missing && kind === "base") {
     actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
     actions.push({
@@ -1506,7 +1557,9 @@ function renderRepos(repos: HubRepo[]): void {
 
     const runSummary = formatRunSummary(repo);
     const lastActivity = formatLastActivity(repo);
+    const destinationSummary = formatDestinationSummary(repo.effective_destination);
     const infoItems: string[] = [];
+    infoItems.push(`dest ${destinationSummary}`);
     if (
       runSummary &&
       runSummary !== "No runs yet" &&
@@ -1686,6 +1739,7 @@ async function refreshHub(): Promise<void> {
     renderSummary(hubData.repos || []);
     renderReposWithScroll(hubData.repos || []);
     loadHubUsage({ silent: true }).catch(() => {});
+    loadHubChannelDirectory({ silent: true }).catch(() => {});
   } catch (err) {
     flash((err as Error).message || "Hub request failed", "error");
   } finally {
@@ -1815,6 +1869,127 @@ async function setParentRepoPinned(repoId: string, pinned: boolean): Promise<voi
   hubData.pinned_parent_repo_ids = Array.from(pinnedParentRepoIds);
 }
 
+async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
+  const current = formatDestinationSummary(repo.effective_destination);
+  const currentKind =
+    current.startsWith("docker:") || current === "docker" ? "docker" : "local";
+  const kindValue = await inputModal(
+    `Set destination for "${repo.id}" (local|docker):`,
+    {
+      placeholder: "local or docker",
+      defaultValue: currentKind,
+      confirmText: "Next",
+    }
+  );
+  if (!kindValue) return false;
+
+  const kind = kindValue.trim().toLowerCase();
+  const body: Record<string, unknown> = { kind };
+  if (kind === "docker") {
+    const currentImage =
+      typeof repo.effective_destination?.image === "string"
+        ? String(repo.effective_destination.image)
+        : "";
+    const imageValue = await inputModal("Docker image:", {
+      placeholder: "ghcr.io/acme/repo:tag",
+      defaultValue: currentImage,
+      confirmText: "Save",
+    });
+    if (!imageValue) {
+      flash("Docker destination requires an image", "error");
+      return false;
+    }
+    body.image = imageValue.trim();
+  } else if (kind !== "local") {
+    flash("Unsupported destination kind. Use local or docker.", "error");
+    return false;
+  }
+
+  const payload = (await api(`/hub/repos/${encodeURIComponent(repo.id)}/destination`, {
+    method: "POST",
+    body,
+  })) as HubDestinationResponse;
+  const effective = formatDestinationSummary(payload.effective_destination);
+  flash(`Updated destination for ${repo.id}: ${effective}`, "success");
+  return true;
+}
+
+function renderHubChannelEntries(entries: HubChannelEntry[]): void {
+  if (!hubChannelListEl) return;
+  if (!entries.length) {
+    hubChannelListEl.innerHTML =
+      '<div class="muted small">No channel entries found.</div>';
+    return;
+  }
+
+  const rows = entries
+    .map((row) => {
+      const label =
+        typeof row.display === "string" && row.display.trim()
+          ? row.display.trim()
+          : row.key;
+      const seen = row.seen_at ? formatTimeCompact(row.seen_at) : "unknown";
+      return `
+        <div class="hub-channel-row">
+          <div class="hub-channel-main">
+            <div class="hub-channel-key">${escapeHtml(row.key)}</div>
+            <div class="hub-channel-meta muted small">${escapeHtml(
+              label
+            )} · seen ${escapeHtml(seen)}</div>
+          </div>
+          <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(
+            row.key
+          )}">Copy</button>
+        </div>
+      `;
+    })
+    .join("");
+  hubChannelListEl.innerHTML = rows;
+}
+
+async function loadHubChannelDirectory({ silent = false }: { silent?: boolean } = {}): Promise<void> {
+  const query = (hubChannelQueryInput?.value || "").trim();
+  const params = new URLSearchParams();
+  params.set("limit", "100");
+  if (query) params.set("query", query);
+  try {
+    if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = true;
+    if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = true;
+    const payload = (await api(`/hub/chat/channels?${params.toString()}`, {
+      method: "GET",
+    })) as HubChannelDirectoryResponse;
+    renderHubChannelEntries(Array.isArray(payload.entries) ? payload.entries : []);
+  } catch (err) {
+    if (!silent) {
+      flash((err as Error).message || "Failed to load channel directory", "error");
+    }
+  } finally {
+    if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = false;
+    if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = false;
+  }
+}
+
+async function copyTextToClipboard(value: string): Promise<void> {
+  const text = String(value || "");
+  if (!text) return;
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+}
+
 async function handleRepoAction(repoId: string, action: string): Promise<void> {
   const buttons = repoListEl?.querySelectorAll(
     `button[data-repo="${repoId}"][data-action="${action}"]`
@@ -1858,6 +2033,18 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         return;
       }
       await openRepoSettingsModal(repo);
+      return;
+    }
+    if (action === "set_destination") {
+      const repo = hubData.repos.find((item) => item.id === repoId);
+      if (!repo) {
+        flash(`Repo not found: ${repoId}`, "error");
+        return;
+      }
+      const updated = await promptAndSetRepoDestination(repo);
+      if (updated) {
+        await refreshHub();
+      }
       return;
     }
     if (action === "cleanup_worktree") {
@@ -1987,6 +2174,40 @@ function attachHubHandlers(): void {
   if (hubUsageRefresh) {
     hubUsageRefresh.addEventListener("click", () => loadHubUsage());
   }
+  if (hubChannelSearchBtn) {
+    hubChannelSearchBtn.addEventListener("click", () => {
+      loadHubChannelDirectory().catch(() => {});
+    });
+  }
+  if (hubChannelRefreshBtn) {
+    hubChannelRefreshBtn.addEventListener("click", () => {
+      loadHubChannelDirectory().catch(() => {});
+    });
+  }
+  if (hubChannelQueryInput) {
+    hubChannelQueryInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        loadHubChannelDirectory().catch(() => {});
+      }
+    });
+  }
+  if (hubChannelListEl) {
+    hubChannelListEl.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement;
+      const btn = target.closest(
+        'button[data-action="copy_channel_key"]'
+      ) as HTMLButtonElement | null;
+      if (!btn) return;
+      const key = String(btn.dataset.key || "").trim();
+      if (!key) return;
+      copyTextToClipboard(key)
+        .then(() => flash(`Copied key: ${key}`, "success"))
+        .catch((err) =>
+          flash((err as Error).message || "Failed to copy key", "error")
+        );
+    });
+  }
 
   if (newRepoBtn) {
     newRepoBtn.addEventListener("click", showCreateRepoModal);
@@ -2072,6 +2293,7 @@ async function silentRefreshHub(): Promise<void> {
     renderSummary(hubData.repos || []);
     renderReposWithScroll(hubData.repos || []);
     await loadHubUsage({ silent: true, allowRetry: false });
+    await loadHubChannelDirectory({ silent: true });
   } catch (err) {
     console.error("Auto-refresh hub failed:", err);
   }
@@ -2145,6 +2367,7 @@ export function initHub(): void {
     renderHubUsageMeta(cachedUsage);
   }
   loadHubUsageSeries();
+  loadHubChannelDirectory({ silent: true }).catch(() => {});
   refreshHub();
   loadHubVersion();
   checkUpdateStatus();
