@@ -134,6 +134,21 @@ def _flow_interaction(name: str, options: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+def _flow_component_interaction(custom_id: str) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "token": "token-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "type": 3,
+        "member": {"user": {"id": "user-1"}},
+        "data": {
+            "component_type": 2,
+            "custom_id": custom_id,
+        },
+    }
+
+
 def _create_run(workspace: Path, run_id: str, *, status: FlowRunStatus) -> None:
     db_path = workspace / ".codex-autorunner" / "flows.db"
     with FlowStore(db_path) as store:
@@ -216,6 +231,74 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert "Recent ticket_flow runs (limit=2)" in runs_payload
         assert paused_run_id in runs_payload
         assert completed_run_id in runs_payload
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_refresh_button_updates_existing_status_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(workspace, run_id, status=FlowRunStatus.RUNNING)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    reconcile_calls: list[str] = []
+
+    def _fake_reconcile(_repo_root, record, _store, logger=None):
+        reconcile_calls.append(record.id)
+        if len(reconcile_calls) == 1:
+            return record, False, False
+        return (
+            record.model_copy(update={"status": FlowRunStatus.COMPLETED}),
+            True,
+            False,
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.reconcile_flow_run",
+        _fake_reconcile,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": run_id}],
+            ),
+            _flow_component_interaction(f"flow:{run_id}:refresh"),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        initial_payload = rest.interaction_responses[0]["payload"]
+        refresh_payload = rest.interaction_responses[1]["payload"]
+
+        assert initial_payload["type"] == 4
+        assert "Status: running" in initial_payload["data"]["content"]
+
+        assert refresh_payload["type"] == 7
+        assert "Status: completed" in refresh_payload["data"]["content"]
     finally:
         await store.close()
 

@@ -3863,6 +3863,7 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        update_message: bool = False,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -3920,6 +3921,29 @@ class DiscordBotService:
                 )
                 return
             try:
+                record, _updated, locked = reconcile_flow_run(
+                    workspace_root, record, store
+                )
+                if locked:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        f"Run {record.id} is locked for reconcile; try again.",
+                    )
+                    return
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.reconcile_failed",
+                    exc=exc,
+                    run_id=record.id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to reconcile flow run: {exc}",
+                    user_message="Unable to reconcile flow run. Please try again later.",
+                ) from None
+            try:
                 snapshot = build_flow_status_snapshot(workspace_root, record, store)
             except (sqlite3.Error, OSError) as exc:
                 log_event(
@@ -3961,16 +3985,32 @@ class DiscordBotService:
             include_refresh=True,
         )
         if status_buttons:
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                "\n".join(lines),
-                status_buttons,
-            )
+            if update_message:
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text="\n".join(lines),
+                    components=status_buttons,
+                )
+            else:
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    "\n".join(lines),
+                    status_buttons,
+                )
         else:
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "\n".join(lines)
-            )
+            if update_message:
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text="\n".join(lines),
+                    components=[],
+                )
+            else:
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, "\n".join(lines)
+                )
 
     async def _handle_flow_runs(
         self,
@@ -5047,6 +5087,41 @@ class DiscordBotService:
                     interaction_id,
                 )
 
+    async def _update_component_message(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        max_len = max(int(self._config.max_message_length), 32)
+        content = truncate_for_discord(text, max_len=max_len)
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={
+                    "type": 7,
+                    "data": {
+                        "content": content,
+                        "components": components,
+                    },
+                },
+            )
+        except DiscordAPIError as exc:
+            sent_followup = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=content,
+                components=components,
+            )
+            if not sent_followup:
+                self._logger.error(
+                    "Failed to update component message: %s (interaction_id=%s)",
+                    exc,
+                    interaction_id,
+                )
+
     async def _send_followup_ephemeral(
         self,
         *,
@@ -5428,6 +5503,7 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 options={"run_id": run_id},
+                update_message=True,
             )
         else:
             await self._respond_ephemeral(
