@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import anyio
 import httpx
@@ -15,10 +15,8 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
-from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.integrations.pma_delivery import PmaDeliveryOutcome
 from codex_autorunner.server import create_hub_app
-from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from tests.conftest import write_test_config
 
@@ -47,15 +45,6 @@ def _disable_pma(hub_root: Path) -> None:
     cfg.setdefault("pma", {})
     cfg["pma"]["enabled"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-
-def _targets_state_without_updated_at(state: dict[str, object]) -> dict[str, object]:
-    return {
-        "version": state.get("version"),
-        "targets": state.get("targets"),
-        "last_delivery_by_target": state.get("last_delivery_by_target"),
-        "active_target_key": state.get("active_target_key"),
-    }
 
 
 def _install_fake_successful_chat_supervisor(
@@ -146,6 +135,146 @@ def _delivery_outcome_for_status(status: str) -> PmaDeliveryOutcome:
     )
 
 
+def _seed_pma_targets(hub_root: Path) -> None:
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.set_targets(
+        [
+            {"kind": "web"},
+            {"kind": "chat", "platform": "telegram", "chat_id": "100"},
+        ]
+    )
+
+
+def _assert_deprecated_targets_payload(
+    payload: dict[str, Any], *, expected_legacy_count: Optional[int] = None
+) -> None:
+    assert payload.get("status") == "deprecated"
+    assert payload.get("deprecated") is True
+    assert payload.get("active_target_key") is None
+    assert payload.get("active_target") is None
+    assert payload.get("targets") == []
+    assert payload.get("message") == "PMA delivery targets are deprecated and ignored."
+    if expected_legacy_count is not None:
+        assert payload.get("legacy_targets_ignored") == expected_legacy_count
+
+
+def _assert_no_targets_mutation(
+    store: PmaDeliveryTargetsStore, expected: dict[str, Any]
+):
+    assert store.load() == expected
+
+
+def test_pma_targets_endpoints_are_deprecated(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+
+    for endpoint in ["/hub/pma/targets", "/hub/pma/targets/active"]:
+        resp = client.get(endpoint)
+        assert resp.status_code == 200
+        payload = resp.json()
+        _assert_deprecated_targets_payload(
+            payload, expected_legacy_count=len(expected_state["targets"])
+        )
+        _assert_no_targets_mutation(store, expected_state)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "body", "expected_updates"),
+    [
+        (
+            "/hub/pma/targets/active",
+            {"key": "chat:telegram:100"},
+            {"action": "set_active", "changed": False, "key": "chat:telegram:100"},
+        ),
+        ("/hub/pma/targets/add", {"ref": "web"}, {"action": "add", "key": "web"}),
+        (
+            "/hub/pma/targets/remove",
+            {"key": "web"},
+            {"action": "remove", "removed": False, "key": "web"},
+        ),
+        ("/hub/pma/targets/clear", {}, {"action": "clear"}),
+    ],
+)
+def test_pma_targets_mutation_endpoints_are_deprecated_noop(
+    hub_env, endpoint: str, body: dict[str, Any], expected_updates: dict[str, Any]
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(endpoint, json=body)
+    assert resp.status_code == 200
+    payload = resp.json()
+    _assert_deprecated_targets_payload(
+        payload, expected_legacy_count=len(expected_state["targets"])
+    )
+    for key, value in expected_updates.items():
+        assert payload.get(key) == value
+    _assert_no_targets_mutation(store, expected_state)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "body", "expected_action"),
+    [
+        ("/hub/pma/targets/active", {"key": "   "}, "set_active"),
+        ("/hub/pma/targets/active", {"ref": "   "}, "set_active"),
+        ("/hub/pma/targets/add", {"ref": "   "}, "add"),
+        ("/hub/pma/targets/remove", {"key": "   "}, "remove"),
+    ],
+)
+def test_pma_targets_mutation_endpoints_ignore_blank_keys(
+    hub_env, endpoint: str, body: dict[str, Any], expected_action: str
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(endpoint, json=body)
+    assert resp.status_code == 200
+    payload = resp.json()
+    _assert_deprecated_targets_payload(
+        payload, expected_legacy_count=len(expected_state["targets"])
+    )
+    assert payload.get("action") == expected_action
+    assert payload.get("key") is None
+    _assert_no_targets_mutation(store, expected_state)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/hub/pma/targets/active",
+        "/hub/pma/targets/add",
+        "/hub/pma/targets/remove",
+    ],
+)
+def test_pma_targets_mutation_endpoints_reject_non_object_body(
+    hub_env, endpoint: str
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(endpoint, json=["not", "an", "object"])
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert payload.get("detail") == "Request body must be an object"
+    _assert_no_targets_mutation(store, expected_state)
+
+
 def test_pma_agents_endpoint(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -188,264 +317,6 @@ def test_pma_routes_disabled_by_config(hub_env) -> None:
     client = TestClient(app)
     assert client.get("/hub/pma/agents").status_code == 404
     assert client.post("/hub/pma/chat", json={"message": "hi"}).status_code == 404
-
-
-def test_pma_targets_add_list_remove_clear(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-
-    initial = client.get("/hub/pma/targets")
-    assert initial.status_code == 200
-    assert initial.json()["targets"] == []
-
-    add_web = client.post("/hub/pma/targets/add", json={"ref": "web"})
-    assert add_web.status_code == 200
-    assert add_web.json()["key"] == "web"
-
-    add_local = client.post(
-        "/hub/pma/targets/add",
-        json={"ref": "local:.codex-autorunner/pma/deliveries.jsonl"},
-    )
-    assert add_local.status_code == 200
-    assert add_local.json()["key"] == "local:.codex-autorunner/pma/deliveries.jsonl"
-
-    add_telegram = client.post(
-        "/hub/pma/targets/add",
-        json={"ref": "telegram:-100123:777"},
-    )
-    assert add_telegram.status_code == 200
-    assert add_telegram.json()["key"] == "chat:telegram:-100123:777"
-
-    add_discord = client.post(
-        "/hub/pma/targets/add",
-        json={"ref": "discord:987654321"},
-    )
-    assert add_discord.status_code == 200
-    assert add_discord.json()["key"] == "chat:discord:987654321"
-
-    listed = client.get("/hub/pma/targets")
-    assert listed.status_code == 200
-    listed_keys = {row["key"] for row in listed.json()["targets"]}
-    assert listed_keys == {
-        "web",
-        "local:.codex-autorunner/pma/deliveries.jsonl",
-        "chat:telegram:-100123:777",
-        "chat:discord:987654321",
-    }
-
-    remove = client.post(
-        "/hub/pma/targets/remove",
-        json={"ref": "chat:telegram:-100123:777"},
-    )
-    assert remove.status_code == 200
-    assert remove.json()["removed"] is True
-
-    clear = client.post("/hub/pma/targets/clear", json={})
-    assert clear.status_code == 200
-    assert clear.json()["targets"] == []
-
-    state = PmaDeliveryTargetsStore(hub_env.hub_root).load()
-    assert state["targets"] == []
-
-
-def test_pma_targets_reject_invalid_ref(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-
-    invalid_add = client.post(
-        "/hub/pma/targets/add",
-        json={"ref": "telegram:not-a-number"},
-    )
-    assert invalid_add.status_code == 400
-    detail = invalid_add.json().get("detail", "")
-    assert "Invalid target ref" in detail
-    assert "telegram:<chat_id>" in detail
-
-    invalid_remove = client.post(
-        "/hub/pma/targets/remove",
-        json={"ref": "discord:"},
-    )
-    assert invalid_remove.status_code == 400
-    assert "Invalid target ref" in invalid_remove.json().get("detail", "")
-
-
-def test_pma_targets_active_get_and_set(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-
-    assert client.post("/hub/pma/targets/add", json={"ref": "web"}).status_code == 200
-    assert (
-        client.post("/hub/pma/targets/add", json={"ref": "telegram:-100123:777"})
-    ).status_code == 200
-
-    initial = client.get("/hub/pma/targets/active")
-    assert initial.status_code == 200
-    initial_payload = initial.json()
-    assert initial_payload["active_target_key"] is None
-    assert initial_payload.get("active_target") is None
-    assert all(
-        row.get("active") is False
-        for row in initial_payload.get("targets", [])
-        if isinstance(row, dict)
-    )
-
-    set_active = client.post(
-        "/hub/pma/targets/active", json={"ref": "telegram:-100123:777"}
-    )
-    assert set_active.status_code == 200
-    set_payload = set_active.json()
-    assert set_payload["status"] == "ok"
-    assert set_payload["changed"] is True
-    assert set_payload["active_target_key"] == "chat:telegram:-100123:777"
-    assert (set_payload.get("active_target") or {}).get(
-        "key"
-    ) == "chat:telegram:-100123:777"
-    assert (
-        next(
-            row
-            for row in set_payload["targets"]
-            if row["key"] == "chat:telegram:-100123:777"
-        )["active"]
-        is True
-    )
-
-    set_same = client.post(
-        "/hub/pma/targets/active", json={"key": "chat:telegram:-100123:777"}
-    )
-    assert set_same.status_code == 200
-    assert set_same.json()["changed"] is False
-
-
-def test_pma_targets_active_rejects_invalid_inputs(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-    assert client.post("/hub/pma/targets/add", json={"ref": "web"}).status_code == 200
-
-    missing = client.post("/hub/pma/targets/active", json={})
-    assert missing.status_code == 400
-    assert "ref or key is required" in (missing.json().get("detail") or "")
-
-    invalid_ref = client.post("/hub/pma/targets/active", json={"ref": "discord:"})
-    assert invalid_ref.status_code == 400
-    assert "Invalid target ref" in (invalid_ref.json().get("detail") or "")
-
-    not_found = client.post("/hub/pma/targets/active", json={"key": "chat:discord:42"})
-    assert not_found.status_code == 404
-    assert "Target not found" in (not_found.json().get("detail") or "")
-
-
-def test_pma_targets_include_friendly_channel_labels(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    ChannelDirectoryStore(hub_env.hub_root).record_seen(
-        "telegram",
-        "-100123",
-        "777",
-        "Team Room / Build",
-        {"chat_type": "supergroup"},
-    )
-
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-
-    add = client.post("/hub/pma/targets/add", json={"ref": "telegram:-100123:777"})
-    assert add.status_code == 200
-
-    listed = client.get("/hub/pma/targets")
-    assert listed.status_code == 200
-    rows = listed.json()["targets"]
-    target_row = next(row for row in rows if row["key"] == "chat:telegram:-100123:777")
-    assert target_row["friendly_label"] == "Team Room / Build"
-    assert target_row["label"] == "telegram:-100123:777"
-
-
-def test_pma_targets_web_state_matches_cli_helper(tmp_path: Path) -> None:
-    web_root = tmp_path / "web-hub"
-    cli_root = tmp_path / "cli-hub"
-
-    seed_hub_files(web_root, force=True)
-    seed_hub_files(cli_root, force=True)
-    _enable_pma(web_root)
-
-    web_app = create_hub_app(web_root)
-    client = TestClient(web_app)
-
-    add_refs = [
-        "web",
-        "local:.codex-autorunner/pma/deliveries.jsonl",
-        "telegram:-100123:777",
-        "discord:987654321",
-        "chat:telegram:-100123:777",
-    ]
-    remove_refs = ["telegram:-100123:777"]
-    set_active_refs = ["discord:987654321"]
-    set_active_keys = ["web"]
-
-    for ref in add_refs:
-        resp = client.post("/hub/pma/targets/add", json={"ref": ref})
-        assert resp.status_code == 200, ref
-
-    for ref in remove_refs:
-        resp = client.post("/hub/pma/targets/remove", json={"ref": ref})
-        assert resp.status_code == 200, ref
-
-    for ref in set_active_refs:
-        resp = client.post("/hub/pma/targets/active", json={"ref": ref})
-        assert resp.status_code == 200, ref
-
-    for key in set_active_keys:
-        resp = client.post("/hub/pma/targets/active", json={"key": key})
-        assert resp.status_code == 200, key
-
-    web_state = PmaDeliveryTargetsStore(web_root).load()
-
-    cli_store = PmaDeliveryTargetsStore(cli_root)
-    for ref in add_refs:
-        parsed = pma_cli._parse_pma_target_ref(ref)
-        assert parsed is not None
-        cli_store.add_target(parsed)
-    for ref in remove_refs:
-        parsed = pma_cli._parse_pma_target_ref(ref)
-        assert parsed is not None
-        cli_store.remove_target(parsed)
-
-    for ref in set_active_refs:
-        parsed = pma_cli._parse_pma_target_ref(ref)
-        assert parsed is not None
-        cli_store.set_active_target(parsed)
-    for key in set_active_keys:
-        cli_store.set_active_target(key)
-
-    cli_state = cli_store.load()
-    assert _targets_state_without_updated_at(
-        web_state
-    ) == _targets_state_without_updated_at(cli_state)
-    assert web_state.get("active_target_key") == "web"
-
-
-def test_pma_ui_target_management_controls_present() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    index_html = (
-        repo_root / "src" / "codex_autorunner" / "static" / "index.html"
-    ).read_text(encoding="utf-8")
-    assert 'id="pma-targets-list"' in index_html
-    assert 'id="pma-target-ref-input"' in index_html
-    assert 'id="pma-target-add"' in index_html
-    assert 'id="pma-targets-clear"' in index_html
-
-    pma_source = (
-        repo_root / "src" / "codex_autorunner" / "static_src" / "pma.ts"
-    ).read_text(encoding="utf-8")
-    assert "/hub/pma/targets" in pma_source
-    assert "/hub/pma/targets/active" in pma_source
-    assert "/hub/pma/targets/add" in pma_source
-    assert "/hub/pma/targets/remove" in pma_source
-    assert "/hub/pma/targets/clear" in pma_source
-    assert "Set active" in pma_source
-    assert "friendly_label" in pma_source
 
 
 def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
@@ -503,155 +374,6 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
         "model": "test-model",
         "effort": "high",
     }
-
-
-@pytest.mark.parametrize(
-    ("targets", "turn_id", "pre_marked_keys", "expected_delivery_status"),
-    [
-        (
-            [{"kind": "web"}],
-            "turn-delivery-success",
-            (),
-            "success",
-        ),
-        (
-            [
-                {"kind": "web"},
-                {
-                    "kind": "chat",
-                    "platform": "telegram",
-                    "chat_id": "123",
-                    "thread_id": "invalid-thread",
-                },
-            ],
-            "turn-delivery-partial",
-            (),
-            "partial_success",
-        ),
-        (
-            [
-                {
-                    "kind": "chat",
-                    "platform": "telegram",
-                    "chat_id": "123",
-                    "thread_id": "invalid-thread",
-                }
-            ],
-            "turn-delivery-failed",
-            (),
-            "failed",
-        ),
-        (
-            [{"kind": "web"}],
-            "turn-delivery-duplicate",
-            ("web",),
-            "duplicate_only",
-        ),
-    ],
-)
-def test_pma_chat_exposes_top_level_delivery_status(
-    hub_env,
-    targets: list[dict[str, str]],
-    turn_id: str,
-    pre_marked_keys: tuple[str, ...],
-    expected_delivery_status: str,
-) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-
-    targets_store = PmaDeliveryTargetsStore(hub_env.hub_root)
-    targets_store.set_targets(targets)
-    for key in pre_marked_keys:
-        assert targets_store.mark_delivered(key, turn_id) is True
-
-    _install_fake_successful_chat_supervisor(
-        app,
-        turn_id=turn_id,
-        message=f"delivery status {expected_delivery_status}",
-    )
-
-    client = TestClient(app)
-    resp = client.post("/hub/pma/chat", json={"message": "hi"})
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload.get("status") == "ok"
-    assert payload.get("delivery_status") == expected_delivery_status
-
-    delivery_outcome = payload.get("delivery_outcome")
-    assert isinstance(delivery_outcome, dict)
-    assert delivery_outcome.get("status") == expected_delivery_status
-
-
-def test_pma_chat_does_not_implicitly_set_web_active_target(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-
-    targets_store = PmaDeliveryTargetsStore(hub_env.hub_root)
-    targets_store.set_targets(
-        [
-            {"kind": "web"},
-            {
-                "kind": "chat",
-                "platform": "telegram",
-                "chat_id": "-100123",
-                "thread_id": "777",
-            },
-        ]
-    )
-    assert targets_store.set_active_target("chat:telegram:-100123:777") is True
-
-    class FakeTurnHandle:
-        def __init__(self) -> None:
-            self.turn_id = "turn-keep-active"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {"agent_messages": ["assistant text"], "raw_events": [], "errors": []},
-            )()
-
-    class FakeClient:
-        async def thread_resume(self, thread_id: str) -> None:
-            _ = thread_id
-            return None
-
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        def __init__(self) -> None:
-            self.client = FakeClient()
-
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return self.client
-
-    app.state.app_server_supervisor = FakeSupervisor()
-
-    client = TestClient(app)
-    resp = client.post("/hub/pma/chat", json={"message": "hi"})
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload.get("status") == "ok"
-    assert (payload.get("delivery_outcome") or {}).get("status") == "success"
-    assert payload.get("delivery_status") == "success"
-
-    state = targets_store.load()
-    assert state["active_target_key"] == "chat:telegram:-100123:777"
 
 
 @pytest.mark.parametrize(

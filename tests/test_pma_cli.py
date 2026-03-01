@@ -1,18 +1,10 @@
 """Tests for PMA CLI commands."""
 
 from pathlib import Path
-from typing import Optional
 
-import pytest
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.pma_delivery_targets import (
-    PmaDeliveryTargetsStore,
-    target_key,
-)
-from codex_autorunner.core.pma_target_refs import parse_pma_target_ref
-from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
 
@@ -38,6 +30,14 @@ def test_pma_cli_has_required_commands():
     assert "docs" in output, "PMA CLI should have 'docs' command group"
     assert "context" in output, "PMA CLI should have 'context' command group"
     assert "thread" in output, "PMA CLI should have 'thread' command group"
+    assert "targets" not in output, "PMA CLI should not expose 'targets' commands"
+
+
+def test_pma_cli_targets_commands_removed() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["targets", "--help"])
+    assert result.exit_code != 0
+    assert "No such command 'targets'" in result.output
 
 
 def test_pma_cli_thread_group_has_required_commands():
@@ -437,206 +437,3 @@ def test_pma_context_compact_snapshots_and_rewrites_active_context(tmp_path: Pat
     assert "## Open questions" in compacted
     assert "## Archived context summary" in compacted
     assert len(compacted.splitlines()) <= 24
-
-
-def test_pma_targets_group_has_required_commands() -> None:
-    runner = CliRunner()
-    result = runner.invoke(pma_app, ["targets", "--help"])
-    assert result.exit_code == 0
-    output = result.stdout
-    assert "list" in output
-    assert "add" in output
-    assert "rm" in output
-    assert "clear" in output
-    assert "active" in output
-    assert "set-active" in output
-
-
-def test_pma_targets_add_list_rm_clear(tmp_path: Path) -> None:
-    seed_hub_files(tmp_path, force=True)
-    runner = CliRunner()
-
-    add_web_result = runner.invoke(
-        pma_app,
-        ["targets", "add", "web", "--path", str(tmp_path)],
-    )
-    assert add_web_result.exit_code == 0
-    assert "Added PMA delivery target: web" in add_web_result.stdout
-
-    add_local_result = runner.invoke(
-        pma_app,
-        [
-            "targets",
-            "add",
-            "local:.codex-autorunner/pma/deliveries.jsonl",
-            "--path",
-            str(tmp_path),
-        ],
-    )
-    assert add_local_result.exit_code == 0
-    assert (
-        "Added PMA delivery target: local:.codex-autorunner/pma/deliveries.jsonl"
-        in add_local_result.stdout
-    )
-
-    add_result = runner.invoke(
-        pma_app,
-        ["targets", "add", "telegram:-100123:777", "--path", str(tmp_path)],
-    )
-    assert add_result.exit_code == 0
-    assert "Added PMA delivery target: chat:telegram:-100123:777" in add_result.stdout
-
-    add_discord_result = runner.invoke(
-        pma_app,
-        ["targets", "add", "discord:987654321", "--path", str(tmp_path)],
-    )
-    assert add_discord_result.exit_code == 0
-    assert (
-        "Added PMA delivery target: chat:discord:987654321" in add_discord_result.stdout
-    )
-
-    add_chat_key_result = runner.invoke(
-        pma_app,
-        ["targets", "add", "chat:telegram:-100123:777", "--path", str(tmp_path)],
-    )
-    assert add_chat_key_result.exit_code == 0
-    assert (
-        "Added PMA delivery target: chat:telegram:-100123:777"
-        in add_chat_key_result.stdout
-    )
-
-    list_result = runner.invoke(pma_app, ["targets", "list", "--path", str(tmp_path)])
-    assert list_result.exit_code == 0
-    assert "web" in list_result.stdout
-    assert "local:.codex-autorunner/pma/deliveries.jsonl" in list_result.stdout
-    assert "chat:telegram:-100123:777" in list_result.stdout
-    assert "chat:discord:987654321" in list_result.stdout
-
-    rm_result = runner.invoke(
-        pma_app,
-        ["targets", "rm", "chat:telegram:-100123:777", "--path", str(tmp_path)],
-    )
-    assert rm_result.exit_code == 0
-    assert "Removed PMA delivery target: chat:telegram:-100123:777" in rm_result.stdout
-
-    clear_result = runner.invoke(
-        pma_app,
-        ["targets", "clear", "--path", str(tmp_path)],
-    )
-    assert clear_result.exit_code == 0
-    assert "Cleared PMA delivery targets." in clear_result.stdout
-
-    state = PmaDeliveryTargetsStore(tmp_path).load()
-    keys = {
-        key
-        for key in (target_key(target) for target in state.get("targets", []))
-        if isinstance(key, str)
-    }
-    assert keys == set()
-
-
-def test_pma_targets_active_show_and_set(tmp_path: Path) -> None:
-    seed_hub_files(tmp_path, force=True)
-    runner = CliRunner()
-
-    add_web = runner.invoke(pma_app, ["targets", "add", "web", "--path", str(tmp_path)])
-    assert add_web.exit_code == 0
-    assert (
-        runner.invoke(
-            pma_app,
-            ["targets", "add", "telegram:-100123:777", "--path", str(tmp_path)],
-        ).exit_code
-        == 0
-    )
-
-    show_result = runner.invoke(
-        pma_app,
-        ["targets", "active", "--path", str(tmp_path)],
-    )
-    assert show_result.exit_code == 0
-    assert "Active PMA delivery target: (not set)" in show_result.stdout
-
-    set_result = runner.invoke(
-        pma_app,
-        ["targets", "set-active", "telegram:-100123:777", "--path", str(tmp_path)],
-    )
-    assert set_result.exit_code == 0
-    assert (
-        "Set active PMA delivery target: chat:telegram:-100123:777" in set_result.stdout
-    )
-
-    set_same_result = runner.invoke(
-        pma_app,
-        [
-            "targets",
-            "set-active",
-            "chat:telegram:-100123:777",
-            "--path",
-            str(tmp_path),
-        ],
-    )
-    assert set_same_result.exit_code == 0
-    assert (
-        "PMA delivery target already active: chat:telegram:-100123:777"
-        in set_same_result.stdout
-    )
-
-    missing_result = runner.invoke(
-        pma_app,
-        ["targets", "set-active", "chat:discord:42", "--path", str(tmp_path)],
-    )
-    assert missing_result.exit_code == 1
-    assert "PMA delivery target not found: chat:discord:42" in missing_result.output
-
-    invalid_result = runner.invoke(
-        pma_app,
-        ["targets", "set-active", "telegram:not-a-number", "--path", str(tmp_path)],
-    )
-    assert invalid_result.exit_code == 1
-    assert "Invalid target ref" in invalid_result.output
-
-
-def test_pma_targets_add_rejects_invalid_ref(tmp_path: Path) -> None:
-    seed_hub_files(tmp_path, force=True)
-    runner = CliRunner()
-    result = runner.invoke(
-        pma_app,
-        ["targets", "add", "telegram:not-a-number", "--path", str(tmp_path)],
-    )
-    assert result.exit_code == 1
-    assert "Invalid target ref" in result.output
-
-
-@pytest.mark.parametrize(
-    ("ref", "expected_key"),
-    [
-        ("web", "web"),
-        (
-            "local:.codex-autorunner/pma/deliveries.jsonl",
-            "local:.codex-autorunner/pma/deliveries.jsonl",
-        ),
-        ("telegram:-100123", "chat:telegram:-100123"),
-        ("telegram:-100123:777", "chat:telegram:-100123:777"),
-        ("discord:987654321", "chat:discord:987654321"),
-        ("chat:telegram:-100123:777", "chat:telegram:-100123:777"),
-        ("chat:discord:987654321", "chat:discord:987654321"),
-        ("", None),
-        ("telegram:not-a-number", None),
-        ("telegram:-100123:not-a-number", None),
-        ("discord:", None),
-        ("chat:telegram:-100123:not-a-number", None),
-        ("chat:discord:", None),
-        ("chat:discord:123:456", None),
-    ],
-)
-def test_pma_target_ref_matrix_cli_matches_canonical_parser(
-    ref: str, expected_key: Optional[str]
-) -> None:
-    cli_target = pma_cli._parse_pma_target_ref(ref)
-    canonical_target = parse_pma_target_ref(ref)
-    assert cli_target == canonical_target
-    if expected_key is None:
-        assert canonical_target is None
-        return
-    assert canonical_target is not None
-    assert target_key(canonical_target) == expected_key

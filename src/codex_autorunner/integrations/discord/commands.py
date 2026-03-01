@@ -468,62 +468,6 @@ def build_application_commands() -> list[dict[str, Any]]:
                     "name": "status",
                     "description": "Show PMA mode status",
                 },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "targets",
-                    "description": "List PMA delivery targets",
-                },
-                {
-                    "type": SUB_COMMAND_GROUP,
-                    "name": "target",
-                    "description": "Manage PMA delivery targets",
-                    "options": [
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "add",
-                            "description": "Add PMA delivery target",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "ref",
-                                    "description": "here | web | local:<path> | telegram:<chat_id>[:<thread_id>] | discord:<channel_id> | chat:<...>",
-                                    "required": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "rm",
-                            "description": "Remove PMA delivery target",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "ref",
-                                    "description": "here | web | local:<path> | telegram:<chat_id>[:<thread_id>] | discord:<channel_id> | chat:<...>",
-                                    "required": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "clear",
-                            "description": "Clear PMA delivery targets",
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "active",
-                            "description": "Show or set active PMA delivery target",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "ref",
-                                    "description": "Optional target ref/key to set as active",
-                                    "required": False,
-                                }
-                            ],
-                        },
-                    ],
-                },
             ],
         },
     ]

@@ -66,26 +66,6 @@ type PMADocUpdate = {
   status: string;
 };
 
-type PMATargetRow = {
-  key: string;
-  label?: string;
-  friendly_label?: string;
-  active?: boolean;
-  target?: Record<string, unknown>;
-};
-
-type PMATargetsResponse = {
-  status?: string;
-  action?: string;
-  key?: string;
-  changed?: boolean;
-  removed?: boolean;
-  active_target_key?: string | null;
-  active_target?: PMATargetRow | null;
-  updated_at?: string;
-  targets?: PMATargetRow[];
-};
-
 const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
 let activeContextMaxLines = 200;
 
@@ -559,11 +539,6 @@ function getElements() {
     docsSaveBtn: document.getElementById("pma-docs-save") as HTMLButtonElement | null,
     docsResetBtn: document.getElementById("pma-docs-reset") as HTMLButtonElement | null,
     docsSnapshotBtn: document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null,
-    targetRefInput: document.getElementById("pma-target-ref-input") as HTMLInputElement | null,
-    targetAddBtn: document.getElementById("pma-target-add") as HTMLButtonElement | null,
-    targetsRefreshBtn: document.getElementById("pma-targets-refresh") as HTMLButtonElement | null,
-    targetsClearBtn: document.getElementById("pma-targets-clear") as HTMLButtonElement | null,
-    targetsList: document.getElementById("pma-targets-list"),
   };
 }
 
@@ -743,7 +718,6 @@ async function initPMA(): Promise<void> {
   await refreshAgentControls({ force: true, reason: "initial" });
   await loadPMAThreadInfo();
   await initFileBoxUI();
-  await loadPMATargets();
   await loadPMADocs();
   attachHandlers();
   setPMAView(loadPMAView(), { persist: false });
@@ -784,7 +758,6 @@ function startPMARefreshLoop(): void {
     if (!shell || shell.classList.contains("hidden")) return;
     void loadPMAThreadInfo();
     void fileBoxCtrl?.refresh();
-    void loadPMATargets();
   }, 30000);
 }
 
@@ -850,197 +823,6 @@ async function loadPMAThreadInfo(): Promise<void> {
     elements.threadInfo.classList.remove("hidden");
   } catch {
     elements.threadInfo?.classList.add("hidden");
-  }
-}
-
-function renderPMATargets(rows: PMATargetRow[]): void {
-  const elements = getElements();
-  if (!elements.targetsList) return;
-
-  elements.targetsList.innerHTML = "";
-  if (!rows.length) {
-    elements.targetsList.textContent = "No delivery targets configured.";
-    elements.targetsList.classList.add("muted", "small");
-    return;
-  }
-
-  elements.targetsList.classList.remove("muted", "small");
-  const fragment = document.createDocumentFragment();
-  rows.forEach((row) => {
-    if (!row || typeof row.key !== "string" || !row.key) return;
-    const item = document.createElement("div");
-    item.className = "pma-target-item";
-    if (row.active) {
-      item.classList.add("is-active");
-    }
-
-    const friendlyLabel =
-      typeof row.friendly_label === "string" && row.friendly_label.trim()
-        ? row.friendly_label.trim()
-        : "";
-    if (friendlyLabel) {
-      const label = document.createElement("span");
-      label.className = "pma-target-label";
-      label.textContent = friendlyLabel;
-      label.title = friendlyLabel;
-      item.appendChild(label);
-    }
-
-    const key = document.createElement("code");
-    key.className = "pma-target-key";
-    key.textContent = row.key;
-    item.appendChild(key);
-
-    const fallbackLabel =
-      typeof row.label === "string" && row.label.trim() ? row.label.trim() : "";
-    if (
-      fallbackLabel &&
-      fallbackLabel !== row.key &&
-      fallbackLabel !== friendlyLabel
-    ) {
-      const label = document.createElement("span");
-      label.className = "pma-target-label muted";
-      label.textContent = fallbackLabel;
-      label.title = fallbackLabel;
-      item.appendChild(label);
-    }
-
-    if (row.active) {
-      const badge = document.createElement("span");
-      badge.className = "pma-target-active-badge";
-      badge.textContent = "active";
-      item.appendChild(badge);
-    } else {
-      const activeBtn = document.createElement("button");
-      activeBtn.className = "ghost sm";
-      activeBtn.type = "button";
-      activeBtn.textContent = "Set active";
-      activeBtn.dataset.targetSetActiveKey = row.key;
-      item.appendChild(activeBtn);
-    }
-
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "ghost sm";
-    removeBtn.type = "button";
-    removeBtn.textContent = "Remove";
-    removeBtn.dataset.targetRef = row.key;
-    item.appendChild(removeBtn);
-
-    fragment.appendChild(item);
-  });
-  elements.targetsList.appendChild(fragment);
-}
-
-async function loadPMATargets(): Promise<void> {
-  const elements = getElements();
-  if (!elements.targetsList) return;
-  try {
-    const payload = (await api("/hub/pma/targets/active", { method: "GET" })) as PMATargetsResponse;
-    const rows = Array.isArray(payload?.targets)
-      ? payload.targets.filter(
-          (row): row is PMATargetRow => Boolean(row && typeof row.key === "string")
-        )
-      : [];
-    renderPMATargets(rows);
-  } catch {
-    elements.targetsList.textContent = "Failed to load delivery targets.";
-    elements.targetsList.classList.add("muted", "small");
-  }
-}
-
-function payloadTargetKey(payload: PMATargetsResponse | null | undefined): string | null {
-  if (typeof payload?.key === "string" && payload.key) {
-    return payload.key;
-  }
-  return null;
-}
-
-function payloadActiveTargetKey(payload: PMATargetsResponse | null | undefined): string | null {
-  if (typeof payload?.active_target?.key === "string" && payload.active_target.key) {
-    return payload.active_target.key;
-  }
-  if (typeof payload?.active_target_key === "string" && payload.active_target_key) {
-    return payload.active_target_key;
-  }
-  return payloadTargetKey(payload);
-}
-
-async function addPMATarget(): Promise<void> {
-  const elements = getElements();
-  const ref = elements.targetRefInput?.value?.trim() || "";
-  if (!ref) {
-    flash("Target ref is required", "error");
-    return;
-  }
-  try {
-    const payload = (await api("/hub/pma/targets/add", {
-      method: "POST",
-      body: { ref },
-    })) as PMATargetsResponse;
-    const key = payloadTargetKey(payload) || ref;
-    if (elements.targetRefInput) {
-      elements.targetRefInput.value = "";
-    }
-    flash(`Added PMA delivery target: ${key}`, "info");
-    await loadPMATargets();
-  } catch (err) {
-    flash((err as Error).message || "Failed to add delivery target", "error");
-  }
-}
-
-async function removePMATarget(ref: string): Promise<void> {
-  if (!ref) return;
-  try {
-    const payload = (await api("/hub/pma/targets/remove", {
-      method: "POST",
-      body: { ref },
-    })) as PMATargetsResponse;
-    const key = payloadTargetKey(payload) || ref;
-    if (payload?.removed) {
-      flash(`Removed PMA delivery target: ${key}`, "info");
-    } else {
-      flash(`PMA delivery target not found: ${key}`, "info");
-    }
-    await loadPMATargets();
-  } catch (err) {
-    flash((err as Error).message || "Failed to remove delivery target", "error");
-  }
-}
-
-async function setPMAActiveTarget(key: string): Promise<void> {
-  if (!key) return;
-  try {
-    const payload = (await api("/hub/pma/targets/active", {
-      method: "POST",
-      body: { key },
-    })) as PMATargetsResponse;
-    const activeKey = payloadActiveTargetKey(payload) || key;
-    if (payload?.changed) {
-      flash(`Set active PMA delivery target: ${activeKey}`, "info");
-    } else {
-      flash(`PMA delivery target already active: ${activeKey}`, "info");
-    }
-    await loadPMATargets();
-  } catch (err) {
-    flash((err as Error).message || "Failed to set active target", "error");
-  }
-}
-
-async function clearPMATargets(): Promise<void> {
-  if (!window.confirm("Clear all PMA delivery targets?")) return;
-  try {
-    const payload = (await api("/hub/pma/targets/clear", {
-      method: "POST",
-    })) as PMATargetsResponse;
-    const activeKey = payloadActiveTargetKey(payload);
-    if (activeKey) {
-      flash(`Cleared PMA delivery targets; active: ${activeKey}`, "info");
-    } else {
-      flash("Cleared PMA delivery targets", "info");
-    }
-    await loadPMATargets();
-  } catch (err) {
-    flash((err as Error).message || "Failed to clear delivery targets", "error");
   }
 }
 
@@ -1677,51 +1459,6 @@ function attachHandlers(): void {
   if (elements.outboxClear) {
     elements.outboxClear.addEventListener("click", () => {
       void clearPMABox("outbox");
-    });
-  }
-
-  if (elements.targetAddBtn) {
-    elements.targetAddBtn.addEventListener("click", () => {
-      void addPMATarget();
-    });
-  }
-
-  if (elements.targetRefInput) {
-    elements.targetRefInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        void addPMATarget();
-      }
-    });
-  }
-
-  if (elements.targetsRefreshBtn) {
-    elements.targetsRefreshBtn.addEventListener("click", () => {
-      void loadPMATargets();
-    });
-  }
-
-  if (elements.targetsClearBtn) {
-    elements.targetsClearBtn.addEventListener("click", () => {
-      void clearPMATargets();
-    });
-  }
-
-  if (elements.targetsList) {
-    elements.targetsList.addEventListener("click", (event) => {
-      const target = event.target as HTMLElement | null;
-      const activeBtn = target?.closest("button[data-target-set-active-key]") as HTMLButtonElement | null;
-      if (activeBtn) {
-        const key = activeBtn.dataset.targetSetActiveKey || "";
-        if (!key) return;
-        void setPMAActiveTarget(key);
-        return;
-      }
-      const removeBtn = target?.closest("button[data-target-ref]") as HTMLButtonElement | null;
-      if (!removeBtn) return;
-      const ref = removeBtn.dataset.targetRef || "";
-      if (!ref) return;
-      void removePMATarget(ref);
     });
   }
 

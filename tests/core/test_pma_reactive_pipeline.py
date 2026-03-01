@@ -12,9 +12,9 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
-from codex_autorunner.core.pma_sink import PmaActiveSinkStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.integrations.pma_delivery import deliver_pma_output_to_active_sink
 from codex_autorunner.integrations.telegram.state import TelegramStateStore
@@ -87,7 +87,6 @@ async def test_reactive_flow_failed_writes_transcript_web_sink(tmp_path: Path) -
     supervisor._stop_lifecycle_event_processor()
 
     try:
-        PmaActiveSinkStore(hub_root).set_web()
         supervisor.lifecycle_emitter.emit_flow_failed(
             "repo-1", "run-1", origin="runner"
         )
@@ -117,7 +116,7 @@ async def test_reactive_flow_failed_writes_transcript_web_sink(tmp_path: Path) -
 
 
 @pytest.mark.anyio
-async def test_reactive_dispatch_created_enqueues_telegram_outbox(
+async def test_reactive_dispatch_created_does_not_enqueue_telegram_outbox(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -126,7 +125,16 @@ async def test_reactive_dispatch_created_enqueues_telegram_outbox(
     supervisor._stop_lifecycle_event_processor()
 
     try:
-        PmaActiveSinkStore(hub_root).set_telegram(chat_id=1, thread_id=2)
+        PmaDeliveryTargetsStore(hub_root).set_targets(
+            [
+                {
+                    "kind": "chat",
+                    "platform": "telegram",
+                    "chat_id": "1",
+                    "thread_id": "2",
+                }
+            ]
+        )
         repo_root = hub_root / "repo-1"
         repo_root.mkdir(parents=True, exist_ok=True)
         _register_repo(hub_root, repo_root, "repo-1")
@@ -145,6 +153,6 @@ async def test_reactive_dispatch_created_enqueues_telegram_outbox(
         telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
         outbox = await telegram_store.list_outbox()
         await telegram_store.close()
-        assert outbox, "expected telegram outbox records"
+        assert outbox == []
     finally:
         supervisor.shutdown()

@@ -1453,7 +1453,7 @@ function renderHubChannelEntries(entries) {
             <div class="hub-channel-key">${escapeHtml(row.key)}</div>
             <div class="hub-channel-meta muted small">${escapeHtml(label)} · seen ${escapeHtml(seen)}</div>
           </div>
-          <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(row.key)}" title="Copy PMA delivery target ref">Copy Ref</button>
+          <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(row.key)}" title="Copy channel ref">Copy Ref</button>
         </div>
       `;
     })
@@ -1712,7 +1712,7 @@ function attachHubHandlers() {
             if (!key)
                 return;
             copyTextToClipboard(key)
-                .then(() => flash(`Copied channel ref: ${key}. Paste it into PMA > Delivery targets.`, "success"))
+                .then(() => flash(`Copied channel ref: ${key}. Use it when configuring chat delivery.`, "success"))
                 .catch((err) => flash(err.message || "Failed to copy channel ref", "error"));
         });
     }

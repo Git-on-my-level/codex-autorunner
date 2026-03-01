@@ -339,15 +339,20 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    discord_pma_delivery = "_resolve_discord_target" in Path(
+    pma_delivery_text = Path(
         "src/codex_autorunner/integrations/pma_delivery.py"
     ).read_text(encoding="utf-8")
+    discord_pma_delivery = _contains_all(
+        pma_delivery_text,
+        "def deliver_pma_output_to_active_sink(",
+        'status="no_targets"',
+    )
     checks.append(
         ParityCheck(
             entrypoint="discord",
             primitive="pma_delivery",
             passed=discord_pma_delivery,
-            details="PMA output can be delivered to Discord channels",
+            details="PMA output routing is explicitly no-target/deprecated",
         )
     )
 

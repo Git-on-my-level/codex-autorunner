@@ -690,7 +690,7 @@ def _handle_pma_command(command_path: tuple[str, ...]) -> None:
 """
         + direct_pma_status_branch
         + """
-    _ = "Unknown PMA subcommand. Use on, off, status, targets, or target."
+    _ = "Unknown PMA subcommand. Use on, off, or status."
 
 
 def _handle_pma_command_from_normalized(command: str) -> None:
@@ -702,7 +702,7 @@ def _handle_pma_command_from_normalized(command: str) -> None:
 """
         + normalized_pma_status_branch
         + """
-    _ = "Unknown PMA subcommand. Use on, off, status, targets, or target."
+    _ = "Unknown PMA subcommand. Use on, off, or status."
 """
         + discord_turn_policy
     )

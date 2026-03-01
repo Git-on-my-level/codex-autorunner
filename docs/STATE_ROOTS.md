@@ -48,9 +48,7 @@ All durable artifacts must live under one of these roots:
 - `config.yml` - Hub config
 - `codex-autorunner-hub.log` - Hub logs
 - `templates/` - Hub-scoped templates
-- `pma/delivery_targets.json` - PMA delivery target intent + per-target delivery bookkeeping
-- `chat/channel_directory.json` - Derived cross-platform channel directory cache
-- `pma/deliveries.jsonl` - PMA delivery mirror log (when local mirroring is enabled)
+- `chat/channel_directory.json` - Cross-platform channel directory used for lightweight routing context
 
 **Resolution**: Hub root is typically the hub's repo root, using repo-local patterns.
 
@@ -85,6 +83,13 @@ These locations are explicitly **non-canonical** (ephemeral, disposable):
 | `/tmp/`, `$TMPDIR` | Temporary files | Never durable |
 | `$XDG_CACHE_HOME` or `~/.cache` | Optional caches | Must be rebuildable |
 | `__pycache__/` | Python bytecode | Auto-generated |
+
+## Legacy PMA Target Artifacts (Deprecated)
+
+- `<hub_root>/.codex-autorunner/pma/delivery_targets.json`
+- `<hub_root>/.codex-autorunner/pma/active_sink.json`
+
+These files are kept only for compatibility and are not part of current PMA dispatch behavior. Delivery routing now treats legacy targets as deprecated/no-op and ignores them.
 
 **Rule**: Any location outside the canonical roots must be:
 1. A true cache (data is derivable from canonical sources)

@@ -4,6 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.pma_delivery_targets import (
+    PMA_ACTIVE_SINK_LEGACY_FILENAME,
+    default_delivery_targets_path,
+)
 from codex_autorunner.core.state_roots import (
     GLOBAL_STATE_ROOT_ENV,
     REPO_STATE_DIR,
@@ -185,7 +189,6 @@ class TestStateRootContract:
             state_root / "lock",
             state_root / "runs",
             state_root / "flows.db",
-            state_root / "pma" / "delivery_targets.json",
             state_root / "pma" / "deliveries.jsonl",
             state_root / "chat" / "channel_directory.json",
             state_root / "flows" / "run-id" / "chat" / "inbound.jsonl",
@@ -193,6 +196,46 @@ class TestStateRootContract:
         ]
         for path in canonical_paths:
             assert is_within_allowed_root(path, allowed_roots=[state_root])
+
+    def test_legacy_pma_delivery_targets_state_is_hub_scoped(self, tmp_path):
+        repo_root = tmp_path / "repo"
+        hub_root = tmp_path / "hub"
+        legacy_targets_path = default_delivery_targets_path(hub_root)
+        repo_state_root = resolve_repo_state_root(repo_root)
+        hub_state_root = resolve_hub_state_root(hub_root)
+
+        assert legacy_targets_path == hub_state_root / "pma" / "delivery_targets.json"
+        assert is_within_allowed_root(
+            legacy_targets_path, allowed_roots=[hub_state_root]
+        )
+        assert (
+            is_within_allowed_root(legacy_targets_path, allowed_roots=[repo_state_root])
+            is False
+        )
+
+    def test_legacy_pma_active_sink_state_is_hub_scoped(self, tmp_path):
+        repo_root = tmp_path / "repo"
+        hub_root = tmp_path / "hub"
+        legacy_active_sink_path = (
+            default_delivery_targets_path(hub_root).parent
+            / PMA_ACTIVE_SINK_LEGACY_FILENAME
+        )
+        repo_state_root = resolve_repo_state_root(repo_root)
+        hub_state_root = resolve_hub_state_root(hub_root)
+
+        assert (
+            legacy_active_sink_path
+            == hub_state_root / "pma" / PMA_ACTIVE_SINK_LEGACY_FILENAME
+        )
+        assert is_within_allowed_root(
+            legacy_active_sink_path, allowed_roots=[hub_state_root]
+        )
+        assert (
+            is_within_allowed_root(
+                legacy_active_sink_path, allowed_roots=[repo_state_root]
+            )
+            is False
+        )
 
     def test_global_state_paths_are_within_global_root(self, tmp_path, monkeypatch):
         global_root = tmp_path / "global_state"
