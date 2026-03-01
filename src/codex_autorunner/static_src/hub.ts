@@ -82,6 +82,26 @@ interface HubChannelEntry {
   seen_at?: string | null;
   meta?: Record<string, unknown> | null;
   entry?: Record<string, unknown> | null;
+  repo_id?: string | null;
+  workspace_path?: string | null;
+  active_thread_id?: string | null;
+  channel_status?: string | null;
+  status_label?: string | null;
+  dirty?: boolean | null;
+  diff_stats?: {
+    insertions?: number | null;
+    deletions?: number | null;
+    files_changed?: number | null;
+  } | null;
+  token_usage?: {
+    total_tokens?: number | null;
+    input_tokens?: number | null;
+    cached_input_tokens?: number | null;
+    output_tokens?: number | null;
+    reasoning_output_tokens?: number | null;
+    turn_id?: string | null;
+    timestamp?: string | null;
+  } | null;
 }
 
 interface HubChannelDirectoryResponse {
@@ -202,16 +222,9 @@ const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 const hubVersionEl = document.getElementById("hub-version");
 const pmaVersionEl = document.getElementById("pma-version");
-const hubChannelQueryInput = document.getElementById(
-  "hub-channel-query"
+const hubRepoSearchInput = document.getElementById(
+  "hub-repo-search"
 ) as HTMLInputElement | null;
-const hubChannelSearchBtn = document.getElementById(
-  "hub-channel-search"
-) as HTMLButtonElement | null;
-const hubChannelRefreshBtn = document.getElementById(
-  "hub-channel-refresh"
-) as HTMLButtonElement | null;
-const hubChannelListEl = document.getElementById("hub-channel-list");
 const hubFlowFilterEl = document.getElementById(
   "hub-flow-filter"
 ) as HTMLSelectElement | null;
@@ -225,6 +238,7 @@ const HUB_JOB_TIMEOUT_MS = 180000;
 let hubUsageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let hubUsageIndex: Record<string, HubUsageRepo> = {};
 let hubUsageUnmatched: HubUsageData["unmatched"] | null = null;
+let hubChannelEntries: HubChannelEntry[] = [];
 
 function saveSessionCache<T>(key: string, value: T): void {
   try {
@@ -393,11 +407,10 @@ function parseDockerMountList(
 }
 
 function setButtonLoading(scanning: boolean): void {
-  const buttons = [
-    document.getElementById("hub-scan"),
-    document.getElementById("hub-quick-scan"),
-    document.getElementById("hub-refresh"),
-  ] as (HTMLButtonElement | null)[];
+  const buttons = [document.getElementById("hub-refresh")] as (
+    | HTMLButtonElement
+    | null
+  )[];
   buttons.forEach((btn) => {
     if (!btn) return;
     btn.disabled = scanning;
@@ -1141,6 +1154,99 @@ function compareReposForSort(a: HubRepo, b: HubRepo, sortOrder: HubSortOrder): n
   return String(a.id).localeCompare(String(b.id));
 }
 
+function normalizedHubSearch(): string {
+  return String(hubRepoSearchInput?.value || "").trim().toLowerCase();
+}
+
+function repoSearchBlob(repo: HubRepo): string {
+  const status = repo.ticket_flow_display?.status_label || repo.ticket_flow_display?.status || repo.status;
+  const destination = formatDestinationSummary(repo.effective_destination);
+  const parts = [
+    repo.id,
+    repo.display_name,
+    repo.path,
+    repo.status,
+    status,
+    repo.lock_status,
+    repo.kind,
+    repo.worktree_of,
+    repo.branch,
+    destination,
+    repo.mount_error,
+    repo.init_error,
+  ].filter(Boolean);
+  return parts.join(" ").toLowerCase();
+}
+
+function repoMatchesSearch(repo: HubRepo, query: string): boolean {
+  if (!query) return true;
+  return repoSearchBlob(repo).includes(query);
+}
+
+function channelSearchBlob(channel: HubChannelEntry): string {
+  const parts = [
+    channel.key,
+    channel.display,
+    channel.repo_id,
+    channel.status_label || channel.channel_status,
+    channel.workspace_path,
+    JSON.stringify(channel.meta || {}),
+  ];
+  return parts
+    .map((part) => String(part || ""))
+    .join(" ")
+    .toLowerCase();
+}
+
+function channelMatchesSearch(channel: HubChannelEntry, query: string): boolean {
+  if (!query) return true;
+  return channelSearchBlob(channel).includes(query);
+}
+
+function toPositiveInt(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
+function channelDisplayLabel(channel: HubChannelEntry): string {
+  if (typeof channel.display === "string" && channel.display.trim()) {
+    return channel.display.trim();
+  }
+  return channel.key;
+}
+
+function channelMetaSummary(channel: HubChannelEntry): string {
+  const parts: string[] = [];
+  const status = String(channel.status_label || channel.channel_status || "unknown")
+    .trim()
+    .toLowerCase();
+  parts.push(`status ${status || "unknown"}`);
+  if (channel.seen_at) {
+    parts.push(`seen ${formatTimeCompact(channel.seen_at)}`);
+  }
+  const totalTokens = toPositiveInt(channel.token_usage?.total_tokens);
+  if (totalTokens !== null) {
+    parts.push(`tok ${formatTokensCompact(totalTokens)}`);
+  }
+  const insertions = toPositiveInt(channel.diff_stats?.insertions) || 0;
+  const deletions = toPositiveInt(channel.diff_stats?.deletions) || 0;
+  const filesChanged = toPositiveInt(channel.diff_stats?.files_changed);
+  if (insertions || deletions || filesChanged) {
+    let diffPart = `+${insertions}/-${deletions}`;
+    if (filesChanged) {
+      diffPart += ` · f${filesChanged}`;
+    }
+    parts.push(diffPart);
+  }
+  if (typeof channel.repo_id === "string" && channel.repo_id.trim()) {
+    parts.push(`repo ${channel.repo_id.trim()}`);
+  } else {
+    parts.push("repo unbound");
+  }
+  return parts.join(" · ");
+}
+
 function buildRepoGroups(repos: HubRepo[]): {
   groups: HubRepoGroup[];
   orphanWorktrees: HubRepo[];
@@ -1204,9 +1310,14 @@ function buildRepoGroups(repos: HubRepo[]): {
 function renderRepos(repos: HubRepo[]): void {
   if (!repoListEl) return;
   repoListEl.innerHTML = "";
-  if (!repos.length) {
+  const searchQuery = normalizedHubSearch();
+  const filteredChannels = hubChannelEntries.filter((entry) =>
+    channelMatchesSearch(entry, searchQuery)
+  );
+
+  if (!repos.length && !filteredChannels.length) {
     repoListEl.innerHTML =
-      '<div class="hub-empty muted">No repos discovered yet. Run a scan or create a new repo.</div>';
+      '<div class="hub-empty muted">No repos or channels found.</div>';
     return;
   }
 
@@ -1243,6 +1354,9 @@ function renderRepos(repos: HubRepo[]): void {
       : orphanWorktrees.filter((repo) =>
           repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter)
         );
+  const queryFilteredOrphans = filteredOrphans.filter((repo) =>
+    repoMatchesSearch(repo, searchQuery)
+  );
   filteredOrphans.sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
   const filteredChatBound =
     hubViewPrefs.flowFilter === "all"
@@ -1250,13 +1364,17 @@ function renderRepos(repos: HubRepo[]): void {
       : chatBoundWorktrees.filter((repo) =>
           repoMatchesFlowFilter(repo, hubViewPrefs.flowFilter)
         );
-  filteredChatBound.sort((a, b) =>
+  const queryFilteredChatBound = filteredChatBound.filter((repo) =>
+    repoMatchesSearch(repo, searchQuery)
+  );
+  queryFilteredOrphans.sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
+  queryFilteredChatBound.sort((a, b) =>
     compareReposForSort(a, b, hubViewPrefs.sortOrder)
   );
 
-  if (!orderedGroups.length && !filteredOrphans.length && !filteredChatBound.length) {
+  if (!orderedGroups.length && !queryFilteredOrphans.length && !queryFilteredChatBound.length && !filteredChannels.length) {
     repoListEl.innerHTML =
-      '<div class="hub-empty muted">No repos match the selected flow filter.</div>';
+      '<div class="hub-empty muted">No rows match current filters.</div>';
     return;
   }
 
@@ -1429,48 +1547,94 @@ function renderRepos(repos: HubRepo[]): void {
     repoListEl.appendChild(card);
   };
 
+  let renderedRepoRows = 0;
+
   orderedGroups.forEach((group) => {
+    const baseMatchesQuery = repoMatchesSearch(group.base, searchQuery);
+    const worktrees = [...group.filteredWorktrees]
+      .filter((repo) => repoMatchesSearch(repo, searchQuery))
+      .sort((a, b) => compareReposForSort(a, b, hubViewPrefs.sortOrder));
+    const hasRepoMatch = !searchQuery || baseMatchesQuery || worktrees.length > 0;
+    if (!hasRepoMatch) return;
+
     const repo = group.base;
     renderRepoCard(repo, { isWorktreeRow: false });
-    const worktrees = [...group.filteredWorktrees].sort((a, b) =>
-      compareReposForSort(a, b, hubViewPrefs.sortOrder)
-    );
+    renderedRepoRows += 1;
     if (worktrees.length) {
       const list = document.createElement("div");
       list.className = "hub-worktree-list";
       worktrees.forEach((wt) => {
-          const row = document.createElement("div");
-          row.className = "hub-worktree-row";
-          const tmp = document.createElement("div");
-          tmp.className = "hub-worktree-row-inner";
-          list.appendChild(tmp);
-          const beforeCount = repoListEl.children.length;
-          renderRepoCard(wt, { isWorktreeRow: true });
-          const newNode = repoListEl.children[beforeCount];
-          if (newNode) {
-            repoListEl.removeChild(newNode);
-            tmp.appendChild(newNode);
-          }
-        });
+        const row = document.createElement("div");
+        row.className = "hub-worktree-row";
+        const tmp = document.createElement("div");
+        tmp.className = "hub-worktree-row-inner";
+        list.appendChild(tmp);
+        const beforeCount = repoListEl.children.length;
+        renderRepoCard(wt, { isWorktreeRow: true });
+        const newNode = repoListEl.children[beforeCount];
+        if (newNode) {
+          repoListEl.removeChild(newNode);
+          tmp.appendChild(newNode);
+          renderedRepoRows += 1;
+        }
+      });
       repoListEl.appendChild(list);
     }
   });
 
-  if (filteredOrphans.length) {
+  if (queryFilteredOrphans.length) {
     const header = document.createElement("div");
     header.className = "hub-worktree-orphans muted small";
     header.textContent = "Orphan worktrees";
     repoListEl.appendChild(header);
-    filteredOrphans.forEach((wt) => renderRepoCard(wt, { isWorktreeRow: true }));
+    queryFilteredOrphans.forEach((wt) => {
+      renderRepoCard(wt, { isWorktreeRow: true });
+      renderedRepoRows += 1;
+    });
   }
-  if (filteredChatBound.length) {
+  if (queryFilteredChatBound.length) {
     const header = document.createElement("div");
     header.className = "hub-worktree-orphans muted small";
     header.textContent = "Chat bound worktrees";
     repoListEl.appendChild(header);
-    filteredChatBound.forEach((wt) =>
-      renderRepoCard(wt, { isWorktreeRow: true })
-    );
+    queryFilteredChatBound.forEach((wt) => {
+      renderRepoCard(wt, { isWorktreeRow: true });
+      renderedRepoRows += 1;
+    });
+  }
+
+  if (filteredChannels.length) {
+    const header = document.createElement("div");
+    header.className = "hub-worktree-orphans muted small hub-merged-section-title";
+    header.textContent = "Channels";
+    repoListEl.appendChild(header);
+    filteredChannels.forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = "hub-channel-row hub-channel-row-merged";
+      const label = channelDisplayLabel(entry);
+      const secondary =
+        entry.key && entry.key !== label
+          ? `<div class="hub-channel-secondary muted small">${escapeHtml(
+              entry.key
+            )}</div>`
+          : "";
+      row.innerHTML = `
+        <div class="hub-channel-main">
+          <div class="hub-channel-primary">${escapeHtml(label)}</div>
+          <div class="hub-channel-meta muted small">${escapeHtml(
+            channelMetaSummary(entry)
+          )}</div>
+          ${secondary}
+        </div>
+      `;
+      repoListEl.appendChild(row);
+    });
+  }
+
+  if (!renderedRepoRows && !filteredChannels.length) {
+    repoListEl.innerHTML =
+      '<div class="hub-empty muted">No rows match current filters.</div>';
+    return;
   }
 
   if (hubUsageUnmatched && hubUsageUnmatched.events) {
@@ -1814,81 +1978,17 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
   return true;
 }
 
-function renderHubChannelEntries(entries: HubChannelEntry[]): void {
-  if (!hubChannelListEl) return;
-  if (!entries.length) {
-    hubChannelListEl.innerHTML =
-      '<div class="muted small">No channel entries found.</div>';
-    return;
-  }
-
-  const rows = entries
-    .map((row) => {
-      const label =
-        typeof row.display === "string" && row.display.trim()
-          ? row.display.trim()
-          : row.key;
-      const seen = row.seen_at ? formatTimeCompact(row.seen_at) : "unknown";
-      return `
-        <div class="hub-channel-row">
-          <div class="hub-channel-main">
-            <div class="hub-channel-key">${escapeHtml(row.key)}</div>
-            <div class="hub-channel-meta muted small">${escapeHtml(
-              label
-            )} · seen ${escapeHtml(seen)}</div>
-          </div>
-          <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(
-            row.key
-          )}" title="Copy channel ref">Copy Ref</button>
-        </div>
-      `;
-    })
-    .join("");
-  hubChannelListEl.innerHTML = rows;
-}
-
 async function loadHubChannelDirectory({ silent = false }: { silent?: boolean } = {}): Promise<void> {
-  const query = (hubChannelQueryInput?.value || "").trim();
   try {
-    const params = new URLSearchParams();
-    if (query) params.set("query", query);
-    if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = true;
-    if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = true;
-    const path = params.toString()
-      ? `/hub/chat/channels?${params.toString()}`
-      : "/hub/chat/channels";
-    const payload = (await api(path, {
+    const payload = (await api("/hub/chat/channels?limit=1000", {
       method: "GET",
     })) as HubChannelDirectoryResponse;
-    renderHubChannelEntries(Array.isArray(payload.entries) ? payload.entries : []);
+    hubChannelEntries = Array.isArray(payload.entries) ? payload.entries : [];
+    renderReposWithScroll(hubData.repos || []);
   } catch (err) {
     if (!silent) {
       flash((err as Error).message || "Failed to load channel directory", "error");
     }
-  } finally {
-    if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = false;
-    if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = false;
-  }
-}
-
-async function copyTextToClipboard(value: string): Promise<void> {
-  const text = String(value || "");
-  if (!text) return;
-  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  try {
-    document.execCommand("copy");
-  } finally {
-    textarea.remove();
   }
 }
 
@@ -2058,63 +2158,20 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
 
 function attachHubHandlers(): void {
   initHubSettings();
-  const scanBtn = document.getElementById("hub-scan") as HTMLButtonElement | null;
   const refreshBtn = document.getElementById("hub-refresh") as HTMLButtonElement | null;
-  const quickScanBtn = document.getElementById("hub-quick-scan") as HTMLButtonElement | null;
   const newRepoBtn = document.getElementById("hub-new-repo") as HTMLButtonElement | null;
   const createCancelBtn = document.getElementById("create-repo-cancel") as HTMLButtonElement | null;
   const createSubmitBtn = document.getElementById("create-repo-submit") as HTMLButtonElement | null;
   const createRepoId = document.getElementById("create-repo-id") as HTMLInputElement | null;
-
-  if (scanBtn) {
-    scanBtn.addEventListener("click", () => triggerHubScan());
-  }
-  if (quickScanBtn) {
-    quickScanBtn.addEventListener("click", () => triggerHubScan());
-  }
   if (refreshBtn) {
-    refreshBtn.addEventListener("click", () => refreshHub());
+    refreshBtn.addEventListener("click", () => triggerHubScan());
   }
   if (hubUsageRefresh) {
     hubUsageRefresh.addEventListener("click", () => loadHubUsage());
   }
-  if (hubChannelSearchBtn) {
-    hubChannelSearchBtn.addEventListener("click", () => {
-      loadHubChannelDirectory().catch(() => {});
-    });
-  }
-  if (hubChannelRefreshBtn) {
-    hubChannelRefreshBtn.addEventListener("click", () => {
-      loadHubChannelDirectory().catch(() => {});
-    });
-  }
-  if (hubChannelQueryInput) {
-    hubChannelQueryInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        loadHubChannelDirectory().catch(() => {});
-      }
-    });
-  }
-  if (hubChannelListEl) {
-    hubChannelListEl.addEventListener("click", (event) => {
-      const target = event.target as HTMLElement;
-      const btn = target.closest(
-        'button[data-action="copy_channel_key"]'
-      ) as HTMLButtonElement | null;
-      if (!btn) return;
-      const key = String(btn.dataset.key || "").trim();
-      if (!key) return;
-      copyTextToClipboard(key)
-        .then(() =>
-          flash(
-            `Copied channel ref: ${key}. Use it when configuring chat delivery.`,
-            "success"
-          )
-        )
-        .catch((err) =>
-          flash((err as Error).message || "Failed to copy channel ref", "error")
-        );
+  if (hubRepoSearchInput) {
+    hubRepoSearchInput.addEventListener("input", () => {
+      renderReposWithScroll(hubData.repos || []);
     });
   }
 
