@@ -56,18 +56,31 @@ ensure_login_shell_path() {
     return 0
   fi
   for profile in "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
-    mkdir -p "$(dirname "${profile}")"
-    touch "${profile}"
-    if grep -Fq "${marker_start}" "${profile}"; then
+    if ! mkdir -p "$(dirname "${profile}")"; then
+      echo "Warning: could not create directory for ${profile}; skipping." >&2
       continue
     fi
-    {
+    if [[ ! -e "${profile}" ]] && ! touch "${profile}"; then
+      echo "Warning: could not create ${profile}; skipping." >&2
+      continue
+    fi
+    if [[ ! -w "${profile}" ]]; then
+      echo "Warning: ${profile} is not writable; skipping." >&2
+      continue
+    fi
+    if grep -Fq "${marker_start}" "${profile}" 2>/dev/null; then
+      continue
+    fi
+    if ! {
       echo ""
       echo "${marker_start}"
       echo "# Ensure pipx-installed CAR is available in login/non-interactive shells."
       printf 'export PATH="%s:$PATH"\n' "${path_entry}"
       echo "${marker_end}"
-    } >> "${profile}"
+    } >> "${profile}"; then
+      echo "Warning: failed to update ${profile}; skipping." >&2
+      continue
+    fi
     echo "Updated ${profile} to include ${path_entry} in PATH."
   done
 }
