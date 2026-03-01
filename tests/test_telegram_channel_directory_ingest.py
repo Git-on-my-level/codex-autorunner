@@ -238,3 +238,54 @@ async def test_inbound_message_preserves_and_updates_topic_title(
         }
     finally:
         await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_inbound_message_parses_legacy_display_when_chat_title_contains_separator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+
+    async def _noop_handle_message(_service: TelegramBotService, _message) -> None:
+        return None
+
+    monkeypatch.setattr(
+        telegram_service_module.message_handlers,
+        "handle_message",
+        _noop_handle_message,
+    )
+
+    # Seed a legacy-style entry without meta.topic_title.
+    ChannelDirectoryStore(tmp_path).record_seen(
+        "telegram",
+        "-1001",
+        "77",
+        "Team / Room / Ops",
+        {"chat_type": "supergroup"},
+    )
+
+    update = parse_update(
+        {
+            "update_id": 8,
+            "message": {
+                "message_id": 24,
+                "chat": {"id": -1001, "type": "supergroup", "title": "Team / Room"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "from": {"id": 42},
+                "text": "no title metadata",
+                "date": 1700000104,
+            },
+        }
+    )
+    assert update and update.message
+
+    try:
+        await service._handle_message(update.message)
+        entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["display"] == "Team / Room / Ops"
+        assert entry["meta"] == {"chat_type": "supergroup", "topic_title": "Ops"}
+    finally:
+        await service._bot.close()

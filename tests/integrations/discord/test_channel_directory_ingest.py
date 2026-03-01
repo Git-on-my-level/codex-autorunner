@@ -199,3 +199,38 @@ async def test_message_create_resolves_channel_directory_names_via_rest(
     assert entry["meta"] == {"guild_id": "guild-9"}
     assert rest.get_channel_calls == ["channel-9"]
     assert rest.get_guild_calls == ["guild-9"]
+
+
+@pytest.mark.anyio
+async def test_message_create_uses_negative_lookup_cache_for_missing_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway(),
+    )
+
+    async def _noop_dispatch(_event) -> None:
+        return None
+
+    monkeypatch.setattr(service, "_dispatch_chat_event", _noop_dispatch)
+
+    payload = {
+        "id": "m-4",
+        "channel_id": "channel-missing",
+        "guild_id": "guild-missing",
+        "content": "hello",
+        "author": {"id": "user-1", "bot": False},
+    }
+    await service._on_dispatch("MESSAGE_CREATE", dict(payload))
+    await service._on_dispatch("MESSAGE_CREATE", dict(payload))
+
+    entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["display"] == "guild:guild-missing / #channel-missing"
+    assert rest.get_channel_calls == ["channel-missing"]
+    assert rest.get_guild_calls == ["guild-missing"]

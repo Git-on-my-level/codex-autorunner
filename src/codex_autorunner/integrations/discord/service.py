@@ -2600,16 +2600,20 @@ class DiscordBotService:
             channel_label_raw = channel_label_raw.lstrip("#")
             self._channel_name_cache[channel_id] = channel_label_raw
         else:
-            channel_label_raw = self._channel_name_cache.get(channel_id) or None
-            if channel_label_raw is None:
+            if channel_id in self._channel_name_cache:
+                cached_channel = self._channel_name_cache[channel_id]
+                channel_label_raw = cached_channel if cached_channel else None
+            else:
                 channel_label_raw = await self._resolve_channel_name(channel_id)
 
         if guild_id is not None:
             if guild_label is not None:
                 self._guild_name_cache[guild_id] = guild_label
             else:
-                guild_label = self._guild_name_cache.get(guild_id) or None
-                if guild_label is None:
+                if guild_id in self._guild_name_cache:
+                    cached_guild = self._guild_name_cache[guild_id]
+                    guild_label = cached_guild if cached_guild else None
+                else:
                     guild_label = await self._resolve_guild_name(guild_id)
 
         channel_label = (
@@ -2672,9 +2676,6 @@ class DiscordBotService:
         normalized = channel_label.lstrip("#")
         self._channel_name_cache[channel_id] = normalized
 
-        guild_id = self._coerce_id(payload.get("guild_id"))
-        if guild_id is not None and guild_id not in self._guild_name_cache:
-            self._guild_name_cache[guild_id] = ""
         return normalized
 
     async def _resolve_guild_name(self, guild_id: str) -> Optional[str]:

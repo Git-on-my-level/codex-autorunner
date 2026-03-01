@@ -1226,7 +1226,9 @@ class TelegramBotService(
             )
             if topic_label is None:
                 topic_label = self._existing_topic_label(
-                    chat_id=str(message.chat_id), thread_id=thread_id
+                    chat_id=str(message.chat_id),
+                    thread_id=thread_id,
+                    chat_label=chat_label,
                 )
             if topic_label is None:
                 topic_label = thread_id
@@ -1261,7 +1263,9 @@ class TelegramBotService(
                 exc=exc,
             )
 
-    def _existing_topic_label(self, *, chat_id: str, thread_id: str) -> Optional[str]:
+    def _existing_topic_label(
+        self, *, chat_id: str, thread_id: str, chat_label: str
+    ) -> Optional[str]:
         try:
             entries = self._channel_directory_store.list_entries(limit=None)
         except Exception:
@@ -1287,9 +1291,14 @@ class TelegramBotService(
 
             display = entry.get("display")
             if isinstance(display, str):
-                parts = display.split(" / ", 1)
-                if len(parts) == 2:
-                    topic_part = parts[1].strip()
+                prefix = f"{chat_label} / "
+                if display.startswith(prefix):
+                    topic_part = display[len(prefix) :].strip()
+                    if topic_part and topic_part != thread_id:
+                        return topic_part
+                separator_index = display.rfind(" / ")
+                if separator_index >= 0:
+                    topic_part = display[separator_index + 3 :].strip()
                     if topic_part and topic_part != thread_id:
                         return topic_part
             break
