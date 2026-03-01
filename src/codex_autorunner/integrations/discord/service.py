@@ -942,10 +942,18 @@ class DiscordBotService:
 
     def _is_audio_attachment(self, attachment: Any, mime_type: Optional[str]) -> bool:
         kind = getattr(attachment, "kind", None)
-        if isinstance(kind, str) and kind.lower() == "audio":
+        kind_lower = kind.lower().strip() if isinstance(kind, str) else ""
+        if kind_lower == "audio":
             return True
-        if isinstance(mime_type, str) and mime_type.lower().startswith("audio/"):
-            return True
+        if kind_lower in {"image", "video"}:
+            return False
+        if isinstance(mime_type, str):
+            mime_base = mime_type.lower().split(";", 1)[0].strip()
+            if mime_base.startswith("audio/"):
+                return True
+            # Respect explicit, non-audio media classifications from Discord.
+            if mime_base.startswith("video/") or mime_base.startswith("image/"):
+                return False
         file_name = getattr(attachment, "file_name", None)
         if isinstance(file_name, str):
             if Path(file_name).suffix.lower() in DISCORD_AUDIO_SUFFIXES:
