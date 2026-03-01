@@ -45,14 +45,24 @@ function renderList(items) {
         const href = item.open_url || `/repos/${item.repo_id}/?tab=inbox&run_id=${item.run_id}`;
         const seq = item.seq ? `#${item.seq}` : "";
         const isInformationalDispatch = item.item_type === "run_dispatch" && item.dispatch_actionable === false;
+        const canonicalState = item.canonical_state_v1;
+        const canonicalRecommendedAction = (canonicalState?.recommended_action || "").trim();
+        const legacyRecommendedAction = (item.run_state?.recommended_action || "").trim();
+        const recommendedAction = canonicalRecommendedAction || legacyRecommendedAction;
+        const canonicalRecommendationConfidence = canonicalState?.recommendation_confidence;
+        const canonicalRecommendationIsStale = Boolean(canonicalState?.recommendation_stale_reason) || canonicalRecommendationConfidence === "low";
         const nextAction = isInformationalDispatch
             ? "Info only"
-            : item.run_state?.recommended_action
-                ? `Next: ${item.run_state.recommended_action}`
-                : item.next_action === "reply_and_resume"
-                    ? "Next: Reply + resume run"
-                    : "";
-        const stateLabel = item.run_state?.state || item.status || "attention";
+            : canonicalRecommendationIsStale
+                ? recommendedAction
+                    ? `Suggestion: ${recommendedAction}`
+                    : "Suggestion only"
+                : recommendedAction
+                    ? `Next: ${recommendedAction}`
+                    : item.next_action === "reply_and_resume"
+                        ? "Next: Reply + resume run"
+                        : "";
+        const stateLabel = canonicalState?.state || item.run_state?.state || item.status || "attention";
         const stateClass = isInformationalDispatch
             ? "pill-info"
             : stateLabel === "paused"

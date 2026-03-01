@@ -27,6 +27,7 @@ from .flows.worker_process import check_worker_health, read_worker_crash_info
 from .hub import HubSupervisor
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .state_roots import resolve_hub_templates_root
+from .ticket_flow_projection import build_canonical_state_v1
 from .ticket_flow_summary import build_ticket_flow_summary
 from .utils import atomic_write
 
@@ -1121,21 +1122,21 @@ def build_ticket_flow_run_state(
     }
 
 
-def get_latest_ticket_flow_run_state(
+def get_latest_ticket_flow_run_state_with_record(
     repo_root: Path, repo_id: str
-) -> Optional[dict[str, Any]]:
+) -> tuple[Optional[dict[str, Any]], Optional[FlowRunRecord]]:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     if not db_path.exists():
-        return None
+        return None, None
     try:
         config = load_repo_config(repo_root)
         with FlowStore(db_path, durable=config.durable_writes) as store:
             records = store.list_flow_runs(flow_type="ticket_flow")
             if not records:
-                return None
+                return None, None
             record = _select_newest_run(records)
             if record is None:
-                return None
+                return None, None
             latest = _latest_dispatch(
                 repo_root,
                 str(record.id),
@@ -1180,7 +1181,7 @@ def get_latest_ticket_flow_run_state(
                     )
                 else:
                     reason = "Run is paused without an actionable dispatch"
-            return build_ticket_flow_run_state(
+            run_state = build_ticket_flow_run_state(
                 repo_root=repo_root,
                 repo_id=repo_id,
                 record=record,
@@ -1188,11 +1189,12 @@ def get_latest_ticket_flow_run_state(
                 has_pending_dispatch=has_dispatch,
                 dispatch_state_reason=reason,
             )
+            return run_state, record
     except Exception as exc:
         _logger.warning(
             "Failed to get latest ticket flow run state for repo %s: %s", repo_id, exc
         )
-        return None
+        return None, None
 
 
 def _gather_inbox(
@@ -1318,6 +1320,14 @@ def _gather_inbox(
                         "status": record.status.value,
                         "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record_id}",
                         "run_state": run_state,
+                        "canonical_state_v1": build_canonical_state_v1(
+                            repo_root=repo_root,
+                            repo_id=snap.id,
+                            run_state=run_state,
+                            record=record,
+                            store=store,
+                            preferred_run_id=newest_run_id,
+                        ),
                         "active_run_id": active_run_id,
                     }
                     if has_dispatch:
@@ -1436,10 +1446,23 @@ async def build_hub_snapshot(
             "effective_destination": effective_destination,
             "ticket_flow": None,
             "run_state": None,
+            "canonical_state_v1": None,
         }
         if snap.initialized and snap.exists_on_disk:
             summary["ticket_flow"] = _get_ticket_flow_summary(snap.path)
-            summary["run_state"] = get_latest_ticket_flow_run_state(snap.path, snap.id)
+            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
+                snap.path, snap.id
+            )
+            summary["run_state"] = run_state
+            summary["canonical_state_v1"] = build_canonical_state_v1(
+                repo_root=snap.path,
+                repo_id=snap.id,
+                run_state=summary["run_state"],
+                record=run_record,
+                preferred_run_id=(
+                    str(snap.last_run_id) if snap.last_run_id is not None else None
+                ),
+            )
         repos.append(summary)
 
     inbox = await asyncio.to_thread(

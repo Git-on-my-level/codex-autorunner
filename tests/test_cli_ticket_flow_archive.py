@@ -31,6 +31,15 @@ def _seed_repo_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
         store.update_flow_run_status(run_id, status)
 
 
+def _seed_ticket(repo_root: Path) -> None:
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: user\ndone: false\n---\n\nStatus ticket\n",
+        encoding="utf-8",
+    )
+
+
 def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     tmp_path: Path,
 ) -> None:
@@ -111,3 +120,66 @@ def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
     assert payload["archived_runs"] is False
     assert payload["deleted_run"] is False
     assert run_dir.exists()
+
+
+def test_ticket_flow_status_outputs_human_readable_status(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+    _seed_ticket(repo_root)
+
+    run_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.RUNNING)
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "ticket_flow",
+            "status",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip()
+    assert f"Run id: {run_id}" in result.output
+    assert "Status: running" in result.output
+
+
+def test_ticket_flow_status_outputs_json_payload(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+    _seed_ticket(repo_root)
+
+    run_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.PAUSED)
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "ticket_flow",
+            "status",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip()
+    payload = json.loads(result.stdout)
+    assert payload["run_id"] == run_id
+    assert payload["status"] == "paused"
+    assert payload["flow_type"] == "ticket_flow"
+    assert "worker" in payload
+    assert "ticket_progress" in payload

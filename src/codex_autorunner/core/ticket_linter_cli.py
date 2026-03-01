@@ -37,6 +37,7 @@ _SCRIPT = dedent(
 
 
     _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})(?:[^/]*)\\.md$", re.IGNORECASE)
+    _IGNORED_NON_TICKET_FILENAMES = {"AGENTS.md", "ingest_state.json"}
 
 
     def _ticket_paths(tickets_dir: Path) -> Tuple[List[Path], List[str]]:
@@ -48,7 +49,7 @@ _SCRIPT = dedent(
         for path in sorted(tickets_dir.iterdir()):
             if not path.is_file():
                 continue
-            if path.name == "AGENTS.md":
+            if path.name in _IGNORED_NON_TICKET_FILENAMES:
                 continue
             match = _TICKET_NAME_RE.match(path.name)
             if not match:

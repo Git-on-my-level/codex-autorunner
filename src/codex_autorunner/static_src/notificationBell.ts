@@ -17,6 +17,12 @@ interface HubMessageItem {
     last_progress_at?: string | null;
     recommended_action?: string | null;
   };
+  canonical_state_v1?: {
+    state?: string | null;
+    recommended_action?: string | null;
+    recommendation_confidence?: "high" | "medium" | "low" | null;
+    recommendation_stale_reason?: string | null;
+  } | null;
   message?: {
     mode?: string;
     title?: string | null;
@@ -79,14 +85,27 @@ function renderList(items: HubMessageItem[]): void {
       const seq = item.seq ? `#${item.seq}` : "";
       const isInformationalDispatch =
         item.item_type === "run_dispatch" && item.dispatch_actionable === false;
+      const canonicalState = item.canonical_state_v1;
+      const canonicalRecommendedAction = (canonicalState?.recommended_action || "").trim();
+      const legacyRecommendedAction = (item.run_state?.recommended_action || "").trim();
+      const recommendedAction = canonicalRecommendedAction || legacyRecommendedAction;
+      const canonicalRecommendationConfidence = canonicalState?.recommendation_confidence;
+      const canonicalRecommendationIsStale = Boolean(
+        canonicalState?.recommendation_stale_reason,
+      ) || canonicalRecommendationConfidence === "low";
       const nextAction = isInformationalDispatch
         ? "Info only"
-        : item.run_state?.recommended_action
-        ? `Next: ${item.run_state.recommended_action}`
+        : canonicalRecommendationIsStale
+          ? recommendedAction
+            ? `Suggestion: ${recommendedAction}`
+            : "Suggestion only"
+        : recommendedAction
+        ? `Next: ${recommendedAction}`
         : item.next_action === "reply_and_resume"
           ? "Next: Reply + resume run"
           : "";
-      const stateLabel = item.run_state?.state || item.status || "attention";
+      const stateLabel =
+        canonicalState?.state || item.run_state?.state || item.status || "attention";
       const stateClass = isInformationalDispatch
         ? "pill-info"
         : stateLabel === "paused"

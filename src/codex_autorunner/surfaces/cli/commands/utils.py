@@ -30,6 +30,7 @@ from ....core.utils import (
 )
 from ....manifest import load_manifest
 from ....tickets.files import list_ticket_paths, read_ticket, safe_relpath
+from ....tickets.ingest_state import INGEST_STATE_FILENAME
 from ....tickets.lint import lint_ticket_directory, parse_ticket_index
 
 if TYPE_CHECKING:
@@ -454,7 +455,7 @@ def ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
     for path in sorted(ticket_dir.iterdir()):
         if not path.is_file():
             continue
-        if path.name == "AGENTS.md":
+        if path.name in {"AGENTS.md", INGEST_STATE_FILENAME}:
             continue
         if parse_ticket_index(path.name) is None:
             rel_path = safe_relpath(path, ticket_root)

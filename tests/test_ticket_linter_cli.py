@@ -116,3 +116,17 @@ def test_linter_detects_duplicate_indices(repo: Path) -> None:
     result_clean = _run_linter(repo)
     assert result_clean.returncode == 0
     assert "OK" in result_clean.stdout
+
+
+def test_linter_ignores_ingest_receipt_file(repo: Path) -> None:
+    tickets_dir = repo / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+    )
+    (tickets_dir / "ingest_state.json").write_text("{}", encoding="utf-8")
+
+    result = _run_linter(repo)
+    assert result.returncode == 0
+    assert "Invalid ticket filename" not in result.stderr

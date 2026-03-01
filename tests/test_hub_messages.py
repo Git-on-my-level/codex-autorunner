@@ -134,6 +134,30 @@ def _write_dead_worker_artifacts(repo_root: Path, run_id: str) -> None:
     )
 
 
+def _assert_canonical_state_v1(
+    item: dict,
+    *,
+    repo_id: str,
+    repo_root: Path,
+    run_id: str,
+    run_status: str,
+    state: str,
+) -> None:
+    canonical = item.get("canonical_state_v1") or {}
+    assert canonical.get("schema_version") == 1
+    assert canonical.get("repo_id") == repo_id
+    assert canonical.get("repo_root") == str(repo_root)
+    assert canonical.get("represented_run_id") == run_id
+    assert canonical.get("latest_run_id") == run_id
+    assert canonical.get("latest_run_status") == run_status
+    assert canonical.get("state") == state
+    assert canonical.get("ingest_source") == "ticket_files"
+    assert isinstance(canonical.get("recommended_actions"), list)
+    assert canonical.get("recommendation_confidence") in {"high", "medium", "low"}
+    assert canonical.get("observed_at")
+    assert canonical.get("recommendation_generated_at")
+
+
 def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
     run_id = "11111111-1111-1111-1111-111111111111"
     _seed_paused_run(hub_env.repo_root, run_id)
@@ -155,6 +179,14 @@ def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
         assert run_state.get("recommended_actions")
         assert isinstance(run_state.get("recommended_actions"), list)
         assert run_state.get("attention_required") is True
+        _assert_canonical_state_v1(
+            items[0],
+            repo_id=hub_env.repo_id,
+            repo_root=hub_env.repo_root,
+            run_id=run_id,
+            run_status="paused",
+            state="blocked",
+        )
 
 
 def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
@@ -179,6 +211,14 @@ def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
         assert run_state.get("recommended_actions")
         assert isinstance(run_state.get("recommended_actions"), list)
         assert run_state.get("attention_required") is True
+        _assert_canonical_state_v1(
+            items[0],
+            repo_id=hub_env.repo_id,
+            repo_root=hub_env.repo_root,
+            run_id=run_id,
+            run_status="paused",
+            state="paused",
+        )
 
 
 def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> None:
@@ -345,6 +385,35 @@ def test_hub_messages_failed_run_appears_in_inbox(hub_env) -> None:
         assert "available_actions" in item
         assert item.get("resolution_state") == "terminal_attention"
         assert "dismiss" in (item.get("resolvable_actions") or [])
+
+
+def test_hub_messages_multi_run_items_keep_canonical_run_identity(hub_env) -> None:
+    older_failed_run_id = "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1"
+    newer_paused_run_id = "bbbbbbb2-bbbb-bbbb-bbbb-bbbbbbbbbbb2"
+    _seed_failed_run(hub_env.repo_root, older_failed_run_id)
+    _seed_paused_run(hub_env.repo_root, newer_paused_run_id)
+    _write_dispatch_history(hub_env.repo_root, newer_paused_run_id, seq=1)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 2
+        by_run_id = {str(item.get("run_id")): item for item in items}
+        assert set(by_run_id.keys()) == {older_failed_run_id, newer_paused_run_id}
+
+        failed_item = by_run_id[older_failed_run_id]
+        assert failed_item.get("item_type") == "run_failed"
+        failed_canonical = failed_item.get("canonical_state_v1") or {}
+        assert failed_canonical.get("represented_run_id") == older_failed_run_id
+        assert failed_canonical.get("latest_run_id") == older_failed_run_id
+
+        paused_item = by_run_id[newer_paused_run_id]
+        assert paused_item.get("item_type") == "run_dispatch"
+        paused_canonical = paused_item.get("canonical_state_v1") or {}
+        assert paused_canonical.get("represented_run_id") == newer_paused_run_id
+        assert paused_canonical.get("latest_run_id") == newer_paused_run_id
 
 
 def test_hub_messages_dispatch_includes_lifecycle_metadata(hub_env) -> None:

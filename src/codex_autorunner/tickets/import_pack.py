@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import heapq
+import logging
 import re
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -12,7 +13,14 @@ import yaml
 from ..core.utils import atomic_write
 from .files import list_ticket_paths, read_ticket, safe_relpath
 from .frontmatter import parse_markdown_frontmatter, split_markdown_frontmatter
+from .ingest_state import (
+    INGEST_STATE_FILENAME,
+    ingest_state_path,
+    write_ingest_receipt,
+)
 from .lint import lint_ticket_directory, lint_ticket_frontmatter, parse_ticket_index
+
+logger = logging.getLogger(__name__)
 
 
 class TicketPackImportError(Exception):
@@ -301,7 +309,7 @@ def _lint_ticket_dir(ticket_dir: Path) -> list[str]:
     for path in sorted(ticket_dir.iterdir()):
         if not path.is_file():
             continue
-        if path.name == "AGENTS.md":
+        if path.name in {"AGENTS.md", INGEST_STATE_FILENAME}:
             continue
         if parse_ticket_index(path.name) is None:
             rel_path = safe_relpath(path, ticket_root)
@@ -487,6 +495,21 @@ def import_ticket_pack(
             ticket_dir.mkdir(parents=True, exist_ok=True)
             for target_path, rendered in pending_writes:
                 atomic_write(target_path, rendered)
+            try:
+                write_ingest_receipt(
+                    repo_root,
+                    source="import_pack",
+                    details={
+                        "created": created,
+                        "zip_path": safe_relpath(zip_path, repo_root),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to write ingest receipt at %s after import_pack: %s",
+                    safe_relpath(ingest_state_path(repo_root), repo_root),
+                    exc,
+                )
 
     return TicketImportReport(
         repo_id=repo_id,
