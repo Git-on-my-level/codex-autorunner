@@ -13,6 +13,10 @@ from ...core.destinations import (
 )
 from ...core.utils import is_within
 from ...workspace import workspace_id_for_path
+from ..docker.profile_contracts import (
+    expand_profile_paths,
+    resolve_docker_profile_contract,
+)
 from ..docker.runtime import DockerRuntime, build_docker_container_spec
 
 logger = logging.getLogger("codex_autorunner.integrations.agents.destination_wrapping")
@@ -59,6 +63,7 @@ def wrap_command_for_destination(
         name=container_name,
         image=destination.image,
         repo_root=repo_abs,
+        profile=destination.profile,
         mounts=destination.mounts,
         env_passthrough_patterns=destination.env_passthrough,
         explicit_env=(
@@ -69,6 +74,18 @@ def wrap_command_for_destination(
         workdir=destination.workdir,
     )
     runtime.ensure_container_running(spec)
+    profile_contract = resolve_docker_profile_contract(destination.profile)
+    if profile_contract is not None:
+        required_auth_files = expand_profile_paths(
+            profile_contract.required_auth_files,
+            repo_root=repo_abs,
+        )
+        runtime.preflight_container(
+            container_name,
+            required_binaries=profile_contract.required_binaries,
+            required_readable_files=required_auth_files,
+            workdir=spec.workdir,
+        )
     wrapped = runtime.build_exec_command(
         container_name,
         command,

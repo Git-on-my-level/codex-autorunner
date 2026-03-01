@@ -30,9 +30,10 @@ class LocalDestination:
 class DockerDestination:
     image: str
     container_name: Optional[str] = None
-    mounts: tuple[Dict[str, str], ...] = ()
+    mounts: tuple[Dict[str, Any], ...] = ()
     env_passthrough: tuple[str, ...] = ()
     workdir: Optional[str] = None
+    profile: Optional[str] = None
     extra: Dict[str, Any] = dataclasses.field(default_factory=dict)
     kind: str = "docker"
 
@@ -46,6 +47,8 @@ class DockerDestination:
             payload["env_passthrough"] = list(self.env_passthrough)
         if self.workdir:
             payload["workdir"] = self.workdir
+        if self.profile:
+            payload["profile"] = self.profile
         payload.update(self.extra)
         return payload
 
@@ -203,13 +206,13 @@ def parse_destination_config(
         else:
             container_name = container_name.strip()
 
-    mounts: tuple[Dict[str, str], ...] = ()
+    mounts: tuple[Dict[str, Any], ...] = ()
     mounts_raw = normalized.get("mounts")
     if mounts_raw is not None:
         if not isinstance(mounts_raw, list):
             errors.append(f"{context}: optional 'mounts' must be a list")
         else:
-            parsed_mounts: list[Dict[str, str]] = []
+            parsed_mounts: list[Dict[str, Any]] = []
             for idx, mount in enumerate(mounts_raw):
                 if not isinstance(mount, dict):
                     errors.append(
@@ -228,9 +231,23 @@ def parse_destination_config(
                         f"{context}: mounts[{idx}].target must be a non-empty string"
                     )
                     continue
-                parsed_mounts.append(
-                    {"source": source.strip(), "target": target.strip()}
-                )
+                parsed_mount: Dict[str, Any] = {
+                    "source": source.strip(),
+                    "target": target.strip(),
+                }
+                raw_read_only = mount.get("read_only")
+                if raw_read_only is None and "readOnly" in mount:
+                    raw_read_only = mount.get("readOnly")
+                if raw_read_only is None and "readonly" in mount:
+                    raw_read_only = mount.get("readonly")
+                if raw_read_only is not None:
+                    if not isinstance(raw_read_only, bool):
+                        errors.append(
+                            f"{context}: mounts[{idx}].read_only must be a boolean"
+                        )
+                        continue
+                    parsed_mount["read_only"] = raw_read_only
+                parsed_mounts.append(parsed_mount)
             mounts = tuple(parsed_mounts)
 
     env_passthrough: tuple[str, ...] = ()
@@ -257,6 +274,33 @@ def parse_destination_config(
         else:
             workdir = workdir.strip()
 
+    profile = normalized.get("profile")
+    if profile is not None:
+        if not isinstance(profile, str) or not profile.strip():
+            errors.append(f"{context}: optional 'profile' must be a non-empty string")
+            profile = None
+        else:
+            profile = profile.strip().lower()
+            if profile != "full-dev":
+                errors.append(f"{context}: unsupported docker profile '{profile}'")
+
+    explicit_env: Optional[Dict[str, str]] = None
+    env_map_raw = normalized.get("env")
+    if env_map_raw is not None:
+        if not isinstance(env_map_raw, dict):
+            errors.append(f"{context}: optional 'env' must be an object")
+        else:
+            parsed_env_map: Dict[str, str] = {}
+            for raw_key, raw_value in env_map_raw.items():
+                if not isinstance(raw_key, str) or not raw_key.strip():
+                    errors.append(f"{context}: env keys must be non-empty strings")
+                    continue
+                if not isinstance(raw_value, str):
+                    errors.append(f"{context}: env[{raw_key!r}] must be a string value")
+                    continue
+                parsed_env_map[raw_key.strip()] = raw_value
+            explicit_env = parsed_env_map
+
     if errors:
         return DestinationParseResult(
             destination=LocalDestination(),
@@ -275,8 +319,12 @@ def parse_destination_config(
             "mounts",
             "env_passthrough",
             "workdir",
+            "profile",
+            "env",
         }
     }
+    if explicit_env is not None:
+        extra["env"] = explicit_env
     return DestinationParseResult(
         destination=DockerDestination(
             image=image,  # type: ignore[arg-type]
@@ -284,6 +332,7 @@ def parse_destination_config(
             mounts=mounts,
             env_passthrough=env_passthrough,
             workdir=workdir,
+            profile=profile,
             extra=extra,
         ),
         valid=True,

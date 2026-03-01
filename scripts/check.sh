@@ -86,6 +86,9 @@ echo "Checking core imports (no adapter implementations)..."
 echo "Checking for legacy TODO/SUMMARY pipeline code..."
 "$PYTHON_BIN" scripts/check_legacy_pipeline.py
 
+echo "Checking destination contract drift..."
+"$PYTHON_BIN" scripts/check_destination_contract_drift.py
+
 echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server src/codex_autorunner/integrations/telegram
 

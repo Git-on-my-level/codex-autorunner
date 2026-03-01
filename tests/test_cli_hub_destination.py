@@ -145,3 +145,67 @@ def test_hub_destination_set_local_allows_worktree_override(tmp_path: Path) -> N
     assert show_payload["configured_destination"] == {"kind": "local"}
     assert show_payload["effective_destination"] == {"kind": "local"}
     assert show_payload["source"] == "repo"
+
+
+def test_hub_destination_set_docker_supports_extended_payload_fields(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path, base_id, _ = _seed_hub_with_base_and_worktree(hub_root)
+
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "destination",
+            "set",
+            base_id,
+            "docker",
+            "--image",
+            "busybox:latest",
+            "--profile",
+            "full-dev",
+            "--workdir",
+            "/workspace",
+            "--env",
+            "CAR_*",
+            "--env-map",
+            "OPENAI_API_KEY=sk-test",
+            "--env-map",
+            "CODEX_HOME=/workspace/.codex",
+            "--mount",
+            "/tmp/src:/workspace/src",
+            "--mount-ro",
+            "/tmp/cache:/workspace/cache",
+            "--json",
+            "--path",
+            str(hub_root),
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["effective_destination"] == {
+        "kind": "docker",
+        "image": "busybox:latest",
+        "profile": "full-dev",
+        "workdir": "/workspace",
+        "env_passthrough": ["CAR_*"],
+        "env": {
+            "OPENAI_API_KEY": "sk-test",
+            "CODEX_HOME": "/workspace/.codex",
+        },
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
+    }
+
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    assert manifest_text.startswith(MANIFEST_HEADER)
+    manifest_data = yaml.safe_load(manifest_text)
+    repo_data = next(item for item in manifest_data["repos"] if item["id"] == base_id)
+    assert repo_data["destination"] == payload["effective_destination"]

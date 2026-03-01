@@ -19,3 +19,18 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 - **Dev server binding**: Use `--host 0.0.0.0` (not the default `127.0.0.1`) to make the UI accessible outside the VM.
 - **Process termination tests**: A few tests in `tests/test_opencode_supervisor_process_management.py` and `tests/test_process_termination.py` may fail in containerized environments due to PID namespace / signal handling constraints. These are environment-specific, not code bugs.
 - **No external services required**: SQLite is embedded (stdlib); no Postgres/Redis/Docker needed for core dev workflows.
+
+## Optional Docker Profile Probe
+
+Use this only when validating a real image for `destination.profile: full-dev`. It is integration-marked and skipped by default:
+
+```bash
+CAR_TEST_DOCKER_FULL_DEV=1 \
+CAR_TEST_DOCKER_FULL_DEV_IMAGE=ghcr.io/your-org/your-image:tag \
+.venv/bin/python -m pytest -q tests/integrations/docker/test_full_dev_profile_probe.py -m integration
+```
+
+What it checks:
+- Docker daemon reachable
+- Container image can be started
+- All `full-dev` required binaries are present (`codex`, `opencode`, `python3`, `git`, `rg`, `bash`, `node`, `pnpm`)

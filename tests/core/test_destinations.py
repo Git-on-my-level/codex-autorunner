@@ -25,8 +25,9 @@ def test_parse_destination_config_docker() -> None:
             "kind": "docker",
             "image": "ghcr.io/acme/car:latest",
             "container_name": "car-demo",
-            "mounts": [{"source": "/tmp/src", "target": "/src"}],
+            "mounts": [{"source": "/tmp/src", "target": "/src", "read_only": True}],
             "env_passthrough": ["CAR_*", "OPENAI_*"],
+            "env": {"OPENAI_API_KEY": "sk-test"},
             "workdir": "/src",
         }
     )
@@ -36,9 +37,28 @@ def test_parse_destination_config_docker() -> None:
         "kind": "docker",
         "image": "ghcr.io/acme/car:latest",
         "container_name": "car-demo",
-        "mounts": [{"source": "/tmp/src", "target": "/src"}],
+        "mounts": [{"source": "/tmp/src", "target": "/src", "read_only": True}],
         "env_passthrough": ["CAR_*", "OPENAI_*"],
+        "env": {"OPENAI_API_KEY": "sk-test"},
         "workdir": "/src",
+    }
+
+
+def test_parse_destination_config_docker_with_profile() -> None:
+    parsed = parse_destination_config(
+        {
+            "kind": "docker",
+            "image": "ghcr.io/acme/car:latest",
+            "profile": "full-dev",
+        }
+    )
+    assert parsed.valid is True
+    assert isinstance(parsed.destination, DockerDestination)
+    assert parsed.destination.profile == "full-dev"
+    assert parsed.destination.to_dict() == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/car:latest",
+        "profile": "full-dev",
     }
 
 
@@ -47,6 +67,45 @@ def test_parse_destination_config_invalid_docker() -> None:
     assert parsed.valid is False
     assert isinstance(parsed.destination, LocalDestination)
     assert "requires non-empty 'image'" in parsed.errors[0]
+
+
+def test_parse_destination_config_invalid_docker_profile() -> None:
+    parsed = parse_destination_config(
+        {
+            "kind": "docker",
+            "image": "ghcr.io/acme/car:latest",
+            "profile": "unknown",
+        }
+    )
+    assert parsed.valid is False
+    assert isinstance(parsed.destination, LocalDestination)
+    assert "unsupported docker profile 'unknown'" in parsed.errors[0]
+
+
+def test_parse_destination_config_invalid_mount_read_only_type() -> None:
+    parsed = parse_destination_config(
+        {
+            "kind": "docker",
+            "image": "ghcr.io/acme/car:latest",
+            "mounts": [{"source": "/tmp/src", "target": "/src", "read_only": "yes"}],
+        }
+    )
+    assert parsed.valid is False
+    assert isinstance(parsed.destination, LocalDestination)
+    assert "mounts[0].read_only must be a boolean" in parsed.errors[0]
+
+
+def test_parse_destination_config_invalid_explicit_env_map() -> None:
+    parsed = parse_destination_config(
+        {
+            "kind": "docker",
+            "image": "ghcr.io/acme/car:latest",
+            "env": {"OPENAI_API_KEY": 123},
+        }
+    )
+    assert parsed.valid is False
+    assert isinstance(parsed.destination, LocalDestination)
+    assert "env['OPENAI_API_KEY'] must be a string value" in parsed.errors[0]
 
 
 def test_resolve_effective_repo_destination_defaults_to_local() -> None:

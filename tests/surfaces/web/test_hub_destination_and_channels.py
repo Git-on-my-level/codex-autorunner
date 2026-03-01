@@ -334,8 +334,18 @@ def test_hub_destination_set_route_supports_extended_docker_fields(
             "kind": "docker",
             "image": "busybox:latest",
             "container_name": "car-demo",
+            "profile": "full-dev",
+            "workdir": "/workspace",
             "env_passthrough": ["CAR_*", "PATH"],
-            "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+            "env": {"OPENAI_API_KEY": "sk-test", "CODEX_HOME": "/workspace/.codex"},
+            "mounts": [
+                {"source": "/tmp/src", "target": "/workspace/src"},
+                {
+                    "source": "/tmp/cache",
+                    "target": "/workspace/cache",
+                    "readOnly": True,
+                },
+            ],
         },
     )
     assert set_docker.status_code == 200
@@ -344,15 +354,35 @@ def test_hub_destination_set_route_supports_extended_docker_fields(
         "kind": "docker",
         "image": "busybox:latest",
         "container_name": "car-demo",
+        "profile": "full-dev",
+        "workdir": "/workspace",
         "env_passthrough": ["CAR_*", "PATH"],
-        "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+        "env": {"OPENAI_API_KEY": "sk-test", "CODEX_HOME": "/workspace/.codex"},
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
     }
     assert payload["effective_destination"] == {
         "kind": "docker",
         "image": "busybox:latest",
         "container_name": "car-demo",
+        "profile": "full-dev",
+        "workdir": "/workspace",
         "env_passthrough": ["CAR_*", "PATH"],
-        "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+        "env": {"OPENAI_API_KEY": "sk-test", "CODEX_HOME": "/workspace/.codex"},
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
     }
 
     manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
@@ -362,8 +392,43 @@ def test_hub_destination_set_route_supports_extended_docker_fields(
         "kind": "docker",
         "image": "busybox:latest",
         "container_name": "car-demo",
+        "profile": "full-dev",
+        "workdir": "/workspace",
         "env_passthrough": ["CAR_*", "PATH"],
-        "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+        "env": {"OPENAI_API_KEY": "sk-test", "CODEX_HOME": "/workspace/.codex"},
+        "mounts": [
+            {"source": "/tmp/src", "target": "/workspace/src"},
+            {
+                "source": "/tmp/cache",
+                "target": "/workspace/cache",
+                "read_only": True,
+            },
+        ],
+    }
+
+
+def test_hub_destination_set_route_accepts_legacy_env_list_alias(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    supervisor.create_repo("base")
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "env": ["CAR_*", "PATH"],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["configured_destination"] == {
+        "kind": "docker",
+        "image": "busybox:latest",
+        "env_passthrough": ["CAR_*", "PATH"],
     }
 
 
@@ -393,6 +458,30 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
     assert (
         "Each mount requires non-empty source and target" in bad_mount.json()["detail"]
     )
+
+    bad_mount_read_only = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "mounts": [
+                {"source": "/tmp/src", "target": "/workspace/src", "read_only": "yes"}
+            ],
+        },
+    )
+    assert bad_mount_read_only.status_code == 400
+    assert "Mount read_only must be a boolean" in bad_mount_read_only.json()["detail"]
+
+    bad_env = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "env": {"": "value"},
+        },
+    )
+    assert bad_env.status_code == 400
+    assert "Docker env keys must be non-empty strings" in bad_env.json()["detail"]
 
     unknown_repo = client.post(
         "/hub/repos/missing-repo/destination",
@@ -731,8 +820,12 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     assert "/hub/repos/${encodeURIComponent(repo.id)}/destination" in hub_source
     assert "/hub/chat/channels" in hub_source
     assert "container_name" in hub_source
+    assert "profile" in hub_source
+    assert "workdir" in hub_source
     assert "env_passthrough" in hub_source
+    assert "body.env =" in hub_source
     assert "mounts" in hub_source
+    assert "read_only" in hub_source
     assert "hubRepoSearchInput" in hub_source
     assert "hub-chat-binding-row" in hub_source
     assert 'header.textContent = "Channels"' not in hub_source
