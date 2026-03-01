@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
@@ -13,6 +14,7 @@ from codex_autorunner.core.pma_context import (
     get_active_context_auto_prune_meta,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.manifest import load_manifest, save_manifest
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
@@ -476,6 +478,38 @@ def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
     assert "url" not in repos[0]
 
 
+def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    hub_config = load_hub_config(hub_env.hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_env.hub_root)
+    repo = manifest.get(hub_env.repo_id)
+    assert repo is not None
+    repo.destination = {"kind": "docker", "image": "busybox:latest"}
+    save_manifest(hub_config.manifest_path, manifest, hub_env.hub_root)
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    repos = snapshot.get("repos") or []
+    repo_summary = next(
+        (entry for entry in repos if entry.get("id") == hub_env.repo_id),
+        {},
+    )
+    assert repo_summary
+    effective_destination = repo_summary.get("effective_destination") or {}
+    assert effective_destination.get("kind") == "docker"
+    assert effective_destination.get("image") == "busybox:latest"
+
+    rendered = _render_hub_snapshot(snapshot)
+    assert "destination=docker:busybox:latest" in rendered
+
+
 def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None:
     run_id = "66666666-6666-6666-6666-666666666666"
     _seed_paused_run(hub_env.repo_root, run_id)
@@ -616,6 +650,35 @@ def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(
     assert "PMA File Inbox:" in result
     assert "inbox: [upload.md, data.csv]" in result
     assert "next_action: process_uploaded_file" in result
+
+
+def test_render_hub_snapshot_includes_repo_destination(tmp_path: Path) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [],
+        "repos": [
+            {
+                "id": "repo-1",
+                "display_name": "Repo One",
+                "status": "idle",
+                "last_run_id": None,
+                "last_exit_code": None,
+                "ticket_flow": None,
+                "run_state": None,
+                "effective_destination": {"kind": "docker", "image": "python:3.12"},
+            }
+        ],
+        "pma_files": {"inbox": [], "outbox": []},
+        "pma_files_detail": {"inbox": [], "outbox": []},
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Repos:" in result
+    assert "destination=docker:python:3.12" in result
 
 
 def test_render_hub_snapshot_pma_files_only(tmp_path: Path) -> None:
