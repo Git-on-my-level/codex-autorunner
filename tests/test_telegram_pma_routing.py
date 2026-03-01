@@ -1397,7 +1397,7 @@ async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
     await handler._handle_pma(message, "target add telegram:-2002:77", _RuntimeStub())
 
     await handler._handle_pma(message, "target active", _RuntimeStub())
-    assert "Active PMA delivery target: web" in handler.sent[-1]
+    assert "Active PMA delivery target: (not set;" in handler.sent[-1]
 
     await handler._handle_pma(
         message, "target active set telegram:-2002:77", _RuntimeStub()

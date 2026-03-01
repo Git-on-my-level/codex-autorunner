@@ -664,7 +664,7 @@ def pma_targets_active(
         return
 
     if not isinstance(active_target_key, str):
-        typer.echo("Active PMA delivery target: (none)")
+        typer.echo("Active PMA delivery target: (not set)")
         return
     label = (
         _format_pma_target_label(active_target)

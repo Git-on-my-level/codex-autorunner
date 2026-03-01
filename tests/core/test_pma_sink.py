@@ -139,3 +139,22 @@ def test_set_telegram_preserves_non_chat_targets(tmp_path: Path) -> None:
         },
     ]
     assert state["active_target_key"] == "chat:telegram:111:222"
+
+
+def test_load_does_not_fallback_to_first_target_when_active_is_unset(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "web"},
+            {"kind": "chat", "platform": "discord", "chat_id": "123"},
+        ]
+    )
+
+    sink_store = PmaActiveSinkStore(hub_root)
+    assert sink_store.get_active_target_key() is None
+    assert sink_store.get_active_target() is None
+    assert sink_store.load() is None
+    assert sink_store.mark_delivered("turn-1") is False

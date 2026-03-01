@@ -283,8 +283,13 @@ def test_pma_targets_active_get_and_set(hub_env) -> None:
     initial = client.get("/hub/pma/targets/active")
     assert initial.status_code == 200
     initial_payload = initial.json()
-    assert initial_payload["active_target_key"] == "web"
-    assert (initial_payload.get("active_target") or {}).get("key") == "web"
+    assert initial_payload["active_target_key"] is None
+    assert initial_payload.get("active_target") is None
+    assert all(
+        row.get("active") is False
+        for row in initial_payload.get("targets", [])
+        if isinstance(row, dict)
+    )
 
     set_active = client.post(
         "/hub/pma/targets/active", json={"ref": "telegram:-100123:777"}

@@ -554,7 +554,7 @@ def test_pma_targets_active_show_and_set(tmp_path: Path) -> None:
         ["targets", "active", "--path", str(tmp_path)],
     )
     assert show_result.exit_code == 0
-    assert "Active PMA delivery target: web" in show_result.stdout
+    assert "Active PMA delivery target: (not set)" in show_result.stdout
 
     set_result = runner.invoke(
         pma_app,

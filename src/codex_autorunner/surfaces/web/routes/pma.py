@@ -482,27 +482,35 @@ def build_pma_routes() -> APIRouter:
         targets = [
             target for target in state.get("targets", []) if isinstance(target, dict)
         ]
-        active_target_key = state.get("active_target_key")
+        raw_active_target_key = state.get("active_target_key")
         rows: list[dict[str, Any]] = []
+        known_keys: set[str] = set()
         for target in targets:
             key = target_key(target)
             if not isinstance(key, str):
                 continue
+            known_keys.add(key)
             rows.append(
                 {
                     "key": key,
                     "label": format_pma_target_label(target),
                     "target": target,
-                    "active": key == active_target_key,
+                    "active": False,
                 }
             )
+
+        active_target_key = (
+            raw_active_target_key
+            if isinstance(raw_active_target_key, str)
+            and raw_active_target_key in known_keys
+            else None
+        )
+        for row in rows:
+            row["active"] = row["key"] == active_target_key
+
         return {
             "updated_at": state.get("updated_at"),
-            "active_target_key": (
-                active_target_key
-                if isinstance(active_target_key, str) and active_target_key
-                else None
-            ),
+            "active_target_key": active_target_key,
             "targets": rows,
         }
 
@@ -1156,25 +1164,12 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/targets/active")
     def pma_targets_active(request: Request) -> dict[str, Any]:
-        sink_store = PmaActiveSinkStore(request.app.state.config.root)
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        state = store.load()
-        payload = _serialize_delivery_targets_state(state)
-        active_key = sink_store.get_active_target_key() or payload.get(
-            "active_target_key"
-        )
+        payload = _serialize_delivery_targets_state(store.load())
         rows = [row for row in payload.get("targets", []) if isinstance(row, dict)]
-        normalized_rows: list[dict[str, Any]] = []
-        for row in rows:
-            normalized = dict(row)
-            normalized["active"] = normalized.get("key") == active_key
-            normalized_rows.append(normalized)
-        payload["targets"] = normalized_rows
-        payload["active_target_key"] = (
-            active_key if isinstance(active_key, str) and active_key else None
-        )
+        active_key = payload.get("active_target_key")
         active_row = next(
-            (row for row in normalized_rows if row.get("key") == active_key),
+            (row for row in rows if row.get("key") == active_key),
             None,
         )
         payload["active_target"] = active_row

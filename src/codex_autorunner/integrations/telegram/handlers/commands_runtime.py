@@ -1323,7 +1323,10 @@ class TelegramCommandHandlers(
     def _format_pma_active_target(self, targets_store: PmaDeliveryTargetsStore) -> str:
         active_key = targets_store.get_active_target_key()
         if not isinstance(active_key, str):
-            return "Active PMA delivery target: (none)"
+            return (
+                "Active PMA delivery target: (not set; use /pma target active set "
+                "<ref|key>)"
+            )
         state = targets_store.load()
         active_target = next(
             (

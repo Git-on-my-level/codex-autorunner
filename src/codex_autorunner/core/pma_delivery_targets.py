@@ -443,7 +443,7 @@ class PmaDeliveryTargetsStore:
             normalized = candidate.strip()
             if normalized and normalized in target_keys:
                 return normalized
-        return target_keys[0] if target_keys else None
+        return None
 
     def _read_json_object(self, path: Path) -> Optional[dict[str, Any]]:
         if not path.exists():

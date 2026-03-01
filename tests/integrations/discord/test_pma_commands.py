@@ -650,7 +650,7 @@ async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
         await service.run_forever()
         assert len(rest.interaction_responses) == 6
         assert (
-            "Active PMA delivery target: web"
+            "Active PMA delivery target: (not set; use /pma target active [ref|key])"
             in rest.interaction_responses[2]["payload"]["data"]["content"]
         )
         assert (

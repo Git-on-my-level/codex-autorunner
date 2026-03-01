@@ -181,9 +181,6 @@ class PmaActiveSinkStore:
                     continue
                 if target_key(target) == active_target_key:
                     return target
-        for target in targets:
-            if isinstance(target, dict):
-                return target
         return None
 
     def _last_delivery_for_target(

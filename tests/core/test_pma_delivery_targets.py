@@ -157,7 +157,73 @@ def test_add_and_remove_targets(tmp_path: Path) -> None:
     assert store.remove_target("chat:discord:does-not-exist") is False
     state = store.load()
     assert state["targets"] == [{"kind": "web"}]
-    assert state["active_target_key"] == "web"
+    assert state["active_target_key"] is None
+
+
+def test_set_targets_does_not_implicitly_set_active_target(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaDeliveryTargetsStore(hub_root)
+
+    store.set_targets(
+        [
+            {"kind": "web"},
+            {"kind": "chat", "platform": "discord", "chat_id": "123"},
+        ]
+    )
+    state = store.load()
+
+    assert state["active_target_key"] is None
+    assert store.get_active_target_key() is None
+    assert store.get_active_target() is None
+
+
+def test_load_normalizes_missing_active_target_key_to_none(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-02-27T00:00:00Z",
+                "targets": [
+                    {"kind": "web"},
+                    {"kind": "chat", "platform": "discord", "chat_id": "123"},
+                ],
+                "last_delivery_by_target": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = store.load()
+    assert state["active_target_key"] is None
+    assert store.get_active_target_key() is None
+
+
+def test_load_normalizes_invalid_active_target_key_to_none(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-02-27T00:00:00Z",
+                "targets": [
+                    {"kind": "web"},
+                    {"kind": "chat", "platform": "discord", "chat_id": "123"},
+                ],
+                "last_delivery_by_target": {},
+                "active_target_key": "chat:telegram:999",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = store.load()
+    assert state["active_target_key"] is None
+    assert store.get_active_target_key() is None
 
 
 def test_mark_delivered_is_per_target_and_deduped(tmp_path: Path) -> None:
