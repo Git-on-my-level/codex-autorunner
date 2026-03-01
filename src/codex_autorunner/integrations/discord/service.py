@@ -73,7 +73,7 @@ from ...core.utils import (
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.app_server.client import CodexAppServerClient
-from ...integrations.app_server.env import build_app_server_env
+from ...integrations.app_server.env import app_server_env, build_app_server_env
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
@@ -1707,14 +1707,17 @@ class DiscordBotService:
 
         timeout_seconds = max(0.1, self._config.shell.timeout_ms / 1000.0)
         timeout_label = int(timeout_seconds + 0.999)
+        shell_command = ["bash", "-lc", command_text]
+        shell_env = app_server_env(shell_command, workspace_root)
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["bash", "-lc", command_text],
+                shell_command,
                 cwd=workspace_root,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
+                env=shell_env,
             )
         except subprocess.TimeoutExpired:
             log_event(

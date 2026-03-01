@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -1869,6 +1870,7 @@ async def test_message_create_bang_shell_executes_in_bound_workspace(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    (workspace / "car").write_text("#!/bin/sh\n", encoding="utf-8")
 
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -1911,6 +1913,8 @@ async def test_message_create_bang_shell_executes_in_bound_workspace(
         await service.run_forever()
         assert seen["args"][0] == ["bash", "-lc", "pwd"]
         assert seen["kwargs"]["cwd"] == workspace.resolve()
+        path_entries = seen["kwargs"]["env"]["PATH"].split(os.pathsep)
+        assert str(workspace.resolve()) in path_entries
         assert any(
             "$ pwd" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
