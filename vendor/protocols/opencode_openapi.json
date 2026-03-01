@@ -808,9 +808,6 @@
             },
             "type": "array"
           },
-          "keybinds": {
-            "$ref": "#/components/schemas/KeybindsConfig"
-          },
           "layout": {
             "$ref": "#/components/schemas/LayoutConfig"
           },
@@ -996,48 +993,12 @@
           "snapshot": {
             "type": "boolean"
           },
-          "theme": {
-            "description": "Theme name to use for the interface",
-            "type": "string"
-          },
           "tools": {
             "additionalProperties": {
               "type": "boolean"
             },
             "propertyNames": {
               "type": "string"
-            },
-            "type": "object"
-          },
-          "tui": {
-            "description": "TUI specific settings",
-            "properties": {
-              "diff_style": {
-                "description": "Control diff rendering style: 'auto' adapts to terminal width, 'stacked' always shows single column",
-                "enum": [
-                  "auto",
-                  "stacked"
-                ],
-                "type": "string"
-              },
-              "scroll_acceleration": {
-                "description": "Scroll acceleration settings",
-                "properties": {
-                  "enabled": {
-                    "description": "Enable scroll acceleration",
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "enabled"
-                ],
-                "type": "object"
-              },
-              "scroll_speed": {
-                "description": "TUI scroll speed",
-                "minimum": 0.001,
-                "type": "number"
-              }
             },
             "type": "object"
           },
@@ -2738,487 +2699,138 @@
         ],
         "type": "object"
       },
+      "GlobalSession": {
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^ses.*",
+            "type": "string"
+          },
+          "parentID": {
+            "pattern": "^ses.*",
+            "type": "string"
+          },
+          "permission": {
+            "$ref": "#/components/schemas/PermissionRuleset"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectID": {
+            "type": "string"
+          },
+          "revert": {
+            "properties": {
+              "diff": {
+                "type": "string"
+              },
+              "messageID": {
+                "type": "string"
+              },
+              "partID": {
+                "type": "string"
+              },
+              "snapshot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageID"
+            ],
+            "type": "object"
+          },
+          "share": {
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "summary": {
+            "properties": {
+              "additions": {
+                "type": "number"
+              },
+              "deletions": {
+                "type": "number"
+              },
+              "diffs": {
+                "items": {
+                  "$ref": "#/components/schemas/FileDiff"
+                },
+                "type": "array"
+              },
+              "files": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "additions",
+              "deletions",
+              "files"
+            ],
+            "type": "object"
+          },
+          "time": {
+            "properties": {
+              "archived": {
+                "type": "number"
+              },
+              "compacting": {
+                "type": "number"
+              },
+              "created": {
+                "type": "number"
+              },
+              "updated": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "created",
+              "updated"
+            ],
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "projectID",
+          "directory",
+          "title",
+          "version",
+          "time",
+          "project"
+        ],
+        "type": "object"
+      },
       "JSONSchema": {
         "additionalProperties": {},
         "propertyNames": {
           "type": "string"
-        },
-        "type": "object"
-      },
-      "KeybindsConfig": {
-        "additionalProperties": false,
-        "description": "Custom keybind configurations",
-        "properties": {
-          "agent_cycle": {
-            "default": "tab",
-            "description": "Next agent",
-            "type": "string"
-          },
-          "agent_cycle_reverse": {
-            "default": "shift+tab",
-            "description": "Previous agent",
-            "type": "string"
-          },
-          "agent_list": {
-            "default": "<leader>a",
-            "description": "List agents",
-            "type": "string"
-          },
-          "app_exit": {
-            "default": "ctrl+c,ctrl+d,<leader>q",
-            "description": "Exit the application",
-            "type": "string"
-          },
-          "command_list": {
-            "default": "ctrl+p",
-            "description": "List available commands",
-            "type": "string"
-          },
-          "display_thinking": {
-            "default": "none",
-            "description": "Toggle thinking blocks visibility",
-            "type": "string"
-          },
-          "editor_open": {
-            "default": "<leader>e",
-            "description": "Open external editor",
-            "type": "string"
-          },
-          "history_next": {
-            "default": "down",
-            "description": "Next history item",
-            "type": "string"
-          },
-          "history_previous": {
-            "default": "up",
-            "description": "Previous history item",
-            "type": "string"
-          },
-          "input_backspace": {
-            "default": "backspace,shift+backspace",
-            "description": "Backspace in input",
-            "type": "string"
-          },
-          "input_buffer_end": {
-            "default": "end",
-            "description": "Move to end of buffer in input",
-            "type": "string"
-          },
-          "input_buffer_home": {
-            "default": "home",
-            "description": "Move to start of buffer in input",
-            "type": "string"
-          },
-          "input_clear": {
-            "default": "ctrl+c",
-            "description": "Clear input field",
-            "type": "string"
-          },
-          "input_delete": {
-            "default": "ctrl+d,delete,shift+delete",
-            "description": "Delete character in input",
-            "type": "string"
-          },
-          "input_delete_line": {
-            "default": "ctrl+shift+d",
-            "description": "Delete line in input",
-            "type": "string"
-          },
-          "input_delete_to_line_end": {
-            "default": "ctrl+k",
-            "description": "Delete to end of line in input",
-            "type": "string"
-          },
-          "input_delete_to_line_start": {
-            "default": "ctrl+u",
-            "description": "Delete to start of line in input",
-            "type": "string"
-          },
-          "input_delete_word_backward": {
-            "default": "ctrl+w,ctrl+backspace,alt+backspace",
-            "description": "Delete word backward in input",
-            "type": "string"
-          },
-          "input_delete_word_forward": {
-            "default": "alt+d,alt+delete,ctrl+delete",
-            "description": "Delete word forward in input",
-            "type": "string"
-          },
-          "input_line_end": {
-            "default": "ctrl+e",
-            "description": "Move to end of line in input",
-            "type": "string"
-          },
-          "input_line_home": {
-            "default": "ctrl+a",
-            "description": "Move to start of line in input",
-            "type": "string"
-          },
-          "input_move_down": {
-            "default": "down",
-            "description": "Move cursor down in input",
-            "type": "string"
-          },
-          "input_move_left": {
-            "default": "left,ctrl+b",
-            "description": "Move cursor left in input",
-            "type": "string"
-          },
-          "input_move_right": {
-            "default": "right,ctrl+f",
-            "description": "Move cursor right in input",
-            "type": "string"
-          },
-          "input_move_up": {
-            "default": "up",
-            "description": "Move cursor up in input",
-            "type": "string"
-          },
-          "input_newline": {
-            "default": "shift+return,ctrl+return,alt+return,ctrl+j",
-            "description": "Insert newline in input",
-            "type": "string"
-          },
-          "input_paste": {
-            "default": "ctrl+v",
-            "description": "Paste from clipboard",
-            "type": "string"
-          },
-          "input_redo": {
-            "default": "ctrl+.,super+shift+z",
-            "description": "Redo in input",
-            "type": "string"
-          },
-          "input_select_buffer_end": {
-            "default": "shift+end",
-            "description": "Select to end of buffer in input",
-            "type": "string"
-          },
-          "input_select_buffer_home": {
-            "default": "shift+home",
-            "description": "Select to start of buffer in input",
-            "type": "string"
-          },
-          "input_select_down": {
-            "default": "shift+down",
-            "description": "Select down in input",
-            "type": "string"
-          },
-          "input_select_left": {
-            "default": "shift+left",
-            "description": "Select left in input",
-            "type": "string"
-          },
-          "input_select_line_end": {
-            "default": "ctrl+shift+e",
-            "description": "Select to end of line in input",
-            "type": "string"
-          },
-          "input_select_line_home": {
-            "default": "ctrl+shift+a",
-            "description": "Select to start of line in input",
-            "type": "string"
-          },
-          "input_select_right": {
-            "default": "shift+right",
-            "description": "Select right in input",
-            "type": "string"
-          },
-          "input_select_up": {
-            "default": "shift+up",
-            "description": "Select up in input",
-            "type": "string"
-          },
-          "input_select_visual_line_end": {
-            "default": "alt+shift+e",
-            "description": "Select to end of visual line in input",
-            "type": "string"
-          },
-          "input_select_visual_line_home": {
-            "default": "alt+shift+a",
-            "description": "Select to start of visual line in input",
-            "type": "string"
-          },
-          "input_select_word_backward": {
-            "default": "alt+shift+b,alt+shift+left",
-            "description": "Select word backward in input",
-            "type": "string"
-          },
-          "input_select_word_forward": {
-            "default": "alt+shift+f,alt+shift+right",
-            "description": "Select word forward in input",
-            "type": "string"
-          },
-          "input_submit": {
-            "default": "return",
-            "description": "Submit input",
-            "type": "string"
-          },
-          "input_undo": {
-            "default": "ctrl+-,super+z",
-            "description": "Undo in input",
-            "type": "string"
-          },
-          "input_visual_line_end": {
-            "default": "alt+e",
-            "description": "Move to end of visual line in input",
-            "type": "string"
-          },
-          "input_visual_line_home": {
-            "default": "alt+a",
-            "description": "Move to start of visual line in input",
-            "type": "string"
-          },
-          "input_word_backward": {
-            "default": "alt+b,alt+left,ctrl+left",
-            "description": "Move word backward in input",
-            "type": "string"
-          },
-          "input_word_forward": {
-            "default": "alt+f,alt+right,ctrl+right",
-            "description": "Move word forward in input",
-            "type": "string"
-          },
-          "leader": {
-            "default": "ctrl+x",
-            "description": "Leader key for keybind combinations",
-            "type": "string"
-          },
-          "messages_copy": {
-            "default": "<leader>y",
-            "description": "Copy message",
-            "type": "string"
-          },
-          "messages_first": {
-            "default": "ctrl+g,home",
-            "description": "Navigate to first message",
-            "type": "string"
-          },
-          "messages_half_page_down": {
-            "default": "ctrl+alt+d",
-            "description": "Scroll messages down by half page",
-            "type": "string"
-          },
-          "messages_half_page_up": {
-            "default": "ctrl+alt+u",
-            "description": "Scroll messages up by half page",
-            "type": "string"
-          },
-          "messages_last": {
-            "default": "ctrl+alt+g,end",
-            "description": "Navigate to last message",
-            "type": "string"
-          },
-          "messages_last_user": {
-            "default": "none",
-            "description": "Navigate to last user message",
-            "type": "string"
-          },
-          "messages_line_down": {
-            "default": "ctrl+alt+e",
-            "description": "Scroll messages down by one line",
-            "type": "string"
-          },
-          "messages_line_up": {
-            "default": "ctrl+alt+y",
-            "description": "Scroll messages up by one line",
-            "type": "string"
-          },
-          "messages_next": {
-            "default": "none",
-            "description": "Navigate to next message",
-            "type": "string"
-          },
-          "messages_page_down": {
-            "default": "pagedown,ctrl+alt+f",
-            "description": "Scroll messages down by one page",
-            "type": "string"
-          },
-          "messages_page_up": {
-            "default": "pageup,ctrl+alt+b",
-            "description": "Scroll messages up by one page",
-            "type": "string"
-          },
-          "messages_previous": {
-            "default": "none",
-            "description": "Navigate to previous message",
-            "type": "string"
-          },
-          "messages_redo": {
-            "default": "<leader>r",
-            "description": "Redo message",
-            "type": "string"
-          },
-          "messages_toggle_conceal": {
-            "default": "<leader>h",
-            "description": "Toggle code block concealment in messages",
-            "type": "string"
-          },
-          "messages_undo": {
-            "default": "<leader>u",
-            "description": "Undo message",
-            "type": "string"
-          },
-          "model_cycle_favorite": {
-            "default": "none",
-            "description": "Next favorite model",
-            "type": "string"
-          },
-          "model_cycle_favorite_reverse": {
-            "default": "none",
-            "description": "Previous favorite model",
-            "type": "string"
-          },
-          "model_cycle_recent": {
-            "default": "f2",
-            "description": "Next recently used model",
-            "type": "string"
-          },
-          "model_cycle_recent_reverse": {
-            "default": "shift+f2",
-            "description": "Previous recently used model",
-            "type": "string"
-          },
-          "model_favorite_toggle": {
-            "default": "ctrl+f",
-            "description": "Toggle model favorite status",
-            "type": "string"
-          },
-          "model_list": {
-            "default": "<leader>m",
-            "description": "List available models",
-            "type": "string"
-          },
-          "model_provider_list": {
-            "default": "ctrl+a",
-            "description": "Open provider list from model dialog",
-            "type": "string"
-          },
-          "scrollbar_toggle": {
-            "default": "none",
-            "description": "Toggle session scrollbar",
-            "type": "string"
-          },
-          "session_child_cycle": {
-            "default": "<leader>right",
-            "description": "Next child session",
-            "type": "string"
-          },
-          "session_child_cycle_reverse": {
-            "default": "<leader>left",
-            "description": "Previous child session",
-            "type": "string"
-          },
-          "session_compact": {
-            "default": "<leader>c",
-            "description": "Compact the session",
-            "type": "string"
-          },
-          "session_delete": {
-            "default": "ctrl+d",
-            "description": "Delete session",
-            "type": "string"
-          },
-          "session_export": {
-            "default": "<leader>x",
-            "description": "Export session to editor",
-            "type": "string"
-          },
-          "session_fork": {
-            "default": "none",
-            "description": "Fork session from message",
-            "type": "string"
-          },
-          "session_interrupt": {
-            "default": "escape",
-            "description": "Interrupt current session",
-            "type": "string"
-          },
-          "session_list": {
-            "default": "<leader>l",
-            "description": "List all sessions",
-            "type": "string"
-          },
-          "session_new": {
-            "default": "<leader>n",
-            "description": "Create a new session",
-            "type": "string"
-          },
-          "session_parent": {
-            "default": "<leader>up",
-            "description": "Go to parent session",
-            "type": "string"
-          },
-          "session_rename": {
-            "default": "ctrl+r",
-            "description": "Rename session",
-            "type": "string"
-          },
-          "session_share": {
-            "default": "none",
-            "description": "Share current session",
-            "type": "string"
-          },
-          "session_timeline": {
-            "default": "<leader>g",
-            "description": "Show session timeline",
-            "type": "string"
-          },
-          "session_unshare": {
-            "default": "none",
-            "description": "Unshare current session",
-            "type": "string"
-          },
-          "sidebar_toggle": {
-            "default": "<leader>b",
-            "description": "Toggle sidebar",
-            "type": "string"
-          },
-          "stash_delete": {
-            "default": "ctrl+d",
-            "description": "Delete stash entry",
-            "type": "string"
-          },
-          "status_view": {
-            "default": "<leader>s",
-            "description": "View status",
-            "type": "string"
-          },
-          "terminal_suspend": {
-            "default": "ctrl+z",
-            "description": "Suspend terminal",
-            "type": "string"
-          },
-          "terminal_title_toggle": {
-            "default": "none",
-            "description": "Toggle terminal title",
-            "type": "string"
-          },
-          "theme_list": {
-            "default": "<leader>t",
-            "description": "List available themes",
-            "type": "string"
-          },
-          "tips_toggle": {
-            "default": "<leader>h",
-            "description": "Toggle tips on home screen",
-            "type": "string"
-          },
-          "tool_details": {
-            "default": "none",
-            "description": "Toggle tool details visibility",
-            "type": "string"
-          },
-          "username_toggle": {
-            "default": "none",
-            "description": "Toggle username visibility",
-            "type": "string"
-          },
-          "variant_cycle": {
-            "default": "ctrl+t",
-            "description": "Cycle model variants",
-            "type": "string"
-          }
         },
         "type": "object"
       },
@@ -4276,6 +3888,24 @@
           "worktree",
           "time",
           "sandboxes"
+        ],
+        "type": "object"
+      },
+      "ProjectSummary": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "worktree"
         ],
         "type": "object"
       },
@@ -6432,6 +6062,86 @@
           }
         },
         "summary": "Get MCP resources"
+      }
+    },
+    "/experimental/session": {
+      "get": {
+        "description": "Get a list of all OpenCode sessions across projects, sorted by most recently updated. Archived sessions are excluded by default.",
+        "operationId": "experimental.session.list",
+        "parameters": [
+          {
+            "description": "Filter sessions by project directory",
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only return root sessions (no parentID)",
+            "in": "query",
+            "name": "roots",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Filter sessions updated on or after this timestamp (milliseconds since epoch)",
+            "in": "query",
+            "name": "start",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "description": "Return sessions updated before this timestamp (milliseconds since epoch)",
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "description": "Filter sessions by title (case-insensitive)",
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum number of sessions to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "description": "Include archived sessions (default false)",
+            "in": "query",
+            "name": "archived",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GlobalSession"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "List of sessions"
+          }
+        },
+        "summary": "List sessions"
       }
     },
     "/experimental/tool": {
@@ -9998,6 +9708,70 @@
       }
     },
     "/session/{sessionID}/message/{messageID}": {
+      "delete": {
+        "description": "Permanently delete a specific message (and all of its parts) from a session. This does not revert any file changes that may have been made while processing the message.",
+        "operationId": "session.deleteMessage",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Session ID",
+            "in": "path",
+            "name": "sessionID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Message ID",
+            "in": "path",
+            "name": "messageID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "description": "Successfully deleted message"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Delete message"
+      },
       "get": {
         "description": "Retrieve a specific message from a session by its message ID.",
         "operationId": "session.message",

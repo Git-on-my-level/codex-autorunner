@@ -144,6 +144,7 @@ def reap_managed_processes(
     summary = ReapSummary()
     for record in list_process_records(repo_root):
         owner_running = _pid_is_running(record.owner_pid)
+        owner_mismatch = False
         if owner_running:
             owner_matches = process_command_matches(
                 record.owner_pid,
@@ -151,6 +152,7 @@ def reap_managed_processes(
             )
             if owner_matches is False:
                 owner_running = False
+                owner_mismatch = True
         record_old = _is_older_than(record, max_record_age_seconds)
         should_reap = force or (not owner_running) or record_old
 
@@ -163,6 +165,15 @@ def reap_managed_processes(
             if has_target:
                 summary.killed += 1
             continue
+
+        # When owner PID mismatches expected autorunner identity, avoid signaling
+        # unrelated target processes on PID reuse. Drop the stale record instead.
+        if owner_mismatch and record.pid is not None and _pid_is_running(record.pid):
+            target_matches = process_command_matches(record.pid, record.command)
+            if target_matches is False:
+                if delete_process_record(repo_root, record.kind, record.record_key()):
+                    summary.removed += 1
+                continue
 
         was_running = _record_is_running(record)
         _kill_record_processes(record)
