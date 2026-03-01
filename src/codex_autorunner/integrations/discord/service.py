@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
+from urllib.parse import urlparse
 
 from ...core.config import load_repo_config, resolve_env_for_root
 from ...core.filebox import (
@@ -174,6 +175,18 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
+DISCORD_AUDIO_SUFFIXES = {
+    ".aac",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".mp4",
+    ".oga",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".webm",
+}
 
 
 class AppServerUnavailableError(Exception):
@@ -930,10 +943,27 @@ class DiscordBotService:
 
     def _is_audio_attachment(self, attachment: Any, mime_type: Optional[str]) -> bool:
         kind = getattr(attachment, "kind", None)
-        if isinstance(kind, str) and kind.lower() == "audio":
+        kind_lower = kind.lower().strip() if isinstance(kind, str) else ""
+        if kind_lower == "audio":
             return True
-        if isinstance(mime_type, str) and mime_type.lower().startswith("audio/"):
-            return True
+        if kind_lower in {"image", "video"}:
+            return False
+        if isinstance(mime_type, str):
+            mime_base = mime_type.lower().split(";", 1)[0].strip()
+            if mime_base.startswith("audio/"):
+                return True
+            # Respect explicit, non-audio media classifications from Discord.
+            if mime_base.startswith("video/") or mime_base.startswith("image/"):
+                return False
+        file_name = getattr(attachment, "file_name", None)
+        if isinstance(file_name, str):
+            if Path(file_name).suffix.lower() in DISCORD_AUDIO_SUFFIXES:
+                return True
+        source_url = getattr(attachment, "source_url", None)
+        if isinstance(source_url, str) and source_url:
+            path = urlparse(source_url).path
+            if Path(path).suffix.lower() in DISCORD_AUDIO_SUFFIXES:
+                return True
         return False
 
     async def _transcribe_voice_attachment(
@@ -1147,9 +1177,21 @@ class DiscordBotService:
                     "image/jpg": ".jpg",
                     "image/gif": ".gif",
                     "image/webp": ".webp",
+                    "audio/mpeg": ".mp3",
+                    "audio/mp3": ".mp3",
+                    "audio/mp4": ".m4a",
+                    "audio/wav": ".wav",
+                    "audio/ogg": ".ogg",
+                    "audio/webm": ".webm",
                     "application/pdf": ".pdf",
                     "text/plain": ".txt",
                 }.get(mime_key, "")
+        if not suffix:
+            source_url = getattr(attachment, "source_url", None)
+            if isinstance(source_url, str) and source_url:
+                source_suffix = Path(urlparse(source_url).path).suffix.lower()
+                if source_suffix in DISCORD_AUDIO_SUFFIXES:
+                    suffix = source_suffix
         return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
 
     async def _find_paused_flow_run(

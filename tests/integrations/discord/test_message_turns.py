@@ -860,6 +860,187 @@ async def test_message_create_audio_attachment_does_not_transcribe_when_voice_di
         await store.close()
 
 
+@pytest.mark.anyio
+async def test_message_create_audio_attachment_without_content_type_still_transcribes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/audio-missing-content-type"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"voice-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-audio-3",
+                            "filename": "voice-note.ogg",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("transcribed despite missing mime")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "Transcript: transcribed despite missing mime" in prompt
+        assert fake_voice.calls
+        assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
+        assert fake_voice.calls[0]["filename"] == "voice-note.ogg"
+        assert fake_voice.calls[0]["content_type"] is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_video_attachment_does_not_transcribe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/video-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"video-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-video-1",
+                            "filename": "clip.mp4",
+                            "content_type": "video/mp4",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("ignored for video")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        assert "Transcript:" not in captured_prompts[0]
+        assert fake_voice.calls == []
+    finally:
+        await store.close()
+
+
 def test_voice_service_for_workspace_uses_hub_config_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1001,6 +1182,22 @@ def test_voice_service_for_workspace_caches_env_by_workspace(
     assert voice_service_a is voice_service_a_repeat
     assert voice_service_a.env.get("OPENAI_API_KEY") == "key-a"
     assert voice_service_b.env.get("OPENAI_API_KEY") == "key-b"
+
+
+def test_build_attachment_filename_uses_source_url_audio_suffix(tmp_path: Path) -> None:
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+    )
+    attachment = SimpleNamespace(
+        file_name=None,
+        mime_type=None,
+        source_url="https://cdn.discordapp.com/attachments/voice-message.opus?foo=bar",
+    )
+
+    file_name = service._build_attachment_filename(attachment, index=1)
+
+    assert file_name.endswith(".opus")
 
 
 @pytest.mark.anyio
