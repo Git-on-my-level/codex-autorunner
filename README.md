@@ -73,7 +73,6 @@ The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will 
 - [Architecture boundaries](docs/ARCHITECTURE_BOUNDARIES.md)
 - [Run history contract](docs/RUN_HISTORY.md)
 - [State roots contract](docs/STATE_ROOTS.md)
-- [Architecture refactor handoff (tickets 200-270)](docs/ARCHITECTURE_REFACTOR_HANDOFF.md)
 
 ## Supported agents
 CAR currently supports:

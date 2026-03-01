@@ -28,7 +28,7 @@ from codex_autorunner.integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
-from codex_autorunner.manifest import load_manifest, sanitize_repo_id
+from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
@@ -183,6 +183,45 @@ def test_hub_api_lists_repos(tmp_path: Path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["repos"][0]["id"] == "demo"
+    assert data["repos"][0]["effective_destination"] == {"kind": "local"}
+
+
+def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/destination-inherit",
+        start_point="HEAD",
+    )
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    base_entry = manifest.get("base")
+    assert base_entry is not None
+    base_entry.destination = {"kind": "docker", "image": "ghcr.io/acme/base:latest"}
+    save_manifest(manifest_path, manifest, hub_root)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    data = resp.json()
+    base_payload = next(item for item in data["repos"] if item["id"] == "base")
+    worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
+    expected = {"kind": "docker", "image": "ghcr.io/acme/base:latest"}
+    assert base_payload["effective_destination"] == expected
+    assert worktree_payload["effective_destination"] == expected
 
 
 def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):

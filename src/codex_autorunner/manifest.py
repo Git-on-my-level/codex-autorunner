@@ -38,6 +38,25 @@ class ManifestError(Exception):
     pass
 
 
+def normalize_manifest_destination(value: Any) -> Optional[Dict[str, Any]]:
+    """Normalize destination payloads; return None for invalid shapes."""
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        return None
+    normalized: Dict[str, Any] = {}
+    for raw_key, raw_value in value.items():
+        if not isinstance(raw_key, str):
+            continue
+        key = raw_key.strip()
+        if not key:
+            continue
+        normalized[key] = raw_value
+    normalized["kind"] = kind.strip()
+    return normalized
+
+
 @dataclasses.dataclass
 class ManifestRepo:
     id: str
@@ -49,6 +68,7 @@ class ManifestRepo:
     branch: Optional[str] = None
     display_name: Optional[str] = None
     worktree_setup_commands: Optional[List[str]] = None
+    destination: Optional[Dict[str, Any]] = None
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         rel = _relative_to_hub_root(hub_root, self.path)
@@ -69,6 +89,9 @@ class ManifestRepo:
             payload["worktree_setup_commands"] = [
                 str(cmd) for cmd in self.worktree_setup_commands if str(cmd).strip()
             ]
+        destination = normalize_manifest_destination(self.destination)
+        if destination is not None:
+            payload["destination"] = destination
         return payload
 
 
@@ -101,6 +124,7 @@ class Manifest:
         worktree_of: Optional[str] = None,
         branch: Optional[str] = None,
         worktree_setup_commands: Optional[List[str]] = None,
+        destination: Optional[Dict[str, Any]] = None,
     ) -> ManifestRepo:
         base_name = display_name or repo_id or repo_path.name
         repo_id = sanitize_repo_id(repo_id or base_name)
@@ -126,6 +150,7 @@ class Manifest:
                 if worktree_setup_commands
                 else None
             ),
+            destination=normalize_manifest_destination(destination),
         )
         self.repos.append(repo)
         return repo
@@ -202,6 +227,7 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
                     ]
                     or None
                 ),
+                destination=normalize_manifest_destination(entry.get("destination")),
             )
         )
     return Manifest(version=MANIFEST_VERSION, repos=repos)

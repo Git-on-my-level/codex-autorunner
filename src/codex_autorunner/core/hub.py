@@ -15,8 +15,10 @@ from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
 from ..manifest import (
     Manifest,
+    ManifestRepo,
     ensure_unique_repo_id,
     load_manifest,
+    normalize_manifest_destination,
     sanitize_repo_id,
     save_manifest,
 )
@@ -24,6 +26,10 @@ from ..tickets.outbox import set_lifecycle_emitter
 from .archive import archive_worktree_snapshot, build_snapshot_id
 from .chat_bindings import repo_has_active_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
+from .destinations import (
+    default_local_destination,
+    resolve_effective_repo_destination,
+)
 from .git_utils import (
     GitError,
     git_available,
@@ -117,6 +123,9 @@ class RepoSnapshot:
     last_run_finished_at: Optional[str]
     last_exit_code: Optional[int]
     runner_pid: Optional[int]
+    effective_destination: Dict[str, Any] = dataclasses.field(
+        default_factory=default_local_destination
+    )
     chat_bound: bool = False
     chat_bound_thread_count: int = 0
 
@@ -146,6 +155,7 @@ class RepoSnapshot:
             "last_run_finished_at": self.last_run_finished_at,
             "last_exit_code": self.last_exit_code,
             "runner_pid": self.runner_pid,
+            "effective_destination": self.effective_destination,
             "chat_bound": self.chat_bound,
             "chat_bound_thread_count": self.chat_bound_thread_count,
         }
@@ -226,6 +236,10 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 last_run_finished_at=entry.get("last_run_finished_at"),
                 last_exit_code=entry.get("last_exit_code"),
                 runner_pid=entry.get("runner_pid"),
+                effective_destination=(
+                    normalize_manifest_destination(entry.get("effective_destination"))
+                    or default_local_destination()
+                ),
             )
             repos.append(repo)
         except Exception as exc:
@@ -1305,9 +1319,10 @@ class HubSupervisor:
         return manifest, records
 
     def _build_snapshots(self, records: List[DiscoveryRecord]) -> List[RepoSnapshot]:
+        repos_by_id = {record.repo.id: record.repo for record in records}
         snapshots: List[RepoSnapshot] = []
         for record in records:
-            snapshots.append(self._snapshot_from_record(record))
+            snapshots.append(self._snapshot_from_record(record, repos_by_id))
         return snapshots
 
     def _prune_pinned_parent_repo_ids(self, snapshots: List[RepoSnapshot]) -> List[str]:
@@ -1320,7 +1335,8 @@ class HubSupervisor:
         record = next((r for r in records if r.repo.id == repo_id), None)
         if not record:
             raise ValueError(f"Repo {repo_id} not found in manifest")
-        snapshot = self._snapshot_from_record(record)
+        repos_by_id = {entry.repo.id: entry.repo for entry in records}
+        snapshot = self._snapshot_from_record(record, repos_by_id)
         self.list_repos(use_cache=False)
         return snapshot
 
@@ -1673,7 +1689,11 @@ class HubSupervisor:
             processed,
         )
 
-    def _snapshot_from_record(self, record: DiscoveryRecord) -> RepoSnapshot:
+    def _snapshot_from_record(
+        self,
+        record: DiscoveryRecord,
+        repos_by_id: Optional[Dict[str, ManifestRepo]] = None,
+    ) -> RepoSnapshot:
         repo_path = record.absolute_path
         lock_path = repo_path / ".codex-autorunner" / "lock"
         lock_status = read_lock_status(lock_path)
@@ -1688,6 +1708,10 @@ class HubSupervisor:
 
         status = self._derive_status(record, lock_status, runner_state)
         last_run_id = runner_state.last_run_id if runner_state else None
+        repo_index = repos_by_id or {record.repo.id: record.repo}
+        effective_destination = resolve_effective_repo_destination(
+            record.repo, repo_index
+        ).to_dict()
         return RepoSnapshot(
             id=record.repo.id,
             path=repo_path,
@@ -1713,6 +1737,7 @@ class HubSupervisor:
             ),
             last_exit_code=runner_state.last_exit_code if runner_state else None,
             runner_pid=runner_state.runner_pid if runner_state else None,
+            effective_destination=effective_destination,
         )
 
     def _run_worktree_setup_commands(

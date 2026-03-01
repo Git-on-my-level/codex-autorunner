@@ -81,6 +81,9 @@ def _stub_doctor_checks(monkeypatch):
     monkeypatch.setattr(doctor_cmd, "discord_doctor_checks", lambda *_a, **_k: [])
     monkeypatch.setattr(doctor_cmd, "pma_doctor_checks", lambda *_a, **_k: [])
     monkeypatch.setattr(doctor_cmd, "hub_worktree_doctor_checks", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        doctor_cmd, "hub_destination_doctor_checks", lambda *_a, **_k: []
+    )
     monkeypatch.setattr(doctor_cmd, "chat_doctor_checks", _chat_doctor_checks)
     return chat_calls
 

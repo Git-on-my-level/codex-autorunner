@@ -27,6 +27,11 @@ All durable artifacts must live under one of these roots:
 - `archive/` - Worktree snapshots
 - `bin/` - Generated helper scripts
 - `workspace/` - Workspace directory
+- `app_server_workspaces/` - App-server supervisor/workspace state when the effective destination is `docker`
+
+**Notable repo-local artifacts**:
+- `flows/<run_id>/chat/inbound.jsonl` - Mirrored inbound chat events for a flow run
+- `flows/<run_id>/chat/outbound.jsonl` - Mirrored outbound chat events for a flow run
 
 **Resolution**: `resolve_repo_state_root(repo_root)` in `core/state_roots.py`
 
@@ -37,11 +42,14 @@ All durable artifacts must live under one of these roots:
 **Purpose**: Hub-level state for multi-repo management.
 
 **Contents**:
-- `manifest.yml` - Managed repositories list
+- `manifest.yml` - Managed repositories list (including repo/worktree `destination` config)
 - `hub_state.json` - Hub state
 - `config.yml` - Hub config
 - `codex-autorunner-hub.log` - Hub logs
 - `templates/` - Hub-scoped templates
+- `pma/delivery_targets.json` - PMA delivery target intent + per-target delivery bookkeeping
+- `chat/channel_directory.json` - Derived cross-platform channel directory cache
+- `pma/deliveries.jsonl` - PMA delivery mirror log (when local mirroring is enabled)
 
 **Resolution**: Hub root is typically the hub's repo root, using repo-local patterns.
 
@@ -55,7 +63,13 @@ All durable artifacts must live under one of these roots:
 - `update_cache/` - Cached update artifacts
 - `update_status.json` - Update status
 - `locks/` - Cross-repo locks (e.g., telegram bot lock)
-- `workspaces/` - App-server workspaces
+- `workspaces/` - App-server workspaces (default for non-docker destinations)
+
+**Docker destination override**:
+- When a repo/worktree runs with effective destination `docker`, supervisor state root is forced to:
+  - `<repo_root>/.codex-autorunner/app_server_workspaces`
+- Rationale: docker-wrapped commands execute inside the repo bind mount, so state must be writable and visible from that mount.
+- This still satisfies the canonical state contract because the override remains under repo-local `.codex-autorunner/`.
 
 **Resolution**: `resolve_global_state_root()` in `core/state_roots.py`
 

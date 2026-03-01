@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,98 @@ async def test_flow_stop_defaults_latest_active(
 
     assert controller.stop_calls == [run_running]
     assert any(f"Stopped run `{run_running}`" in text for text in handler.sent)
+    inbound_path = (
+        tmp_path
+        / ".codex-autorunner"
+        / "flows"
+        / run_running
+        / "chat"
+        / "inbound.jsonl"
+    )
+    outbound_path = (
+        tmp_path
+        / ".codex-autorunner"
+        / "flows"
+        / run_running
+        / "chat"
+        / "outbound.jsonl"
+    )
+    inbound_records = [
+        json.loads(line)
+        for line in inbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    outbound_records = [
+        json.loads(line)
+        for line in outbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert inbound_records[-1]["event_type"] == "flow_stop_command"
+    assert inbound_records[-1]["kind"] == "command"
+    assert outbound_records[-1]["event_type"] == "flow_stop_notice"
+    assert outbound_records[-1]["kind"] == "notice"
+
+
+@pytest.mark.anyio
+async def test_flow_resume_mirrors_chat_inbound_and_outbound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _init_store(tmp_path, monkeypatch)
+    run_id = str(uuid.uuid4())
+    _create_run(store, run_id, FlowRunStatus.PAUSED)
+    store.close()
+
+    controller = _ControllerStub()
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        flows_module, "_get_ticket_controller", lambda _root: controller
+    )
+    monkeypatch.setattr(
+        flows_module, "_spawn_flow_worker", lambda _root, run: spawned.append(run)
+    )
+
+    handler = _FlowLifecycleHandler()
+    await handler._handle_flow_resume(_message(), tmp_path, argv=[])
+
+    assert controller.resume_calls == [run_id]
+    assert spawned == [run_id]
+
+    inbound_path = (
+        tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "inbound.jsonl"
+    )
+    outbound_path = (
+        tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "outbound.jsonl"
+    )
+    assert inbound_path.exists()
+    assert outbound_path.exists()
+
+    inbound_records = [
+        json.loads(line)
+        for line in inbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    outbound_records = [
+        json.loads(line)
+        for line in outbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(inbound_records) == 1
+    assert len(outbound_records) == 1
+    assert inbound_records[0]["event_type"] == "flow_resume_command"
+    assert inbound_records[0]["kind"] == "command"
+    assert inbound_records[0]["actor"] == "user"
+    assert outbound_records[0]["event_type"] == "flow_resume_notice"
+    assert outbound_records[0]["kind"] == "notice"
+    assert outbound_records[0]["actor"] == "car"
+    assert inbound_records[0]["meta"]["run_id"] == run_id
+    assert outbound_records[0]["meta"]["run_id"] == run_id
+
+    with FlowStore(tmp_path / ".codex-autorunner" / "flows.db") as verify_store:
+        artifact_kinds = {
+            artifact.kind for artifact in verify_store.get_artifacts(run_id)
+        }
+    assert "chat_inbound" in artifact_kinds
+    assert "chat_outbound" in artifact_kinds
 
 
 @pytest.mark.anyio
@@ -205,6 +298,75 @@ async def test_flow_archive_defaults_latest_paused(
         assert store.get_flow_run(run_paused) is None
     finally:
         store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_reply_mirrors_chat_inbound_and_outbound(
+    tmp_path: Path,
+) -> None:
+    run_id = str(uuid.uuid4())
+    paused_record = SimpleNamespace(
+        id=run_id, status=FlowRunStatus.PAUSED, input_data={}
+    )
+
+    async def _get_topic(_key: str):
+        return SimpleNamespace(workspace_path=str(tmp_path))
+
+    async def _write_user_reply(
+        _repo_root: Path,
+        _run_id: str,
+        _run_record: object,
+        _message: TelegramMessage,
+        _text: str,
+    ) -> tuple[bool, str]:
+        return True, f"Reply saved for {run_id}"
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    handler = _FlowLifecycleHandler()
+    handler._store = SimpleNamespace(get_topic=_get_topic)
+    handler._ticket_flow_pause_targets = {}
+    handler._get_paused_ticket_flow = lambda *_args, **_kwargs: (run_id, paused_record)  # type: ignore[assignment]
+    handler._write_user_reply_from_telegram = _write_user_reply  # type: ignore[assignment]
+    handler._resolve_topic_key = _resolve_topic_key  # type: ignore[assignment]
+
+    message = TelegramMessage(
+        update_id=2,
+        message_id=11,
+        chat_id=999,
+        thread_id=123,
+        from_user_id=1,
+        text="/flow reply hello",
+        date=None,
+        is_topic_message=True,
+    )
+    await handler._handle_reply(message, "hello")
+
+    inbound_path = (
+        tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "inbound.jsonl"
+    )
+    outbound_path = (
+        tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "outbound.jsonl"
+    )
+    assert inbound_path.exists()
+    assert outbound_path.exists()
+    inbound_records = [
+        json.loads(line)
+        for line in inbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    outbound_records = [
+        json.loads(line)
+        for line in outbound_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert inbound_records[-1]["event_type"] == "flow_reply_command"
+    assert inbound_records[-1]["kind"] == "command"
+    assert inbound_records[-1]["actor"] == "user"
+    assert outbound_records[-1]["event_type"] == "flow_reply_notice"
+    assert outbound_records[-1]["kind"] == "notice"
+    assert outbound_records[-1]["actor"] == "car"
 
 
 @pytest.mark.anyio

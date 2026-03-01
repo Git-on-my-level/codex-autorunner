@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_sink import PmaActiveSinkStore
 
 
@@ -54,3 +55,106 @@ def test_set_telegram_preserves_last_delivery_for_same_target(tmp_path: Path) ->
 
     payload = store.set_telegram(chat_id=111, thread_id=222)
     assert payload["last_delivery_turn_id"] == "turn-42"
+
+
+def test_set_web_preserves_non_web_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    local_path = hub_root / ".codex-autorunner" / "pma" / "local_sink.jsonl"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "chat", "platform": "telegram", "chat_id": "111"},
+            {"kind": "local", "path": str(local_path)},
+        ]
+    )
+    assert targets_store.mark_delivered("chat:telegram:111", "turn-42") is True
+
+    payload = PmaActiveSinkStore(hub_root).set_web()
+    assert payload["kind"] == "web"
+
+    state = targets_store.load()
+    assert state["targets"] == [
+        {"kind": "chat", "platform": "telegram", "chat_id": "111"},
+        {"kind": "local", "path": str(local_path)},
+        {"kind": "web"},
+    ]
+    assert state["active_target_key"] == "web"
+    assert state["last_delivery_by_target"]["chat:telegram:111"] == "turn-42"
+
+
+def test_set_chat_preserves_non_chat_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    local_path = hub_root / ".codex-autorunner" / "pma" / "local_sink.jsonl"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
+            {"kind": "local", "path": str(local_path)},
+            {"kind": "web"},
+        ]
+    )
+
+    payload = PmaActiveSinkStore(hub_root).set_chat("discord", chat_id="new-channel")
+    assert payload["kind"] == "chat"
+    assert payload["platform"] == "discord"
+    assert payload["chat_id"] == "new-channel"
+
+    state = targets_store.load()
+    assert state["targets"] == [
+        {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
+        {"kind": "local", "path": str(local_path)},
+        {"kind": "web"},
+        {"kind": "chat", "platform": "discord", "chat_id": "new-channel"},
+    ]
+    assert state["active_target_key"] == "chat:discord:new-channel"
+
+
+def test_set_telegram_preserves_non_chat_targets(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    local_path = hub_root / ".codex-autorunner" / "pma" / "local_sink.jsonl"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
+            {"kind": "local", "path": str(local_path)},
+            {"kind": "web"},
+        ]
+    )
+
+    payload = PmaActiveSinkStore(hub_root).set_telegram(chat_id=111, thread_id=222)
+    assert payload["kind"] == "telegram"
+    assert payload["chat_id"] == 111
+    assert payload["thread_id"] == 222
+
+    state = targets_store.load()
+    assert state["targets"] == [
+        {"kind": "chat", "platform": "discord", "chat_id": "old-channel"},
+        {"kind": "local", "path": str(local_path)},
+        {"kind": "web"},
+        {
+            "kind": "chat",
+            "platform": "telegram",
+            "chat_id": "111",
+            "thread_id": "222",
+        },
+    ]
+    assert state["active_target_key"] == "chat:telegram:111:222"
+
+
+def test_load_does_not_fallback_to_first_target_when_active_is_unset(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    targets_store = PmaDeliveryTargetsStore(hub_root)
+    targets_store.set_targets(
+        [
+            {"kind": "web"},
+            {"kind": "chat", "platform": "discord", "chat_id": "123"},
+        ]
+    )
+
+    sink_store = PmaActiveSinkStore(hub_root)
+    assert sink_store.get_active_target_key() is None
+    assert sink_store.get_active_target() is None
+    assert sink_store.load() is None
+    assert sink_store.mark_delivered("turn-1") is False

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
-from .locks import file_lock
+from .pma_delivery_targets import PmaDeliveryTargetsStore, target_key
 from .time_utils import now_iso
-from .utils import atomic_write
 
 PMA_ACTIVE_SINK_FILENAME = "active_sink.json"
 
@@ -17,24 +15,31 @@ logger = logging.getLogger(__name__)
 class PmaActiveSinkStore:
     def __init__(self, hub_root: Path) -> None:
         self._path = hub_root / ".codex-autorunner" / "pma" / PMA_ACTIVE_SINK_FILENAME
-
-    def _lock_path(self) -> Path:
-        return self._path.with_suffix(self._path.suffix + ".lock")
+        self._delivery_targets = PmaDeliveryTargetsStore(hub_root)
 
     def load(self) -> Optional[dict[str, Any]]:
-        with file_lock(self._lock_path()):
-            return self._load_unlocked()
+        return self._payload_from_state(self._delivery_targets.load())
+
+    def get_active_target_key(self) -> Optional[str]:
+        return self._delivery_targets.get_active_target_key()
+
+    def get_active_target(self) -> Optional[dict[str, Any]]:
+        return self._delivery_targets.get_active_target()
+
+    def set_active_target(self, target_or_key: Mapping[str, Any] | str) -> bool:
+        return self._delivery_targets.set_active_target(target_or_key)
 
     def set_web(self) -> dict[str, Any]:
-        payload = {
+        state = self._upsert_target_and_set_active({"kind": "web"})
+        payload = self._payload_from_state(state)
+        if payload is not None:
+            return payload
+        return {
             "version": 1,
             "kind": "web",
             "updated_at": now_iso(),
             "last_delivery_turn_id": None,
         }
-        with file_lock(self._lock_path()):
-            self._save_unlocked(payload)
-        return payload
 
     def set_telegram(
         self,
@@ -43,27 +48,32 @@ class PmaActiveSinkStore:
         thread_id: Optional[int],
         topic_key: Optional[str] = None,
     ) -> dict[str, Any]:
-        target = (
-            "telegram",
-            str(int(chat_id)),
-            str(int(thread_id)) if thread_id is not None else None,
-        )
+        target: dict[str, Any] = {
+            "kind": "chat",
+            "platform": "telegram",
+            "chat_id": str(int(chat_id)),
+        }
+        if thread_id is not None:
+            target["thread_id"] = str(int(thread_id))
+        if topic_key:
+            target["conversation_key"] = topic_key
+        state = self._upsert_target_and_set_active(target)
+        updated_at = state.get("updated_at")
+        if not isinstance(updated_at, str) or not updated_at:
+            updated_at = now_iso()
+
         payload: dict[str, Any] = {
             "version": 1,
             "kind": "telegram",
             "chat_id": int(chat_id),
             "thread_id": int(thread_id) if thread_id is not None else None,
-            "updated_at": now_iso(),
-            "last_delivery_turn_id": None,
+            "updated_at": updated_at,
+            "last_delivery_turn_id": self._last_delivery_for_target(
+                target, state=state
+            ),
         }
         if topic_key:
             payload["topic_key"] = topic_key
-        with file_lock(self._lock_path()):
-            existing = self._load_unlocked()
-            payload["last_delivery_turn_id"] = self._last_delivery_for_target(
-                existing, target
-            )
-            self._save_unlocked(payload)
         return payload
 
     def set_chat(
@@ -80,6 +90,7 @@ class PmaActiveSinkStore:
             raise ValueError("platform must be non-empty")
         if not chat_id_norm:
             raise ValueError("chat_id must be non-empty")
+
         thread_id_norm = (
             str(thread_id).strip() if isinstance(thread_id, str) and thread_id else None
         )
@@ -88,111 +99,180 @@ class PmaActiveSinkStore:
             if isinstance(conversation_key, str) and conversation_key
             else None
         )
-        target = (platform_norm, chat_id_norm, thread_id_norm)
-        with file_lock(self._lock_path()):
-            existing = self._load_unlocked()
-            last_delivery_turn_id = self._last_delivery_for_target(existing, target)
-            payload: dict[str, Any] = {
-                "version": 2,
-                "kind": "chat",
-                "platform": platform_norm,
-                "chat_id": chat_id_norm,
-                "thread_id": thread_id_norm,
-                "updated_at": now_iso(),
-                "last_delivery_turn_id": last_delivery_turn_id,
-            }
-            if conversation_key_norm:
-                payload["conversation_key"] = conversation_key_norm
-            self._save_unlocked(payload)
+
+        target: dict[str, Any] = {
+            "kind": "chat",
+            "platform": platform_norm,
+            "chat_id": chat_id_norm,
+        }
+        if thread_id_norm:
+            target["thread_id"] = thread_id_norm
+        if conversation_key_norm:
+            target["conversation_key"] = conversation_key_norm
+
+        state = self._upsert_target_and_set_active(target)
+        updated_at = state.get("updated_at")
+        if not isinstance(updated_at, str) or not updated_at:
+            updated_at = now_iso()
+
+        payload: dict[str, Any] = {
+            "version": 2,
+            "kind": "chat",
+            "platform": platform_norm,
+            "chat_id": chat_id_norm,
+            "thread_id": thread_id_norm,
+            "updated_at": updated_at,
+            "last_delivery_turn_id": self._last_delivery_for_target(
+                target, state=state
+            ),
+        }
+        if conversation_key_norm:
+            payload["conversation_key"] = conversation_key_norm
         return payload
 
     def clear(self) -> None:
-        with file_lock(self._lock_path()):
-            try:
-                self._path.unlink()
-            except FileNotFoundError:
-                return
-            except OSError as exc:
-                logger.warning("Failed to clear PMA active sink: %s", exc)
+        self._delivery_targets.set_targets([])
+        try:
+            self._path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning("Failed to clear PMA active sink: %s", exc)
 
     def mark_delivered(self, turn_id: str) -> bool:
         if not isinstance(turn_id, str) or not turn_id:
             return False
-        with file_lock(self._lock_path()):
-            payload = self._load_unlocked()
-            if not isinstance(payload, dict):
-                return False
-            if payload.get("last_delivery_turn_id") == turn_id:
-                return False
-            payload["last_delivery_turn_id"] = turn_id
-            payload["updated_at"] = now_iso()
-            self._save_unlocked(payload)
-        return True
+        state = self._delivery_targets.load()
+        target = self._active_target(state)
+        if target is None:
+            return False
+        key = target_key(target)
+        if not isinstance(key, str):
+            return False
+        return self._delivery_targets.mark_delivered(key, turn_id)
 
-    def _load_unlocked(self) -> Optional[dict[str, Any]]:
-        if not self._path.exists():
+    def _payload_from_state(self, state: dict[str, Any]) -> Optional[dict[str, Any]]:
+        target = self._active_target(state)
+        if target is None:
             return None
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Failed to read PMA active sink: %s", exc)
-            return None
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        return payload
+        key = target_key(target)
+        last_delivery = None
+        if isinstance(key, str):
+            raw_last = (state.get("last_delivery_by_target") or {}).get(key)
+            if isinstance(raw_last, str) and raw_last:
+                last_delivery = raw_last
+        updated_at = state.get("updated_at")
+        if not isinstance(updated_at, str) or not updated_at:
+            updated_at = now_iso()
+        return self._to_legacy_payload(
+            target=target,
+            updated_at=updated_at,
+            last_delivery_turn_id=last_delivery,
+        )
 
-    def _save_unlocked(self, payload: dict[str, Any]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(self._path, json.dumps(payload, indent=2) + "\n")
+    def _active_target(self, state: dict[str, Any]) -> Optional[dict[str, Any]]:
+        targets = state.get("targets")
+        if not isinstance(targets, list):
+            return None
+        active_target_key = state.get("active_target_key")
+        if isinstance(active_target_key, str) and active_target_key:
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+                if target_key(target) == active_target_key:
+                    return target
+        return None
 
     def _last_delivery_for_target(
-        self,
-        payload: Optional[dict[str, Any]],
-        target: tuple[str, str, Optional[str]],
+        self, target: dict[str, Any], *, state: Optional[dict[str, Any]] = None
     ) -> Optional[str]:
-        if not isinstance(payload, dict):
+        if state is None:
+            state = self._delivery_targets.load()
+        key = target_key(target)
+        if not isinstance(key, str):
             return None
-        payload_target = self._target_key(payload)
-        if payload_target != target:
-            return None
-        last_delivery_turn_id = payload.get("last_delivery_turn_id")
+        last_delivery_turn_id = (state.get("last_delivery_by_target") or {}).get(key)
         if isinstance(last_delivery_turn_id, str) and last_delivery_turn_id:
             return last_delivery_turn_id
         return None
 
-    def _target_key(
-        self, payload: dict[str, Any]
-    ) -> Optional[tuple[str, str, Optional[str]]]:
-        kind = payload.get("kind")
-        if kind == "telegram":
-            chat_id = payload.get("chat_id")
-            if not isinstance(chat_id, int):
-                return None
-            thread_id = payload.get("thread_id")
-            if thread_id is not None and not isinstance(thread_id, int):
-                thread_norm: Optional[str] = None
-            else:
-                thread_norm = str(thread_id) if thread_id is not None else None
-            return ("telegram", str(chat_id), thread_norm)
+    def _upsert_target_and_set_active(
+        self, target: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        self._delivery_targets.add_target(dict(target))
+        key = target_key(target)
+        if isinstance(key, str):
+            self._delivery_targets.set_active_target(key)
+        return self._delivery_targets.load()
 
+    def _to_legacy_payload(
+        self,
+        *,
+        target: dict[str, Any],
+        updated_at: str,
+        last_delivery_turn_id: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        kind = target.get("kind")
+        if kind == "web":
+            return {
+                "version": 1,
+                "kind": "web",
+                "updated_at": updated_at,
+                "last_delivery_turn_id": last_delivery_turn_id,
+            }
         if kind != "chat":
             return None
-        platform = payload.get("platform")
-        chat_id = payload.get("chat_id")
-        if not isinstance(platform, str) or not platform.strip():
+
+        platform = target.get("platform")
+        chat_id = target.get("chat_id")
+        thread_id = target.get("thread_id")
+        conversation_key = target.get("conversation_key")
+
+        if not isinstance(platform, str) or not platform:
             return None
-        if not isinstance(chat_id, str) or not chat_id.strip():
+        if not isinstance(chat_id, str) or not chat_id:
             return None
-        thread_id = payload.get("thread_id")
-        if isinstance(thread_id, str) and thread_id.strip():
-            thread_norm = thread_id.strip()
-        else:
-            thread_norm = None
-        return (platform.strip().lower(), chat_id.strip(), thread_norm)
+
+        if platform == "telegram":
+            try:
+                chat_id_int = int(chat_id)
+            except ValueError:
+                chat_id_int = None
+
+            if chat_id_int is not None:
+                thread_id_int: Optional[int] = None
+                if isinstance(thread_id, str) and thread_id:
+                    try:
+                        thread_id_int = int(thread_id)
+                    except ValueError:
+                        thread_id_int = None
+
+                payload: dict[str, Any] = {
+                    "version": 1,
+                    "kind": "telegram",
+                    "chat_id": chat_id_int,
+                    "thread_id": thread_id_int,
+                    "updated_at": updated_at,
+                    "last_delivery_turn_id": last_delivery_turn_id,
+                }
+                if isinstance(conversation_key, str) and conversation_key:
+                    payload["topic_key"] = conversation_key
+                return payload
+
+        chat_payload: dict[str, Any] = {
+            "version": 2,
+            "kind": "chat",
+            "platform": platform,
+            "chat_id": chat_id,
+            "thread_id": (
+                thread_id if isinstance(thread_id, str) and thread_id else None
+            ),
+            "updated_at": updated_at,
+            "last_delivery_turn_id": last_delivery_turn_id,
+        }
+        if isinstance(conversation_key, str) and conversation_key:
+            chat_payload["conversation_key"] = conversation_key
+        return chat_payload
 
 
 __all__ = ["PmaActiveSinkStore", "PMA_ACTIVE_SINK_FILENAME"]

@@ -12,6 +12,7 @@ from starlette.types import ASGIApp
 
 from ....core.chat_bindings import active_chat_binding_counts
 from ....core.config import ConfigError
+from ....core.destinations import resolve_effective_repo_destination
 from ....core.logging_utils import safe_log
 from ....core.pma_context import get_latest_ticket_flow_run_state
 from ....core.request_context import get_request_id
@@ -20,6 +21,11 @@ from ....core.ticket_flow_summary import (
     build_ticket_flow_display,
     build_ticket_flow_summary,
 )
+from ....integrations.chat.channel_directory import (
+    ChannelDirectoryStore,
+    channel_entry_key,
+)
+from ....manifest import load_manifest, normalize_manifest_destination, save_manifest
 from ..app_state import HubAppContext
 from ..schemas import (
     HubArchiveWorktreeRequest,
@@ -27,6 +33,7 @@ from ..schemas import (
     HubCleanupWorktreeRequest,
     HubCreateRepoRequest,
     HubCreateWorktreeRequest,
+    HubDestinationSetRequest,
     HubJobResponse,
     HubPinRepoRequest,
     HubRemoveRepoRequest,
@@ -323,6 +330,26 @@ def build_hub_repo_routes(
     def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict]:
         return build_ticket_flow_summary(repo_path, include_failure=True)
 
+    def _resolve_manifest_repo(repo_id: str):
+        manifest = load_manifest(context.config.manifest_path, context.config.root)
+        repos_by_id = {entry.id: entry for entry in manifest.repos}
+        repo = repos_by_id.get(repo_id)
+        if repo is None:
+            raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
+        return manifest, repos_by_id, repo
+
+    def _destination_payload(repo, repos_by_id: dict[str, Any]) -> dict[str, Any]:
+        resolution = resolve_effective_repo_destination(repo, repos_by_id)
+        return {
+            "repo_id": repo.id,
+            "kind": repo.kind,
+            "worktree_of": repo.worktree_of,
+            "configured_destination": repo.destination,
+            "effective_destination": resolution.to_dict(),
+            "source": resolution.source,
+            "issues": list(resolution.issues),
+        }
+
     @router.get("/hub/repos")
     async def list_repos():
         safe_log(context.logger, logging.INFO, "Hub list_repos")
@@ -489,6 +516,106 @@ def build_hub_repo_routes(
             "pinned": requested,
             "pinned_parent_repo_ids": pinned_parent_repo_ids,
         }
+
+    @router.get("/hub/repos/{repo_id}/destination")
+    async def get_repo_destination(repo_id: str):
+        safe_log(context.logger, logging.INFO, "Hub destination show repo=%s" % repo_id)
+        manifest, repos_by_id, repo = await asyncio.to_thread(
+            _resolve_manifest_repo, repo_id
+        )
+        return _destination_payload(repo, repos_by_id)
+
+    @router.post("/hub/repos/{repo_id}/destination")
+    async def set_repo_destination(repo_id: str, payload: HubDestinationSetRequest):
+        normalized_kind = payload.kind.strip().lower()
+        destination: dict[str, Any]
+        if normalized_kind == "local":
+            destination = {"kind": "local"}
+        elif normalized_kind == "docker":
+            image = (payload.image or "").strip()
+            if not image:
+                raise HTTPException(
+                    status_code=400, detail="image is required for docker destination"
+                )
+            destination = {"kind": "docker", "image": image}
+            container_name = (payload.container_name or "").strip()
+            if container_name:
+                destination["container_name"] = container_name
+            env_passthrough = [
+                str(item).strip()
+                for item in (payload.env_passthrough or [])
+                if str(item).strip()
+            ]
+            if env_passthrough:
+                destination["env_passthrough"] = env_passthrough
+            mounts: list[dict[str, str]] = []
+            for item in payload.mounts or []:
+                source = str((item or {}).get("source") or "").strip()
+                target = str((item or {}).get("target") or "").strip()
+                if not source or not target:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Each mount requires non-empty source and target",
+                    )
+                mounts.append({"source": source, "target": target})
+            if mounts:
+                destination["mounts"] = mounts
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unsupported destination kind: {payload.kind!r}. "
+                    "Use 'local' or 'docker'."
+                ),
+            )
+
+        normalized_destination = normalize_manifest_destination(destination)
+        if normalized_destination is None:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid destination payload: {destination!r}"
+            )
+
+        manifest, repos_by_id, repo = await asyncio.to_thread(
+            _resolve_manifest_repo, repo_id
+        )
+        repo.destination = normalized_destination
+        await asyncio.to_thread(
+            save_manifest,
+            context.config.manifest_path,
+            manifest,
+            context.config.root,
+        )
+
+        snapshots = await asyncio.to_thread(
+            context.supervisor.list_repos, use_cache=False
+        )
+        await mount_manager.refresh_mounts(snapshots)
+        return _destination_payload(repo, repos_by_id)
+
+    @router.get("/hub/chat/channels")
+    async def list_chat_channels(query: Optional[str] = None, limit: int = 100):
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        if limit > 1000:
+            raise HTTPException(status_code=400, detail="limit must be <= 1000")
+
+        store = ChannelDirectoryStore(context.config.root)
+        entries = await asyncio.to_thread(store.list_entries, query=query, limit=limit)
+        rows: list[dict[str, Any]] = []
+        for entry in entries:
+            key = channel_entry_key(entry)
+            if not isinstance(key, str):
+                continue
+            rows.append(
+                {
+                    "key": key,
+                    "display": entry.get("display"),
+                    "seen_at": entry.get("seen_at"),
+                    "meta": entry.get("meta"),
+                    "entry": entry,
+                }
+            )
+        return {"entries": rows}
 
     @router.get("/hub/repos/{repo_id}/remove-check")
     async def remove_repo_check(repo_id: str):

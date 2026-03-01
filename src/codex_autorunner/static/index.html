@@ -113,6 +113,24 @@
         <div class="muted small">Loading…</div>
       </div>
     </section>
+    <section class="hub-repo-panel">
+      <div class="hub-panel-header">
+        <div class="hub-panel-title">
+          <span class="label">Channel Directory</span>
+          <div class="form-group">
+            <input id="hub-channel-query" type="text" placeholder="Search key/display/meta…" spellcheck="false" />
+          </div>
+          <div class="form-group">
+            <input id="hub-channel-limit" type="number" min="1" max="1000" step="1" value="100" placeholder="Limit" />
+          </div>
+        </div>
+        <div class="hub-panel-actions">
+          <button class="ghost sm" id="hub-channel-search" type="button">Search</button>
+          <button class="ghost sm" id="hub-channel-refresh" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="hub-channel-list muted small" id="hub-channel-list">Loading channel directory…</div>
+    </section>
   </div>
   <div class="hub-shell hidden" id="pma-shell" data-pma-view="chat">
     <header class="hub-hero pma-hero">
@@ -158,6 +176,19 @@
             thread</button>
           <span class="pma-status-pill" id="pma-chat-status">idle</span>
         </div>
+      </div>
+      <div class="pma-targets-panel">
+        <div class="pma-targets-header">
+          <span class="pma-targets-label">Delivery targets</span>
+          <button class="pma-icon-btn-small" id="pma-targets-refresh" title="Refresh targets">↻</button>
+          <button class="ghost sm pma-targets-clear" id="pma-targets-clear" type="button">Clear</button>
+        </div>
+        <div class="pma-targets-input-row">
+          <input id="pma-target-ref-input" class="pma-target-ref-input" type="text"
+            placeholder="web | local:path | telegram:chat[:thread] | discord:channel" spellcheck="false" />
+          <button class="primary sm" id="pma-target-add" type="button">Add</button>
+        </div>
+        <div class="pma-targets-list muted small" id="pma-targets-list">Loading targets…</div>
       </div>
     </section>
     <section class="pma-chat-section" id="pma-chat-section">

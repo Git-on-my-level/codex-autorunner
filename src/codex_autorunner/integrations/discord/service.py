@@ -43,7 +43,8 @@ from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
-from ...core.pma_sink import PmaActiveSinkStore
+from ...core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
+from ...core.pma_target_refs import parse_pma_target_ref, pma_targets_usage
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
@@ -82,6 +83,7 @@ from ...integrations.app_server.threads import (
     PMA_OPENCODE_KEY,
 )
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
+from ...integrations.chat.channel_directory import ChannelDirectoryStore
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
@@ -93,6 +95,7 @@ from ...integrations.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
+from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
@@ -315,6 +318,7 @@ class DiscordBotService:
         self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
         self._app_server_lock = asyncio.Lock()
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
+        self._channel_directory_store = ChannelDirectoryStore(self._config.root)
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
         if generated_hub_config.exists():
@@ -574,7 +578,8 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     guild_id=guild_id,
-                    command=command,
+                    command_path=ingress.command_path,
+                    options=ingress.options,
                 )
             else:
                 await self._respond_ephemeral(
@@ -695,6 +700,18 @@ class DiscordBotService:
                         return
 
                 reply_path = self._write_user_reply(workspace_root, paused, reply_text)
+                run_mirror = self._flow_run_mirror(workspace_root)
+                run_mirror.mirror_inbound(
+                    run_id=paused.id,
+                    platform="discord",
+                    event_type="flow_reply_message",
+                    kind="command",
+                    actor="user",
+                    text=reply_text,
+                    chat_id=channel_id,
+                    thread_id=event.thread.thread_id,
+                    message_id=event.message.message_id,
+                )
                 controller = build_ticket_flow_controller(workspace_root)
                 try:
                     updated = await controller.resume_flow(paused.id)
@@ -716,6 +733,16 @@ class DiscordBotService:
                 await self._send_channel_message_safe(
                     channel_id,
                     {"content": content},
+                )
+                run_mirror.mirror_outbound(
+                    run_id=updated.id,
+                    platform="discord",
+                    event_type="flow_reply_notice",
+                    kind="notice",
+                    actor="car",
+                    text=content,
+                    chat_id=channel_id,
+                    thread_id=event.thread.thread_id,
                 )
                 return
 
@@ -770,9 +797,8 @@ class DiscordBotService:
                     prompt_text,
                     hub_root=self._config.root,
                 )
-                PmaActiveSinkStore(self._config.root).set_chat(
-                    platform="discord",
-                    chat_id=channel_id,
+                PmaDeliveryTargetsStore(self._config.root).add_target(
+                    self._pma_here_target(channel_id)
                 )
             except Exception as exc:
                 log_event(
@@ -2096,6 +2122,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "plan"):
@@ -2104,6 +2132,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "start"):
@@ -2128,6 +2158,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "stop"):
@@ -2136,6 +2168,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "archive"):
@@ -2144,6 +2178,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             if command_path == ("car", "flow", "recover"):
@@ -2160,6 +2196,8 @@ class DiscordBotService:
                     interaction_token,
                     workspace_root=workspace_root,
                     options=options,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
                 )
                 return
             await self._respond_ephemeral(
@@ -2218,38 +2256,35 @@ class DiscordBotService:
         *,
         channel_id: str,
         guild_id: Optional[str],
-        command: str,
+        command_path: tuple[str, ...],
+        options: dict[str, Any],
     ) -> None:
-        if not self._config.pma_enabled:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "PMA is disabled in hub config. Set pma.enabled: true to enable.",
-            )
-            return
-
-        subcommand = command.split(":")[-1] if ":" in command else "status"
+        subcommand = command_path[1] if len(command_path) > 1 else "status"
         if subcommand == "on":
-            await self._handle_pma_on(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                guild_id=guild_id,
-            )
+            pass
         elif subcommand == "off":
-            await self._handle_pma_off(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
+            pass
         elif subcommand == "status":
-            await self._handle_pma_status(
-                interaction_id, interaction_token, channel_id=channel_id
-            )
+            pass
+        elif subcommand == "targets":
+            pass
+        elif subcommand == "target":
+            pass
         else:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
+                "Unknown PMA subcommand. Use on, off, status, targets, or target.",
             )
+            return
+        await self._handle_pma_command(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            command_path=command_path,
+            options=options,
+        )
 
     async def _sync_application_commands_on_startup(self) -> None:
         registration = self._config.command_registration
@@ -2338,6 +2373,7 @@ class DiscordBotService:
             if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
                 continue
             workspace_root = canonicalize_path(Path(workspace_raw))
+            run_mirror = self._flow_run_mirror(workspace_root)
             snapshot = await asyncio.to_thread(
                 load_latest_paused_ticket_flow_dispatch, workspace_root
             )
@@ -2370,6 +2406,21 @@ class DiscordBotService:
                             operation="send",
                             payload_json={"content": chunk},
                         )
+                    )
+                    run_mirror.mirror_outbound(
+                        run_id=snapshot.run_id,
+                        platform="discord",
+                        event_type="flow_pause_dispatch_notice",
+                        kind="dispatch",
+                        actor="car",
+                        text=chunk,
+                        chat_id=channel_id,
+                        thread_id=binding.get("guild_id"),
+                        message_id=record_id,
+                        meta={
+                            "dispatch_seq": snapshot.dispatch_seq,
+                            "chunk_index": index,
+                        },
                     )
                 except Exception as exc:
                     enqueued = False
@@ -2529,9 +2580,87 @@ class DiscordBotService:
             if event is not None:
                 await self._dispatcher.dispatch(event, self._handle_chat_event)
         elif event_type == "MESSAGE_CREATE":
+            self._record_channel_directory_seen_from_message_payload(payload)
             event = self._chat_adapter.parse_message_event(payload)
             if event is not None:
                 await self._dispatch_chat_event(event)
+
+    def _record_channel_directory_seen_from_message_payload(
+        self, payload: dict[str, Any]
+    ) -> None:
+        channel_id = self._coerce_id(payload.get("channel_id"))
+        if channel_id is None:
+            return
+        guild_id = self._coerce_id(payload.get("guild_id"))
+
+        guild_label = self._first_non_empty_text(
+            payload.get("guild_name"),
+            self._nested_text(payload, "guild", "name"),
+        )
+        channel_label_raw = self._first_non_empty_text(
+            payload.get("channel_name"),
+            self._nested_text(payload, "channel", "name"),
+        )
+        channel_label = (
+            f"#{channel_label_raw.lstrip('#')}"
+            if channel_label_raw is not None
+            else f"#{channel_id}"
+        )
+
+        if guild_id is not None:
+            display = f"{guild_label or f'guild:{guild_id}'} / {channel_label}"
+        else:
+            display = channel_label if channel_label_raw is not None else channel_id
+
+        meta: dict[str, Any] = {}
+        if guild_id is not None:
+            meta["guild_id"] = guild_id
+
+        try:
+            self._channel_directory_store.record_seen(
+                "discord",
+                channel_id,
+                None,
+                display,
+                meta,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_directory.record_failed",
+                channel_id=channel_id,
+                guild_id=guild_id,
+                exc=exc,
+            )
+
+    @staticmethod
+    def _nested_text(payload: dict[str, Any], key: str, field: str) -> Optional[str]:
+        candidate = payload.get(key)
+        if not isinstance(candidate, dict):
+            return None
+        return DiscordBotService._first_non_empty_text(candidate.get(field))
+
+    @staticmethod
+    def _first_non_empty_text(*values: Any) -> Optional[str]:
+        for value in values:
+            if isinstance(value, str):
+                normalized = value.strip()
+                if normalized:
+                    return normalized
+        return None
+
+    @staticmethod
+    def _coerce_id(value: Any) -> Optional[str]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                return normalized
+        return None
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
         if is_component_interaction(interaction_payload):
@@ -2598,6 +2727,7 @@ class DiscordBotService:
                     channel_id=channel_id,
                     guild_id=guild_id,
                     command_path=ingress.command_path,
+                    options=ingress.options,
                 )
                 return
 
@@ -2891,6 +3021,11 @@ class DiscordBotService:
             "/pma on - Enable PMA mode",
             "/pma off - Disable PMA mode",
             "/pma status - Show PMA status",
+            "/pma targets - List PMA delivery targets",
+            "/pma target add <ref> - Add a PMA delivery target",
+            "/pma target rm <ref> - Remove a PMA delivery target",
+            "/pma target clear - Clear PMA delivery targets",
+            "/pma target active [show|set <ref|key>] - Show/set active PMA delivery target",
             "",
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",
@@ -3909,6 +4044,9 @@ class DiscordBotService:
             return None
         return record
 
+    def _flow_run_mirror(self, workspace_root: Path) -> ChatRunMirror:
+        return ChatRunMirror(workspace_root, logger_=self._logger)
+
     @staticmethod
     def _select_default_status_run(
         records: list[FlowRunRecord],
@@ -3927,6 +4065,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
         update_message: bool = False,
     ) -> None:
         run_id_opt = options.get("run_id")
@@ -4042,6 +4182,31 @@ class DiscordBotService:
             f"Worker: {worker_text}",
             f"Current ticket: {current_ticket or '-'}",
         ]
+        response_text = "\n".join(lines)
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=record.id,
+            platform="discord",
+            event_type="flow_status_command",
+            kind="command",
+            actor="user",
+            text="/car flow status",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+            meta={"interaction_token": interaction_token},
+        )
+        run_mirror.mirror_outbound(
+            run_id=record.id,
+            platform="discord",
+            event_type="flow_status_notice",
+            kind="notice",
+            actor="car",
+            text=response_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            meta={"response_type": "ephemeral"},
+        )
 
         status_buttons = build_flow_status_buttons(
             record.id,
@@ -4053,14 +4218,14 @@ class DiscordBotService:
                 await self._update_component_message(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
-                    text="\n".join(lines),
+                    text=response_text,
                     components=status_buttons,
                 )
             else:
                 await self._respond_with_components(
                     interaction_id,
                     interaction_token,
-                    "\n".join(lines),
+                    response_text,
                     status_buttons,
                 )
         else:
@@ -4068,12 +4233,12 @@ class DiscordBotService:
                 await self._update_component_message(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
-                    text="\n".join(lines),
+                    text=response_text,
                     components=[],
                 )
             else:
                 await self._respond_ephemeral(
-                    interaction_id, interaction_token, "\n".join(lines)
+                    interaction_id, interaction_token, response_text
                 )
 
     async def _handle_flow_runs(
@@ -4144,7 +4309,10 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
+        _ = channel_id, guild_id
         issue_ref = options.get("issue_ref")
         if not isinstance(issue_ref, str) or not issue_ref.strip():
             await self._respond_ephemeral(
@@ -4189,7 +4357,10 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
+        _ = channel_id, guild_id
         plan_text = options.get("text")
         if not isinstance(plan_text, str) or not plan_text.strip():
             await self._respond_ephemeral(
@@ -4551,6 +4722,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -4619,6 +4792,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_resume_command",
+            kind="command",
+            actor="user",
+            text="/car flow resume",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         controller = build_ticket_flow_controller(workspace_root)
         try:
             updated = await controller.resume_flow(target.id)
@@ -4630,10 +4815,21 @@ class DiscordBotService:
             workspace_root, updated.id, is_terminal=updated.status.is_terminal()
         )
         self._close_worker_handles(ensure_result)
+        outbound_text = f"Resumed run {updated.id}."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Resumed run {updated.id}.",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="discord",
+            event_type="flow_resume_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
         )
 
     async def _handle_flow_stop(
@@ -4643,6 +4839,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -4707,6 +4905,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_stop_command",
+            kind="command",
+            actor="user",
+            text="/car flow stop",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         controller = build_ticket_flow_controller(workspace_root)
         try:
             updated = await controller.stop_flow(target.id)
@@ -4714,10 +4924,22 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
+        outbound_text = f"Stop requested for run {updated.id} ({updated.status.value})."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Stop requested for run {updated.id} ({updated.status.value}).",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="discord",
+            event_type="flow_stop_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            meta={"status": updated.status.value},
         )
 
     async def _handle_flow_archive(
@@ -4727,6 +4949,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -4788,6 +5012,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_archive_command",
+            kind="command",
+            actor="user",
+            text="/car flow archive",
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         try:
             summary = archive_flow_run_artifacts(
                 workspace_root,
@@ -4799,10 +5035,22 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
+        outbound_text = f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']})."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']}).",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_archive_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            meta={"archived_runs": summary.get("archived_runs")},
         )
 
     async def _handle_flow_reply(
@@ -4812,6 +5060,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         text = options.get("text")
         if not isinstance(text, str) or not text.strip():
@@ -4891,6 +5141,18 @@ class DiscordBotService:
             )
             return
 
+        run_mirror = self._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_reply_command",
+            kind="command",
+            actor="user",
+            text=text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            message_id=interaction_id,
+        )
         reply_path = self._write_user_reply(workspace_root, target, text)
 
         controller = build_ticket_flow_controller(workspace_root)
@@ -4904,10 +5166,23 @@ class DiscordBotService:
             workspace_root, updated.id, is_terminal=updated.status.is_terminal()
         )
         self._close_worker_handles(ensure_result)
+        outbound_text = (
+            f"Reply saved to {reply_path.name} and resumed run {updated.id}."
+        )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Reply saved to {reply_path.name} and resumed run {updated.id}.",
+            outbound_text,
+        )
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="discord",
+            event_type="flow_reply_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
         )
 
     def _write_user_reply(
@@ -5079,6 +5354,7 @@ class DiscordBotService:
         channel_id: str,
         guild_id: Optional[str],
         command_path: tuple[str, ...],
+        options: Optional[dict[str, Any]] = None,
     ) -> None:
         if not self._config.pma_enabled:
             await self._respond_ephemeral(
@@ -5088,6 +5364,7 @@ class DiscordBotService:
             )
             return
 
+        command_options = options or {}
         subcommand = command_path[1] if len(command_path) > 1 else "status"
 
         if subcommand == "on":
@@ -5105,11 +5382,25 @@ class DiscordBotService:
             await self._handle_pma_status(
                 interaction_id, interaction_token, channel_id=channel_id
             )
+        elif subcommand == "targets":
+            await self._handle_pma_targets_list(
+                interaction_id,
+                interaction_token,
+            )
+        elif subcommand == "target":
+            action = command_path[2] if len(command_path) > 2 else ""
+            await self._handle_pma_target_mutation(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                action=action,
+                options=command_options,
+            )
         else:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
+                "Unknown PMA subcommand. Use on, off, status, targets, or target.",
             )
 
     async def _handle_pma_on(
@@ -5148,11 +5439,16 @@ class DiscordBotService:
             pma_prev_repo_id=prev_repo_id,
         )
 
-        sink_store = PmaActiveSinkStore(self._config.root)
-        sink_store.set_chat(
-            platform="discord",
-            chat_id=channel_id,
-        )
+        targets_store = PmaDeliveryTargetsStore(self._config.root)
+        here_target = self._pma_here_target(channel_id)
+        state = targets_store.load()
+        current_targets = [
+            target for target in state.get("targets", []) if isinstance(target, dict)
+        ]
+        if len(current_targets) > 1:
+            targets_store.add_target(here_target)
+        else:
+            targets_store.set_targets([here_target])
 
         hint = (
             "Use /pma off to exit. Previous binding saved."
@@ -5174,14 +5470,6 @@ class DiscordBotService:
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
-            sink_store = PmaActiveSinkStore(self._config.root)
-            sink = sink_store.load()
-            if (
-                sink is not None
-                and sink.get("platform") == "discord"
-                and sink.get("chat_id") == channel_id
-            ):
-                sink_store.clear()
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -5198,15 +5486,6 @@ class DiscordBotService:
             pma_prev_workspace_path=None,
             pma_prev_repo_id=None,
         )
-
-        sink_store = PmaActiveSinkStore(self._config.root)
-        sink = sink_store.load()
-        if (
-            sink is not None
-            and sink.get("platform") == "discord"
-            and sink.get("chat_id") == channel_id
-        ):
-            sink_store.clear()
 
         if prev_workspace:
             await self._store.upsert_binding(
@@ -5234,21 +5513,21 @@ class DiscordBotService:
         channel_id: str,
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
+        here_key = target_key(self._pma_here_target(channel_id))
+        targets = PmaDeliveryTargetsStore(self._config.root).load().get("targets", [])
+        active_here = isinstance(here_key, str) and any(
+            target_key(candidate) == here_key
+            for candidate in targets
+            if isinstance(candidate, dict)
+        )
         if binding is None:
-            sink_store = PmaActiveSinkStore(self._config.root)
-            sink = sink_store.load()
-            active_here = (
-                sink is not None
-                and sink.get("platform") == "discord"
-                and sink.get("chat_id") == channel_id
-            )
-            status = "enabled" if active_here else "disabled"
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "\n".join(
                     [
-                        f"PMA mode: {status}",
+                        "PMA mode: disabled",
+                        f"Delivery targets include this channel: {active_here}",
                         "Current workspace: unbound",
                     ]
                 ),
@@ -5259,16 +5538,9 @@ class DiscordBotService:
         status = "enabled" if pma_enabled else "disabled"
 
         if pma_enabled:
-            sink_store = PmaActiveSinkStore(self._config.root)
-            sink = sink_store.load()
-            active_here = (
-                sink is not None
-                and sink.get("platform") == "discord"
-                and sink.get("chat_id") == channel_id
-            )
             lines = [
                 f"PMA mode: {status}",
-                f"Active sink targeting this channel: {active_here}",
+                f"Delivery targets include this channel: {active_here}",
             ]
         else:
             workspace = binding.get("workspace_path", "unknown")
@@ -5282,6 +5554,263 @@ class DiscordBotService:
             interaction_token,
             "\n".join(lines),
         )
+
+    async def _handle_pma_targets_list(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> None:
+        store = PmaDeliveryTargetsStore(self._config.root)
+        state = store.load()
+        active_key = store.get_active_target_key()
+        targets = [
+            target for target in state.get("targets", []) if isinstance(target, dict)
+        ]
+        if not targets:
+            text = "PMA delivery targets: (none)"
+        else:
+            lines = ["PMA delivery targets:"]
+            for target in targets:
+                key = target_key(target)
+                if not isinstance(key, str):
+                    continue
+                label = self._format_pma_target_label(target)
+                active_suffix = " [active]" if key == active_key else ""
+                if label:
+                    lines.append(f"- {key} ({label}){active_suffix}")
+                else:
+                    lines.append(f"- {key}{active_suffix}")
+            text = "\n".join(lines)
+        await self._respond_ephemeral(interaction_id, interaction_token, text)
+
+    async def _handle_pma_target_mutation(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        action: str,
+        options: dict[str, Any],
+    ) -> None:
+        action_norm = action.strip().lower()
+        store = PmaDeliveryTargetsStore(self._config.root)
+        if action_norm == "clear":
+            store.set_targets([])
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Cleared PMA delivery targets.",
+            )
+            return
+
+        if action_norm == "active":
+            raw_ref = options.get("ref")
+            ref_or_key = raw_ref.strip() if isinstance(raw_ref, str) else ""
+            if not ref_or_key:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    self._format_pma_active_target(store),
+                )
+                return
+            active_argv = ref_or_key.split(maxsplit=1)
+            if active_argv:
+                subaction = active_argv[0].lower()
+                if subaction in {"show", "status"} and len(active_argv) == 1:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        self._format_pma_active_target(store),
+                    )
+                    return
+                if subaction == "set":
+                    ref_or_key = active_argv[1].strip() if len(active_argv) > 1 else ""
+            key, error = self._resolve_pma_target_key_for_active(
+                channel_id=channel_id,
+                store=store,
+                ref_or_key=ref_or_key,
+            )
+            if error:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    error,
+                )
+                return
+            if not isinstance(key, str):
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Unable to resolve target key.",
+                )
+                return
+            changed = store.set_active_target(key)
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    f"Set active PMA delivery target: {key}"
+                    if changed
+                    else f"PMA delivery target already active: {key}"
+                ),
+            )
+            return
+
+        if action_norm not in {"add", "rm", "remove"}:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                self._pma_usage_text(),
+            )
+            return
+
+        raw_ref = options.get("ref")
+        ref = raw_ref.strip() if isinstance(raw_ref, str) else ""
+        if not ref:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                self._pma_usage_text(),
+            )
+            return
+        target = self._parse_pma_target_ref(channel_id=channel_id, ref=ref)
+        if target is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Invalid target ref '{ref}'.\n{self._pma_usage_text()}",
+            )
+            return
+        key = target_key(target)
+        if not isinstance(key, str):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Invalid target ref '{ref}'.",
+            )
+            return
+
+        if action_norm == "add":
+            store.add_target(target)
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Added PMA delivery target: {key}",
+            )
+            return
+
+        removed = store.remove_target(target)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            (
+                f"Removed PMA delivery target: {key}"
+                if removed
+                else f"PMA delivery target not found: {key}"
+            ),
+        )
+
+    def _pma_usage_text(self) -> str:
+        return "\n".join(
+            [
+                "Usage:",
+                "/pma on|off|status|targets",
+                "/pma target add <ref>",
+                "/pma target rm <ref>",
+                "/pma target clear",
+                "/pma target active [show|set <ref|key>]",
+                pma_targets_usage(include_here=True),
+            ]
+        )
+
+    def _format_pma_active_target(self, store: PmaDeliveryTargetsStore) -> str:
+        active_key = store.get_active_target_key()
+        if not isinstance(active_key, str):
+            return (
+                "Active PMA delivery target: (not set; use /pma target active set "
+                "<ref|key>)"
+            )
+        state = store.load()
+        active_target = next(
+            (
+                target
+                for target in state.get("targets", [])
+                if isinstance(target, dict) and target_key(target) == active_key
+            ),
+            None,
+        )
+        label = (
+            self._format_pma_target_label(active_target)
+            if isinstance(active_target, dict)
+            else ""
+        )
+        if label:
+            return f"Active PMA delivery target: {active_key} ({label})"
+        return f"Active PMA delivery target: {active_key}"
+
+    def _resolve_pma_target_key_for_active(
+        self,
+        *,
+        channel_id: str,
+        store: PmaDeliveryTargetsStore,
+        ref_or_key: str,
+    ) -> tuple[Optional[str], Optional[str]]:
+        candidate = ref_or_key.strip()
+        if not candidate:
+            return None, self._pma_usage_text()
+        state = store.load()
+        known_keys = {
+            key
+            for key in (target_key(target) for target in state.get("targets", []))
+            if isinstance(key, str)
+        }
+        target = self._parse_pma_target_ref(channel_id=channel_id, ref=candidate)
+        if target is None:
+            if candidate in known_keys:
+                return candidate, None
+            return None, f"Invalid target ref '{candidate}'.\n{self._pma_usage_text()}"
+        key = target_key(target)
+        if not isinstance(key, str):
+            return None, f"Invalid target ref '{candidate}'."
+        if key not in known_keys:
+            return None, f"PMA delivery target not found: {key}"
+        return key, None
+
+    def _pma_here_target(self, channel_id: str) -> dict[str, Any]:
+        return {
+            "kind": "chat",
+            "platform": "discord",
+            "chat_id": channel_id,
+        }
+
+    def _parse_pma_target_ref(
+        self, *, channel_id: str, ref: str
+    ) -> Optional[dict[str, Any]]:
+        return parse_pma_target_ref(ref, here_target=self._pma_here_target(channel_id))
+
+    def _format_pma_target_label(self, target: dict[str, Any]) -> str:
+        label = target.get("label")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+        kind = target.get("kind")
+        if kind == "chat":
+            platform = target.get("platform")
+            chat_id = target.get("chat_id")
+            thread_id = target.get("thread_id")
+            if (
+                isinstance(platform, str)
+                and isinstance(chat_id, str)
+                and platform
+                and chat_id
+            ):
+                if isinstance(thread_id, str) and thread_id:
+                    return f"{platform} {chat_id} thread {thread_id}"
+                return f"{platform} {chat_id}"
+        if kind == "local":
+            path = target.get("path")
+            if isinstance(path, str) and path:
+                return path
+        return ""
 
     async def _respond_ephemeral(
         self,
@@ -5529,6 +6058,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         options={"run_id": values[0]},
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
                     )
                 return
 
@@ -5542,6 +6073,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         custom_id=custom_id,
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
                     )
                 return
 
@@ -5628,6 +6161,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         options={"run_id": values[0]},
+                        channel_id=channel_id,
+                        guild_id=guild_id,
                     )
                 return
 
@@ -5641,6 +6176,8 @@ class DiscordBotService:
                         interaction_token,
                         workspace_root=workspace_root,
                         custom_id=custom_id,
+                        channel_id=channel_id,
+                        guild_id=guild_id,
                     )
                 return
 
@@ -5738,6 +6275,8 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         custom_id: str,
+        channel_id: Optional[str] = None,
+        guild_id: Optional[str] = None,
     ) -> None:
         parts = custom_id.split(":")
         if len(parts) < 3:
@@ -5817,6 +6356,8 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 options={"run_id": run_id},
+                channel_id=channel_id,
+                guild_id=guild_id,
                 update_message=True,
             )
         else:

@@ -237,6 +237,20 @@ class HubPinRepoRequest(Payload):
     pinned: bool = True
 
 
+class HubDestinationSetRequest(Payload):
+    kind: str
+    image: Optional[str] = None
+    container_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("container_name", "containerName", "name"),
+    )
+    env_passthrough: Optional[List[str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("env_passthrough", "envPassthrough", "env"),
+    )
+    mounts: Optional[List[Dict[str, str]]] = None
+
+
 class SessionStopRequest(Payload):
     session_id: Optional[str] = None
     repo_path: Optional[str] = None

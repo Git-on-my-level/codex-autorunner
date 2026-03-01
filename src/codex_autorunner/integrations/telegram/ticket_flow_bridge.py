@@ -18,6 +18,7 @@ from ...flows.ticket_flow.runtime_helpers import (
     spawn_ticket_flow_worker,
 )
 from ...manifest import load_manifest
+from ..chat.run_mirror import ChatRunMirror
 from .adapter import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .state import parse_topic_key
@@ -388,6 +389,11 @@ class TelegramTicketFlowBridge:
         workspace_root: Optional[Path],
         repo_id: Optional[str] = None,
     ) -> None:
+        run_mirror = (
+            ChatRunMirror(workspace_root, logger_=self._logger)
+            if isinstance(workspace_root, Path)
+            else None
+        )
         body = content.strip() or "(no dispatch message)"
         source = self._format_dispatch_source(workspace_root, repo_id)
         header = (
@@ -413,6 +419,18 @@ class TelegramTicketFlowBridge:
                 thread_id=thread_id,
                 reply_to=None,
             )
+            if run_mirror is not None:
+                run_mirror.mirror_outbound(
+                    run_id=run_id,
+                    platform="telegram",
+                    event_type="flow_pause_dispatch_notice",
+                    kind="dispatch",
+                    actor="car",
+                    text=chunk,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    meta={"dispatch_seq": seq, "chunk_index": idx + 1},
+                )
             if idx == 0:
                 await asyncio.sleep(0)
 

@@ -1,0 +1,108 @@
+{
+  "signals": [
+    {
+      "signal_id": "web.feature_routes_static",
+      "category": "web_integration",
+      "description": "checkpoint baseline",
+      "weight": 3.0,
+      "passed": false,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "web.feature_destination_routes_static",
+      "category": "web_integration",
+      "description": "checkpoint baseline",
+      "weight": 2.0,
+      "passed": false,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "web.tests_target_management",
+      "category": "web_integration",
+      "description": "checkpoint baseline",
+      "weight": 3.0,
+      "passed": false,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "web.tests_destination_channels",
+      "category": "web_integration",
+      "description": "checkpoint baseline",
+      "weight": 2.0,
+      "passed": false,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "chat.tests_telegram_target_matrix",
+      "category": "chat_integration",
+      "description": "checkpoint baseline",
+      "weight": 4.0,
+      "passed": true,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "chat.tests_discord_target_matrix",
+      "category": "chat_integration",
+      "description": "checkpoint baseline",
+      "weight": 4.0,
+      "passed": true,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "chat.tests_cross_surface_parity",
+      "category": "chat_integration",
+      "description": "checkpoint baseline",
+      "weight": 2.0,
+      "passed": false,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "cli.tests_target_commands",
+      "category": "cli_integration",
+      "description": "checkpoint baseline",
+      "weight": 5.0,
+      "passed": true,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "cli.tests_target_matrix",
+      "category": "cli_integration",
+      "description": "checkpoint baseline",
+      "weight": 5.0,
+      "passed": true,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "fallback.feature_outcome_fields_static",
+      "category": "fallback_robustness",
+      "description": "checkpoint baseline",
+      "weight": 2.0,
+      "passed": true,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "fallback.tests_partial_success",
+      "category": "fallback_robustness",
+      "description": "checkpoint baseline",
+      "weight": 4.0,
+      "passed": false,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "fallback.tests_duplicate_skip_failure",
+      "category": "fallback_robustness",
+      "description": "checkpoint baseline",
+      "weight": 2.0,
+      "passed": true,
+      "details": "checkpoint baseline replay"
+    },
+    {
+      "signal_id": "fallback.tests_web_non_implicit_active",
+      "category": "fallback_robustness",
+      "description": "checkpoint baseline",
+      "weight": 2.0,
+      "passed": true,
+      "details": "checkpoint baseline replay"
+    }
+  ]
+}

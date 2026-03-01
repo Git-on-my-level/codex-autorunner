@@ -81,7 +81,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "pma": CommandSpec(
             "pma",
-            "toggle PMA mode for this topic",
+            "PMA mode and delivery targets (on/off/status/targets)",
             handlers._handle_pma,
             allow_during_turn=True,
         ),

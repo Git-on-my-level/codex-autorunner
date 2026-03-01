@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.logging_utils import log_event
-from ....core.pma_sink import PmaActiveSinkStore
+from ....core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
+from ....core.pma_target_refs import parse_pma_target_ref, pma_targets_usage
 from ....core.state import now_iso
 from ....core.update import (
     _available_update_target_options,
@@ -1036,21 +1037,35 @@ class TelegramCommandHandlers(
                     reply_to=message.message_id,
                 )
                 return
+
         argv = self._parse_command_args(args)
         action = argv[0].lower() if argv else ""
+        if action == "targets":
+            await self._handle_pma_targets_list(message)
+            return
+        if action == "target":
+            await self._handle_pma_target_mutation(message, argv[1:])
+            return
+
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
         current = bool(record and record.pma_enabled)
-        if action in ("status", "show"):
-            enabled = current
-        elif action in ("on", "enable", "true"):
+        if action in ("on", "enable", "true"):
             enabled = True
         elif action in ("off", "disable", "false"):
             enabled = False
+        elif action in ("status", "show"):
+            await self._send_message(
+                message.chat_id,
+                f"PMA mode: {'enabled' if current else 'disabled'}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         elif action:
             await self._send_message(
                 message.chat_id,
-                "Usage: /pma [on|off|status]",
+                self._pma_usage(),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1059,7 +1074,7 @@ class TelegramCommandHandlers(
             enabled = not current
 
         if record is None:
-            await self._router.ensure_topic(message.chat_id, message.thread_id)
+            record = await self._router.ensure_topic(message.chat_id, message.thread_id)
 
         def apply_pma(record: TelegramTopicRecord) -> None:
             record.pma_enabled = enabled
@@ -1092,25 +1107,32 @@ class TelegramCommandHandlers(
             message.thread_id,
             apply_pma,
         )
+
         try:
-            sink_store = PmaActiveSinkStore(Path(self._hub_root))
             if enabled:
-                sink_store.set_telegram(
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    topic_key=topic_key(message.chat_id, message.thread_id),
-                )
-            else:
-                sink_store.clear()
+                targets_store = PmaDeliveryTargetsStore(Path(self._hub_root))
+                here_target = self._pma_here_target(message)
+                state = targets_store.load()
+                current_targets = [
+                    target
+                    for target in state.get("targets", [])
+                    if isinstance(target, dict)
+                ]
+                if len(current_targets) > 1:
+                    targets_store.add_target(here_target)
+                else:
+                    targets_store.set_targets([here_target])
+            # /pma off should not clear delivery targets.
         except Exception:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.pma.active_sink.update_failed",
+                "telegram.pma.delivery_targets.update_failed",
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 enabled=enabled,
             )
+
         status = "enabled" if enabled else "disabled"
         if enabled:
             hint = "Use /pma off to exit. Previous repo binding saved."
@@ -1126,6 +1148,272 @@ class TelegramCommandHandlers(
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
+
+    async def _handle_pma_targets_list(self, message: TelegramMessage) -> None:
+        targets_store = PmaDeliveryTargetsStore(Path(self._hub_root))
+        state = targets_store.load()
+        active_key = targets_store.get_active_target_key()
+        targets = [
+            target for target in state.get("targets", []) if isinstance(target, dict)
+        ]
+        if not targets:
+            text = "PMA delivery targets: (none)"
+        else:
+            lines = ["PMA delivery targets:"]
+            for target in targets:
+                key = target_key(target)
+                if not isinstance(key, str):
+                    continue
+                label = self._format_pma_target_label(target)
+                active_suffix = " [active]" if key == active_key else ""
+                if label:
+                    lines.append(f"- {key} ({label}){active_suffix}")
+                else:
+                    lines.append(f"- {key}{active_suffix}")
+            text = "\n".join(lines)
+        await self._send_message(
+            message.chat_id,
+            text,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_pma_target_mutation(
+        self, message: TelegramMessage, argv: list[str]
+    ) -> None:
+        if not argv:
+            await self._send_message(
+                message.chat_id,
+                self._pma_usage(),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        action = argv[0].lower()
+        targets_store = PmaDeliveryTargetsStore(Path(self._hub_root))
+
+        if action == "clear":
+            targets_store.set_targets([])
+            await self._send_message(
+                message.chat_id,
+                "Cleared PMA delivery targets.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        if action == "active":
+            if len(argv) < 2:
+                await self._send_message(
+                    message.chat_id,
+                    self._format_pma_active_target(targets_store),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            subaction = argv[1].strip().lower()
+            if subaction in {"show", "status"} and len(argv) == 2:
+                await self._send_message(
+                    message.chat_id,
+                    self._format_pma_active_target(targets_store),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            if subaction == "set":
+                ref_or_key = " ".join(argv[2:]).strip()
+            else:
+                ref_or_key = " ".join(argv[1:]).strip()
+            key, error = self._resolve_pma_target_key_for_active(
+                message=message,
+                targets_store=targets_store,
+                ref_or_key=ref_or_key,
+            )
+            if error:
+                await self._send_message(
+                    message.chat_id,
+                    error,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            if not isinstance(key, str):
+                await self._send_message(
+                    message.chat_id,
+                    "Unable to resolve target key.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            changed = targets_store.set_active_target(key)
+            text = (
+                f"Set active PMA delivery target: {key}"
+                if changed
+                else f"PMA delivery target already active: {key}"
+            )
+            await self._send_message(
+                message.chat_id,
+                text,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        if action not in {"add", "rm", "remove"} or len(argv) < 2:
+            await self._send_message(
+                message.chat_id,
+                self._pma_usage(),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        ref = " ".join(argv[1:]).strip()
+        target = self._parse_pma_target_ref(message, ref)
+        if target is None:
+            await self._send_message(
+                message.chat_id,
+                f"Invalid target ref '{ref}'.\n{self._pma_usage()}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        key = target_key(target)
+        if not isinstance(key, str):
+            await self._send_message(
+                message.chat_id,
+                f"Invalid target ref '{ref}'.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if action == "add":
+            targets_store.add_target(target)
+            await self._send_message(
+                message.chat_id,
+                f"Added PMA delivery target: {key}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        removed = targets_store.remove_target(target)
+        await self._send_message(
+            message.chat_id,
+            (
+                f"Removed PMA delivery target: {key}"
+                if removed
+                else f"PMA delivery target not found: {key}"
+            ),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    def _pma_usage(self) -> str:
+        return "\n".join(
+            [
+                "Usage:",
+                "/pma [on|off|status|targets]",
+                "/pma target add <ref>",
+                "/pma target rm <ref>",
+                "/pma target clear",
+                "/pma target active [show|set <ref|key>]",
+                pma_targets_usage(include_here=True),
+            ]
+        )
+
+    def _format_pma_active_target(self, targets_store: PmaDeliveryTargetsStore) -> str:
+        active_key = targets_store.get_active_target_key()
+        if not isinstance(active_key, str):
+            return (
+                "Active PMA delivery target: (not set; use /pma target active set "
+                "<ref|key>)"
+            )
+        state = targets_store.load()
+        active_target = next(
+            (
+                target
+                for target in state.get("targets", [])
+                if isinstance(target, dict) and target_key(target) == active_key
+            ),
+            None,
+        )
+        label = (
+            self._format_pma_target_label(active_target)
+            if isinstance(active_target, dict)
+            else ""
+        )
+        if label:
+            return f"Active PMA delivery target: {active_key} ({label})"
+        return f"Active PMA delivery target: {active_key}"
+
+    def _resolve_pma_target_key_for_active(
+        self,
+        *,
+        message: TelegramMessage,
+        targets_store: PmaDeliveryTargetsStore,
+        ref_or_key: str,
+    ) -> tuple[Optional[str], Optional[str]]:
+        candidate = ref_or_key.strip()
+        if not candidate:
+            return None, self._pma_usage()
+
+        state = targets_store.load()
+        known_keys = {
+            key
+            for key in (target_key(target) for target in state.get("targets", []))
+            if isinstance(key, str)
+        }
+        target = self._parse_pma_target_ref(message, candidate)
+        if target is None:
+            if candidate in known_keys:
+                return candidate, None
+            return None, f"Invalid target ref '{candidate}'.\n{self._pma_usage()}"
+
+        key = target_key(target)
+        if not isinstance(key, str):
+            return None, f"Invalid target ref '{candidate}'."
+        if key not in known_keys:
+            return None, f"PMA delivery target not found: {key}"
+        return key, None
+
+    def _pma_here_target(self, message: TelegramMessage) -> dict[str, Any]:
+        target: dict[str, Any] = {
+            "kind": "chat",
+            "platform": "telegram",
+            "chat_id": str(message.chat_id),
+            "conversation_key": topic_key(message.chat_id, message.thread_id),
+        }
+        if message.thread_id is not None:
+            target["thread_id"] = str(message.thread_id)
+        return target
+
+    def _parse_pma_target_ref(
+        self, message: TelegramMessage, ref: str
+    ) -> Optional[dict[str, Any]]:
+        return parse_pma_target_ref(ref, here_target=self._pma_here_target(message))
+
+    def _format_pma_target_label(self, target: dict[str, Any]) -> str:
+        label = target.get("label")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+        kind = target.get("kind")
+        if kind == "chat":
+            platform = target.get("platform")
+            chat_id = target.get("chat_id")
+            thread_id = target.get("thread_id")
+            if (
+                isinstance(platform, str)
+                and isinstance(chat_id, str)
+                and platform
+                and chat_id
+            ):
+                if isinstance(thread_id, str) and thread_id:
+                    return f"{platform} {chat_id} thread {thread_id}"
+                return f"{platform} {chat_id}"
+        if kind == "local":
+            path = target.get("path")
+            if isinstance(path, str) and path:
+                return path
+        return ""
 
     async def _opencode_review_arguments(target: dict[str, Any]) -> str:
         target_type = target.get("type")

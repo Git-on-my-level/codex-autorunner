@@ -16,6 +16,7 @@ from ....core.managed_processes import list_process_records
 from ....core.runtime import (
     DoctorReport,
     doctor,
+    hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
     pma_doctor_checks,
 )
@@ -296,6 +297,7 @@ def register_doctor_commands(
             discord_checks = discord_doctor_checks(hub_config)
             pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
             hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
+            hub_destination_checks = hub_destination_doctor_checks(hub_config)
             chat_checks = chat_doctor_checks(repo_root=repo_root) if dev else []
 
             report = DoctorReport(
@@ -304,6 +306,7 @@ def register_doctor_commands(
                 + discord_checks
                 + pma_checks
                 + hub_worktree_checks
+                + hub_destination_checks
                 + chat_checks
             )
         except ConfigError as exc:

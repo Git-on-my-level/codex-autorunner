@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -17,6 +18,16 @@ from codex_autorunner.integrations.discord.config import (
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 class _FakeRest:
@@ -141,6 +152,19 @@ async def test_pause_bridge_dedupes_by_run_and_dispatch_seq(tmp_path: Path) -> N
         await service._scan_and_enqueue_pause_notifications()
         queued = await store.list_outbox()
         assert len(queued) == 1
+        mirror_path = (
+            workspace
+            / ".codex-autorunner"
+            / "flows"
+            / run_id
+            / "chat"
+            / "outbound.jsonl"
+        )
+        mirrored = _read_jsonl(mirror_path)
+        assert mirrored
+        assert mirrored[-1]["event_type"] == "flow_pause_dispatch_notice"
+        assert mirrored[-1]["kind"] == "dispatch"
+        assert mirrored[-1]["actor"] == "car"
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None

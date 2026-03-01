@@ -38,3 +38,22 @@ Please confirm the decisions update before continuing.
 
 - Use the web UI to resolve (preferred), or
 - set `resolved_at` to an ISO 8601 timestamp.
+
+## Web API Delivery Semantics
+
+For `POST /hub/pma/chat`, the top-level response `status` reflects turn execution
+(`ok|error|interrupted`). Delivery fanout health is reported separately in
+`delivery_status` so clients do not need to parse nested outcome objects.
+
+`delivery_status` values:
+
+- `success`: all attempted deliveries succeeded.
+- `partial_success`: some deliveries succeeded and at least one failed.
+- `failed`: all attempted deliveries failed.
+- `duplicate_only`: no deliveries were sent because all targets were deduped for the turn.
+- `skipped`: delivery was not attempted for a non-error reason (for example no targets/content).
+
+Backward compatibility:
+
+- `delivery_outcome` and `dispatch_delivery_outcome` remain unchanged and still carry
+  detailed target-level fields (`errors`, counts, target keys).

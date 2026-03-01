@@ -39,6 +39,7 @@
       "last_run_finished_at": {"type": ["null", "string"]},
       "last_exit_code": {"type": ["null", "integer"]},
       "runner_pid": {"type": ["null", "integer"]},
+      "effective_destination": {"type": "object"},
       "chat_bound": {"type": "boolean"},
       "chat_bound_thread_count": {"type": "integer"},
       "mounted": {"type": "boolean"},
@@ -86,6 +87,7 @@
       "last_run_finished_at",
       "last_exit_code",
       "runner_pid",
+      "effective_destination",
       "mounted"
     ]
   },

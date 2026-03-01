@@ -10,7 +10,9 @@ from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
 import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
+from ..manifest import load_manifest
 from .config_contract import CONFIG_VERSION, ConfigError
+from .destinations import default_local_destination, resolve_effective_repo_destination
 from .path_utils import ConfigPathError, resolve_config_path
 from .utils import atomic_write
 
@@ -944,6 +946,9 @@ class RepoConfig:
     housekeeping: HousekeepingConfig
     durable_writes: bool
     templates: TemplatesConfig
+    effective_destination: Dict[str, Any] = dataclasses.field(
+        default_factory=default_local_destination
+    )
 
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
@@ -1908,7 +1913,26 @@ def derive_repo_config(
     merged["mode"] = "repo"
     merged["version"] = CONFIG_VERSION
     _validate_repo_config(merged, root=repo_root)
-    return _build_repo_config(repo_root / CONFIG_FILENAME, merged)
+    repo_config = _build_repo_config(repo_root / CONFIG_FILENAME, merged)
+    repo_config.effective_destination = _resolve_repo_effective_destination(
+        hub, repo_root
+    )
+    return repo_config
+
+
+def _resolve_repo_effective_destination(
+    hub: HubConfig, repo_root: Path
+) -> Dict[str, Any]:
+    try:
+        manifest = load_manifest(hub.manifest_path, hub.root)
+    except Exception:
+        return default_local_destination()
+    repo = manifest.get_by_path(hub.root, repo_root)
+    if repo is None:
+        return default_local_destination()
+    repos_by_id = {entry.id: entry for entry in manifest.repos}
+    resolution = resolve_effective_repo_destination(repo, repos_by_id)
+    return resolution.to_dict()
 
 
 def _resolve_repo_root(start: Path) -> Path:

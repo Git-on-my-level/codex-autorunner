@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.core.pma_sink import PmaActiveSinkStore
+from codex_autorunner.core.pma_delivery_targets import (
+    PmaDeliveryTargetsStore,
+    target_key,
+)
+from codex_autorunner.core.pma_target_refs import parse_pma_target_ref
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -119,6 +123,29 @@ def _pma_interaction(*, subcommand: str, user_id: str = "user-1") -> dict[str, A
     }
 
 
+def _pma_target_interaction(
+    *, action: str, ref: str | None = None, user_id: str = "user-1"
+) -> dict[str, Any]:
+    subcommand: dict[str, Any] = {
+        "type": 1,
+        "name": action,
+        "options": [],
+    }
+    if ref is not None:
+        subcommand["options"] = [{"type": 3, "name": "ref", "value": ref}]
+    return {
+        "id": "inter-target",
+        "token": "token-target",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": user_id}},
+        "data": {
+            "name": "pma",
+            "options": [{"type": 2, "name": "target", "options": [subcommand]}],
+        },
+    }
+
+
 def _bind_interaction(*, path: str, user_id: str = "user-1") -> dict[str, Any]:
     return {
         "id": "inter-bind",
@@ -137,6 +164,41 @@ def _bind_interaction(*, path: str, user_id: str = "user-1") -> dict[str, Any]:
             ],
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected_key"),
+    [
+        ("here", "chat:discord:channel-1"),
+        ("web", "web"),
+        (
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+            "local:.codex-autorunner/pma/deliveries.jsonl",
+        ),
+        ("discord:99887766", "chat:discord:99887766"),
+        ("telegram:-100123", "chat:telegram:-100123"),
+        ("telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("chat:discord:99887766", "chat:discord:99887766"),
+        ("chat:telegram:-100123:777", "chat:telegram:-100123:777"),
+        ("telegram:abc", None),
+        ("discord:", None),
+        ("chat:discord:123:456", None),
+    ],
+)
+def test_pma_target_ref_matrix_discord_matches_canonical_parser(
+    ref: str, expected_key: str | None
+) -> None:
+    service = DiscordBotService.__new__(DiscordBotService)
+    parsed = service._parse_pma_target_ref(channel_id="channel-1", ref=ref)
+    canonical = parse_pma_target_ref(
+        ref, here_target={"kind": "chat", "platform": "discord", "chat_id": "channel-1"}
+    )
+    assert parsed == canonical
+    if expected_key is None:
+        assert parsed is None
+        return
+    assert parsed is not None
+    assert target_key(parsed) == expected_key
 
 
 @pytest.mark.anyio
@@ -175,6 +237,14 @@ async def test_pma_on_enables_pma_mode(tmp_path: Path) -> None:
         assert binding.get("pma_enabled") is True
         assert binding.get("pma_prev_workspace_path") == str(workspace)
         assert binding.get("pma_prev_repo_id") == "repo-1"
+
+        targets_state = PmaDeliveryTargetsStore(tmp_path).load()
+        keys = {
+            key
+            for key in (target_key(target) for target in targets_state["targets"])
+            if isinstance(key, str)
+        }
+        assert keys == {"chat:discord:channel-1"}
     finally:
         await store.close()
 
@@ -431,10 +501,18 @@ async def test_pma_command_registration_includes_pma_commands() -> None:
     assert "on" in subcommand_names
     assert "off" in subcommand_names
     assert "status" in subcommand_names
+    assert "targets" in subcommand_names
+    assert "target" in subcommand_names
+
+    target_group = next(
+        opt for opt in pma_cmd.get("options", []) if opt.get("name") == "target"
+    )
+    target_subcommands = {opt["name"] for opt in target_group.get("options", [])}
+    assert target_subcommands == {"add", "rm", "clear", "active"}
 
 
 @pytest.mark.anyio
-async def test_pma_off_only_clears_sink_when_matching_channel(tmp_path: Path) -> None:
+async def test_pma_off_keeps_delivery_targets(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -453,8 +531,13 @@ async def test_pma_off_only_clears_sink_when_matching_channel(tmp_path: Path) ->
         pma_prev_repo_id="repo-1",
     )
 
-    sink_store = PmaActiveSinkStore(tmp_path)
-    sink_store.set_chat(platform="discord", chat_id="channel-2")
+    targets_store = PmaDeliveryTargetsStore(tmp_path)
+    targets_store.set_targets(
+        [
+            {"kind": "chat", "platform": "discord", "chat_id": "channel-2"},
+            {"kind": "chat", "platform": "telegram", "chat_id": "-1001"},
+        ]
+    )
 
     rest = _FakeRest()
     gateway = _FakeGateway([_pma_interaction(subcommand="off")])
@@ -473,13 +556,217 @@ async def test_pma_off_only_clears_sink_when_matching_channel(tmp_path: Path) ->
         payload = rest.interaction_responses[0]["payload"]
         assert "PMA mode disabled" in payload["data"]["content"]
 
-        sink = sink_store.load()
-        assert sink is not None
-        assert sink.get("platform") == "discord"
-        assert sink.get("chat_id") == "channel-2"
+        keys = {
+            key
+            for key in (
+                target_key(target) for target in targets_store.load().get("targets", [])
+            )
+            if isinstance(key, str)
+        }
+        assert keys == {"chat:discord:channel-2", "chat:telegram:-1001"}
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("pma_enabled") is False
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _pma_target_interaction(action="add", ref="here"),
+            _pma_target_interaction(action="add", ref="web"),
+            _pma_target_interaction(
+                action="add", ref="local:.codex-autorunner/pma/deliveries.jsonl"
+            ),
+            _pma_target_interaction(action="add", ref="telegram:-2002:77"),
+            _pma_target_interaction(action="add", ref="discord:99887766"),
+            _pma_target_interaction(action="add", ref="chat:telegram:-2002:77"),
+            _pma_interaction(subcommand="targets"),
+            _pma_target_interaction(action="rm", ref="here"),
+            _pma_target_interaction(action="clear"),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 9
+        list_content = rest.interaction_responses[6]["payload"]["data"]["content"]
+        assert "web" in list_content
+        assert "local:.codex-autorunner/pma/deliveries.jsonl" in list_content
+        assert "chat:discord:channel-1" in list_content
+        assert "chat:telegram:-2002:77" in list_content
+        assert "chat:discord:99887766" in list_content
+
+        assert "Removed PMA delivery target: chat:discord:channel-1" in (
+            rest.interaction_responses[7]["payload"]["data"]["content"]
+        )
+        assert "Cleared PMA delivery targets." in (
+            rest.interaction_responses[8]["payload"]["data"]["content"]
+        )
+        assert PmaDeliveryTargetsStore(tmp_path).load()["targets"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _pma_target_interaction(action="add", ref="web"),
+            _pma_target_interaction(action="add", ref="telegram:-2002:77"),
+            _pma_target_interaction(action="active"),
+            _pma_target_interaction(action="active", ref="show"),
+            _pma_target_interaction(action="active", ref="status"),
+            _pma_target_interaction(action="active", ref="set telegram:-2002:77"),
+            _pma_target_interaction(action="active", ref="telegram:-2002:77"),
+            _pma_target_interaction(action="active", ref="chat:telegram:-2002:77"),
+            _pma_target_interaction(action="active", ref="chat:discord:42"),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 9
+        assert (
+            "Active PMA delivery target: (not set; use /pma target active set <ref|key>)"
+            in rest.interaction_responses[2]["payload"]["data"]["content"]
+        )
+        assert (
+            "Active PMA delivery target: (not set; use /pma target active set <ref|key>)"
+            in rest.interaction_responses[3]["payload"]["data"]["content"]
+        )
+        assert (
+            "Active PMA delivery target: (not set; use /pma target active set <ref|key>)"
+            in rest.interaction_responses[4]["payload"]["data"]["content"]
+        )
+        assert (
+            "Set active PMA delivery target: chat:telegram:-2002:77"
+            in rest.interaction_responses[5]["payload"]["data"]["content"]
+        )
+        assert (
+            "PMA delivery target already active: chat:telegram:-2002:77"
+            in rest.interaction_responses[6]["payload"]["data"]["content"]
+        )
+        assert (
+            "PMA delivery target already active: chat:telegram:-2002:77"
+            in rest.interaction_responses[7]["payload"]["data"]["content"]
+        )
+        assert (
+            "PMA delivery target not found: chat:discord:42"
+            in rest.interaction_responses[8]["payload"]["data"]["content"]
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_target_active_invalid_ref_returns_usage(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_pma_target_interaction(action="active", ref="telegram:abc")]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Invalid target ref 'telegram:abc'." in content
+        assert "/pma target active [show|set <ref|key>]" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_target_add_invalid_ref_returns_usage(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_target_interaction(action="add", ref="telegram:abc")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Invalid target ref" in content
+        assert "/pma target add <ref>" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_can_add_telegram_target_to_delivery_store(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_pma_target_interaction(action="add", ref="telegram:-123:77")]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        keys = {
+            key
+            for key in (
+                target_key(target)
+                for target in PmaDeliveryTargetsStore(tmp_path)
+                .load()
+                .get("targets", [])
+            )
+            if isinstance(key, str)
+        }
+        assert "chat:telegram:-123:77" in keys
     finally:
         await store.close()

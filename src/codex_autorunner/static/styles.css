@@ -1273,6 +1273,46 @@ main {
   overflow: auto;
 }
 
+.hub-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.hub-channel-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  background: var(--bg);
+}
+
+.hub-channel-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hub-channel-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.hub-channel-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Hub worktrees (worktree repos grouped under a base repo) */
 .hub-worktree-list {
   display: flex;
@@ -7284,6 +7324,15 @@ button.loading::after {
 
   .hub-repo-list {
     gap: 4px;
+  }
+
+  .hub-channel-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hub-channel-row button {
+    align-self: flex-end;
   }
 
   .hub-repo-card {
@@ -13415,6 +13464,29 @@ button.filebox-delete:hover {
     margin-bottom: 6px;
   }
 
+  .pma-targets-panel {
+    padding: 6px;
+  }
+
+  .pma-targets-input-row {
+    gap: 4px;
+  }
+
+  .pma-target-ref-input {
+    height: 24px;
+    font-size: 11px;
+    padding: 0 6px;
+  }
+
+  .pma-targets-list {
+    max-height: 96px;
+  }
+
+  .pma-target-item {
+    padding: 3px 4px;
+    gap: 6px;
+  }
+
   .pma-chat-agent-controls {
     gap: 4px;
   }
@@ -13570,14 +13642,117 @@ button.filebox-delete:hover {
 /* PMA Top Bar */
 .pma-top-bar {
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   gap: 10px;
   padding: 6px 10px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.pma-targets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.pma-targets-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pma-targets-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.4px;
+}
+
+.pma-targets-clear {
+  margin-left: auto;
+}
+
+.pma-targets-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pma-target-ref-input {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pma-target-ref-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pma-targets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.pma-target-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.pma-target-item.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+.pma-target-key {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.pma-target-label {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pma-target-active-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px;
+  padding: 1px 6px;
+  line-height: 1.5;
+}
+
+.pma-target-item > button {
+  margin-left: auto;
 }
 
 .pma-dispatches-section {

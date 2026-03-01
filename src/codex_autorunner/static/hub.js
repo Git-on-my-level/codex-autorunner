@@ -42,6 +42,11 @@ const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const pmaVersionEl = document.getElementById("pma-version");
+const hubChannelQueryInput = document.getElementById("hub-channel-query");
+const hubChannelLimitInput = document.getElementById("hub-channel-limit");
+const hubChannelSearchBtn = document.getElementById("hub-channel-search");
+const hubChannelRefreshBtn = document.getElementById("hub-channel-refresh");
+const hubChannelListEl = document.getElementById("hub-channel-list");
 const hubFlowFilterEl = document.getElementById("hub-flow-filter");
 const hubSortOrderEl = document.getElementById("hub-sort-order");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
@@ -152,6 +157,83 @@ function formatLastActivity(repo) {
     if (!time)
         return "";
     return formatTimeCompact(time);
+}
+function formatDestinationSummary(destination) {
+    if (!destination || typeof destination !== "object")
+        return "local";
+    const kindRaw = destination.kind;
+    const kind = typeof kindRaw === "string" ? kindRaw.trim().toLowerCase() : "local";
+    if (kind === "docker") {
+        const image = typeof destination.image === "string" ? destination.image.trim() : "";
+        return image ? `docker:${image}` : "docker";
+    }
+    return "local";
+}
+function splitCommaSeparated(value) {
+    return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+function currentDockerEnvPassthrough(destination) {
+    const raw = destination?.env_passthrough;
+    if (!Array.isArray(raw))
+        return "";
+    return raw
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .join(", ");
+}
+function currentDockerMounts(destination) {
+    const raw = destination?.mounts;
+    if (!Array.isArray(raw))
+        return "";
+    const mounts = raw
+        .map((item) => {
+        if (!item || typeof item !== "object")
+            return "";
+        const source = String(item.source || "").trim();
+        const target = String(item.target || "").trim();
+        return source && target ? `${source}:${target}` : "";
+    })
+        .filter(Boolean);
+    return mounts.join(", ");
+}
+function parseDockerMountList(value) {
+    const mounts = [];
+    const entries = splitCommaSeparated(value);
+    for (const entry of entries) {
+        const splitAt = entry.lastIndexOf(":");
+        if (splitAt <= 0 || splitAt >= entry.length - 1) {
+            return {
+                mounts: [],
+                error: `Invalid mount "${entry}". Use source:target (comma-separated).`,
+            };
+        }
+        const source = entry.slice(0, splitAt).trim();
+        const target = entry.slice(splitAt + 1).trim();
+        if (!source || !target) {
+            return {
+                mounts: [],
+                error: `Invalid mount "${entry}". Use source:target (comma-separated).`,
+            };
+        }
+        mounts.push({ source, target });
+    }
+    return { mounts, error: null };
+}
+function resolveHubChannelLimit() {
+    const raw = (hubChannelLimitInput?.value || "").trim();
+    if (!raw)
+        return 100;
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error("Channel directory limit must be a positive integer.");
+    }
+    if (parsed > 1000) {
+        throw new Error("Channel directory limit must be <= 1000.");
+    }
+    return parsed;
 }
 function setButtonLoading(scanning) {
     const buttons = [
@@ -806,6 +888,14 @@ function buildActions(repo) {
     else if (!missing && !repo.initialized) {
         actions.push({ key: "init", label: "Init", kind: "primary" });
     }
+    if (!missing) {
+        actions.push({
+            key: "set_destination",
+            label: "Destination",
+            kind: "ghost",
+            title: "Set execution destination (local or docker)",
+        });
+    }
     if (!missing && kind === "base") {
         actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
         actions.push({
@@ -1165,7 +1255,9 @@ function renderRepos(repos) {
             : "";
         const runSummary = formatRunSummary(repo);
         const lastActivity = formatLastActivity(repo);
+        const destinationSummary = formatDestinationSummary(repo.effective_destination);
         const infoItems = [];
+        infoItems.push(`dest ${destinationSummary}`);
         if (runSummary &&
             runSummary !== "No runs yet" &&
             runSummary !== "Not initialized") {
@@ -1309,6 +1401,7 @@ async function refreshHub() {
         renderSummary(hubData.repos || []);
         renderReposWithScroll(hubData.repos || []);
         loadHubUsage({ silent: true }).catch(() => { });
+        loadHubChannelDirectory({ silent: true }).catch(() => { });
     }
     catch (err) {
         flash(err.message || "Hub request failed", "error");
@@ -1436,6 +1529,229 @@ async function setParentRepoPinned(repoId, pinned) {
     pinnedParentRepoIds = new Set(normalizePinnedParentRepoIds(response?.pinned_parent_repo_ids));
     hubData.pinned_parent_repo_ids = Array.from(pinnedParentRepoIds);
 }
+async function chooseDestinationKind(repo, currentKind) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.hidden = true;
+    const dialog = document.createElement("div");
+    dialog.className = "modal-dialog repo-settings-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const header = document.createElement("div");
+    header.className = "modal-header";
+    const title = document.createElement("span");
+    title.className = "label";
+    title.textContent = `Set destination: ${repo.display_name || repo.id}`;
+    header.appendChild(title);
+    const body = document.createElement("div");
+    body.className = "modal-body";
+    const hint = document.createElement("p");
+    hint.className = "muted small";
+    hint.textContent = "Choose execution destination kind.";
+    body.appendChild(hint);
+    const footer = document.createElement("div");
+    footer.className = "modal-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "ghost";
+    cancelBtn.textContent = "Cancel";
+    const localBtn = document.createElement("button");
+    localBtn.className = currentKind === "local" ? "primary" : "ghost";
+    localBtn.textContent = "Local";
+    const dockerBtn = document.createElement("button");
+    dockerBtn.className = currentKind === "docker" ? "primary" : "ghost";
+    dockerBtn.textContent = "Docker";
+    footer.append(cancelBtn, localBtn, dockerBtn);
+    dialog.append(header, body, footer);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    return new Promise((resolve) => {
+        let closeModal = null;
+        let settled = false;
+        const returnFocusTo = document.activeElement;
+        const finalize = (selected) => {
+            if (settled)
+                return;
+            settled = true;
+            if (closeModal) {
+                const close = closeModal;
+                closeModal = null;
+                close();
+            }
+            overlay.remove();
+            resolve(selected);
+        };
+        closeModal = openModal(overlay, {
+            initialFocus: currentKind === "docker" ? dockerBtn : localBtn,
+            returnFocusTo,
+            onRequestClose: () => finalize(null),
+        });
+        cancelBtn.addEventListener("click", () => finalize(null));
+        localBtn.addEventListener("click", () => finalize("local"));
+        dockerBtn.addEventListener("click", () => finalize("docker"));
+    });
+}
+async function promptAndSetRepoDestination(repo) {
+    const current = formatDestinationSummary(repo.effective_destination);
+    const currentKind = current.startsWith("docker:") || current === "docker" ? "docker" : "local";
+    const kind = await chooseDestinationKind(repo, currentKind);
+    if (!kind)
+        return false;
+    const body = { kind };
+    if (kind === "docker") {
+        const currentImage = typeof repo.effective_destination?.image === "string"
+            ? String(repo.effective_destination.image)
+            : "";
+        const imageValue = await inputModal("Docker image:", {
+            placeholder: "ghcr.io/acme/repo:tag",
+            defaultValue: currentImage,
+            confirmText: "Save",
+        });
+        if (!imageValue) {
+            flash("Docker destination requires an image", "error");
+            return false;
+        }
+        body.image = imageValue.trim();
+        const configureAdvanced = await confirmModal("Configure optional docker fields (container name, env passthrough, mounts)?", {
+            confirmText: "Configure",
+            cancelText: "Skip",
+            danger: false,
+        });
+        if (configureAdvanced) {
+            const currentContainerName = typeof repo.effective_destination?.container_name === "string"
+                ? String(repo.effective_destination.container_name)
+                : "";
+            const containerNameValue = await inputModal("Docker container name (optional):", {
+                placeholder: "car-runner",
+                defaultValue: currentContainerName,
+                confirmText: "Next",
+                allowEmpty: true,
+            });
+            if (containerNameValue === null)
+                return false;
+            const containerName = containerNameValue.trim();
+            if (containerName) {
+                body.container_name = containerName;
+            }
+            const envPassthroughValue = await inputModal("Docker env passthrough (optional, comma-separated):", {
+                placeholder: "CAR_*, PATH",
+                defaultValue: currentDockerEnvPassthrough(repo.effective_destination),
+                confirmText: "Next",
+                allowEmpty: true,
+            });
+            if (envPassthroughValue === null)
+                return false;
+            const envPassthrough = splitCommaSeparated(envPassthroughValue);
+            if (envPassthrough.length) {
+                body.env_passthrough = envPassthrough;
+            }
+            const mountsValue = await inputModal("Docker mounts (optional, source:target pairs, comma-separated):", {
+                placeholder: "/host/path:/workspace/path",
+                defaultValue: currentDockerMounts(repo.effective_destination),
+                confirmText: "Save",
+                allowEmpty: true,
+            });
+            if (mountsValue === null)
+                return false;
+            const parsedMounts = parseDockerMountList(mountsValue);
+            if (parsedMounts.error) {
+                flash(parsedMounts.error, "error");
+                return false;
+            }
+            if (parsedMounts.mounts.length) {
+                body.mounts = parsedMounts.mounts;
+            }
+        }
+    }
+    const payload = (await api(`/hub/repos/${encodeURIComponent(repo.id)}/destination`, {
+        method: "POST",
+        body,
+    }));
+    const effective = formatDestinationSummary(payload.effective_destination);
+    flash(`Updated destination for ${repo.id}: ${effective}`, "success");
+    return true;
+}
+function renderHubChannelEntries(entries) {
+    if (!hubChannelListEl)
+        return;
+    if (!entries.length) {
+        hubChannelListEl.innerHTML =
+            '<div class="muted small">No channel entries found.</div>';
+        return;
+    }
+    const rows = entries
+        .map((row) => {
+        const label = typeof row.display === "string" && row.display.trim()
+            ? row.display.trim()
+            : row.key;
+        const seen = row.seen_at ? formatTimeCompact(row.seen_at) : "unknown";
+        return `
+        <div class="hub-channel-row">
+          <div class="hub-channel-main">
+            <div class="hub-channel-key">${escapeHtml(row.key)}</div>
+            <div class="hub-channel-meta muted small">${escapeHtml(label)} · seen ${escapeHtml(seen)}</div>
+          </div>
+          <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(row.key)}">Copy</button>
+        </div>
+      `;
+    })
+        .join("");
+    hubChannelListEl.innerHTML = rows;
+}
+async function loadHubChannelDirectory({ silent = false } = {}) {
+    const query = (hubChannelQueryInput?.value || "").trim();
+    try {
+        const limit = resolveHubChannelLimit();
+        const params = new URLSearchParams();
+        params.set("limit", String(limit));
+        if (query)
+            params.set("query", query);
+        if (hubChannelRefreshBtn)
+            hubChannelRefreshBtn.disabled = true;
+        if (hubChannelSearchBtn)
+            hubChannelSearchBtn.disabled = true;
+        if (hubChannelLimitInput)
+            hubChannelLimitInput.disabled = true;
+        const payload = (await api(`/hub/chat/channels?${params.toString()}`, {
+            method: "GET",
+        }));
+        renderHubChannelEntries(Array.isArray(payload.entries) ? payload.entries : []);
+    }
+    catch (err) {
+        if (!silent) {
+            flash(err.message || "Failed to load channel directory", "error");
+        }
+    }
+    finally {
+        if (hubChannelRefreshBtn)
+            hubChannelRefreshBtn.disabled = false;
+        if (hubChannelSearchBtn)
+            hubChannelSearchBtn.disabled = false;
+        if (hubChannelLimitInput)
+            hubChannelLimitInput.disabled = false;
+    }
+}
+async function copyTextToClipboard(value) {
+    const text = String(value || "");
+    if (!text)
+        return;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+        document.execCommand("copy");
+    }
+    finally {
+        textarea.remove();
+    }
+}
 async function handleRepoAction(repoId, action) {
     const buttons = repoListEl?.querySelectorAll(`button[data-repo="${repoId}"][data-action="${action}"]`);
     buttons?.forEach((btn) => btn.disabled = true);
@@ -1477,6 +1793,18 @@ async function handleRepoAction(repoId, action) {
                 return;
             }
             await openRepoSettingsModal(repo);
+            return;
+        }
+        if (action === "set_destination") {
+            const repo = hubData.repos.find((item) => item.id === repoId);
+            if (!repo) {
+                flash(`Repo not found: ${repoId}`, "error");
+                return;
+            }
+            const updated = await promptAndSetRepoDestination(repo);
+            if (updated) {
+                await refreshHub();
+            }
             return;
         }
         if (action === "cleanup_worktree") {
@@ -1593,6 +1921,46 @@ function attachHubHandlers() {
     if (hubUsageRefresh) {
         hubUsageRefresh.addEventListener("click", () => loadHubUsage());
     }
+    if (hubChannelSearchBtn) {
+        hubChannelSearchBtn.addEventListener("click", () => {
+            loadHubChannelDirectory().catch(() => { });
+        });
+    }
+    if (hubChannelRefreshBtn) {
+        hubChannelRefreshBtn.addEventListener("click", () => {
+            loadHubChannelDirectory().catch(() => { });
+        });
+    }
+    if (hubChannelQueryInput) {
+        hubChannelQueryInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                loadHubChannelDirectory().catch(() => { });
+            }
+        });
+    }
+    if (hubChannelLimitInput) {
+        hubChannelLimitInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                loadHubChannelDirectory().catch(() => { });
+            }
+        });
+    }
+    if (hubChannelListEl) {
+        hubChannelListEl.addEventListener("click", (event) => {
+            const target = event.target;
+            const btn = target.closest('button[data-action="copy_channel_key"]');
+            if (!btn)
+                return;
+            const key = String(btn.dataset.key || "").trim();
+            if (!key)
+                return;
+            copyTextToClipboard(key)
+                .then(() => flash(`Copied key: ${key}`, "success"))
+                .catch((err) => flash(err.message || "Failed to copy key", "error"));
+        });
+    }
     if (newRepoBtn) {
         newRepoBtn.addEventListener("click", showCreateRepoModal);
     }
@@ -1669,6 +2037,7 @@ async function silentRefreshHub() {
         renderSummary(hubData.repos || []);
         renderReposWithScroll(hubData.repos || []);
         await loadHubUsage({ silent: true, allowRetry: false });
+        await loadHubChannelDirectory({ silent: true });
     }
     catch (err) {
         console.error("Auto-refresh hub failed:", err);
@@ -1748,6 +2117,7 @@ export function initHub() {
         renderHubUsageMeta(cachedUsage);
     }
     loadHubUsageSeries();
+    loadHubChannelDirectory({ silent: true }).catch(() => { });
     refreshHub();
     loadHubVersion();
     checkUpdateStatus();

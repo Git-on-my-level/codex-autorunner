@@ -66,6 +66,25 @@ type PMADocUpdate = {
   status: string;
 };
 
+type PMATargetRow = {
+  key: string;
+  label?: string;
+  active?: boolean;
+  target?: Record<string, unknown>;
+};
+
+type PMATargetsResponse = {
+  status?: string;
+  action?: string;
+  key?: string;
+  changed?: boolean;
+  removed?: boolean;
+  active_target_key?: string | null;
+  active_target?: PMATargetRow | null;
+  updated_at?: string;
+  targets?: PMATargetRow[];
+};
+
 const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
 let activeContextMaxLines = 200;
 
@@ -96,12 +115,26 @@ let currentDocName: string | null = null;
 const docsInfo: Map<string, PMADocInfo> = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
+let pendingDeliverySummary: PMADeliverySummary | null = null;
 type PMAView = "chat" | "memory";
 
 type PendingTurn = {
   clientTurnId: string;
   message: string;
   startedAtMs: number;
+};
+
+type PMADeliveryStatus =
+  | "success"
+  | "partial_success"
+  | "failed"
+  | "duplicate_only"
+  | "skipped";
+
+type PMADeliverySummary = {
+  status: PMADeliveryStatus;
+  statusText: string;
+  messageTag: string;
 };
 
 function newClientTurnId(): string {
@@ -524,6 +557,11 @@ function getElements() {
     docsSaveBtn: document.getElementById("pma-docs-save") as HTMLButtonElement | null,
     docsResetBtn: document.getElementById("pma-docs-reset") as HTMLButtonElement | null,
     docsSnapshotBtn: document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null,
+    targetRefInput: document.getElementById("pma-target-ref-input") as HTMLInputElement | null,
+    targetAddBtn: document.getElementById("pma-target-add") as HTMLButtonElement | null,
+    targetsRefreshBtn: document.getElementById("pma-targets-refresh") as HTMLButtonElement | null,
+    targetsClearBtn: document.getElementById("pma-targets-clear") as HTMLButtonElement | null,
+    targetsList: document.getElementById("pma-targets-list"),
   };
 }
 
@@ -545,8 +583,95 @@ function formatOutboxAttachments(listing: FileBoxListing | null, names: string[]
   return lines.length ? `**Outbox files (download):**\n${lines.join("\n")}` : "";
 }
 
-async function finalizePMAResponse(responseText: string): Promise<void> {
+function normalizeDeliveryStatus(value: unknown): PMADeliveryStatus | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "success" ||
+    normalized === "partial_success" ||
+    normalized === "failed" ||
+    normalized === "duplicate_only" ||
+    normalized === "skipped"
+  ) {
+    return normalized;
+  }
+  if (normalized === "no_targets" || normalized === "no_content" || normalized === "invalid") {
+    return "skipped";
+  }
+  return null;
+}
+
+function summarizeDeliveryStatus(result: Record<string, unknown>): PMADeliveryStatus | null {
+  const topLevel = normalizeDeliveryStatus(result.delivery_status);
+  if (topLevel) return topLevel;
+
+  const statuses: PMADeliveryStatus[] = [];
+  const outcomeFields = ["delivery_outcome", "dispatch_delivery_outcome"];
+  outcomeFields.forEach((fieldName) => {
+    const outcome = result[fieldName];
+    if (!outcome || typeof outcome !== "object") return;
+    const status = normalizeDeliveryStatus((outcome as Record<string, unknown>).status);
+    if (status) statuses.push(status);
+  });
+
+  if (!statuses.length) return null;
+  const distinct = new Set(statuses);
+  const hasSuccess = distinct.has("success");
+  const hasFailed = distinct.has("failed");
+  if (distinct.has("partial_success") || (hasSuccess && hasFailed)) return "partial_success";
+  if (hasFailed) return "failed";
+  if (hasSuccess) return "success";
+  if (distinct.has("duplicate_only")) return "duplicate_only";
+  return "skipped";
+}
+
+function deriveDeliverySummary(payload: unknown): PMADeliverySummary | null {
+  if (!payload || typeof payload !== "object") return null;
+  const status = summarizeDeliveryStatus(payload as Record<string, unknown>);
+  if (!status) return null;
+
+  if (status === "success") {
+    return {
+      status,
+      statusText: "Done · delivery sent",
+      messageTag: "delivery:success",
+    };
+  }
+  if (status === "partial_success") {
+    return {
+      status,
+      statusText: "Done · delivery partial",
+      messageTag: "delivery:partial_success",
+    };
+  }
+  if (status === "failed") {
+    return {
+      status,
+      statusText: "Done · delivery failed",
+      messageTag: "delivery:failed",
+    };
+  }
+  if (status === "duplicate_only") {
+    return {
+      status,
+      statusText: "Done · delivery duplicate",
+      messageTag: "delivery:duplicate_only",
+    };
+  }
+  return {
+    status,
+    statusText: "Done · delivery skipped",
+    messageTag: "delivery:skipped",
+  };
+}
+
+async function finalizePMAResponse(
+  responseText: string,
+  options: { deliverySummary?: PMADeliverySummary | null } = {}
+): Promise<void> {
   if (!pmaChat) return;
+
+  const deliverySummary = options.deliverySummary ?? pendingDeliverySummary;
 
   let attachments = "";
   try {
@@ -576,13 +701,19 @@ async function finalizePMAResponse(responseText: string): Promise<void> {
   const steps = pmaChat.state.totalEvents || pmaChat.state.events.length;
 
   if (content) {
-    pmaChat.addAssistantMessage(content, true, { steps, duration });
+    pmaChat.addAssistantMessage(content, true, {
+      steps,
+      duration,
+      tag: deliverySummary?.messageTag,
+    });
   }
   pmaChat.state.streamText = "";
   pmaChat.state.status = "done";
+  pmaChat.state.statusText = deliverySummary?.statusText || "Done";
   pmaChat.render();
   pmaChat.renderMessages();
   pmaChat.renderEvents();
+  pendingDeliverySummary = null;
   void fileBoxCtrl?.refresh();
 }
 
@@ -610,6 +741,7 @@ async function initPMA(): Promise<void> {
   await refreshAgentControls({ force: true, reason: "initial" });
   await loadPMAThreadInfo();
   await initFileBoxUI();
+  await loadPMATargets();
   await loadPMADocs();
   attachHandlers();
   setPMAView(loadPMAView(), { persist: false });
@@ -642,6 +774,7 @@ async function initPMA(): Promise<void> {
   setInterval(() => {
     void loadPMAThreadInfo();
     void fileBoxCtrl?.refresh();
+    void loadPMATargets();
   }, 30000);
 }
 
@@ -696,6 +829,178 @@ async function loadPMAThreadInfo(): Promise<void> {
   }
 }
 
+function renderPMATargets(rows: PMATargetRow[]): void {
+  const elements = getElements();
+  if (!elements.targetsList) return;
+
+  elements.targetsList.innerHTML = "";
+  if (!rows.length) {
+    elements.targetsList.textContent = "No delivery targets configured.";
+    elements.targetsList.classList.add("muted", "small");
+    return;
+  }
+
+  elements.targetsList.classList.remove("muted", "small");
+  const fragment = document.createDocumentFragment();
+  rows.forEach((row) => {
+    if (!row || typeof row.key !== "string" || !row.key) return;
+    const item = document.createElement("div");
+    item.className = "pma-target-item";
+    if (row.active) {
+      item.classList.add("is-active");
+    }
+
+    const key = document.createElement("code");
+    key.className = "pma-target-key";
+    key.textContent = row.key;
+    item.appendChild(key);
+
+    if (row.label) {
+      const label = document.createElement("span");
+      label.className = "pma-target-label muted";
+      label.textContent = row.label;
+      item.appendChild(label);
+    }
+
+    if (row.active) {
+      const badge = document.createElement("span");
+      badge.className = "pma-target-active-badge";
+      badge.textContent = "active";
+      item.appendChild(badge);
+    } else {
+      const activeBtn = document.createElement("button");
+      activeBtn.className = "ghost sm";
+      activeBtn.type = "button";
+      activeBtn.textContent = "Set active";
+      activeBtn.dataset.targetSetActiveKey = row.key;
+      item.appendChild(activeBtn);
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "ghost sm";
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.dataset.targetRef = row.key;
+    item.appendChild(removeBtn);
+
+    fragment.appendChild(item);
+  });
+  elements.targetsList.appendChild(fragment);
+}
+
+async function loadPMATargets(): Promise<void> {
+  const elements = getElements();
+  if (!elements.targetsList) return;
+  try {
+    const payload = (await api("/hub/pma/targets/active", { method: "GET" })) as PMATargetsResponse;
+    const rows = Array.isArray(payload?.targets)
+      ? payload.targets.filter(
+          (row): row is PMATargetRow => Boolean(row && typeof row.key === "string")
+        )
+      : [];
+    renderPMATargets(rows);
+  } catch {
+    elements.targetsList.textContent = "Failed to load delivery targets.";
+    elements.targetsList.classList.add("muted", "small");
+  }
+}
+
+function payloadTargetKey(payload: PMATargetsResponse | null | undefined): string | null {
+  if (typeof payload?.key === "string" && payload.key) {
+    return payload.key;
+  }
+  return null;
+}
+
+function payloadActiveTargetKey(payload: PMATargetsResponse | null | undefined): string | null {
+  if (typeof payload?.active_target?.key === "string" && payload.active_target.key) {
+    return payload.active_target.key;
+  }
+  if (typeof payload?.active_target_key === "string" && payload.active_target_key) {
+    return payload.active_target_key;
+  }
+  return payloadTargetKey(payload);
+}
+
+async function addPMATarget(): Promise<void> {
+  const elements = getElements();
+  const ref = elements.targetRefInput?.value?.trim() || "";
+  if (!ref) {
+    flash("Target ref is required", "error");
+    return;
+  }
+  try {
+    const payload = (await api("/hub/pma/targets/add", {
+      method: "POST",
+      body: { ref },
+    })) as PMATargetsResponse;
+    const key = payloadTargetKey(payload) || ref;
+    if (elements.targetRefInput) {
+      elements.targetRefInput.value = "";
+    }
+    flash(`Added PMA delivery target: ${key}`, "info");
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to add delivery target", "error");
+  }
+}
+
+async function removePMATarget(ref: string): Promise<void> {
+  if (!ref) return;
+  try {
+    const payload = (await api("/hub/pma/targets/remove", {
+      method: "POST",
+      body: { ref },
+    })) as PMATargetsResponse;
+    const key = payloadTargetKey(payload) || ref;
+    if (payload?.removed) {
+      flash(`Removed PMA delivery target: ${key}`, "info");
+    } else {
+      flash(`PMA delivery target not found: ${key}`, "info");
+    }
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to remove delivery target", "error");
+  }
+}
+
+async function setPMAActiveTarget(key: string): Promise<void> {
+  if (!key) return;
+  try {
+    const payload = (await api("/hub/pma/targets/active", {
+      method: "POST",
+      body: { key },
+    })) as PMATargetsResponse;
+    const activeKey = payloadActiveTargetKey(payload) || key;
+    if (payload?.changed) {
+      flash(`Set active PMA delivery target: ${activeKey}`, "info");
+    } else {
+      flash(`PMA delivery target already active: ${activeKey}`, "info");
+    }
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to set active target", "error");
+  }
+}
+
+async function clearPMATargets(): Promise<void> {
+  if (!window.confirm("Clear all PMA delivery targets?")) return;
+  try {
+    const payload = (await api("/hub/pma/targets/clear", {
+      method: "POST",
+    })) as PMATargetsResponse;
+    const activeKey = payloadActiveTargetKey(payload);
+    if (activeKey) {
+      flash(`Cleared PMA delivery targets; active: ${activeKey}`, "info");
+    } else {
+      flash("Cleared PMA delivery targets", "info");
+    }
+    await loadPMATargets();
+  } catch (err) {
+    flash((err as Error).message || "Failed to clear delivery targets", "error");
+  }
+}
+
 function updateClearButtons(listing: FileBoxListing | null): void {
   const elements = getElements();
   if (!elements.inboxClear || !elements.outboxClear) return;
@@ -732,6 +1037,7 @@ async function sendMessage(): Promise<void> {
 
   // Ensure prior turn event streams are cleared so we don't render stale actions.
   stopTurnEventsStream();
+  pendingDeliverySummary = null;
 
   elements.input.value = "";
   elements.input.style.height = "auto";
@@ -826,6 +1132,7 @@ async function sendMessage(): Promise<void> {
       pmaChat.state.status = "interrupted";
       pmaChat.state.error = "";
       pmaChat.state.statusText = isUnloading ? "Cancelled (page reload)" : "Cancelled";
+      pendingDeliverySummary = null;
       pmaChat.render();
       return;
     }
@@ -837,6 +1144,7 @@ async function sendMessage(): Promise<void> {
     pmaChat.renderMessages();
     clearPendingTurn();
     stopTurnEventsStream();
+    pendingDeliverySummary = null;
   } finally {
     currentController = null;
     pmaChat.state.controller = null;
@@ -993,6 +1301,7 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
             ((parsed as Record<string, unknown>).error as string) ||
             rawData
           : rawData || "PMA chat failed";
+      pendingDeliverySummary = null;
       pmaChat!.state.status = "error";
       pmaChat!.state.error = String(message);
       pmaChat!.addAssistantMessage(`Error: ${message}`, true);
@@ -1006,6 +1315,7 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
         typeof parsed === "object" && parsed !== null
           ? ((parsed as Record<string, unknown>).detail as string) || rawData
           : rawData || "PMA chat interrupted";
+      pendingDeliverySummary = null;
       pmaChat!.state.status = "interrupted";
       pmaChat!.state.error = "";
       pmaChat!.state.statusText = String(message);
@@ -1023,6 +1333,10 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
       }
       if (data.message) {
         pmaChat!.state.streamText = data.message as string;
+      }
+      const summary = deriveDeliverySummary(data);
+      if (summary) {
+        pendingDeliverySummary = summary;
       }
       pmaChat!.render();
       break;
@@ -1074,11 +1388,14 @@ async function resumePendingTurn(): Promise<void> {
       const last = (payload.last_result || {}) as Record<string, unknown>;
       const status = String(last.status || "");
       if (status === "ok" && typeof last.message === "string") {
-        await finalizePMAResponse(last.message);
+        const summary = deriveDeliverySummary(last);
+        pendingDeliverySummary = summary;
+        await finalizePMAResponse(last.message, { deliverySummary: summary });
         return;
       }
       if (status === "error") {
         const detail = String(last.detail || "PMA chat failed");
+        pendingDeliverySummary = null;
         pmaChat.state.status = "error";
         pmaChat.state.error = detail;
         pmaChat.addAssistantMessage(`Error: ${detail}`, true);
@@ -1089,6 +1406,7 @@ async function resumePendingTurn(): Promise<void> {
         return;
       }
       if (status === "interrupted") {
+        pendingDeliverySummary = null;
         pmaChat.state.status = "interrupted";
         pmaChat.state.error = "";
         pmaChat.addAssistantMessage("Request interrupted", true);
@@ -1120,6 +1438,7 @@ function applyPMAResult(payload: unknown): void {
   const result = payload as Record<string, unknown>;
 
   if (result.status === "interrupted") {
+    pendingDeliverySummary = null;
     pmaChat!.state.status = "interrupted";
     pmaChat!.state.error = "";
     pmaChat!.addAssistantMessage("Request interrupted", true);
@@ -1129,6 +1448,7 @@ function applyPMAResult(payload: unknown): void {
   }
 
   if (result.status === "error" || result.error) {
+    pendingDeliverySummary = null;
     pmaChat!.state.status = "error";
     pmaChat!.state.error =
       (result.detail as string) || (result.error as string) || "Chat failed";
@@ -1142,8 +1462,10 @@ function applyPMAResult(payload: unknown): void {
     pmaChat!.state.streamText = result.message as string;
   }
 
+  const summary = deriveDeliverySummary(result);
+  pendingDeliverySummary = summary;
   const responseText = (pmaChat!.state.streamText || pmaChat!.state.statusText || "Done") as string;
-  void finalizePMAResponse(responseText);
+  void finalizePMAResponse(responseText, { deliverySummary: summary });
 }
 
 function parseMaybeJson(data: string): unknown {
@@ -1182,6 +1504,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
     currentController.abort();
     currentController = null;
   }
+  pendingDeliverySummary = null;
   stopTurnEventsStream();
   if (interruptServer || stopLane) {
     await interruptActiveTurn({ stopLane });
@@ -1200,6 +1523,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
 
 function resetThread(): void {
   clearPendingTurn();
+  pendingDeliverySummary = null;
   stopTurnEventsStream();
   if (pmaChat) {
     pmaChat.state.messages = [];
@@ -1310,6 +1634,51 @@ function attachHandlers(): void {
   if (elements.outboxClear) {
     elements.outboxClear.addEventListener("click", () => {
       void clearPMABox("outbox");
+    });
+  }
+
+  if (elements.targetAddBtn) {
+    elements.targetAddBtn.addEventListener("click", () => {
+      void addPMATarget();
+    });
+  }
+
+  if (elements.targetRefInput) {
+    elements.targetRefInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void addPMATarget();
+      }
+    });
+  }
+
+  if (elements.targetsRefreshBtn) {
+    elements.targetsRefreshBtn.addEventListener("click", () => {
+      void loadPMATargets();
+    });
+  }
+
+  if (elements.targetsClearBtn) {
+    elements.targetsClearBtn.addEventListener("click", () => {
+      void clearPMATargets();
+    });
+  }
+
+  if (elements.targetsList) {
+    elements.targetsList.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement | null;
+      const activeBtn = target?.closest("button[data-target-set-active-key]") as HTMLButtonElement | null;
+      if (activeBtn) {
+        const key = activeBtn.dataset.targetSetActiveKey || "";
+        if (!key) return;
+        void setPMAActiveTarget(key);
+        return;
+      }
+      const removeBtn = target?.closest("button[data-target-ref]") as HTMLButtonElement | null;
+      if (!removeBtn) return;
+      const ref = removeBtn.dataset.targetRef || "";
+      if (!ref) return;
+      void removePMATarget(ref);
     });
   }
 

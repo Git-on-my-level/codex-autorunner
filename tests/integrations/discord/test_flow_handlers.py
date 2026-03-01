@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -18,6 +19,16 @@ from codex_autorunner.integrations.discord.config import (
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 class _FakeRest:
@@ -231,6 +242,27 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert "Recent ticket_flow runs (limit=2)" in runs_payload
         assert paused_run_id in runs_payload
         assert completed_run_id in runs_payload
+
+        mirror_path = (
+            workspace
+            / ".codex-autorunner"
+            / "flows"
+            / paused_run_id
+            / "chat"
+            / "outbound.jsonl"
+        )
+        mirror_records = _read_jsonl(mirror_path)
+        assert mirror_records
+        status_mirrors = [
+            rec
+            for rec in mirror_records
+            if rec.get("event_type") == "flow_status_notice"
+        ]
+        assert status_mirrors
+        latest = status_mirrors[-1]
+        assert latest["kind"] == "notice"
+        assert latest["actor"] == "car"
+        assert "Run:" in latest["text"]
     finally:
         await store.close()
 
@@ -729,6 +761,31 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert paused_run_id in content
         assert "resumed run" in content.lower()
+
+        inbound_path = (
+            workspace
+            / ".codex-autorunner"
+            / "flows"
+            / paused_run_id
+            / "chat"
+            / "inbound.jsonl"
+        )
+        outbound_path = (
+            workspace
+            / ".codex-autorunner"
+            / "flows"
+            / paused_run_id
+            / "chat"
+            / "outbound.jsonl"
+        )
+        inbound_records = _read_jsonl(inbound_path)
+        outbound_records = _read_jsonl(outbound_path)
+        assert inbound_records
+        assert outbound_records
+        assert inbound_records[-1]["event_type"] == "flow_reply_command"
+        assert inbound_records[-1]["kind"] == "command"
+        assert outbound_records[-1]["event_type"] == "flow_reply_notice"
+        assert outbound_records[-1]["kind"] == "notice"
     finally:
         await store.close()
 
