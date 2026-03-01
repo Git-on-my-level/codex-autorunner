@@ -69,6 +69,7 @@ type PMADocUpdate = {
 type PMATargetRow = {
   key: string;
   label?: string;
+  friendly_label?: string;
   active?: boolean;
   target?: Record<string, unknown>;
 };
@@ -850,15 +851,34 @@ function renderPMATargets(rows: PMATargetRow[]): void {
       item.classList.add("is-active");
     }
 
+    const friendlyLabel =
+      typeof row.friendly_label === "string" && row.friendly_label.trim()
+        ? row.friendly_label.trim()
+        : "";
+    if (friendlyLabel) {
+      const label = document.createElement("span");
+      label.className = "pma-target-label";
+      label.textContent = friendlyLabel;
+      label.title = friendlyLabel;
+      item.appendChild(label);
+    }
+
     const key = document.createElement("code");
     key.className = "pma-target-key";
     key.textContent = row.key;
     item.appendChild(key);
 
-    if (row.label) {
+    const fallbackLabel =
+      typeof row.label === "string" && row.label.trim() ? row.label.trim() : "";
+    if (
+      fallbackLabel &&
+      fallbackLabel !== row.key &&
+      fallbackLabel !== friendlyLabel
+    ) {
       const label = document.createElement("span");
       label.className = "pma-target-label muted";
-      label.textContent = row.label;
+      label.textContent = fallbackLabel;
+      label.title = fallbackLabel;
       item.appendChild(label);
     }
 

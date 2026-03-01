@@ -222,9 +222,6 @@ const pmaVersionEl = document.getElementById("pma-version");
 const hubChannelQueryInput = document.getElementById(
   "hub-channel-query"
 ) as HTMLInputElement | null;
-const hubChannelLimitInput = document.getElementById(
-  "hub-channel-limit"
-) as HTMLInputElement | null;
 const hubChannelSearchBtn = document.getElementById(
   "hub-channel-search"
 ) as HTMLButtonElement | null;
@@ -423,19 +420,6 @@ function parseDockerMountList(
     mounts.push({ source, target });
   }
   return { mounts, error: null };
-}
-
-function resolveHubChannelLimit(): number {
-  const raw = (hubChannelLimitInput?.value || "").trim();
-  if (!raw) return 100;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error("Channel directory limit must be a positive integer.");
-  }
-  if (parsed > 1000) {
-    throw new Error("Channel directory limit must be <= 1000.");
-  }
-  return parsed;
 }
 
 function setButtonLoading(scanning: boolean): void {
@@ -2143,7 +2127,7 @@ function renderHubChannelEntries(entries: HubChannelEntry[]): void {
           </div>
           <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(
             row.key
-          )}">Copy</button>
+          )}" title="Copy PMA delivery target ref">Copy Ref</button>
         </div>
       `;
     })
@@ -2154,14 +2138,14 @@ function renderHubChannelEntries(entries: HubChannelEntry[]): void {
 async function loadHubChannelDirectory({ silent = false }: { silent?: boolean } = {}): Promise<void> {
   const query = (hubChannelQueryInput?.value || "").trim();
   try {
-    const limit = resolveHubChannelLimit();
     const params = new URLSearchParams();
-    params.set("limit", String(limit));
     if (query) params.set("query", query);
     if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = true;
     if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = true;
-    if (hubChannelLimitInput) hubChannelLimitInput.disabled = true;
-    const payload = (await api(`/hub/chat/channels?${params.toString()}`, {
+    const path = params.toString()
+      ? `/hub/chat/channels?${params.toString()}`
+      : "/hub/chat/channels";
+    const payload = (await api(path, {
       method: "GET",
     })) as HubChannelDirectoryResponse;
     renderHubChannelEntries(Array.isArray(payload.entries) ? payload.entries : []);
@@ -2172,7 +2156,6 @@ async function loadHubChannelDirectory({ silent = false }: { silent?: boolean } 
   } finally {
     if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = false;
     if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = false;
-    if (hubChannelLimitInput) hubChannelLimitInput.disabled = false;
   }
 }
 
@@ -2399,14 +2382,6 @@ function attachHubHandlers(): void {
       }
     });
   }
-  if (hubChannelLimitInput) {
-    hubChannelLimitInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        loadHubChannelDirectory().catch(() => {});
-      }
-    });
-  }
   if (hubChannelListEl) {
     hubChannelListEl.addEventListener("click", (event) => {
       const target = event.target as HTMLElement;
@@ -2417,9 +2392,14 @@ function attachHubHandlers(): void {
       const key = String(btn.dataset.key || "").trim();
       if (!key) return;
       copyTextToClipboard(key)
-        .then(() => flash(`Copied key: ${key}`, "success"))
+        .then(() =>
+          flash(
+            `Copied channel ref: ${key}. Paste it into PMA > Delivery targets.`,
+            "success"
+          )
+        )
         .catch((err) =>
-          flash((err as Error).message || "Failed to copy key", "error")
+          flash((err as Error).message || "Failed to copy channel ref", "error")
         );
     });
   }
