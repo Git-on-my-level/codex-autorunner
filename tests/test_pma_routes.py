@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import anyio
 import httpx
@@ -13,6 +13,7 @@ from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
+from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.integrations.pma_delivery import PmaDeliveryOutcome
 from codex_autorunner.server import create_hub_app
@@ -132,6 +133,146 @@ def _delivery_outcome_for_status(status: str) -> PmaDeliveryOutcome:
         delivered_targets=0,
         failed_targets=0,
     )
+
+
+def _seed_pma_targets(hub_root: Path) -> None:
+    store = PmaDeliveryTargetsStore(hub_root)
+    store.set_targets(
+        [
+            {"kind": "web"},
+            {"kind": "chat", "platform": "telegram", "chat_id": "100"},
+        ]
+    )
+
+
+def _assert_deprecated_targets_payload(
+    payload: dict[str, Any], *, expected_legacy_count: Optional[int] = None
+) -> None:
+    assert payload.get("status") == "deprecated"
+    assert payload.get("deprecated") is True
+    assert payload.get("active_target_key") is None
+    assert payload.get("active_target") is None
+    assert payload.get("targets") == []
+    assert payload.get("message") == "PMA delivery targets are deprecated and ignored."
+    if expected_legacy_count is not None:
+        assert payload.get("legacy_targets_ignored") == expected_legacy_count
+
+
+def _assert_no_targets_mutation(
+    store: PmaDeliveryTargetsStore, expected: dict[str, Any]
+):
+    assert store.load() == expected
+
+
+def test_pma_targets_endpoints_are_deprecated(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+
+    for endpoint in ["/hub/pma/targets", "/hub/pma/targets/active"]:
+        resp = client.get(endpoint)
+        assert resp.status_code == 200
+        payload = resp.json()
+        _assert_deprecated_targets_payload(
+            payload, expected_legacy_count=len(expected_state["targets"])
+        )
+        _assert_no_targets_mutation(store, expected_state)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "body", "expected_updates"),
+    [
+        (
+            "/hub/pma/targets/active",
+            {"key": "chat:telegram:100"},
+            {"action": "set_active", "changed": False, "key": "chat:telegram:100"},
+        ),
+        ("/hub/pma/targets/add", {"ref": "web"}, {"action": "add", "key": "web"}),
+        (
+            "/hub/pma/targets/remove",
+            {"key": "web"},
+            {"action": "remove", "removed": False, "key": "web"},
+        ),
+        ("/hub/pma/targets/clear", {}, {"action": "clear"}),
+    ],
+)
+def test_pma_targets_mutation_endpoints_are_deprecated_noop(
+    hub_env, endpoint: str, body: dict[str, Any], expected_updates: dict[str, Any]
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(endpoint, json=body)
+    assert resp.status_code == 200
+    payload = resp.json()
+    _assert_deprecated_targets_payload(
+        payload, expected_legacy_count=len(expected_state["targets"])
+    )
+    for key, value in expected_updates.items():
+        assert payload.get(key) == value
+    _assert_no_targets_mutation(store, expected_state)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "body", "expected_action"),
+    [
+        ("/hub/pma/targets/active", {"key": "   "}, "set_active"),
+        ("/hub/pma/targets/active", {"ref": "   "}, "set_active"),
+        ("/hub/pma/targets/add", {"ref": "   "}, "add"),
+        ("/hub/pma/targets/remove", {"key": "   "}, "remove"),
+    ],
+)
+def test_pma_targets_mutation_endpoints_ignore_blank_keys(
+    hub_env, endpoint: str, body: dict[str, Any], expected_action: str
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(endpoint, json=body)
+    assert resp.status_code == 200
+    payload = resp.json()
+    _assert_deprecated_targets_payload(
+        payload, expected_legacy_count=len(expected_state["targets"])
+    )
+    assert payload.get("action") == expected_action
+    assert payload.get("key") is None
+    _assert_no_targets_mutation(store, expected_state)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/hub/pma/targets/active",
+        "/hub/pma/targets/add",
+        "/hub/pma/targets/remove",
+    ],
+)
+def test_pma_targets_mutation_endpoints_reject_non_object_body(
+    hub_env, endpoint: str
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    _seed_pma_targets(hub_env.hub_root)
+    store = PmaDeliveryTargetsStore(hub_env.hub_root)
+    expected_state = store.load()
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(endpoint, json=["not", "an", "object"])
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert payload.get("detail") == "Request body must be an object"
+    _assert_no_targets_mutation(store, expected_state)
 
 
 def test_pma_agents_endpoint(hub_env) -> None:

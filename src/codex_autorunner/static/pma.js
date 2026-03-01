@@ -54,6 +54,7 @@ const docsInfo = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune = null;
 let pendingDeliverySummary = null;
+let pmaRefreshIntervalId = null;
 function newClientTurnId() {
     // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
     try {
@@ -646,6 +647,7 @@ async function initPMA() {
         unloadHandlerInstalled = true;
         window.addEventListener("beforeunload", () => {
             isUnloading = true;
+            stopPMARefreshLoop();
             // Abort any in-flight request immediately.
             // Note: we do NOT send an interrupt request to the server; the run continues
             // in the background and can be recovered after reload via /hub/pma/active.
@@ -659,11 +661,34 @@ async function initPMA() {
             }
         });
     }
-    // Periodically refresh thread info
-    setInterval(() => {
+    startPMARefreshLoop();
+}
+function startPMARefreshLoop() {
+    if (pmaRefreshIntervalId !== null)
+        return;
+    pmaRefreshIntervalId = window.setInterval(() => {
+        if (document.hidden)
+            return;
+        const shell = document.getElementById("pma-shell");
+        if (!shell || shell.classList.contains("hidden"))
+            return;
         void loadPMAThreadInfo();
         void fileBoxCtrl?.refresh();
     }, 30000);
+}
+function stopPMARefreshLoop() {
+    if (pmaRefreshIntervalId === null)
+        return;
+    clearInterval(pmaRefreshIntervalId);
+    pmaRefreshIntervalId = null;
+}
+export function setPMARefreshActive(active) {
+    if (active) {
+        startPMARefreshLoop();
+    }
+    else {
+        stopPMARefreshLoop();
+    }
 }
 async function loadPMAThreadInfo() {
     const elements = getElements();

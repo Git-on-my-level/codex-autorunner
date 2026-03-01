@@ -84,6 +84,13 @@ These locations are explicitly **non-canonical** (ephemeral, disposable):
 | `$XDG_CACHE_HOME` or `~/.cache` | Optional caches | Must be rebuildable |
 | `__pycache__/` | Python bytecode | Auto-generated |
 
+## Legacy PMA Target Artifacts (Deprecated)
+
+- `<hub_root>/.codex-autorunner/pma/delivery_targets.json`
+- `<hub_root>/.codex-autorunner/pma/active_sink.json`
+
+These files are kept only for compatibility and are not part of current PMA dispatch behavior. Delivery routing now treats legacy targets as deprecated/no-op and ignores them.
+
 **Rule**: Any location outside the canonical roots must be:
 1. A true cache (data is derivable from canonical sources)
 2. Explicitly documented here

@@ -1839,7 +1839,7 @@ function renderHubChannelEntries(entries: HubChannelEntry[]): void {
           </div>
           <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(
             row.key
-          )}" title="Copy PMA delivery target ref">Copy Ref</button>
+          )}" title="Copy channel ref">Copy Ref</button>
         </div>
       `;
     })
@@ -2108,7 +2108,7 @@ function attachHubHandlers(): void {
       copyTextToClipboard(key)
         .then(() =>
           flash(
-            `Copied channel ref: ${key}. Paste it into PMA > Delivery targets.`,
+            `Copied channel ref: ${key}. Use it when configuring chat delivery.`,
             "success"
           )
         )
