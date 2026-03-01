@@ -888,14 +888,16 @@ function buildActions(repo) {
     else if (!missing && !repo.initialized) {
         actions.push({ key: "init", label: "Init", kind: "primary" });
     }
-    if (!missing && kind === "base") {
-        actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
+    if (kind === "base") {
         actions.push({
             key: "repo_settings",
             label: "Settings",
             kind: "ghost",
             title: "Repository settings",
         });
+    }
+    if (!missing && kind === "base") {
+        actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
         const clean = repo.is_clean;
         const syncDisabled = clean !== true;
         const syncTitle = syncDisabled
@@ -1030,13 +1032,23 @@ async function openRepoSettingsModal(repo) {
                 }
             }
             if (action === "destination") {
-                const updated = await promptAndSetRepoDestination(repo);
-                if (updated) {
-                    await refreshHub();
+                try {
+                    const updated = await promptAndSetRepoDestination(repo);
+                    if (updated) {
+                        await refreshHub();
+                    }
+                }
+                catch (err) {
+                    flash(err.message || "Failed to update destination", "error");
                 }
             }
             if (action === "remove") {
-                await removeRepoWithChecks(repo.id);
+                try {
+                    await removeRepoWithChecks(repo.id);
+                }
+                catch (err) {
+                    flash(err.message || "Failed to remove repo", "error");
+                }
             }
             resolve();
         };
