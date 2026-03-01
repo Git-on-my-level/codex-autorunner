@@ -7,6 +7,7 @@ from codex_autorunner.integrations.discord.components import (
     build_action_row,
     build_bind_picker,
     build_button,
+    build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
     build_select_menu,
@@ -124,3 +125,13 @@ class TestBuildFlowRunsPicker:
         menu = picker["components"][0]
         assert len(menu["options"]) == 1
         assert menu["options"][0]["value"] == "none"
+
+
+class TestTurnButtons:
+    def test_build_continue_turn_button(self) -> None:
+        row = build_continue_turn_button()
+        assert row["type"] == 1
+        button = row["components"][0]
+        assert button["label"] == "Continue"
+        assert button["custom_id"] == "continue_turn"
+        assert button["style"] == DISCORD_BUTTON_STYLE_SUCCESS
