@@ -21,8 +21,8 @@ def test_reconcile_clears_stale_runner_pid(repo: Path, monkeypatch) -> None:
     save_state(engine.state_path, state)
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runner_controller.process_alive",
-        lambda _pid: False,
+        "codex_autorunner.core.runner_controller.process_matches_identity",
+        lambda _pid, **_kwargs: False,
     )
 
     controller = ProcessRunnerController(engine)
@@ -61,18 +61,10 @@ def test_start_raises_when_active_lock(monkeypatch, repo: Path) -> None:
     ctx.lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.locks.assess_lock",
+        "codex_autorunner.core.runner_controller.assess_lock",
         lambda _path, **_kwargs: LockAssessment(
             freeable=False, reason=None, pid=12345, host="localhost"
         ),
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.locks.process_alive",
-        lambda _pid: True,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.runner_controller.process_alive",
-        lambda _pid: True,
     )
 
     controller = ProcessRunnerController(ctx)

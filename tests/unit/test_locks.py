@@ -17,8 +17,10 @@ from codex_autorunner.core.locks import (
     file_lock,
     process_alive,
     process_command,
+    process_command_matches,
     process_is_active,
     process_is_zombie,
+    process_matches_identity,
     read_lock_info,
     write_lock_info,
 )
@@ -42,6 +44,30 @@ class TestProcessHelpers:
         if os.name != "nt":
             assert cmd is not None
             assert "python" in cmd.lower() or "pytest" in cmd.lower()
+
+    def test_process_command_matches(self) -> None:
+        if os.name == "nt":
+            pytest.skip("Command inspection not available on Windows")
+        command = process_command(os.getpid())
+        assert command is not None
+        fragment = command.split()[0]
+        assert process_command_matches(os.getpid(), (fragment,)) is True
+
+    def test_process_command_matches_mismatch(self) -> None:
+        if os.name == "nt":
+            pytest.skip("Command inspection not available on Windows")
+        assert process_command_matches(os.getpid(), ("nonexistent_cmd_xyz",)) is False
+
+    def test_process_matches_identity_with_cmd_mismatch(self) -> None:
+        if os.name == "nt":
+            pytest.skip("Command inspection not available on Windows")
+        assert (
+            process_matches_identity(
+                os.getpid(),
+                expected_cmd_substrings=("nonexistent_cmd_xyz",),
+            )
+            is False
+        )
 
 
 class TestReadLockInfo:

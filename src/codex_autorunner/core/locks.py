@@ -76,6 +76,37 @@ def process_command(pid: int) -> Optional[str]:
     return command or None
 
 
+def process_command_matches(
+    pid: int,
+    expected_cmd_substrings: Iterable[str],
+) -> Optional[bool]:
+    fragments = tuple(str(fragment) for fragment in expected_cmd_substrings if fragment)
+    if not fragments:
+        return True
+    command = process_command(pid)
+    if command is None:
+        return None
+    return any(fragment in command for fragment in fragments)
+
+
+def process_matches_identity(
+    pid: int,
+    *,
+    expected_cmd_substrings: Optional[Iterable[str]] = None,
+    treat_unknown_as_match: bool = True,
+) -> bool:
+    if not process_alive(pid):
+        return False
+    if process_is_zombie(pid):
+        return False
+    if expected_cmd_substrings is None:
+        return True
+    cmd_matches = process_command_matches(pid, expected_cmd_substrings)
+    if cmd_matches is None:
+        return treat_unknown_as_match
+    return cmd_matches
+
+
 def process_is_active(pid: int) -> bool:
     return process_alive(pid) and not process_is_zombie(pid)
 
@@ -119,15 +150,15 @@ def assess_lock(
             host=info.host,
         )
     if expected_cmd_substrings:
-        command = process_command(pid)
-        if command is None:
+        cmd_matches = process_command_matches(pid, expected_cmd_substrings)
+        if cmd_matches is None:
             return LockAssessment(
                 freeable=False,
                 reason="Unable to inspect lock pid command.",
                 pid=pid,
                 host=info.host,
             )
-        if not any(fragment in command for fragment in expected_cmd_substrings):
+        if not cmd_matches:
             return LockAssessment(
                 freeable=True,
                 reason="Lock pid command does not match autorunner; safe to clear.",

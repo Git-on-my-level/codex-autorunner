@@ -13,7 +13,7 @@ from .locks import (
     FileLock,
     FileLockBusy,
     assess_lock,
-    process_alive,
+    process_matches_identity,
     read_lock_info,
     write_lock_info,
 )
@@ -51,9 +51,12 @@ class RunnerStateManager:
         try:
             self._lock_handle.acquire(blocking=False)
         except FileLockBusy as exc:
-            info = read_lock_info(self.lock_path)
-            pid = info.pid
-            if pid and process_alive(pid):
+            assessment = assess_lock(
+                self.lock_path,
+                expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+            )
+            pid = assessment.pid
+            if pid and not assessment.freeable:
                 raise LockError(
                     f"Another autorunner is active (pid={pid}); stop it before continuing"
                 ) from exc
@@ -61,9 +64,12 @@ class RunnerStateManager:
                 "Another autorunner is active; stop it before continuing"
             ) from exc
 
-        info = read_lock_info(self.lock_path)
-        pid = info.pid
-        if pid and process_alive(pid) and not force:
+        assessment = assess_lock(
+            self.lock_path,
+            expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+        )
+        pid = assessment.pid
+        if pid and not assessment.freeable and not force:
             self._lock_handle.release()
             self._lock_handle = None
             raise LockError(
@@ -94,14 +100,17 @@ class RunnerStateManager:
             if assessment.freeable:
                 return "Autorunner lock is stale; clear it before continuing."
             pid = assessment.pid
-            if pid and process_alive(pid):
+            if pid:
                 host = f" on {assessment.host}" if assessment.host else ""
                 return f"Autorunner is running (pid={pid}{host}); try again later."
             return "Autorunner lock present; clear or resume before continuing."
 
         state = load_state(self.state_path)
         if state.status == "running":
-            if state.runner_pid and process_alive(state.runner_pid):
+            if state.runner_pid and process_matches_identity(
+                state.runner_pid,
+                expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+            ):
                 return f"Autorunner is currently running (pid={state.runner_pid}); try again later."
             return "Autorunner state is stale; use 'car resume' to continue."
         return None
@@ -125,7 +134,10 @@ class RunnerStateManager:
             return None
         info = read_lock_info(self.lock_path)
         pid = info.pid
-        if pid and process_alive(pid):
+        if pid and process_matches_identity(
+            pid,
+            expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+        ):
             try:
                 os.kill(pid, signal.SIGTERM)
                 return pid
@@ -139,9 +151,15 @@ class RunnerStateManager:
         """Get the PID of the running runner."""
         state = load_state(self.state_path)
         pid = state.runner_pid
-        if pid and process_alive(pid):
+        if pid and process_matches_identity(
+            pid,
+            expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+        ):
             return pid
         info = read_lock_info(self.lock_path)
-        if info.pid and process_alive(info.pid):
+        if info.pid and process_matches_identity(
+            info.pid,
+            expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+        ):
             return info.pid
         return None

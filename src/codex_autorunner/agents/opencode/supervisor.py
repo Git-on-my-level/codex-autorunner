@@ -12,7 +12,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import httpx
 
-from ...core.locks import file_lock
+from ...core.locks import file_lock, process_command_matches
 from ...core.logging_utils import log_event
 from ...core.managed_processes.registry import (
     ProcessRecord,
@@ -435,7 +435,7 @@ class OpenCodeSupervisor:
                 await self._start_process(handle)
                 return True
 
-            if record.pid is None or not self._pid_is_running(record.pid):
+            if not self._record_pid_is_running(record):
                 self._delete_registry_record(handle, pid=record.pid)
                 await self._start_process(handle)
                 return True
@@ -659,6 +659,13 @@ class OpenCodeSupervisor:
             return False
         return True
 
+    def _record_pid_is_running(self, record: ProcessRecord) -> bool:
+        pid = record.pid
+        if pid is None or not self._pid_is_running(pid):
+            return False
+        cmd_matches = process_command_matches(pid, record.command)
+        return cmd_matches is not False
+
     def _pgid_is_running(self, pgid: int) -> bool:
         if os.name == "nt" or not hasattr(os, "killpg"):
             return False
@@ -673,7 +680,7 @@ class OpenCodeSupervisor:
         return True
 
     def _record_is_running(self, record: ProcessRecord) -> bool:
-        if record.pid is not None and self._pid_is_running(record.pid):
+        if self._record_pid_is_running(record):
             return True
         if record.pgid is None:
             return False

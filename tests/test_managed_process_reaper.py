@@ -207,6 +207,52 @@ def test_reaper_skips_active_records(monkeypatch, tmp_path: Path) -> None:
     assert registry.read_process_record(tmp_path, "opencode", "ws-active") is not None
 
 
+def test_reaper_reaps_when_owner_pid_command_mismatches(
+    monkeypatch, tmp_path: Path
+) -> None:
+    rec = _record(
+        workspace_id="ws-owner-mismatch",
+        pid=4211,
+        pgid=4211,
+        owner_pid=9001,
+        started_at=_started_at(hours_ago=1),
+    )
+    registry.write_process_record(tmp_path, rec)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pid_is_running",
+        lambda pid: pid in {9001, 4211},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper.process_command_matches",
+        lambda pid, _cmd: False if pid in {9001, 4211} else None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pgid_is_running",
+        lambda _pgid: False,
+    )
+    killpg_calls: list[tuple[int, int]] = []
+    kill_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.killpg",
+        lambda pgid, sig: killpg_calls.append((pgid, sig)),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.kill",
+        lambda pid, sig: kill_calls.append((pid, sig)),
+    )
+
+    summary = reap_managed_processes(tmp_path, max_record_age_seconds=24 * 60 * 60)
+
+    assert summary.removed == 1
+    assert summary.skipped == 0
+    assert killpg_calls == []
+    assert kill_calls == []
+    assert (
+        registry.read_process_record(tmp_path, "opencode", "ws-owner-mismatch") is None
+    )
+
+
 def test_reaper_reaps_old_records_even_if_owner_running(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -294,7 +340,7 @@ def test_reaper_reaps_sigterm_ignoring_process_group(tmp_path: Path) -> None:
                 workspace_id="ws-sigkill",
                 pid=parent_pid,
                 pgid=pgid,
-                owner_pid=parent_pid,
+                owner_pid=999999,
                 started_at=_started_at(hours_ago=48),
             ),
         )

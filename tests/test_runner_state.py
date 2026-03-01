@@ -29,8 +29,8 @@ def test_repo_busy_reason_with_stale_state_dead_pid(repo: Path, monkeypatch) -> 
     save_state(manager.state_path, state)
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runner_state.process_alive",
-        lambda _pid: False,
+        "codex_autorunner.core.runner_state.process_matches_identity",
+        lambda _pid, **_kwargs: False,
     )
 
     busy_reason = manager.repo_busy_reason()
@@ -49,8 +49,8 @@ def test_repo_busy_reason_with_live_pid(repo: Path, monkeypatch) -> None:
     save_state(manager.state_path, state)
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runner_state.process_alive",
-        lambda _pid: _pid == current_pid,
+        "codex_autorunner.core.runner_state.process_matches_identity",
+        lambda _pid, **_kwargs: _pid == current_pid,
     )
 
     busy_reason = manager.repo_busy_reason()
@@ -91,13 +91,29 @@ def test_repo_busy_reason_with_lock(repo: Path, monkeypatch) -> None:
             freeable=False, reason=None, pid=current_pid, host="localhost"
         ),
     )
-    monkeypatch.setattr(
-        "codex_autorunner.core.runner_state.process_alive",
-        lambda _pid: _pid == current_pid,
-    )
-
     busy_reason = manager.repo_busy_reason()
     assert (
         busy_reason
         == f"Autorunner is running (pid={current_pid} on localhost); try again later."
     )
+
+
+def test_kill_running_process_skips_pid_identity_mismatch(
+    repo: Path, monkeypatch
+) -> None:
+    manager = RunnerStateManager(repo)
+    manager.lock_path.write_text(json.dumps({"pid": 4242}), encoding="utf-8")
+    kill_calls: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runner_state.process_matches_identity",
+        lambda _pid, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.runner_state.os.kill",
+        lambda pid, sig: kill_calls.append((pid, sig)),
+    )
+
+    assert manager.kill_running_process() is None
+    assert kill_calls == []
+    assert not manager.lock_path.exists()

@@ -146,7 +146,24 @@ def test_update_lock_active_clears_stale(tmp_path: Path, monkeypatch) -> None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(json.dumps({"pid": 999999}), encoding="utf-8")
 
-    monkeypatch.setattr(system, "_pid_is_running", lambda _pid: False)
+    monkeypatch.setattr(
+        system.update_core, "process_matches_identity", lambda *_a, **_k: False
+    )
+    assert system._update_lock_active() is None
+    assert not lock_path.exists()
+
+
+def test_update_lock_active_clears_pid_reuse_mismatch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    lock_path = system._update_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(json.dumps({"pid": 1234}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        system.update_core, "process_matches_identity", lambda *_a, **_k: False
+    )
     assert system._update_lock_active() is None
     assert not lock_path.exists()
 
