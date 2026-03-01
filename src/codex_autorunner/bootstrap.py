@@ -228,6 +228,7 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
         content = content_fn()
         if content and not content.endswith("\n"):
             content += "\n"
+        migrated_from_legacy = False
 
         # One-time migration from legacy PMA docs into canonical docs/.
         if legacy_path.exists():
@@ -250,6 +251,7 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
                     atomic_write(
                         canonical_path, legacy_path.read_text(encoding="utf-8")
                     )
+                    migrated_from_legacy = True
                 except OSError:
                     pass
             try:
@@ -258,6 +260,13 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
                 pass
 
         if force or not canonical_path.exists():
+            if (
+                force
+                and migrated_from_legacy
+                and filename not in PMA_ALWAYS_REFRESH_DOCS
+            ):
+                # Preserve user-authored docs migrated from legacy paths.
+                continue
             atomic_write(canonical_path, content)
             continue
 

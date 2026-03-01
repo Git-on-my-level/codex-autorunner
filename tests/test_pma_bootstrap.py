@@ -110,3 +110,17 @@ def test_pma_legacy_docs_migrated_to_docs_dir(tmp_path: Path) -> None:
     assert docs_agents.exists()
     assert docs_agents.read_text(encoding="utf-8") == "legacy agents"
     assert not legacy_agents.exists()
+
+
+def test_pma_legacy_user_docs_preserved_on_force_init(tmp_path: Path) -> None:
+    pma_dir = tmp_path / ".codex-autorunner" / "pma"
+    pma_dir.mkdir(parents=True, exist_ok=True)
+    legacy_agents = pma_dir / "AGENTS.md"
+    legacy_agents.write_text("legacy agents force", encoding="utf-8")
+
+    seed_hub_files(tmp_path, force=True)
+
+    docs_agents = pma_dir / "docs" / "AGENTS.md"
+    assert docs_agents.exists()
+    assert docs_agents.read_text(encoding="utf-8") == "legacy agents force"
+    assert not legacy_agents.exists()
