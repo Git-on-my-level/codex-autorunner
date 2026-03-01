@@ -160,6 +160,29 @@ def test_build_docker_container_spec_merges_full_dev_profile_defaults(
     assert "UNRELATED" not in spec.env
 
 
+def test_build_docker_container_spec_applies_user_override_for_expanded_mount_paths(
+    tmp_path: Path,
+) -> None:
+    home_dir = Path.home()
+    codex_path = str(home_dir / ".codex")
+
+    spec = build_docker_container_spec(
+        name="demo",
+        image="busybox:latest",
+        repo_root=tmp_path,
+        profile="full-dev",
+        mounts=[{"source": codex_path, "target": codex_path, "read_only": True}],
+    )
+
+    codex_mounts = [
+        mount
+        for mount in spec.mounts
+        if mount.source == codex_path and mount.target == codex_path
+    ]
+    assert len(codex_mounts) == 1
+    assert codex_mounts[0].read_only is True
+
+
 def test_ensure_container_running_starts_existing_stopped_container() -> None:
     calls: list[list[str]] = []
 

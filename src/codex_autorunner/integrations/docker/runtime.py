@@ -133,6 +133,9 @@ def _normalize_mount_candidate(
 def _merge_mounts(
     profile_contract: Optional[DockerProfileContract],
     user_mounts: Optional[Sequence[DockerMount | Mapping[str, Any]]],
+    *,
+    repo_root: Path,
+    home_dir: Path,
 ) -> tuple[DockerMount | Mapping[str, Any], ...]:
     merged: list[DockerMount | Mapping[str, Any]] = []
     index_by_pair: dict[tuple[str, str], int] = {}
@@ -159,6 +162,10 @@ def _merge_mounts(
                 str(normalized.get("source", "")),
                 str(normalized.get("target", "")),
             )
+        pair = (
+            _expand_template(pair[0], repo_root=repo_root, home_dir=home_dir),
+            _expand_template(pair[1], repo_root=repo_root, home_dir=home_dir),
+        )
         existing_idx = index_by_pair.get(pair)
         if existing_idx is None:
             index_by_pair[pair] = len(merged)
@@ -300,7 +307,12 @@ def build_docker_container_spec(
     repo_abs = repo_root.resolve()
     home_dir = Path.home()
     profile_contract = resolve_docker_profile_contract(profile)
-    merged_mounts = _merge_mounts(profile_contract, mounts)
+    merged_mounts = _merge_mounts(
+        profile_contract,
+        mounts,
+        repo_root=repo_abs,
+        home_dir=home_dir,
+    )
     merged_patterns = _merge_env_passthrough_patterns(
         profile_contract,
         env_passthrough_patterns,

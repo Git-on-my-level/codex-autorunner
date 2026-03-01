@@ -483,6 +483,17 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
     assert bad_env.status_code == 400
     assert "Docker env keys must be non-empty strings" in bad_env.json()["detail"]
 
+    bad_profile = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "profile": "full_deev",
+        },
+    )
+    assert bad_profile.status_code == 400
+    assert "unsupported docker profile 'full_deev'" in bad_profile.json()["detail"]
+
     unknown_repo = client.post(
         "/hub/repos/missing-repo/destination",
         json={"kind": "local"},

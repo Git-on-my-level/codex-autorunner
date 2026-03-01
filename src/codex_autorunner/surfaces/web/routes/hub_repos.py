@@ -21,7 +21,10 @@ from ....core.chat_bindings import (
     active_chat_binding_counts,
 )
 from ....core.config import ConfigError
-from ....core.destinations import resolve_effective_repo_destination
+from ....core.destinations import (
+    parse_destination_config,
+    resolve_effective_repo_destination,
+)
 from ....core.flows import FlowEventType, FlowStore
 from ....core.git_utils import git_is_clean
 from ....core.logging_utils import safe_log
@@ -1299,6 +1302,12 @@ def build_hub_repo_routes(
             raise HTTPException(
                 status_code=400, detail=f"Invalid destination payload: {destination!r}"
             )
+        parsed_destination = parse_destination_config(
+            normalized_destination, context="destination"
+        )
+        if not parsed_destination.valid:
+            detail = "; ".join(parsed_destination.errors)
+            raise HTTPException(status_code=400, detail=detail)
 
         manifest, repos_by_id, repo = await asyncio.to_thread(
             _resolve_manifest_repo, repo_id
