@@ -13,7 +13,14 @@ from codex_autorunner.core.flows.store import FlowStore
 runner = CliRunner()
 
 
-def _seed_repo_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
+def _seed_repo_run(
+    repo_root: Path,
+    run_id: str,
+    status: FlowRunStatus,
+    *,
+    state: dict | None = None,
+    error_message: str | None = None,
+) -> None:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with FlowStore(db_path) as store:
@@ -25,10 +32,10 @@ def _seed_repo_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
                 "workspace_root": str(repo_root),
                 "runs_dir": ".codex-autorunner/runs",
             },
-            state={},
+            state=state or {},
             metadata={},
         )
-        store.update_flow_run_status(run_id, status)
+        store.update_flow_run_status(run_id, status, error_message=error_message)
 
 
 def _seed_ticket(repo_root: Path) -> None:
@@ -183,3 +190,52 @@ def test_ticket_flow_status_outputs_json_payload(tmp_path: Path) -> None:
     assert payload["flow_type"] == "ticket_flow"
     assert "worker" in payload
     assert "ticket_progress" in payload
+    assert "error_message" in payload
+    assert "reason_summary" in payload
+    assert "error" in payload
+    assert "failure_reason" in payload
+
+
+def test_ticket_flow_status_outputs_failure_details_in_json(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+    _seed_ticket(repo_root)
+
+    run_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    _seed_repo_run(
+        repo_root,
+        run_id,
+        FlowRunStatus.FAILED,
+        state={"reason_summary": "docker preflight failed"},
+        error_message="Docker preflight failed: missing required binaries: opencode",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "ticket_flow",
+            "status",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    assert payload["reason_summary"] == "docker preflight failed"
+    assert (
+        payload["error_message"]
+        == "Docker preflight failed: missing required binaries: opencode"
+    )
+    assert payload["failure_reason"] == "docker preflight failed"
+    assert (
+        payload["error"]
+        == "Docker preflight failed: missing required binaries: opencode"
+    )
