@@ -888,14 +888,6 @@ function buildActions(repo) {
     else if (!missing && !repo.initialized) {
         actions.push({ key: "init", label: "Init", kind: "primary" });
     }
-    if (!missing) {
-        actions.push({
-            key: "set_destination",
-            label: "Destination",
-            kind: "ghost",
-            title: "Set execution destination (local or docker)",
-        });
-    }
     if (!missing && kind === "base") {
         actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
         actions.push({
@@ -924,9 +916,6 @@ function buildActions(repo) {
             kind: "ghost",
             title: "Remove worktree and delete branch",
         });
-    }
-    if (kind === "base") {
-        actions.push({ key: "remove_repo", label: "Remove", kind: "danger" });
     }
     return actions;
 }
@@ -962,6 +951,40 @@ async function openRepoSettingsModal(repo) {
     textarea.value = (repo.worktree_setup_commands || []).join("\n");
     worktreeSection.append(worktreeLabel, worktreeHint, textarea);
     body.appendChild(worktreeSection);
+    const destinationSection = document.createElement("div");
+    destinationSection.className = "form-group";
+    const destinationLabel = document.createElement("label");
+    destinationLabel.textContent = "Execution Destination";
+    const destinationHint = document.createElement("p");
+    destinationHint.className = "muted small";
+    destinationHint.textContent = "Set where runs execute for this repo.";
+    const destinationRow = document.createElement("div");
+    destinationRow.className = "settings-actions";
+    const destinationPill = document.createElement("span");
+    destinationPill.className = "pill pill-small hub-destination-settings-pill";
+    destinationPill.textContent = formatDestinationSummary(repo.effective_destination);
+    const destinationBtn = document.createElement("button");
+    destinationBtn.className = "ghost";
+    destinationBtn.textContent = "Change destination";
+    destinationRow.append(destinationPill, destinationBtn);
+    destinationSection.append(destinationLabel, destinationHint, destinationRow);
+    body.appendChild(destinationSection);
+    const dangerSection = document.createElement("div");
+    dangerSection.className = "form-group";
+    const dangerLabel = document.createElement("label");
+    dangerLabel.textContent = "Danger Zone";
+    const dangerHint = document.createElement("p");
+    dangerHint.className = "muted small";
+    dangerHint.textContent =
+        "Remove this repo from hub and delete its local directory.";
+    const dangerRow = document.createElement("div");
+    dangerRow.className = "settings-actions";
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "danger";
+    removeBtn.textContent = "Remove repo";
+    dangerRow.append(removeBtn);
+    dangerSection.append(dangerLabel, dangerHint, dangerRow);
+    body.appendChild(dangerSection);
     const footer = document.createElement("div");
     footer.className = "modal-actions";
     const cancelBtn = document.createElement("button");
@@ -977,7 +1000,7 @@ async function openRepoSettingsModal(repo) {
     return new Promise((resolve) => {
         let closeModal = null;
         let settled = false;
-        const finalize = async (saved) => {
+        const finalize = async (action) => {
             if (settled)
                 return;
             settled = true;
@@ -987,7 +1010,7 @@ async function openRepoSettingsModal(repo) {
                 close();
             }
             overlay.remove();
-            if (saved) {
+            if (action === "save") {
                 const commands = textarea.value
                     .split("\n")
                     .map((line) => line.trim())
@@ -1006,22 +1029,50 @@ async function openRepoSettingsModal(repo) {
                     flash(err.message || "Failed to save settings", "error");
                 }
             }
+            if (action === "destination") {
+                const updated = await promptAndSetRepoDestination(repo);
+                if (updated) {
+                    await refreshHub();
+                }
+            }
+            if (action === "remove") {
+                await removeRepoWithChecks(repo.id);
+            }
             resolve();
         };
         closeModal = openModal(overlay, {
             initialFocus: textarea,
             returnFocusTo: document.activeElement,
-            onRequestClose: () => finalize(false),
+            onRequestClose: () => finalize("cancel"),
             onKeydown: (event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                     event.preventDefault();
-                    finalize(true);
+                    finalize("save");
                 }
             },
         });
-        cancelBtn.addEventListener("click", () => finalize(false));
-        saveBtn.addEventListener("click", () => finalize(true));
+        cancelBtn.addEventListener("click", () => finalize("cancel"));
+        saveBtn.addEventListener("click", () => finalize("save"));
+        destinationBtn.addEventListener("click", () => finalize("destination"));
+        removeBtn.addEventListener("click", () => finalize("remove"));
     });
+}
+function buildDestinationBadge(destination) {
+    const summary = formatDestinationSummary(destination);
+    const isDocker = summary.startsWith("docker");
+    const label = isDocker ? "docker" : "local";
+    const titleAttr = summary !== label ? ` title="${escapeHtml(summary)}"` : "";
+    const className = isDocker
+        ? "pill pill-small pill-info hub-destination-pill hub-destination-pill-docker"
+        : "pill pill-small pill-info hub-destination-pill";
+    return `<span class="${className}"${titleAttr}>${escapeHtml(label)}</span>`;
+}
+function buildFlowStatusBadge(statusLabel, statusValue) {
+    const normalized = String(statusValue || "idle").toLowerCase();
+    if (["idle", "completed", "success", "ready"].includes(normalized)) {
+        return "";
+    }
+    return `<span class="pill pill-small hub-status-pill">${escapeHtml(statusLabel)}</span>`;
 }
 function buildMountBadge(repo) {
     if (!repo)
@@ -1040,13 +1091,12 @@ function buildMountBadge(repo) {
         className += " pill-error";
         title = repo.mount_error;
     }
-    else if (repo.mounted === true) {
-        label = "mounted";
-        className += " pill-idle";
-    }
-    else {
+    else if (repo.mounted !== true) {
         label = "not mounted";
         className += " pill-warn";
+    }
+    else {
+        return "";
     }
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
     return `<span class="${className} hub-mount-pill"${titleAttr}>${escapeHtml(label)}</span>`;
@@ -1230,7 +1280,12 @@ function renderRepos(repos) {
         const pinAction = !isWorktreeRow && repo.kind === "base"
             ? `<button class="ghost sm icon-btn hub-pin-btn${isPinnedParent ? " active" : ""}" data-action="${isPinnedParent ? "unpin_parent" : "pin_parent"}" data-repo="${escapeHtml(repo.id)}" title="${isPinnedParent ? "Unpin parent repo" : "Pin parent repo"}" aria-label="${isPinnedParent ? "Unpin parent repo" : "Pin parent repo"}"><span class="hub-pin-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6"></path><path d="M12 14v7"></path></svg></span></button>`
             : "";
+        const flowDisplay = repo.ticket_flow_display;
+        const statusText = flowDisplay?.status_label || repo.status;
+        const statusValue = flowDisplay?.status || repo.status;
+        const statusBadge = buildFlowStatusBadge(statusText, statusValue);
         const mountBadge = buildMountBadge(repo);
+        const destinationBadge = buildDestinationBadge(repo.effective_destination);
         const lockBadge = repo.lock_status && repo.lock_status !== "unlocked"
             ? `<span class="pill pill-small pill-warn">${escapeHtml(repo.lock_status.replace("_", " "))}</span>`
             : "";
@@ -1255,9 +1310,7 @@ function renderRepos(repos) {
             : "";
         const runSummary = formatRunSummary(repo);
         const lastActivity = formatLastActivity(repo);
-        const destinationSummary = formatDestinationSummary(repo.effective_destination);
         const infoItems = [];
-        infoItems.push(`dest ${destinationSummary}`);
         if (runSummary &&
             runSummary !== "No runs yet" &&
             runSummary !== "Not initialized") {
@@ -1269,17 +1322,24 @@ function renderRepos(repos) {
         const infoLine = infoItems.length > 0
             ? `<span class="hub-repo-info-line">${escapeHtml(infoItems.join(" · "))}</span>`
             : "";
+        const infoSubline = infoLine
+            ? `<div class="hub-repo-subline">${infoLine}</div>`
+            : "";
         const setupBadge = (repo.worktree_setup_commands || []).length > 0 && repo.kind === "base"
             ? '<span class="pill pill-small pill-success">setup</span>'
             : "";
+        const metadataBadges = [
+            destinationBadge,
+            statusBadge,
+            mountBadge,
+            lockBadge,
+            initBadge,
+            setupBadge,
+        ]
+            .filter(Boolean)
+            .join("");
         const usageInfo = getRepoUsage(repo.id);
-        const usageLine = `
-      <div class="hub-repo-usage-line${usageInfo.hasData ? "" : " muted"}">
-        <span class="pill pill-small hub-usage-pill">
-          ${escapeHtml(usageInfo.label)}
-        </span>
-      </div>`;
-        const flowDisplay = repo.ticket_flow_display;
+        const usageBadge = `<span class="pill pill-small hub-usage-pill${usageInfo.hasData ? "" : " muted"}">${escapeHtml(usageInfo.label)}</span>`;
         // Ticket flow progress line
         let ticketFlowLine = "";
         const tf = repo.ticket_flow;
@@ -1300,23 +1360,16 @@ function renderRepos(repos) {
           <span class="hub-flow-text">${escapeHtml(flowDisplay.status_label)} ${flowDisplay.done_count}/${flowDisplay.total_count}${statusSuffix}</span>
         </div>`;
         }
-        const statusText = flowDisplay?.status_label || repo.status;
         card.innerHTML = `
       <div class="hub-repo-row">
-        <div class="hub-repo-left">
-            ${pinAction}
-            <span class="pill pill-small hub-status-pill">${escapeHtml(statusText)}</span>
-            ${mountBadge}
-            ${lockBadge}
-            ${initBadge}
-            ${setupBadge}
-          </div>
+        ${pinAction ? `<div class="hub-repo-left">${pinAction}</div>` : ""}
         <div class="hub-repo-center">
-          <span class="hub-repo-title">${escapeHtml(repo.display_name)}</span>
-          <div class="hub-repo-subline">
-            ${infoLine}
+          <div class="hub-repo-mainline">
+            <span class="hub-repo-title">${escapeHtml(repo.display_name)}</span>
+            <div class="hub-repo-meta-inline">${metadataBadges}</div>
+            ${usageBadge}
           </div>
-          ${usageLine}
+          ${infoSubline}
           ${ticketFlowLine}
         </div>
         <div class="hub-repo-right">
@@ -1752,6 +1805,64 @@ async function copyTextToClipboard(value) {
         textarea.remove();
     }
 }
+async function removeRepoWithChecks(repoId) {
+    const check = await api(`/hub/repos/${repoId}/remove-check`, {
+        method: "GET",
+    });
+    const warnings = [];
+    const dirty = check.is_clean === false;
+    if (dirty) {
+        warnings.push("Working tree has uncommitted changes.");
+    }
+    const upstream = check.upstream;
+    const hasUpstream = upstream?.has_upstream === false;
+    if (hasUpstream) {
+        warnings.push("No upstream tracking branch is configured.");
+    }
+    const ahead = Number(upstream?.ahead || 0);
+    if (ahead > 0) {
+        warnings.push(`Local branch is ahead of upstream by ${ahead} commit(s).`);
+    }
+    const behind = Number(upstream?.behind || 0);
+    if (behind > 0) {
+        warnings.push(`Local branch is behind upstream by ${behind} commit(s).`);
+    }
+    const worktrees = Array.isArray(check.worktrees)
+        ? check.worktrees
+        : [];
+    if (worktrees.length) {
+        warnings.push(`This repo has ${worktrees.length} worktree(s).`);
+    }
+    const messageParts = [`Remove repo "${repoId}" and delete its local directory?`];
+    if (warnings.length) {
+        messageParts.push("", "Warnings:", ...warnings.map((w) => `- ${w}`));
+    }
+    if (worktrees.length) {
+        messageParts.push("", "Worktrees to delete:", ...worktrees.map((w) => `- ${w}`));
+    }
+    const ok = await confirmModal(messageParts.join("\n"), {
+        confirmText: "Remove",
+        danger: true,
+    });
+    if (!ok)
+        return;
+    const needsForce = dirty || ahead > 0;
+    if (needsForce) {
+        const forceOk = await confirmModal("This repo has uncommitted or unpushed changes. Remove anyway?", { confirmText: "Remove anyway", danger: true });
+        if (!forceOk)
+            return;
+    }
+    await startHubJob(`/hub/jobs/repos/${repoId}/remove`, {
+        body: {
+            force: needsForce,
+            delete_dir: true,
+            delete_worktrees: worktrees.length > 0,
+        },
+        startedMessage: "Repo removal queued",
+    });
+    flash(`Removed repo: ${repoId}`, "success");
+    await refreshHub();
+}
 async function handleRepoAction(repoId, action) {
     const buttons = repoListEl?.querySelectorAll(`button[data-repo="${repoId}"][data-action="${action}"]`);
     buttons?.forEach((btn) => btn.disabled = true);
@@ -1828,62 +1939,7 @@ async function handleRepoAction(repoId, action) {
             return;
         }
         if (action === "remove_repo") {
-            const check = await api(`/hub/repos/${repoId}/remove-check`, {
-                method: "GET",
-            });
-            const warnings = [];
-            const dirty = check.is_clean === false;
-            if (dirty) {
-                warnings.push("Working tree has uncommitted changes.");
-            }
-            const upstream = check.upstream;
-            const hasUpstream = upstream?.has_upstream === false;
-            if (hasUpstream) {
-                warnings.push("No upstream tracking branch is configured.");
-            }
-            const ahead = Number(upstream?.ahead || 0);
-            if (ahead > 0) {
-                warnings.push(`Local branch is ahead of upstream by ${ahead} commit(s).`);
-            }
-            const behind = Number(upstream?.behind || 0);
-            if (behind > 0) {
-                warnings.push(`Local branch is behind upstream by ${behind} commit(s).`);
-            }
-            const worktrees = Array.isArray(check.worktrees) ? check.worktrees : [];
-            if (worktrees.length) {
-                warnings.push(`This repo has ${worktrees.length} worktree(s).`);
-            }
-            const messageParts = [
-                `Remove repo "${repoId}" and delete its local directory?`,
-            ];
-            if (warnings.length) {
-                messageParts.push("", "Warnings:", ...warnings.map((w) => `- ${w}`));
-            }
-            if (worktrees.length) {
-                messageParts.push("", "Worktrees to delete:", ...worktrees.map((w) => `- ${w}`));
-            }
-            const ok = await confirmModal(messageParts.join("\n"), {
-                confirmText: "Remove",
-                danger: true,
-            });
-            if (!ok)
-                return;
-            const needsForce = dirty || ahead > 0;
-            if (needsForce) {
-                const forceOk = await confirmModal("This repo has uncommitted or unpushed changes. Remove anyway?", { confirmText: "Remove anyway", danger: true });
-                if (!forceOk)
-                    return;
-            }
-            await startHubJob(`/hub/jobs/repos/${repoId}/remove`, {
-                body: {
-                    force: needsForce,
-                    delete_dir: true,
-                    delete_worktrees: worktrees.length > 0,
-                },
-                startedMessage: "Repo removal queued",
-            });
-            flash(`Removed repo: ${repoId}`, "success");
-            await refreshHub();
+            await removeRepoWithChecks(repoId);
             return;
         }
         const path = pathMap[action];

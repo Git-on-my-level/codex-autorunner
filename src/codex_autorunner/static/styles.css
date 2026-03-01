@@ -1381,8 +1381,16 @@ main {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hub-repo-mainline {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+  width: 100%;
   overflow: hidden;
 }
 
@@ -1400,11 +1408,18 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 0;
+  flex: 1;
 }
 
 .hub-repo-clickable:hover .hub-repo-title {
   color: var(--accent);
+}
+
+.hub-repo-meta-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .hub-repo-info-line {
@@ -1418,23 +1433,24 @@ main {
 .hub-repo-subline {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
 }
 
-.hub-repo-usage-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  font-size: 10px;
+.hub-destination-pill {
+  color: var(--muted);
+}
+
+.hub-destination-pill-docker {
+  color: var(--accent-2);
 }
 
 .hub-usage-pill {
   background: rgba(108, 245, 216, 0.08);
   border: 1px solid var(--border);
   color: var(--text);
+  flex-shrink: 0;
 }
 
 .hub-usage-pill-meta {
@@ -1712,14 +1728,6 @@ a.hub-pr-pill:hover {
 .pill-small {
   padding: 1px 5px;
   font-size: 9px;
-}
-
-/* Compact status pill for repo cards */
-.hub-repo-left .pill-small {
-  padding: 2px 6px;
-  font-size: 9px;
-  min-width: 42px;
-  text-align: center;
 }
 
 /* Metrics grid */
@@ -7350,21 +7358,26 @@ button.loading::after {
   }
 
   .hub-repo-center {
-    flex-direction: row;
+    width: 100%;
+    gap: 4px;
+  }
+
+  .hub-repo-mainline {
+    flex-wrap: wrap;
     gap: 6px;
   }
 
   .hub-repo-title {
     font-size: 11px;
+    min-width: 120px;
+  }
+
+  .hub-repo-meta-inline {
+    flex-wrap: wrap;
   }
 
   .hub-repo-info-line {
     font-size: 10px;
-  }
-
-  .hub-repo-usage-line {
-    font-size: 10px;
-    width: 100%;
   }
 
   .hub-repo-right {
@@ -9738,6 +9751,12 @@ button.loading::after {
   gap: 10px;
   margin-top: 10px;
   flex-wrap: wrap;
+}
+
+.hub-destination-settings-pill {
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-size: 10px;
 }
 
 .form-hint.warning {
