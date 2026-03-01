@@ -632,6 +632,9 @@ async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
             _pma_target_interaction(action="add", ref="web"),
             _pma_target_interaction(action="add", ref="telegram:-2002:77"),
             _pma_target_interaction(action="active"),
+            _pma_target_interaction(action="active", ref="show"),
+            _pma_target_interaction(action="active", ref="status"),
+            _pma_target_interaction(action="active", ref="set telegram:-2002:77"),
             _pma_target_interaction(action="active", ref="telegram:-2002:77"),
             _pma_target_interaction(action="active", ref="chat:telegram:-2002:77"),
             _pma_target_interaction(action="active", ref="chat:discord:42"),
@@ -648,22 +651,34 @@ async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 6
+        assert len(rest.interaction_responses) == 9
         assert (
-            "Active PMA delivery target: (not set; use /pma target active [ref|key])"
+            "Active PMA delivery target: (not set; use /pma target active set <ref|key>)"
             in rest.interaction_responses[2]["payload"]["data"]["content"]
         )
         assert (
-            "Set active PMA delivery target: chat:telegram:-2002:77"
+            "Active PMA delivery target: (not set; use /pma target active set <ref|key>)"
             in rest.interaction_responses[3]["payload"]["data"]["content"]
         )
         assert (
-            "PMA delivery target already active: chat:telegram:-2002:77"
+            "Active PMA delivery target: (not set; use /pma target active set <ref|key>)"
             in rest.interaction_responses[4]["payload"]["data"]["content"]
         )
         assert (
-            "PMA delivery target not found: chat:discord:42"
+            "Set active PMA delivery target: chat:telegram:-2002:77"
             in rest.interaction_responses[5]["payload"]["data"]["content"]
+        )
+        assert (
+            "PMA delivery target already active: chat:telegram:-2002:77"
+            in rest.interaction_responses[6]["payload"]["data"]["content"]
+        )
+        assert (
+            "PMA delivery target already active: chat:telegram:-2002:77"
+            in rest.interaction_responses[7]["payload"]["data"]["content"]
+        )
+        assert (
+            "PMA delivery target not found: chat:discord:42"
+            in rest.interaction_responses[8]["payload"]["data"]["content"]
         )
     finally:
         await store.close()
@@ -691,7 +706,7 @@ async def test_pma_target_active_invalid_ref_returns_usage(tmp_path: Path) -> No
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Invalid target ref 'telegram:abc'." in content
-        assert "/pma target active [ref|key]" in content
+        assert "/pma target active [show|set <ref|key>]" in content
     finally:
         await store.close()
 

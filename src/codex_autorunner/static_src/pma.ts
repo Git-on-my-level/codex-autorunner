@@ -115,12 +115,26 @@ let currentDocName: string | null = null;
 const docsInfo: Map<string, PMADocInfo> = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
+let pendingDeliverySummary: PMADeliverySummary | null = null;
 type PMAView = "chat" | "memory";
 
 type PendingTurn = {
   clientTurnId: string;
   message: string;
   startedAtMs: number;
+};
+
+type PMADeliveryStatus =
+  | "success"
+  | "partial_success"
+  | "failed"
+  | "duplicate_only"
+  | "skipped";
+
+type PMADeliverySummary = {
+  status: PMADeliveryStatus;
+  statusText: string;
+  messageTag: string;
 };
 
 function newClientTurnId(): string {
@@ -569,8 +583,95 @@ function formatOutboxAttachments(listing: FileBoxListing | null, names: string[]
   return lines.length ? `**Outbox files (download):**\n${lines.join("\n")}` : "";
 }
 
-async function finalizePMAResponse(responseText: string): Promise<void> {
+function normalizeDeliveryStatus(value: unknown): PMADeliveryStatus | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "success" ||
+    normalized === "partial_success" ||
+    normalized === "failed" ||
+    normalized === "duplicate_only" ||
+    normalized === "skipped"
+  ) {
+    return normalized;
+  }
+  if (normalized === "no_targets" || normalized === "no_content" || normalized === "invalid") {
+    return "skipped";
+  }
+  return null;
+}
+
+function summarizeDeliveryStatus(result: Record<string, unknown>): PMADeliveryStatus | null {
+  const topLevel = normalizeDeliveryStatus(result.delivery_status);
+  if (topLevel) return topLevel;
+
+  const statuses: PMADeliveryStatus[] = [];
+  const outcomeFields = ["delivery_outcome", "dispatch_delivery_outcome"];
+  outcomeFields.forEach((fieldName) => {
+    const outcome = result[fieldName];
+    if (!outcome || typeof outcome !== "object") return;
+    const status = normalizeDeliveryStatus((outcome as Record<string, unknown>).status);
+    if (status) statuses.push(status);
+  });
+
+  if (!statuses.length) return null;
+  const distinct = new Set(statuses);
+  const hasSuccess = distinct.has("success");
+  const hasFailed = distinct.has("failed");
+  if (distinct.has("partial_success") || (hasSuccess && hasFailed)) return "partial_success";
+  if (hasFailed) return "failed";
+  if (hasSuccess) return "success";
+  if (distinct.has("duplicate_only")) return "duplicate_only";
+  return "skipped";
+}
+
+function deriveDeliverySummary(payload: unknown): PMADeliverySummary | null {
+  if (!payload || typeof payload !== "object") return null;
+  const status = summarizeDeliveryStatus(payload as Record<string, unknown>);
+  if (!status) return null;
+
+  if (status === "success") {
+    return {
+      status,
+      statusText: "Done · delivery sent",
+      messageTag: "delivery:success",
+    };
+  }
+  if (status === "partial_success") {
+    return {
+      status,
+      statusText: "Done · delivery partial",
+      messageTag: "delivery:partial_success",
+    };
+  }
+  if (status === "failed") {
+    return {
+      status,
+      statusText: "Done · delivery failed",
+      messageTag: "delivery:failed",
+    };
+  }
+  if (status === "duplicate_only") {
+    return {
+      status,
+      statusText: "Done · delivery duplicate",
+      messageTag: "delivery:duplicate_only",
+    };
+  }
+  return {
+    status,
+    statusText: "Done · delivery skipped",
+    messageTag: "delivery:skipped",
+  };
+}
+
+async function finalizePMAResponse(
+  responseText: string,
+  options: { deliverySummary?: PMADeliverySummary | null } = {}
+): Promise<void> {
   if (!pmaChat) return;
+
+  const deliverySummary = options.deliverySummary ?? pendingDeliverySummary;
 
   let attachments = "";
   try {
@@ -600,13 +701,19 @@ async function finalizePMAResponse(responseText: string): Promise<void> {
   const steps = pmaChat.state.totalEvents || pmaChat.state.events.length;
 
   if (content) {
-    pmaChat.addAssistantMessage(content, true, { steps, duration });
+    pmaChat.addAssistantMessage(content, true, {
+      steps,
+      duration,
+      tag: deliverySummary?.messageTag,
+    });
   }
   pmaChat.state.streamText = "";
   pmaChat.state.status = "done";
+  pmaChat.state.statusText = deliverySummary?.statusText || "Done";
   pmaChat.render();
   pmaChat.renderMessages();
   pmaChat.renderEvents();
+  pendingDeliverySummary = null;
   void fileBoxCtrl?.refresh();
 }
 
@@ -798,6 +905,23 @@ async function loadPMATargets(): Promise<void> {
   }
 }
 
+function payloadTargetKey(payload: PMATargetsResponse | null | undefined): string | null {
+  if (typeof payload?.key === "string" && payload.key) {
+    return payload.key;
+  }
+  return null;
+}
+
+function payloadActiveTargetKey(payload: PMATargetsResponse | null | undefined): string | null {
+  if (typeof payload?.active_target?.key === "string" && payload.active_target.key) {
+    return payload.active_target.key;
+  }
+  if (typeof payload?.active_target_key === "string" && payload.active_target_key) {
+    return payload.active_target_key;
+  }
+  return payloadTargetKey(payload);
+}
+
 async function addPMATarget(): Promise<void> {
   const elements = getElements();
   const ref = elements.targetRefInput?.value?.trim() || "";
@@ -806,11 +930,15 @@ async function addPMATarget(): Promise<void> {
     return;
   }
   try {
-    await api("/hub/pma/targets/add", { method: "POST", body: { ref } });
+    const payload = (await api("/hub/pma/targets/add", {
+      method: "POST",
+      body: { ref },
+    })) as PMATargetsResponse;
+    const key = payloadTargetKey(payload) || ref;
     if (elements.targetRefInput) {
       elements.targetRefInput.value = "";
     }
-    flash("Delivery target added", "info");
+    flash(`Added PMA delivery target: ${key}`, "info");
     await loadPMATargets();
   } catch (err) {
     flash((err as Error).message || "Failed to add delivery target", "error");
@@ -824,10 +952,11 @@ async function removePMATarget(ref: string): Promise<void> {
       method: "POST",
       body: { ref },
     })) as PMATargetsResponse;
+    const key = payloadTargetKey(payload) || ref;
     if (payload?.removed) {
-      flash(`Removed ${ref}`, "info");
+      flash(`Removed PMA delivery target: ${key}`, "info");
     } else {
-      flash(`Target not found: ${ref}`, "info");
+      flash(`PMA delivery target not found: ${key}`, "info");
     }
     await loadPMATargets();
   } catch (err) {
@@ -842,10 +971,11 @@ async function setPMAActiveTarget(key: string): Promise<void> {
       method: "POST",
       body: { key },
     })) as PMATargetsResponse;
+    const activeKey = payloadActiveTargetKey(payload) || key;
     if (payload?.changed) {
-      flash(`Set active target: ${key}`, "info");
+      flash(`Set active PMA delivery target: ${activeKey}`, "info");
     } else {
-      flash(`Target already active: ${key}`, "info");
+      flash(`PMA delivery target already active: ${activeKey}`, "info");
     }
     await loadPMATargets();
   } catch (err) {
@@ -856,8 +986,15 @@ async function setPMAActiveTarget(key: string): Promise<void> {
 async function clearPMATargets(): Promise<void> {
   if (!window.confirm("Clear all PMA delivery targets?")) return;
   try {
-    await api("/hub/pma/targets/clear", { method: "POST" });
-    flash("Cleared delivery targets", "info");
+    const payload = (await api("/hub/pma/targets/clear", {
+      method: "POST",
+    })) as PMATargetsResponse;
+    const activeKey = payloadActiveTargetKey(payload);
+    if (activeKey) {
+      flash(`Cleared PMA delivery targets; active: ${activeKey}`, "info");
+    } else {
+      flash("Cleared PMA delivery targets", "info");
+    }
     await loadPMATargets();
   } catch (err) {
     flash((err as Error).message || "Failed to clear delivery targets", "error");
@@ -900,6 +1037,7 @@ async function sendMessage(): Promise<void> {
 
   // Ensure prior turn event streams are cleared so we don't render stale actions.
   stopTurnEventsStream();
+  pendingDeliverySummary = null;
 
   elements.input.value = "";
   elements.input.style.height = "auto";
@@ -994,6 +1132,7 @@ async function sendMessage(): Promise<void> {
       pmaChat.state.status = "interrupted";
       pmaChat.state.error = "";
       pmaChat.state.statusText = isUnloading ? "Cancelled (page reload)" : "Cancelled";
+      pendingDeliverySummary = null;
       pmaChat.render();
       return;
     }
@@ -1005,6 +1144,7 @@ async function sendMessage(): Promise<void> {
     pmaChat.renderMessages();
     clearPendingTurn();
     stopTurnEventsStream();
+    pendingDeliverySummary = null;
   } finally {
     currentController = null;
     pmaChat.state.controller = null;
@@ -1161,6 +1301,7 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
             ((parsed as Record<string, unknown>).error as string) ||
             rawData
           : rawData || "PMA chat failed";
+      pendingDeliverySummary = null;
       pmaChat!.state.status = "error";
       pmaChat!.state.error = String(message);
       pmaChat!.addAssistantMessage(`Error: ${message}`, true);
@@ -1174,6 +1315,7 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
         typeof parsed === "object" && parsed !== null
           ? ((parsed as Record<string, unknown>).detail as string) || rawData
           : rawData || "PMA chat interrupted";
+      pendingDeliverySummary = null;
       pmaChat!.state.status = "interrupted";
       pmaChat!.state.error = "";
       pmaChat!.state.statusText = String(message);
@@ -1191,6 +1333,10 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
       }
       if (data.message) {
         pmaChat!.state.streamText = data.message as string;
+      }
+      const summary = deriveDeliverySummary(data);
+      if (summary) {
+        pendingDeliverySummary = summary;
       }
       pmaChat!.render();
       break;
@@ -1242,11 +1388,14 @@ async function resumePendingTurn(): Promise<void> {
       const last = (payload.last_result || {}) as Record<string, unknown>;
       const status = String(last.status || "");
       if (status === "ok" && typeof last.message === "string") {
-        await finalizePMAResponse(last.message);
+        const summary = deriveDeliverySummary(last);
+        pendingDeliverySummary = summary;
+        await finalizePMAResponse(last.message, { deliverySummary: summary });
         return;
       }
       if (status === "error") {
         const detail = String(last.detail || "PMA chat failed");
+        pendingDeliverySummary = null;
         pmaChat.state.status = "error";
         pmaChat.state.error = detail;
         pmaChat.addAssistantMessage(`Error: ${detail}`, true);
@@ -1257,6 +1406,7 @@ async function resumePendingTurn(): Promise<void> {
         return;
       }
       if (status === "interrupted") {
+        pendingDeliverySummary = null;
         pmaChat.state.status = "interrupted";
         pmaChat.state.error = "";
         pmaChat.addAssistantMessage("Request interrupted", true);
@@ -1288,6 +1438,7 @@ function applyPMAResult(payload: unknown): void {
   const result = payload as Record<string, unknown>;
 
   if (result.status === "interrupted") {
+    pendingDeliverySummary = null;
     pmaChat!.state.status = "interrupted";
     pmaChat!.state.error = "";
     pmaChat!.addAssistantMessage("Request interrupted", true);
@@ -1297,6 +1448,7 @@ function applyPMAResult(payload: unknown): void {
   }
 
   if (result.status === "error" || result.error) {
+    pendingDeliverySummary = null;
     pmaChat!.state.status = "error";
     pmaChat!.state.error =
       (result.detail as string) || (result.error as string) || "Chat failed";
@@ -1310,8 +1462,10 @@ function applyPMAResult(payload: unknown): void {
     pmaChat!.state.streamText = result.message as string;
   }
 
+  const summary = deriveDeliverySummary(result);
+  pendingDeliverySummary = summary;
   const responseText = (pmaChat!.state.streamText || pmaChat!.state.statusText || "Done") as string;
-  void finalizePMAResponse(responseText);
+  void finalizePMAResponse(responseText, { deliverySummary: summary });
 }
 
 function parseMaybeJson(data: string): unknown {
@@ -1350,6 +1504,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
     currentController.abort();
     currentController = null;
   }
+  pendingDeliverySummary = null;
   stopTurnEventsStream();
   if (interruptServer || stopLane) {
     await interruptActiveTurn({ stopLane });
@@ -1368,6 +1523,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
 
 function resetThread(): void {
   clearPendingTurn();
+  pendingDeliverySummary = null;
   stopTurnEventsStream();
   if (pmaChat) {
     pmaChat.state.messages = [];

@@ -1945,21 +1945,90 @@ async function setParentRepoPinned(repoId: string, pinned: boolean): Promise<voi
   hubData.pinned_parent_repo_ids = Array.from(pinnedParentRepoIds);
 }
 
+type DestinationKind = "local" | "docker";
+
+async function chooseDestinationKind(
+  repo: HubRepo,
+  currentKind: DestinationKind
+): Promise<DestinationKind | null> {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.hidden = true;
+
+  const dialog = document.createElement("div");
+  dialog.className = "modal-dialog repo-settings-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+
+  const header = document.createElement("div");
+  header.className = "modal-header";
+  const title = document.createElement("span");
+  title.className = "label";
+  title.textContent = `Set destination: ${repo.display_name || repo.id}`;
+  header.appendChild(title);
+
+  const body = document.createElement("div");
+  body.className = "modal-body";
+  const hint = document.createElement("p");
+  hint.className = "muted small";
+  hint.textContent = "Choose execution destination kind.";
+  body.appendChild(hint);
+
+  const footer = document.createElement("div");
+  footer.className = "modal-actions";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "ghost";
+  cancelBtn.textContent = "Cancel";
+
+  const localBtn = document.createElement("button");
+  localBtn.className = currentKind === "local" ? "primary" : "ghost";
+  localBtn.textContent = "Local";
+
+  const dockerBtn = document.createElement("button");
+  dockerBtn.className = currentKind === "docker" ? "primary" : "ghost";
+  dockerBtn.textContent = "Docker";
+
+  footer.append(cancelBtn, localBtn, dockerBtn);
+  dialog.append(header, body, footer);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  return new Promise((resolve) => {
+    let closeModal: (() => void) | null = null;
+    let settled = false;
+    const returnFocusTo = document.activeElement as HTMLElement | null;
+
+    const finalize = (selected: DestinationKind | null) => {
+      if (settled) return;
+      settled = true;
+      if (closeModal) {
+        const close = closeModal;
+        closeModal = null;
+        close();
+      }
+      overlay.remove();
+      resolve(selected);
+    };
+
+    closeModal = openModal(overlay, {
+      initialFocus: currentKind === "docker" ? dockerBtn : localBtn,
+      returnFocusTo,
+      onRequestClose: () => finalize(null),
+    });
+
+    cancelBtn.addEventListener("click", () => finalize(null));
+    localBtn.addEventListener("click", () => finalize("local"));
+    dockerBtn.addEventListener("click", () => finalize("docker"));
+  });
+}
+
 async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
   const current = formatDestinationSummary(repo.effective_destination);
   const currentKind =
     current.startsWith("docker:") || current === "docker" ? "docker" : "local";
-  const kindValue = await inputModal(
-    `Set destination for "${repo.id}" (local|docker):`,
-    {
-      placeholder: "local or docker",
-      defaultValue: currentKind,
-      confirmText: "Next",
-    }
-  );
-  if (!kindValue) return false;
-
-  const kind = kindValue.trim().toLowerCase();
+  const kind = await chooseDestinationKind(repo, currentKind);
+  if (!kind) return false;
   const body: Record<string, unknown> = { kind };
   if (kind === "docker") {
     const currentImage =
@@ -2038,9 +2107,6 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
         body.mounts = parsedMounts.mounts;
       }
     }
-  } else if (kind !== "local") {
-    flash("Unsupported destination kind. Use local or docker.", "error");
-    return false;
   }
 
   const payload = (await api(`/hub/repos/${encodeURIComponent(repo.id)}/destination`, {

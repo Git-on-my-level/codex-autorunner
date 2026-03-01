@@ -2958,7 +2958,7 @@ class DiscordBotService:
             "/pma target add <ref> - Add a PMA delivery target",
             "/pma target rm <ref> - Remove a PMA delivery target",
             "/pma target clear - Clear PMA delivery targets",
-            "/pma target active [ref|key] - Show/set active PMA delivery target",
+            "/pma target active [show|set <ref|key>] - Show/set active PMA delivery target",
             "",
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",
@@ -5263,6 +5263,18 @@ class DiscordBotService:
                     self._format_pma_active_target(store),
                 )
                 return
+            active_argv = ref_or_key.split(maxsplit=1)
+            if active_argv:
+                subaction = active_argv[0].lower()
+                if subaction in {"show", "status"} and len(active_argv) == 1:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        self._format_pma_active_target(store),
+                    )
+                    return
+                if subaction == "set":
+                    ref_or_key = active_argv[1].strip() if len(active_argv) > 1 else ""
             key, error = self._resolve_pma_target_key_for_active(
                 channel_id=channel_id,
                 store=store,
@@ -5356,7 +5368,7 @@ class DiscordBotService:
                 "/pma target add <ref>",
                 "/pma target rm <ref>",
                 "/pma target clear",
-                "/pma target active [ref|key]",
+                "/pma target active [show|set <ref|key>]",
                 pma_targets_usage(include_here=True),
             ]
         )
@@ -5364,7 +5376,10 @@ class DiscordBotService:
     def _format_pma_active_target(self, store: PmaDeliveryTargetsStore) -> str:
         active_key = store.get_active_target_key()
         if not isinstance(active_key, str):
-            return "Active PMA delivery target: (not set; use /pma target active [ref|key])"
+            return (
+                "Active PMA delivery target: (not set; use /pma target active set "
+                "<ref|key>)"
+            )
         state = store.load()
         active_target = next(
             (
