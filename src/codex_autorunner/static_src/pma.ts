@@ -97,7 +97,6 @@ const docsInfo: Map<string, PMADocInfo> = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
 let pendingDeliverySummary: PMADeliverySummary | null = null;
-let pmaRefreshIntervalId: ReturnType<typeof setInterval> | null = null;
 type PMAView = "chat" | "memory";
 
 type PendingTurn = {
@@ -733,7 +732,6 @@ async function initPMA(): Promise<void> {
     unloadHandlerInstalled = true;
     window.addEventListener("beforeunload", () => {
       isUnloading = true;
-      stopPMARefreshLoop();
       // Abort any in-flight request immediately.
       // Note: we do NOT send an interrupt request to the server; the run continues
       // in the background and can be recovered after reload via /hub/pma/active.
@@ -747,32 +745,11 @@ async function initPMA(): Promise<void> {
     });
   }
 
-  startPMARefreshLoop();
-}
-
-function startPMARefreshLoop(): void {
-  if (pmaRefreshIntervalId !== null) return;
-  pmaRefreshIntervalId = window.setInterval(() => {
-    if (document.hidden) return;
-    const shell = document.getElementById("pma-shell");
-    if (!shell || shell.classList.contains("hidden")) return;
+  // Periodically refresh thread info
+  setInterval(() => {
     void loadPMAThreadInfo();
     void fileBoxCtrl?.refresh();
   }, 30000);
-}
-
-function stopPMARefreshLoop(): void {
-  if (pmaRefreshIntervalId === null) return;
-  clearInterval(pmaRefreshIntervalId);
-  pmaRefreshIntervalId = null;
-}
-
-export function setPMARefreshActive(active: boolean): void {
-  if (active) {
-    startPMARefreshLoop();
-  } else {
-    stopPMARefreshLoop();
-  }
 }
 
 async function loadPMAThreadInfo(): Promise<void> {

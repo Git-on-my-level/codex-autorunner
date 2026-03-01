@@ -13,7 +13,6 @@ from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
-from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.integrations.pma_delivery import PmaDeliveryOutcome
 from codex_autorunner.server import create_hub_app
