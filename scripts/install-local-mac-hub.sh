@@ -46,6 +46,45 @@ OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
 
+ensure_login_shell_path() {
+  local path_entry marker_start marker_end
+  path_entry="$1"
+  marker_start="# >>> codex-autorunner local-bin >>>"
+  marker_end="# <<< codex-autorunner local-bin <<<"
+  if [[ -z "${HOME:-}" || ! -d "${HOME}" ]]; then
+    echo "Skipping login-shell PATH bootstrap; HOME is unavailable." >&2
+    return 0
+  fi
+  for profile in "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
+    if ! mkdir -p "$(dirname "${profile}")"; then
+      echo "Warning: could not create directory for ${profile}; skipping." >&2
+      continue
+    fi
+    if [[ ! -e "${profile}" ]] && ! touch "${profile}"; then
+      echo "Warning: could not create ${profile}; skipping." >&2
+      continue
+    fi
+    if [[ ! -w "${profile}" ]]; then
+      echo "Warning: ${profile} is not writable; skipping." >&2
+      continue
+    fi
+    if grep -Fq "${marker_start}" "${profile}" 2>/dev/null; then
+      continue
+    fi
+    if ! {
+      echo ""
+      echo "${marker_start}"
+      echo "# Ensure pipx-installed CAR is available in login/non-interactive shells."
+      printf 'export PATH="%s:$PATH"\n' "${path_entry}"
+      echo "${marker_end}"
+    } >> "${profile}"; then
+      echo "Warning: failed to update ${profile}; skipping." >&2
+      continue
+    fi
+    echo "Updated ${profile} to include ${path_entry} in PATH."
+  done
+}
+
 is_loopback_host() {
   case "$1" in
     localhost|127.*|::1)
@@ -112,6 +151,7 @@ fi
 
 echo "Installing codex-autorunner from ${PACKAGE_SRC} via pipx..."
 pipx install --force "${PACKAGE_SRC}"
+ensure_login_shell_path "${LOCAL_BIN}"
 
 PIPX_ROOT="${PIPX_ROOT:-$HOME/.local/pipx}"
 PIPX_VENV="${PIPX_VENV:-$PIPX_ROOT/venvs/codex-autorunner}"
