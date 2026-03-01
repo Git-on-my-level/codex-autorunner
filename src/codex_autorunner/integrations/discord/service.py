@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
+from urllib.parse import urlparse
 
 from ...core.config import load_repo_config, resolve_env_for_root
 from ...core.filebox import (
@@ -37,6 +38,7 @@ from ...core.flows.ux_helpers import (
     seed_issue_from_text,
     ticket_progress,
 )
+from ...core.flows.worker_process import check_worker_health, clear_worker_metadata
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
@@ -126,6 +128,7 @@ from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_bind_picker,
     build_cancel_turn_button,
+    build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
 )
@@ -175,6 +178,18 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
+DISCORD_AUDIO_SUFFIXES = {
+    ".aac",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".mp4",
+    ".oga",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".webm",
+}
 
 
 class AppServerUnavailableError(Exception):
@@ -954,10 +969,27 @@ class DiscordBotService:
 
     def _is_audio_attachment(self, attachment: Any, mime_type: Optional[str]) -> bool:
         kind = getattr(attachment, "kind", None)
-        if isinstance(kind, str) and kind.lower() == "audio":
+        kind_lower = kind.lower().strip() if isinstance(kind, str) else ""
+        if kind_lower == "audio":
             return True
-        if isinstance(mime_type, str) and mime_type.lower().startswith("audio/"):
-            return True
+        if kind_lower in {"image", "video"}:
+            return False
+        if isinstance(mime_type, str):
+            mime_base = mime_type.lower().split(";", 1)[0].strip()
+            if mime_base.startswith("audio/"):
+                return True
+            # Respect explicit, non-audio media classifications from Discord.
+            if mime_base.startswith("video/") or mime_base.startswith("image/"):
+                return False
+        file_name = getattr(attachment, "file_name", None)
+        if isinstance(file_name, str):
+            if Path(file_name).suffix.lower() in DISCORD_AUDIO_SUFFIXES:
+                return True
+        source_url = getattr(attachment, "source_url", None)
+        if isinstance(source_url, str) and source_url:
+            path = urlparse(source_url).path
+            if Path(path).suffix.lower() in DISCORD_AUDIO_SUFFIXES:
+                return True
         return False
 
     async def _transcribe_voice_attachment(
@@ -1171,9 +1203,21 @@ class DiscordBotService:
                     "image/jpg": ".jpg",
                     "image/gif": ".gif",
                     "image/webp": ".webp",
+                    "audio/mpeg": ".mp3",
+                    "audio/mp3": ".mp3",
+                    "audio/mp4": ".m4a",
+                    "audio/wav": ".wav",
+                    "audio/ogg": ".ogg",
+                    "audio/webm": ".webm",
                     "application/pdf": ".pdf",
                     "text/plain": ".txt",
                 }.get(mime_key, "")
+        if not suffix:
+            source_url = getattr(attachment, "source_url", None)
+            if isinstance(source_url, str) and source_url:
+                source_suffix = Path(urlparse(source_url).path).suffix.lower()
+                if source_suffix in DISCORD_AUDIO_SUFFIXES:
+                    suffix = source_suffix
         return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
 
     async def _find_paused_flow_run(
@@ -1439,7 +1483,9 @@ class DiscordBotService:
             if not force and content == progress_rendered:
                 return
             payload: dict[str, Any] = {"content": content}
-            if not remove_components:
+            if remove_components:
+                payload["components"] = []
+            else:
                 payload["components"] = [build_cancel_turn_button()]
             try:
                 await self._rest.edit_channel_message(
@@ -2085,6 +2131,22 @@ class DiscordBotService:
                     options=options,
                     channel_id=channel_id,
                     guild_id=guild_id,
+                )
+                return
+            if command_path == ("car", "flow", "start"):
+                await self._handle_flow_start(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options=options,
+                )
+                return
+            if command_path == ("car", "flow", "restart"):
+                await self._handle_flow_restart(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options=options,
                 )
                 return
             if command_path == ("car", "flow", "resume"):
@@ -2939,6 +3001,8 @@ class DiscordBotService:
             "/car flow runs [limit] - List flow runs",
             "/car flow issue <issue#|url> - Seed ISSUE.md from GitHub",
             "/car flow plan <text> - Seed ISSUE.md from plan text",
+            "/car flow start [force_new] - Start flow (or reuse active/paused)",
+            "/car flow restart [run_id] - Restart flow with a fresh run",
             "/car flow resume [run_id] - Resume a paused flow",
             "/car flow stop [run_id] - Stop a flow",
             "/car flow archive [run_id] - Archive a flow",
@@ -4000,6 +4064,7 @@ class DiscordBotService:
         options: dict[str, Any],
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
+        update_message: bool = False,
     ) -> None:
         run_id_opt = options.get("run_id")
         try:
@@ -4056,6 +4121,29 @@ class DiscordBotService:
                     interaction_id, interaction_token, "No ticket_flow runs found."
                 )
                 return
+            try:
+                record, _updated, locked = reconcile_flow_run(
+                    workspace_root, record, store
+                )
+                if locked:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        f"Run {record.id} is locked for reconcile; try again.",
+                    )
+                    return
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.reconcile_failed",
+                    exc=exc,
+                    run_id=record.id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to reconcile flow run: {exc}",
+                    user_message="Unable to reconcile flow run. Please try again later.",
+                ) from None
             try:
                 snapshot = build_flow_status_snapshot(workspace_root, record, store)
             except (sqlite3.Error, OSError) as exc:
@@ -4123,16 +4211,32 @@ class DiscordBotService:
             include_refresh=True,
         )
         if status_buttons:
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                response_text,
-                status_buttons,
-            )
+            if update_message:
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text=response_text,
+                    components=status_buttons,
+                )
+            else:
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    response_text,
+                    status_buttons,
+                )
         else:
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, response_text
-            )
+            if update_message:
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text=response_text,
+                    components=[],
+                )
+            else:
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, response_text
+                )
 
     async def _handle_flow_runs(
         self,
@@ -4270,6 +4374,198 @@ class DiscordBotService:
             "Seeded ISSUE.md from your plan.",
         )
 
+    async def _handle_flow_start(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        force_new = bool(options.get("force_new"))
+        restart_from = options.get("restart_from")
+
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.flow.store_open_failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            try:
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.query_failed",
+                    exc=exc,
+                    workspace_root=str(workspace_root),
+                )
+                raise DiscordTransientError(
+                    f"Failed to query flow runs: {exc}",
+                    user_message="Unable to query flow database. Please try again later.",
+                ) from None
+        finally:
+            store.close()
+
+        if not force_new:
+            active_or_paused = next(
+                (
+                    record
+                    for record in runs
+                    if record.status in {FlowRunStatus.RUNNING, FlowRunStatus.PAUSED}
+                ),
+                None,
+            )
+            if active_or_paused is not None:
+                ensure_result = ensure_worker(
+                    workspace_root,
+                    active_or_paused.id,
+                    is_terminal=active_or_paused.status.is_terminal(),
+                )
+                self._close_worker_handles(ensure_result)
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    f"Reusing ticket_flow run {active_or_paused.id} ({active_or_paused.status.value}).",
+                )
+                return
+
+        metadata: dict[str, Any] = {"origin": "discord", "force_new": force_new}
+        if isinstance(restart_from, str) and restart_from.strip():
+            metadata["restart_from"] = restart_from.strip()
+
+        controller = build_ticket_flow_controller(workspace_root)
+        try:
+            started = await controller.start_flow(input_data={}, metadata=metadata)
+        except ValueError as exc:
+            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            return
+
+        ensure_result = ensure_worker(
+            workspace_root, started.id, is_terminal=started.status.is_terminal()
+        )
+        self._close_worker_handles(ensure_result)
+        prefix = "Started new" if force_new else "Started"
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"{prefix} ticket_flow run {started.id}.",
+        )
+
+    async def _handle_flow_restart(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        run_id_opt = options.get("run_id")
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.flow.store_open_failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            target: Optional[FlowRunRecord] = None
+            if isinstance(run_id_opt, str) and run_id_opt.strip():
+                try:
+                    target = self._resolve_flow_run_by_id(
+                        store, run_id=run_id_opt.strip()
+                    )
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        run_id=run_id_opt.strip(),
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow run: {exc}",
+                        user_message="Unable to query flow database. Please try again later.",
+                    ) from None
+            else:
+                try:
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        workspace_root=str(workspace_root),
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow runs: {exc}",
+                        user_message="Unable to query flow database. Please try again later.",
+                    ) from None
+                target = next(
+                    (record for record in runs if record.status.is_active()), None
+                )
+        finally:
+            store.close()
+
+        if isinstance(run_id_opt, str) and run_id_opt.strip() and target is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"No ticket_flow run found for run_id {run_id_opt.strip()}.",
+            )
+            return
+
+        if target is not None and target.status.is_active():
+            self._stop_flow_worker(workspace_root, target.id)
+            controller = build_ticket_flow_controller(workspace_root)
+            try:
+                await controller.stop_flow(target.id)
+            except ValueError as exc:
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, str(exc)
+                )
+                return
+            latest = await self._wait_for_flow_terminal(workspace_root, target.id)
+            if latest is None or not latest.status.is_terminal():
+                status_value = latest.status.value if latest is not None else "unknown"
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    (
+                        f"Run {target.id} is still active ({status_value}); "
+                        "restart aborted to avoid concurrent workers. Try again after it stops."
+                    ),
+                )
+                return
+
+        await self._handle_flow_start(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options={
+                "force_new": True,
+                "restart_from": target.id if target is not None else None,
+            },
+        )
+
     async def _handle_flow_recover(
         self,
         interaction_id: str,
@@ -4364,6 +4660,57 @@ class DiscordBotService:
             close = getattr(handle, "close", None)
             if callable(close):
                 close()
+
+    @staticmethod
+    def _stop_flow_worker(workspace_root: Path, run_id: str) -> None:
+        health = check_worker_health(workspace_root, run_id)
+        if health.is_alive and health.pid:
+            try:
+                subprocess.run(["kill", str(health.pid)], check=False)
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Failed to stop worker %s: %s", run_id, exc
+                )
+        if health.status in {"dead", "mismatch", "invalid"}:
+            clear_worker_metadata(health.artifact_path.parent)
+
+    async def _wait_for_flow_terminal(
+        self,
+        workspace_root: Path,
+        run_id: str,
+        *,
+        timeout_seconds: float = 10.0,
+        poll_interval_seconds: float = 0.25,
+    ) -> Optional[FlowRunRecord]:
+        deadline = time.monotonic() + max(timeout_seconds, poll_interval_seconds)
+        latest: Optional[FlowRunRecord] = None
+
+        while time.monotonic() < deadline:
+            try:
+                store = self._open_flow_store(workspace_root)
+            except (sqlite3.Error, OSError, RuntimeError):
+                break
+            try:
+                record = self._resolve_flow_run_by_id(store, run_id=run_id)
+                if record is None:
+                    return None
+                latest = record
+                if record.status.is_terminal():
+                    return record
+                record, _updated, locked = reconcile_flow_run(
+                    workspace_root, record, store
+                )
+                latest = record
+                if record.status.is_terminal():
+                    return record
+                if locked:
+                    # Another reconciler holds the lock; keep polling.
+                    pass
+            finally:
+                store.close()
+            await asyncio.sleep(poll_interval_seconds)
+
+        return latest
 
     async def _handle_flow_resume(
         self,
@@ -5573,6 +5920,41 @@ class DiscordBotService:
                     interaction_id,
                 )
 
+    async def _update_component_message(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        max_len = max(int(self._config.max_message_length), 32)
+        content = truncate_for_discord(text, max_len=max_len)
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={
+                    "type": 7,
+                    "data": {
+                        "content": content,
+                        "components": components,
+                    },
+                },
+            )
+        except DiscordAPIError as exc:
+            sent_followup = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=content,
+                components=components,
+            )
+            if not sent_followup:
+                self._logger.error(
+                    "Failed to update component message: %s (interaction_id=%s)",
+                    exc,
+                    interaction_id,
+                )
+
     async def _send_followup_ephemeral(
         self,
         *,
@@ -5693,6 +6075,21 @@ class DiscordBotService:
                     )
                 return
 
+            if custom_id == "cancel_turn":
+                await self._handle_cancel_turn_button(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                return
+
+            if custom_id == "continue_turn":
+                await self._handle_continue_turn_button(
+                    interaction_id,
+                    interaction_token,
+                )
+                return
+
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -5786,6 +6183,13 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                )
+                return
+
+            if custom_id == "continue_turn":
+                await self._handle_continue_turn_button(
+                    interaction_id,
+                    interaction_token,
                 )
                 return
 
@@ -5936,6 +6340,13 @@ class DiscordBotService:
                 interaction_token,
                 f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']}).",
             )
+        elif action == "restart":
+            await self._handle_flow_restart(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options={"run_id": run_id},
+            )
         elif action == "refresh":
             await self._handle_flow_status(
                 interaction_id,
@@ -5944,6 +6355,7 @@ class DiscordBotService:
                 options={"run_id": run_id},
                 channel_id=channel_id,
                 guild_id=guild_id,
+                update_message=True,
             )
         else:
             await self._respond_ephemeral(
@@ -6557,9 +6969,53 @@ class DiscordBotService:
         chunks = chunk_discord_message(
             f"**Conversation Summary:**\n\n{response_text}",
             max_len=self._config.max_message_length,
-            with_numbering=True,
+            with_numbering=False,
         )
-        for chunk in chunks:
+        if not chunks:
+            chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
+
+        next_chunk_index = 0
+        continue_button_applied = False
+        preview_message_id = (
+            turn_result.preview_message_id
+            if isinstance(turn_result.preview_message_id, str)
+            and turn_result.preview_message_id
+            else None
+        )
+
+        if preview_message_id:
+            try:
+                await self._rest.edit_channel_message(
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    payload={
+                        "content": chunks[0],
+                        "components": [build_continue_turn_button()],
+                    },
+                )
+                continue_button_applied = True
+                next_chunk_index = 1
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.compact.preview_edit_failed",
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    exc=exc,
+                )
+
+        if not continue_button_applied:
+            await self._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": chunks[0],
+                    "components": [build_continue_turn_button()],
+                },
+            )
+            next_chunk_index = 1
+
+        for chunk in chunks[next_chunk_index:]:
             await self._send_channel_message_safe(channel_id, {"content": chunk})
 
     async def _handle_car_rollout(
@@ -6796,6 +7252,20 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+        )
+
+    async def _handle_continue_turn_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> None:
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            (
+                "Compaction complete. Send your next message to continue this "
+                "session, or use `/car new` to start a fresh session."
+            ),
         )
 
 

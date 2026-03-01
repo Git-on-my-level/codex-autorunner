@@ -31,6 +31,8 @@ Use `/car flow ...` for ticket flow actions:
 - `/car flow runs [limit]`
 - `/car flow issue issue_ref:<issue#|url>`
 - `/car flow plan text:<plan>`
+- `/car flow start [force_new]`
+- `/car flow restart [run_id]`
 - `/car flow resume [run_id]`
 - `/car flow stop [run_id]`
 - `/car flow recover [run_id]`

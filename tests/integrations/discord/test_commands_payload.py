@@ -65,6 +65,8 @@ def test_build_application_commands_structure_is_stable() -> None:
         "runs",
         "issue",
         "plan",
+        "start",
+        "restart",
         "resume",
         "stop",
         "archive",
@@ -111,6 +113,14 @@ def test_required_options_are_marked_required() -> None:
     flow_plan = _find_option(flow["options"], "plan")
     flow_plan_text = _find_option(flow_plan["options"], "text")
     assert flow_plan_text["required"] is True
+
+    flow_start = _find_option(flow["options"], "start")
+    flow_start_force_new = _find_option(flow_start["options"], "force_new")
+    assert flow_start_force_new["required"] is False
+
+    flow_restart = _find_option(flow["options"], "restart")
+    flow_restart_run_id = _find_option(flow_restart["options"], "run_id")
+    assert flow_restart_run_id["required"] is False
 
     flow_recover = _find_option(flow["options"], "recover")
     flow_recover_run_id = _find_option(flow_recover["options"], "run_id")

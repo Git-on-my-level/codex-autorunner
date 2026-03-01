@@ -60,6 +60,9 @@ _FLOW_ACTION_TOKENS = {
     "help",
     "status",
     "runs",
+    "start",
+    "bootstrap",
+    "restart",
     "issue",
     "plan",
     "resume",
@@ -115,6 +118,8 @@ def _flow_help_lines() -> list[str]:
         "Flow commands:",
         "/flow status [run_id]",
         "/flow runs [N]",
+        "/flow start [--force-new]",
+        "/flow restart [run_id]",
         "/flow issue <issue#|url>",
         "/flow plan <text>",
         "/flow resume [run_id]",
@@ -562,6 +567,12 @@ class FlowCommands(SharedHelpers):
                 await self._handle_flow_runs(
                     message, repo_root, rest_argv, repo_id=target_repo_id
                 )
+                return
+            if action in {"start", "bootstrap"}:
+                await self._handle_flow_bootstrap(message, repo_root, rest_argv)
+                return
+            if action == "restart":
+                await self._handle_flow_restart(message, repo_root, rest_argv)
                 return
             if action == "issue":
                 await self._handle_flow_issue(message, repo_root, remainder)
@@ -1859,8 +1870,25 @@ You are the first ticket in a new ticket_flow run.
             run_id_raw = self._first_non_flag(argv)
             if run_id_raw:
                 run_id, error = self._resolve_run_id_input(store, run_id_raw)
-                if error is None and run_id:
+                if error:
+                    await self._send_message(
+                        message.chat_id,
+                        error,
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                if run_id:
                     record = store.get_flow_run(run_id)
+                    if record is None:
+                        await self._send_message(
+                            message.chat_id,
+                            f"No ticket flow run found for {_code(run_id)}.",
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            parse_mode="Markdown",
+                        )
+                        return
             else:
                 record = _select_latest_run(store, lambda run: run.status.is_active())
         finally:

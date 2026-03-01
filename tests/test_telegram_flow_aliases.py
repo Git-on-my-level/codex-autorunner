@@ -46,6 +46,41 @@ class _FlowReplyAliasHandler(FlowCommands):
         _ = (thread_id, reply_to, reply_markup)
 
 
+class _FlowStartRestartAliasHandler(FlowCommands):
+    def __init__(self, repo_root: Path) -> None:
+        self._store = _TopicStoreStub(repo_root)
+        self.bootstrap_calls: list[list[str]] = []
+        self.restart_calls: list[list[str]] = []
+
+    async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
+        return "topic"
+
+    async def _handle_flow_bootstrap(
+        self, _message: TelegramMessage, _repo_root: Path, argv: list[str]
+    ) -> None:
+        self.bootstrap_calls.append(argv)
+
+    async def _handle_flow_restart(
+        self, _message: TelegramMessage, _repo_root: Path, argv: list[str]
+    ) -> None:
+        self.restart_calls.append(argv)
+
+    def _resolve_workspace(self, _key: str) -> tuple[str, Path] | None:
+        return None
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        _text: str,
+        *,
+        thread_id: int | None = None,
+        reply_to: int | None = None,
+        reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
+        _ = (thread_id, reply_to, reply_markup, parse_mode)
+
+
 def _message(text: str) -> TelegramMessage:
     return TelegramMessage(
         update_id=1,
@@ -73,3 +108,21 @@ async def test_flow_command_errors_are_reported(tmp_path: Path) -> None:
     await handler._handle_flow(message, "reply hello world")
 
     assert handler.reply_args == []
+
+
+@pytest.mark.anyio
+async def test_flow_start_alias_routes_to_bootstrap(tmp_path: Path) -> None:
+    handler = _FlowStartRestartAliasHandler(tmp_path)
+    await handler._handle_flow(_message("/flow start --force-new"), "start --force-new")
+    assert handler.bootstrap_calls == [["--force-new"]]
+    assert handler.restart_calls == []
+
+
+@pytest.mark.anyio
+async def test_flow_restart_alias_routes_to_restart(tmp_path: Path) -> None:
+    handler = _FlowStartRestartAliasHandler(tmp_path)
+    await handler._handle_flow(
+        _message("/flow restart abc"), "restart 01234567-89ab-cdef-0123-456789abcdef"
+    )
+    assert handler.restart_calls == [["01234567-89ab-cdef-0123-456789abcdef"]]
+    assert handler.bootstrap_calls == []
