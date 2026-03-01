@@ -125,20 +125,6 @@ interface HubJob {
   };
 }
 
-interface SeriesEntry {
-  key?: string;
-  repo?: string | null;
-  token_type?: string | null;
-  total?: number;
-  values?: number[];
-}
-
-interface HubChartData {
-  buckets?: string[];
-  series?: SeriesEntry[];
-  status?: string;
-}
-
 interface UpdateCheckResponse {
   update_available?: boolean;
   message?: string;
@@ -214,9 +200,6 @@ const runningEl = document.getElementById("hub-count-running");
 const missingEl = document.getElementById("hub-count-missing");
 const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
-const hubUsageChartCanvas = document.getElementById("hub-usage-chart-canvas");
-const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
-const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const pmaVersionEl = document.getElementById("pma-version");
 const hubChannelQueryInput = document.getElementById(
@@ -242,19 +225,6 @@ const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
 const HUB_JOB_TIMEOUT_MS = 180000;
 
-interface HubUsageChartState {
-  segment: string;
-  bucket: string;
-  windowDays: number;
-}
-
-const hubUsageChartState: HubUsageChartState = {
-  segment: "none",
-  bucket: "day",
-  windowDays: 30,
-};
-
-let hubUsageSeriesRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let hubUsageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let hubUsageIndex: Record<string, HubUsageRepo> = {};
 let hubUsageUnmatched: HubUsageData["unmatched"] | null = null;
@@ -529,14 +499,6 @@ function formatTokensCompact(val: number | string | null | undefined): string {
   return num.toLocaleString();
 }
 
-function formatTokensAxis(val: number | string): string {
-  const num = Number(val);
-  if (Number.isNaN(num)) return "0";
-  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
-  return Math.round(num).toString();
-}
-
 function getRepoUsage(repoId: string): { label: string; hasData: boolean } {
   const usage = hubUsageIndex[repoId];
   if (!usage) return { label: "—", hasData: false };
@@ -621,7 +583,6 @@ async function loadHubUsage({ silent = false, allowRetry = true }: LoadHubUsageO
       cachedUsage,
       allowRetry,
     });
-    loadHubUsageSeries();
     if (shouldCache) {
       saveSessionCache(HUB_USAGE_CACHE_KEY, data);
     }
@@ -636,328 +597,6 @@ async function loadHubUsage({ silent = false, allowRetry = true }: LoadHubUsageO
     clearHubUsageSummaryRetry();
   } finally {
     if (!silent && hubUsageRefresh) (hubUsageRefresh as HTMLButtonElement).disabled = false;
-  }
-}
-
-function buildHubUsageSeriesQuery(): string {
-  const params = new URLSearchParams();
-  const now = new Date();
-  const since = new Date(now.getTime() - hubUsageChartState.windowDays * 86400000);
-  const bucket = hubUsageChartState.windowDays >= 180 ? "week" : "day";
-  params.set("since", since.toISOString());
-  params.set("until", now.toISOString());
-  params.set("bucket", bucket);
-  params.set("segment", hubUsageChartState.segment);
-  return params.toString();
-}
-
-function renderHubUsageChart(data: HubChartData | null): void {
-  if (!hubUsageChartCanvas) return;
-  const buckets = data?.buckets || [];
-  const series = data?.series || [];
-  const isLoading = data?.status === "loading";
-  if (!buckets.length || !series.length) {
-    (hubUsageChartCanvas as unknown as { __usageChartBound: boolean }).__usageChartBound = false;
-    hubUsageChartCanvas.innerHTML = isLoading
-      ? '<div class="usage-chart-empty">Loading…</div>'
-      : '<div class="usage-chart-empty">No data</div>';
-    return;
-  }
-
-  const { width, height } = getChartSize(hubUsageChartCanvas, 560, 160);
-  const padding = 14;
-  const chartWidth = width - padding * 2;
-  const chartHeight = height - padding * 2;
-  const colors = [
-    "#6cf5d8",
-    "#6ca8ff",
-    "#f5b86c",
-    "#f56c8a",
-    "#84d1ff",
-    "#9be26f",
-    "#f2a0c5",
-    "#c18bff",
-    "#f5d36c",
-  ];
-
-  const { series: displaySeries } = normalizeSeries(
-    limitSeries(series, 6, "rest").series,
-    buckets.length
-  );
-
-  const totals = new Array(buckets.length).fill(0);
-  displaySeries.forEach((entry) => {
-    (entry.values || []).forEach((value, i) => {
-      totals[i] += value;
-    });
-  });
-  const scaleMax = Math.max(...totals, 1);
-
-  let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="Hub usage trend">`;
-  svg += `
-    <defs></defs>
-  `;
-
-  const gridLines = 3;
-  for (let i = 1; i <= gridLines; i += 1) {
-    const y = padding + (chartHeight / (gridLines + 1)) * i;
-    svg += `<line x1="${padding}" y1="${y}" x2="${
-      padding + chartWidth
-    }" y2="${y}" stroke="rgba(108, 245, 216, 0.12)" stroke-width="1" />`;
-  }
-
-  const maxLabel = formatTokensAxis(scaleMax);
-  const midLabel = formatTokensAxis(scaleMax / 2);
-  svg += `<text x="${padding}" y="${padding + 12}" fill="rgba(203, 213, 225, 0.7)" font-size="9">${maxLabel}</text>`;
-  svg += `<text x="${padding}" y="${
-    padding + chartHeight / 2 + 4
-  }" fill="rgba(203, 213, 225, 0.6)" font-size="9">${midLabel}</text>`;
-  svg += `<text x="${padding}" y="${
-    padding + chartHeight + 2
-  }" fill="rgba(203, 213, 225, 0.5)" font-size="9">0</text>`;
-
-  const count = buckets.length;
-  const barWidth = count ? chartWidth / count : chartWidth;
-  const gap = Math.max(1, Math.round(barWidth * 0.2));
-  const usableWidth = Math.max(1, barWidth - gap);
-  if (hubUsageChartState.segment === "none") {
-    const values = displaySeries[0]?.values || [];
-    values.forEach((value, i) => {
-      const x = padding + i * barWidth + gap / 2;
-      const h = (value / scaleMax) * chartHeight;
-      const y = padding + chartHeight - h;
-      svg += `<rect x="${x}" y="${y}" width="${usableWidth}" height="${h}" fill="#6cf5d8" opacity="0.75" rx="2" />`;
-    });
-  } else {
-    const accum = new Array(count).fill(0);
-    displaySeries.forEach((entry, idx) => {
-      const color = colors[idx % colors.length];
-      const values = entry.values || [];
-      values.forEach((value, i) => {
-        if (!value) return;
-        const base = accum[i];
-        accum[i] += value;
-        const h = (value / scaleMax) * chartHeight;
-        const y = padding + chartHeight - (base / scaleMax) * chartHeight - h;
-        const x = padding + i * barWidth + gap / 2;
-        svg += `<rect x="${x}" y="${y}" width="${usableWidth}" height="${h}" fill="${color}" opacity="0.55" rx="2" />`;
-      });
-    });
-  }
-
-  svg += "</svg>";
-  (hubUsageChartCanvas as unknown as { __usageChartBound: boolean }).__usageChartBound = false;
-  hubUsageChartCanvas.innerHTML = svg;
-  attachHubUsageChartInteraction(hubUsageChartCanvas, {
-    buckets,
-    series: displaySeries,
-    segment: hubUsageChartState.segment,
-    scaleMax,
-    width,
-    height,
-    padding,
-    chartWidth,
-    chartHeight,
-  });
-}
-
-function getChartSize(container: HTMLElement, fallbackWidth: number, fallbackHeight: number): { width: number; height: number } {
-  const rect = container.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width || fallbackWidth));
-  const height = Math.max(1, Math.round(rect.height || fallbackHeight));
-  return { width, height };
-}
-
-function limitSeries(series: SeriesEntry[], maxSeries: number, restKey: string): { series: SeriesEntry[] } {
-  if (series.length <= maxSeries) return { series };
-  const sorted = [...series].sort((a, b) => (b.total || 0) - (a.total || 0));
-  const top = sorted.slice(0, maxSeries).filter((entry) => (entry.total || 0) > 0);
-  const rest = sorted.slice(maxSeries);
-  if (!rest.length) return { series: top };
-  const values = new Array((top[0]?.values || []).length).fill(0);
-  rest.forEach((entry) => {
-    (entry.values || []).forEach((value, i) => {
-      values[i] += value;
-    });
-  });
-  const total = values.reduce((sum, value) => sum + value, 0);
-  if (total > 0) {
-    top.push({ key: restKey, repo: null, token_type: null, total, values });
-  }
-  return { series: top.length ? top : series };
-}
-
-function normalizeSeries(series: SeriesEntry[], length: number): { series: SeriesEntry[] } {
-  const normalized = series.map((entry) => {
-    const values = (entry.values || []).slice(0, length);
-    while (values.length < length) values.push(0);
-    return { ...entry, values, total: values.reduce((sum, v) => sum + v, 0) };
-  });
-  return { series: normalized };
-}
-
-interface ChartInteractionState {
-  buckets: string[];
-  series: SeriesEntry[];
-  segment: string;
-  scaleMax: number;
-  width: number;
-  height: number;
-  padding: number;
-  chartWidth: number;
-  chartHeight: number;
-}
-
-function attachHubUsageChartInteraction(container: HTMLElement, state: ChartInteractionState): void {
-  (container as unknown as { __usageChartState: ChartInteractionState }).__usageChartState = state;
-  if ((container as unknown as { __usageChartBound: boolean }).__usageChartBound) return;
-  (container as unknown as { __usageChartBound: boolean }).__usageChartBound = true;
-
-  const focus = document.createElement("div");
-  focus.className = "usage-chart-focus";
-  const dot = document.createElement("div");
-  dot.className = "usage-chart-dot";
-  const tooltip = document.createElement("div");
-  tooltip.className = "usage-chart-tooltip";
-  container.appendChild(focus);
-  container.appendChild(dot);
-  container.appendChild(tooltip);
-
-  const updateTooltip = (event: PointerEvent) => {
-    const chartState = (container as unknown as { __usageChartState: ChartInteractionState }).__usageChartState;
-    if (!chartState) return;
-    const rect = container.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const normalizedX = (x / rect.width) * chartState.width;
-    const count = chartState.buckets.length;
-    const usableWidth = chartState.chartWidth;
-    const localX = Math.min(
-      Math.max(normalizedX - chartState.padding, 0),
-      usableWidth
-    );
-    const barWidth = count ? usableWidth / count : usableWidth;
-    const index = Math.floor(localX / barWidth);
-    const clampedIndex = Math.max(
-      0,
-      Math.min(chartState.buckets.length - 1, index)
-    );
-    const xPos =
-      chartState.padding + clampedIndex * barWidth + barWidth / 2;
-
-    const totals = chartState.series.reduce((sum, entry) => {
-      return sum + (entry.values?.[clampedIndex] || 0);
-    }, 0);
-    const yPos =
-      chartState.padding +
-      chartState.chartHeight -
-      (totals / chartState.scaleMax) * chartState.chartHeight;
-
-    focus.style.opacity = "1";
-    dot.style.opacity = "1";
-    focus.style.left = `${(xPos / chartState.width) * 100}%`;
-    dot.style.left = `${(xPos / chartState.width) * 100}%`;
-    dot.style.top = `${(yPos / chartState.height) * 100}%`;
-
-    const bucketLabel = chartState.buckets[clampedIndex];
-    const rows: string[] = [];
-    rows.push(
-      `<div class="usage-chart-tooltip-row"><span>Total</span><span>${escapeHtml(
-        formatTokensCompact(totals)
-      )}</span></div>`
-    );
-
-    if (chartState.segment !== "none") {
-      const ranked = chartState.series
-        .map((entry) => ({
-          key: entry.key || "unknown",
-          value: entry.values?.[clampedIndex] || 0,
-        }))
-        .filter((entry) => entry.value > 0)
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 6);
-      ranked.forEach((entry) => {
-        rows.push(
-          `<div class="usage-chart-tooltip-row"><span>${escapeHtml(
-            entry.key
-          )}</span><span>${escapeHtml(
-            formatTokensCompact(entry.value)
-          )}</span></div>`
-        );
-      });
-    }
-
-    tooltip.innerHTML = `<div class="usage-chart-tooltip-title">${escapeHtml(
-      bucketLabel
-    )}</div>${rows.join("")}`;
-
-    const tooltipRect = tooltip.getBoundingClientRect();
-    let tooltipLeft = x + 12;
-    if (tooltipLeft + tooltipRect.width > rect.width) {
-      tooltipLeft = x - tooltipRect.width - 12;
-    }
-    tooltipLeft = Math.max(6, tooltipLeft);
-    const tooltipTop = 6;
-    tooltip.style.opacity = "1";
-    tooltip.style.transform = `translate(${tooltipLeft}px, ${tooltipTop}px)`;
-  };
-
-  container.addEventListener("pointermove", updateTooltip);
-  container.addEventListener("pointerleave", () => {
-    focus.style.opacity = "0";
-    dot.style.opacity = "0";
-    tooltip.style.opacity = "0";
-  });
-}
-
-async function loadHubUsageSeries(): Promise<void> {
-  if (!hubUsageChartCanvas) return;
-  try {
-    const data = await api(`/hub/usage/series?${buildHubUsageSeriesQuery()}`) as HubChartData;
-    hubUsageChartCanvas.classList.toggle("loading", data?.status === "loading");
-    renderHubUsageChart(data);
-    if (data?.status === "loading") {
-      scheduleHubUsageSeriesRetry();
-    } else {
-      clearHubUsageSeriesRetry();
-    }
-  } catch (_err) {
-    hubUsageChartCanvas.classList.remove("loading");
-    renderHubUsageChart(null);
-    clearHubUsageSeriesRetry();
-  }
-}
-
-function scheduleHubUsageSeriesRetry(): void {
-  clearHubUsageSeriesRetry();
-  hubUsageSeriesRetryTimer = setTimeout(() => {
-    loadHubUsageSeries();
-  }, 1500);
-}
-
-function clearHubUsageSeriesRetry(): void {
-  if (hubUsageSeriesRetryTimer) {
-    clearTimeout(hubUsageSeriesRetryTimer);
-    hubUsageSeriesRetryTimer = null;
-  }
-}
-
-function initHubUsageChartControls(): void {
-  if (hubUsageChartRange) {
-    (hubUsageChartRange as HTMLSelectElement).value = String(hubUsageChartState.windowDays);
-    hubUsageChartRange.addEventListener("change", () => {
-      const value = Number((hubUsageChartRange as HTMLSelectElement).value);
-      hubUsageChartState.windowDays = Number.isNaN(value)
-        ? hubUsageChartState.windowDays
-        : value;
-      loadHubUsageSeries();
-    });
-  }
-  if (hubUsageChartSegment) {
-    (hubUsageChartSegment as HTMLSelectElement).value = hubUsageChartState.segment;
-    hubUsageChartSegment.addEventListener("change", () => {
-      hubUsageChartState.segment = (hubUsageChartSegment as HTMLSelectElement).value;
-      loadHubUsageSeries();
-    });
   }
 }
 
@@ -2568,7 +2207,6 @@ export function initHub(): void {
   attachHubHandlers();
   initHubRepoListControls();
   if (!repoListEl) return;
-  initHubUsageChartControls();
   initNotificationBell();
   const cachedHub = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
   if (cachedHub) {
@@ -2581,7 +2219,6 @@ export function initHub(): void {
     indexHubUsage(cachedUsage);
     renderHubUsageMeta(cachedUsage);
   }
-  loadHubUsageSeries();
   loadHubChannelDirectory({ silent: true }).catch(() => {});
   refreshHub();
   loadHubVersion();
