@@ -155,16 +155,12 @@ class PmaDeliveryTargetsStore:
                 for key in target_keys
                 if isinstance(existing_last.get(key), str)
             }
-            active_target_key = self._normalize_active_target_key(
-                existing.get("active_target_key"),
-                target_keys=target_keys,
-            )
             payload = {
                 "version": 1,
                 "updated_at": now_iso(),
                 "targets": normalized_targets,
                 "last_delivery_by_target": next_last,
-                "active_target_key": active_target_key,
+                "active_target_key": None,
             }
             self._save_unlocked(payload)
             return payload
@@ -188,15 +184,8 @@ class PmaDeliveryTargetsStore:
                     break
             if not replaced:
                 targets.append(normalized)
-            target_keys = [
-                candidate_key
-                for candidate_key in (target_key(item) for item in targets)
-                if isinstance(candidate_key, str)
-            ]
             payload["targets"] = targets
-            payload["active_target_key"] = self._normalize_active_target_key(
-                payload.get("active_target_key"), target_keys=target_keys
-            )
+            payload["active_target_key"] = None
             payload["updated_at"] = now_iso()
             self._save_unlocked(payload)
             return payload
@@ -219,17 +208,10 @@ class PmaDeliveryTargetsStore:
             if len(filtered) == len(targets):
                 return False
             payload["targets"] = filtered
-            target_keys = [
-                candidate_key
-                for candidate_key in (target_key(item) for item in filtered)
-                if isinstance(candidate_key, str)
-            ]
             last_delivery = dict(payload.get("last_delivery_by_target") or {})
             last_delivery.pop(key, None)
             payload["last_delivery_by_target"] = last_delivery
-            payload["active_target_key"] = self._normalize_active_target_key(
-                payload.get("active_target_key"), target_keys=target_keys
-            )
+            payload["active_target_key"] = None
             payload["updated_at"] = now_iso()
             self._save_unlocked(payload)
             return True
@@ -269,53 +251,14 @@ class PmaDeliveryTargetsStore:
             return True
 
     def get_active_target_key(self) -> Optional[str]:
-        state = self.load()
-        target_keys = {
-            key
-            for key in (target_key(item) for item in state.get("targets", []))
-            if isinstance(key, str)
-        }
-        active_target_key = state.get("active_target_key")
-        if isinstance(active_target_key, str) and active_target_key in target_keys:
-            return active_target_key
         return None
 
     def get_active_target(self) -> Optional[dict[str, Any]]:
-        state = self.load()
-        active_target_key = self.get_active_target_key()
-        if active_target_key is None:
-            return None
-        for item in state.get("targets", []):
-            if not isinstance(item, dict):
-                continue
-            if target_key(item) == active_target_key:
-                return item
         return None
 
     def set_active_target(self, target_or_key: Mapping[str, Any] | str) -> bool:
-        if isinstance(target_or_key, str):
-            key = target_or_key.strip() or None
-        else:
-            key = target_key(target_or_key)
-        if not isinstance(key, str):
-            return False
-        with file_lock(self._lock_path()):
-            payload = self._load_unlocked()
-            target_keys = {
-                candidate_key
-                for candidate_key in (
-                    target_key(item) for item in payload.get("targets", [])
-                )
-                if isinstance(candidate_key, str)
-            }
-            if key not in target_keys:
-                return False
-            if payload.get("active_target_key") == key:
-                return False
-            payload["active_target_key"] = key
-            payload["updated_at"] = now_iso()
-            self._save_unlocked(payload)
-            return True
+        _ = target_or_key
+        return False
 
     def _load_unlocked(self) -> dict[str, Any]:
         payload = self._read_json_object(self._path)
@@ -347,7 +290,7 @@ class PmaDeliveryTargetsStore:
             "updated_at": updated_at,
             "targets": [target] if target is not None else [],
             "last_delivery_by_target": last_delivery_by_target,
-            "active_target_key": key if target is not None else None,
+            "active_target_key": None,
         }
 
     def _legacy_payload_to_target(
@@ -422,27 +365,19 @@ class PmaDeliveryTargetsStore:
                 if isinstance(value, str) and value:
                     normalized_last_delivery[key] = value
 
-        active_target_key = self._normalize_active_target_key(
-            payload.get("active_target_key"),
-            target_keys=keys,
-        )
-
         updated_at = _optional_text(payload.get("updated_at")) or now_iso()
         return {
             "version": 1,
             "updated_at": updated_at,
             "targets": normalized_targets,
             "last_delivery_by_target": normalized_last_delivery,
-            "active_target_key": active_target_key,
+            "active_target_key": None,
         }
 
     def _normalize_active_target_key(
         self, candidate: Any, *, target_keys: list[str]
     ) -> Optional[str]:
-        if isinstance(candidate, str):
-            normalized = candidate.strip()
-            if normalized and normalized in target_keys:
-                return normalized
+        _ = candidate, target_keys
         return None
 
     def _read_json_object(self, path: Path) -> Optional[dict[str, Any]]:

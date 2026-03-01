@@ -48,9 +48,7 @@ All durable artifacts must live under one of these roots:
 - `config.yml` - Hub config
 - `codex-autorunner-hub.log` - Hub logs
 - `templates/` - Hub-scoped templates
-- `pma/delivery_targets.json` - PMA delivery target intent + per-target delivery bookkeeping
-- `chat/channel_directory.json` - Derived cross-platform channel directory cache
-- `pma/deliveries.jsonl` - PMA delivery mirror log (when local mirroring is enabled)
+- `chat/channel_directory.json` - Cross-platform channel directory used for lightweight routing context
 
 **Resolution**: Hub root is typically the hub's repo root, using repo-local patterns.
 

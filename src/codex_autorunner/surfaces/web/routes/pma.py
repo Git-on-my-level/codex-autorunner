@@ -42,7 +42,7 @@ from ....core.pma_context import (
     get_active_context_auto_prune_meta,
     load_pma_prompt,
 )
-from ....core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
+from ....core.pma_delivery_targets import PmaDeliveryTargetsStore
 from ....core.pma_dispatches import (
     find_pma_dispatch_path,
     list_pma_dispatches,
@@ -53,13 +53,7 @@ from ....core.pma_lane_worker import PmaLaneWorker
 from ....core.pma_lifecycle import PmaLifecycleRouter
 from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
-from ....core.pma_sink import PmaActiveSinkStore
 from ....core.pma_state import PmaStateStore
-from ....core.pma_target_refs import (
-    format_pma_target_label,
-    invalid_pma_target_ref_message,
-    parse_pma_target_ref,
-)
 from ....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -70,10 +64,6 @@ from ....core.state_roots import is_within_allowed_root
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
-from ....integrations.chat.channel_directory import (
-    ChannelDirectoryStore,
-    channel_entry_key,
-)
 from ....integrations.discord.config import (
     DEFAULT_STATE_FILE as DISCORD_DEFAULT_STATE_FILE,
 )
@@ -482,68 +472,29 @@ def build_pma_routes() -> APIRouter:
             payload["delivery_status"] = delivery_status
         return payload
 
-    def _friendly_channel_label_by_target_key(hub_root: Path) -> dict[str, str]:
-        try:
-            entries = ChannelDirectoryStore(hub_root).list_entries(limit=None)
-        except Exception:
-            logger.exception("Failed to load channel directory for PMA target labels")
-            return {}
-
-        labels: dict[str, str] = {}
-        for entry in entries:
-            if not isinstance(entry, Mapping):
-                continue
-            key = channel_entry_key(entry)
-            if not isinstance(key, str) or not key:
-                continue
-            target_delivery_key = f"chat:{key}"
-            if target_delivery_key in labels:
-                continue
-            display = entry.get("display")
-            if isinstance(display, str) and display.strip():
-                labels[target_delivery_key] = display.strip()
-        return labels
-
-    def _serialize_delivery_targets_state(
-        state: dict[str, Any], *, hub_root: Optional[Path] = None
+    def _deprecated_targets_payload(
+        *, legacy_state: Optional[Mapping[str, Any]] = None
     ) -> dict[str, Any]:
-        friendly_labels: dict[str, str] = {}
-        if hub_root is not None:
-            friendly_labels = _friendly_channel_label_by_target_key(hub_root)
-        targets = [
-            target for target in state.get("targets", []) if isinstance(target, dict)
-        ]
-        raw_active_target_key = state.get("active_target_key")
-        rows: list[dict[str, Any]] = []
-        known_keys: set[str] = set()
-        for target in targets:
-            key = target_key(target)
-            if not isinstance(key, str):
-                continue
-            known_keys.add(key)
-            rows.append(
-                {
-                    "key": key,
-                    "label": format_pma_target_label(target),
-                    "friendly_label": friendly_labels.get(key),
-                    "target": target,
-                    "active": False,
-                }
-            )
-
-        active_target_key = (
-            raw_active_target_key
-            if isinstance(raw_active_target_key, str)
-            and raw_active_target_key in known_keys
-            else None
-        )
-        for row in rows:
-            row["active"] = row["key"] == active_target_key
-
+        updated_at = now_iso()
+        legacy_targets_count = 0
+        if isinstance(legacy_state, Mapping):
+            candidate_updated_at = legacy_state.get("updated_at")
+            if isinstance(candidate_updated_at, str) and candidate_updated_at:
+                updated_at = candidate_updated_at
+            targets = legacy_state.get("targets")
+            if isinstance(targets, list):
+                legacy_targets_count = len(
+                    [target for target in targets if isinstance(target, Mapping)]
+                )
         return {
-            "updated_at": state.get("updated_at"),
-            "active_target_key": active_target_key,
-            "targets": rows,
+            "status": "deprecated",
+            "deprecated": True,
+            "message": "PMA delivery targets are deprecated and ignored.",
+            "updated_at": updated_at,
+            "active_target_key": None,
+            "active_target": None,
+            "targets": [],
+            "legacy_targets_ignored": legacy_targets_count,
         }
 
     def _resolve_transcript_turn_id(
@@ -1192,81 +1143,32 @@ def build_pma_routes() -> APIRouter:
     @router.get("/targets")
     def pma_targets_list(request: Request) -> dict[str, Any]:
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        return _serialize_delivery_targets_state(
-            store.load(),
-            hub_root=request.app.state.config.root,
-        )
+        return _deprecated_targets_payload(legacy_state=store.load())
 
     @router.get("/targets/active")
     def pma_targets_active(request: Request) -> dict[str, Any]:
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        payload = _serialize_delivery_targets_state(
-            store.load(),
-            hub_root=request.app.state.config.root,
-        )
-        rows = [row for row in payload.get("targets", []) if isinstance(row, dict)]
-        active_key = payload.get("active_target_key")
-        active_row = next(
-            (row for row in rows if row.get("key") == active_key),
-            None,
-        )
-        payload["active_target"] = active_row
-        return payload
+        return _deprecated_targets_payload(legacy_state=store.load())
 
     @router.post("/targets/active")
     async def pma_targets_set_active(request: Request) -> dict[str, Any]:
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(
-                status_code=400, detail="Request body must be an object"
+                status_code=400,
+                detail="Request body must be an object",
             )
-
-        ref = str(body.get("ref") or "").strip()
-        key = str(body.get("key") or "").strip()
-        if ref:
-            target = parse_pma_target_ref(ref)
-            if target is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=invalid_pma_target_ref_message(ref),
-                )
-            parsed_key = target_key(target)
-            if not isinstance(parsed_key, str):
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid target ref '{ref}'."
-                )
-            key = parsed_key
-        if not key:
-            raise HTTPException(status_code=400, detail="ref or key is required")
-
-        sink_store = PmaActiveSinkStore(request.app.state.config.root)
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        state = store.load()
-        available_keys = {
-            row_key
-            for row_key in (target_key(item) for item in state.get("targets", []))
-            if isinstance(row_key, str)
-        }
-        if key not in available_keys:
-            raise HTTPException(status_code=404, detail=f"Target not found: {key}")
-
-        changed = sink_store.set_active_target(key)
-        payload = _serialize_delivery_targets_state(
-            store.load(),
-            hub_root=request.app.state.config.root,
-        )
-        payload["active_target"] = next(
-            (
-                row
-                for row in payload.get("targets", [])
-                if isinstance(row, dict)
-                and row.get("key") == payload.get("active_target_key")
-            ),
-            None,
-        )
+        key = str(body.get("key") or body.get("ref") or "").strip()
+        payload = _deprecated_targets_payload(legacy_state=store.load())
         payload.update(
-            {"status": "ok", "action": "set_active", "key": key, "changed": changed}
+            {
+                "action": "set_active",
+                "changed": False,
+            }
         )
+        if key:
+            payload["key"] = key
         return payload
 
     @router.post("/targets/add")
@@ -1274,29 +1176,15 @@ def build_pma_routes() -> APIRouter:
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(
-                status_code=400, detail="Request body must be an object"
-            )
-        ref = str(body.get("ref") or "").strip()
-        if not ref:
-            raise HTTPException(status_code=400, detail="ref is required")
-
-        target = parse_pma_target_ref(ref)
-        if target is None:
-            raise HTTPException(
                 status_code=400,
-                detail=invalid_pma_target_ref_message(ref),
+                detail="Request body must be an object",
             )
-        key = target_key(target)
-        if not isinstance(key, str):
-            raise HTTPException(status_code=400, detail=f"Invalid target ref '{ref}'.")
-
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        store.add_target(target)
-        payload = _serialize_delivery_targets_state(
-            store.load(),
-            hub_root=request.app.state.config.root,
-        )
-        payload.update({"status": "ok", "action": "add", "key": key})
+        key = str(body.get("ref") or body.get("key") or "").strip()
+        payload = _deprecated_targets_payload(legacy_state=store.load())
+        payload.update({"action": "add"})
+        if key:
+            payload["key"] = key
         return payload
 
     @router.post("/targets/remove")
@@ -1304,42 +1192,22 @@ def build_pma_routes() -> APIRouter:
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(
-                status_code=400, detail="Request body must be an object"
-            )
-        ref = str(body.get("ref") or "").strip()
-        if not ref:
-            raise HTTPException(status_code=400, detail="ref is required")
-
-        target = parse_pma_target_ref(ref)
-        if target is None:
-            raise HTTPException(
                 status_code=400,
-                detail=invalid_pma_target_ref_message(ref),
+                detail="Request body must be an object",
             )
-        key = target_key(target)
-        if not isinstance(key, str):
-            raise HTTPException(status_code=400, detail=f"Invalid target ref '{ref}'.")
-
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        removed = store.remove_target(target)
-        payload = _serialize_delivery_targets_state(
-            store.load(),
-            hub_root=request.app.state.config.root,
-        )
-        payload.update(
-            {"status": "ok", "action": "remove", "key": key, "removed": bool(removed)}
-        )
+        key = str(body.get("ref") or body.get("key") or "").strip()
+        payload = _deprecated_targets_payload(legacy_state=store.load())
+        payload.update({"action": "remove", "removed": False})
+        if key:
+            payload["key"] = key
         return payload
 
     @router.post("/targets/clear")
     def pma_targets_clear(request: Request) -> dict[str, Any]:
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        store.set_targets([])
-        payload = _serialize_delivery_targets_state(
-            store.load(),
-            hub_root=request.app.state.config.root,
-        )
-        payload.update({"status": "ok", "action": "clear"})
+        payload = _deprecated_targets_payload(legacy_state=store.load())
+        payload.update({"action": "clear"})
         return payload
 
     @router.get("/history")

@@ -42,8 +42,6 @@ from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
-from ...core.pma_delivery_targets import PmaDeliveryTargetsStore, target_key
-from ...core.pma_target_refs import parse_pma_target_ref, pma_targets_usage
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
@@ -791,9 +789,6 @@ class DiscordBotService:
                     snapshot,
                     prompt_text,
                     hub_root=self._config.root,
-                )
-                PmaDeliveryTargetsStore(self._config.root).add_target(
-                    self._pma_here_target(channel_id)
                 )
             except Exception as exc:
                 log_event(
@@ -2267,7 +2262,7 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, status, targets, or target.",
+                "Unknown PMA subcommand. Use on, off, or status.",
             )
             return
         await self._handle_pma_command(
@@ -3014,11 +3009,6 @@ class DiscordBotService:
             "/pma on - Enable PMA mode",
             "/pma off - Disable PMA mode",
             "/pma status - Show PMA status",
-            "/pma targets - List PMA delivery targets",
-            "/pma target add <ref> - Add a PMA delivery target",
-            "/pma target rm <ref> - Remove a PMA delivery target",
-            "/pma target clear - Clear PMA delivery targets",
-            "/pma target active [show|set <ref|key>] - Show/set active PMA delivery target",
             "",
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",
@@ -5357,7 +5347,6 @@ class DiscordBotService:
             )
             return
 
-        command_options = options or {}
         subcommand = command_path[1] if len(command_path) > 1 else "status"
 
         if subcommand == "on":
@@ -5375,25 +5364,17 @@ class DiscordBotService:
             await self._handle_pma_status(
                 interaction_id, interaction_token, channel_id=channel_id
             )
-        elif subcommand == "targets":
-            await self._handle_pma_targets_list(
+        elif subcommand in {"target", "targets"}:
+            await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-            )
-        elif subcommand == "target":
-            action = command_path[2] if len(command_path) > 2 else ""
-            await self._handle_pma_target_mutation(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                action=action,
-                options=command_options,
+                "PMA target commands were removed. PMA now supports only on/off/status.",
             )
         else:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, status, targets, or target.",
+                "Unknown PMA subcommand. Use on, off, or status.",
             )
 
     async def _handle_pma_on(
@@ -5431,17 +5412,6 @@ class DiscordBotService:
             pma_prev_workspace_path=prev_workspace,
             pma_prev_repo_id=prev_repo_id,
         )
-
-        targets_store = PmaDeliveryTargetsStore(self._config.root)
-        here_target = self._pma_here_target(channel_id)
-        state = targets_store.load()
-        current_targets = [
-            target for target in state.get("targets", []) if isinstance(target, dict)
-        ]
-        if len(current_targets) > 1:
-            targets_store.add_target(here_target)
-        else:
-            targets_store.set_targets([here_target])
 
         hint = (
             "Use /pma off to exit. Previous binding saved."
@@ -5506,13 +5476,6 @@ class DiscordBotService:
         channel_id: str,
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
-        here_key = target_key(self._pma_here_target(channel_id))
-        targets = PmaDeliveryTargetsStore(self._config.root).load().get("targets", [])
-        active_here = isinstance(here_key, str) and any(
-            target_key(candidate) == here_key
-            for candidate in targets
-            if isinstance(candidate, dict)
-        )
         if binding is None:
             await self._respond_ephemeral(
                 interaction_id,
@@ -5520,7 +5483,6 @@ class DiscordBotService:
                 "\n".join(
                     [
                         "PMA mode: disabled",
-                        f"Delivery targets include this channel: {active_here}",
                         "Current workspace: unbound",
                     ]
                 ),
@@ -5533,7 +5495,6 @@ class DiscordBotService:
         if pma_enabled:
             lines = [
                 f"PMA mode: {status}",
-                f"Delivery targets include this channel: {active_here}",
             ]
         else:
             workspace = binding.get("workspace_path", "unknown")
@@ -5547,263 +5508,6 @@ class DiscordBotService:
             interaction_token,
             "\n".join(lines),
         )
-
-    async def _handle_pma_targets_list(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> None:
-        store = PmaDeliveryTargetsStore(self._config.root)
-        state = store.load()
-        active_key = store.get_active_target_key()
-        targets = [
-            target for target in state.get("targets", []) if isinstance(target, dict)
-        ]
-        if not targets:
-            text = "PMA delivery targets: (none)"
-        else:
-            lines = ["PMA delivery targets:"]
-            for target in targets:
-                key = target_key(target)
-                if not isinstance(key, str):
-                    continue
-                label = self._format_pma_target_label(target)
-                active_suffix = " [active]" if key == active_key else ""
-                if label:
-                    lines.append(f"- {key} ({label}){active_suffix}")
-                else:
-                    lines.append(f"- {key}{active_suffix}")
-            text = "\n".join(lines)
-        await self._respond_ephemeral(interaction_id, interaction_token, text)
-
-    async def _handle_pma_target_mutation(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        channel_id: str,
-        action: str,
-        options: dict[str, Any],
-    ) -> None:
-        action_norm = action.strip().lower()
-        store = PmaDeliveryTargetsStore(self._config.root)
-        if action_norm == "clear":
-            store.set_targets([])
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Cleared PMA delivery targets.",
-            )
-            return
-
-        if action_norm == "active":
-            raw_ref = options.get("ref")
-            ref_or_key = raw_ref.strip() if isinstance(raw_ref, str) else ""
-            if not ref_or_key:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    self._format_pma_active_target(store),
-                )
-                return
-            active_argv = ref_or_key.split(maxsplit=1)
-            if active_argv:
-                subaction = active_argv[0].lower()
-                if subaction in {"show", "status"} and len(active_argv) == 1:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        self._format_pma_active_target(store),
-                    )
-                    return
-                if subaction == "set":
-                    ref_or_key = active_argv[1].strip() if len(active_argv) > 1 else ""
-            key, error = self._resolve_pma_target_key_for_active(
-                channel_id=channel_id,
-                store=store,
-                ref_or_key=ref_or_key,
-            )
-            if error:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    error,
-                )
-                return
-            if not isinstance(key, str):
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Unable to resolve target key.",
-                )
-                return
-            changed = store.set_active_target(key)
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"Set active PMA delivery target: {key}"
-                    if changed
-                    else f"PMA delivery target already active: {key}"
-                ),
-            )
-            return
-
-        if action_norm not in {"add", "rm", "remove"}:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                self._pma_usage_text(),
-            )
-            return
-
-        raw_ref = options.get("ref")
-        ref = raw_ref.strip() if isinstance(raw_ref, str) else ""
-        if not ref:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                self._pma_usage_text(),
-            )
-            return
-        target = self._parse_pma_target_ref(channel_id=channel_id, ref=ref)
-        if target is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Invalid target ref '{ref}'.\n{self._pma_usage_text()}",
-            )
-            return
-        key = target_key(target)
-        if not isinstance(key, str):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Invalid target ref '{ref}'.",
-            )
-            return
-
-        if action_norm == "add":
-            store.add_target(target)
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Added PMA delivery target: {key}",
-            )
-            return
-
-        removed = store.remove_target(target)
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            (
-                f"Removed PMA delivery target: {key}"
-                if removed
-                else f"PMA delivery target not found: {key}"
-            ),
-        )
-
-    def _pma_usage_text(self) -> str:
-        return "\n".join(
-            [
-                "Usage:",
-                "/pma on|off|status|targets",
-                "/pma target add <ref>",
-                "/pma target rm <ref>",
-                "/pma target clear",
-                "/pma target active [show|set <ref|key>]",
-                pma_targets_usage(include_here=True),
-            ]
-        )
-
-    def _format_pma_active_target(self, store: PmaDeliveryTargetsStore) -> str:
-        active_key = store.get_active_target_key()
-        if not isinstance(active_key, str):
-            return (
-                "Active PMA delivery target: (not set; use /pma target active set "
-                "<ref|key>)"
-            )
-        state = store.load()
-        active_target = next(
-            (
-                target
-                for target in state.get("targets", [])
-                if isinstance(target, dict) and target_key(target) == active_key
-            ),
-            None,
-        )
-        label = (
-            self._format_pma_target_label(active_target)
-            if isinstance(active_target, dict)
-            else ""
-        )
-        if label:
-            return f"Active PMA delivery target: {active_key} ({label})"
-        return f"Active PMA delivery target: {active_key}"
-
-    def _resolve_pma_target_key_for_active(
-        self,
-        *,
-        channel_id: str,
-        store: PmaDeliveryTargetsStore,
-        ref_or_key: str,
-    ) -> tuple[Optional[str], Optional[str]]:
-        candidate = ref_or_key.strip()
-        if not candidate:
-            return None, self._pma_usage_text()
-        state = store.load()
-        known_keys = {
-            key
-            for key in (target_key(target) for target in state.get("targets", []))
-            if isinstance(key, str)
-        }
-        target = self._parse_pma_target_ref(channel_id=channel_id, ref=candidate)
-        if target is None:
-            if candidate in known_keys:
-                return candidate, None
-            return None, f"Invalid target ref '{candidate}'.\n{self._pma_usage_text()}"
-        key = target_key(target)
-        if not isinstance(key, str):
-            return None, f"Invalid target ref '{candidate}'."
-        if key not in known_keys:
-            return None, f"PMA delivery target not found: {key}"
-        return key, None
-
-    def _pma_here_target(self, channel_id: str) -> dict[str, Any]:
-        return {
-            "kind": "chat",
-            "platform": "discord",
-            "chat_id": channel_id,
-        }
-
-    def _parse_pma_target_ref(
-        self, *, channel_id: str, ref: str
-    ) -> Optional[dict[str, Any]]:
-        return parse_pma_target_ref(ref, here_target=self._pma_here_target(channel_id))
-
-    def _format_pma_target_label(self, target: dict[str, Any]) -> str:
-        label = target.get("label")
-        if isinstance(label, str) and label.strip():
-            return label.strip()
-        kind = target.get("kind")
-        if kind == "chat":
-            platform = target.get("platform")
-            chat_id = target.get("chat_id")
-            thread_id = target.get("thread_id")
-            if (
-                isinstance(platform, str)
-                and isinstance(chat_id, str)
-                and platform
-                and chat_id
-            ):
-                if isinstance(thread_id, str) and thread_id:
-                    return f"{platform} {chat_id} thread {thread_id}"
-                return f"{platform} {chat_id}"
-        if kind == "local":
-            path = target.get("path")
-            if isinstance(path, str) and path:
-                return path
-        return ""
 
     async def _respond_ephemeral(
         self,
