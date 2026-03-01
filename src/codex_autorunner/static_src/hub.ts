@@ -879,7 +879,7 @@ async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
   worktreeHint.textContent =
     "Commands run with /bin/sh -lc after creating a new worktree. One per line, leave blank to disable.";
   const textarea = document.createElement("textarea");
-  textarea.rows = 6;
+  textarea.rows = 4;
   textarea.style.width = "100%";
   textarea.style.resize = "vertical";
   textarea.placeholder = "make setup\npnpm install\npre-commit install";
@@ -907,20 +907,17 @@ async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
   body.appendChild(destinationSection);
 
   const dangerSection = document.createElement("div");
-  dangerSection.className = "form-group";
+  dangerSection.className = "form-group settings-section-danger";
   const dangerLabel = document.createElement("label");
   dangerLabel.textContent = "Danger Zone";
   const dangerHint = document.createElement("p");
   dangerHint.className = "muted small";
   dangerHint.textContent =
     "Remove this repo from hub and delete its local directory.";
-  const dangerRow = document.createElement("div");
-  dangerRow.className = "settings-actions";
   const removeBtn = document.createElement("button");
-  removeBtn.className = "danger";
+  removeBtn.className = "danger sm";
   removeBtn.textContent = "Remove repo";
-  dangerRow.append(removeBtn);
-  dangerSection.append(dangerLabel, dangerHint, dangerRow);
+  dangerSection.append(dangerLabel, dangerHint, removeBtn);
   body.appendChild(dangerSection);
 
   const footer = document.createElement("div");
