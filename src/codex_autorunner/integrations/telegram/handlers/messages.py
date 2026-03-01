@@ -11,7 +11,7 @@ from typing import Any, Optional, Sequence
 from ....core.logging_utils import log_event
 from ....core.utils import canonicalize_path
 from ...chat.handlers.messages import is_ticket_reply, message_text_candidate
-from ...chat.media import is_image_mime_or_path
+from ...chat.media import audio_content_type_for_input, is_image_mime_or_path
 from ..adapter import (
     TelegramDocument,
     TelegramMessage,
@@ -624,21 +624,31 @@ def select_voice_candidate(
 ) -> Optional[TelegramMediaCandidate]:
     if message.voice:
         voice = message.voice
+        mime_type = audio_content_type_for_input(
+            mime_type=voice.mime_type,
+            file_name=None,
+            source_url=None,
+        )
         return TelegramMediaCandidate(
             kind="voice",
             file_id=voice.file_id,
             file_name=None,
-            mime_type=voice.mime_type,
+            mime_type=mime_type,
             file_size=voice.file_size,
             duration=voice.duration,
         )
     if message.audio:
         audio = message.audio
+        mime_type = audio_content_type_for_input(
+            mime_type=audio.mime_type,
+            file_name=audio.file_name,
+            source_url=None,
+        )
         return TelegramMediaCandidate(
             kind="audio",
             file_id=audio.file_id,
             file_name=audio.file_name,
-            mime_type=audio.mime_type,
+            mime_type=mime_type,
             file_size=audio.file_size,
             duration=audio.duration,
         )

@@ -13,7 +13,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
-from urllib.parse import urlparse
 
 from ...core.config import load_repo_config, resolve_env_for_root
 from ...core.filebox import (
@@ -89,6 +88,12 @@ from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
     DispatchResult,
+)
+from ...integrations.chat.media import (
+    audio_content_type_for_input,
+    audio_extension_for_input,
+    is_audio_mime_or_path,
+    normalize_mime_type,
 )
 from ...integrations.chat.models import (
     ChatEvent,
@@ -178,18 +183,6 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
-DISCORD_AUDIO_SUFFIXES = {
-    ".aac",
-    ".flac",
-    ".m4a",
-    ".mp3",
-    ".mp4",
-    ".oga",
-    ".ogg",
-    ".opus",
-    ".wav",
-    ".webm",
-}
 
 
 class AppServerUnavailableError(Exception):
@@ -969,28 +962,14 @@ class DiscordBotService:
 
     def _is_audio_attachment(self, attachment: Any, mime_type: Optional[str]) -> bool:
         kind = getattr(attachment, "kind", None)
-        kind_lower = kind.lower().strip() if isinstance(kind, str) else ""
-        if kind_lower == "audio":
-            return True
-        if kind_lower in {"image", "video"}:
-            return False
-        if isinstance(mime_type, str):
-            mime_base = mime_type.lower().split(";", 1)[0].strip()
-            if mime_base.startswith("audio/"):
-                return True
-            # Respect explicit, non-audio media classifications from Discord.
-            if mime_base.startswith("video/") or mime_base.startswith("image/"):
-                return False
         file_name = getattr(attachment, "file_name", None)
-        if isinstance(file_name, str):
-            if Path(file_name).suffix.lower() in DISCORD_AUDIO_SUFFIXES:
-                return True
         source_url = getattr(attachment, "source_url", None)
-        if isinstance(source_url, str) and source_url:
-            path = urlparse(source_url).path
-            if Path(path).suffix.lower() in DISCORD_AUDIO_SUFFIXES:
-                return True
-        return False
+        return is_audio_mime_or_path(
+            mime_type=mime_type,
+            file_name=file_name if isinstance(file_name, str) else None,
+            source_url=source_url if isinstance(source_url, str) else None,
+            kind=kind if isinstance(kind, str) else None,
+        )
 
     async def _transcribe_voice_attachment(
         self,
@@ -1021,11 +1000,17 @@ class DiscordBotService:
             )
 
         try:
+            source_url = getattr(attachment, "source_url", None)
+            content_type = audio_content_type_for_input(
+                mime_type=mime_type,
+                file_name=file_name,
+                source_url=source_url if isinstance(source_url, str) else None,
+            )
             result = await voice_service.transcribe_async(
                 data,
                 client="discord",
                 filename=file_name,
-                content_type=mime_type,
+                content_type=content_type,
             )
         except VoiceServiceError as exc:
             log_event(
@@ -1102,6 +1087,9 @@ class DiscordBotService:
                 path = inbox / file_name
                 path.write_bytes(data)
                 original_name = getattr(attachment, "file_name", None) or path.name
+                transcription_name = str(original_name)
+                if not Path(transcription_name).suffix:
+                    transcription_name = path.name
                 mime_type = getattr(attachment, "mime_type", None)
                 transcript_text, transcript_warning = (
                     await self._transcribe_voice_attachment(
@@ -1109,7 +1097,7 @@ class DiscordBotService:
                         channel_id=channel_id,
                         attachment=attachment,
                         data=data,
-                        file_name=str(original_name),
+                        file_name=transcription_name,
                         mime_type=mime_type if isinstance(mime_type, str) else None,
                     )
                 )
@@ -1196,28 +1184,31 @@ class DiscordBotService:
         if not suffix:
             mime_type = getattr(attachment, "mime_type", None)
             if isinstance(mime_type, str):
-                mime_key = mime_type.lower().split(";", 1)[0].strip()
+                mime_key = normalize_mime_type(mime_type) or ""
                 suffix = {
                     "image/png": ".png",
                     "image/jpeg": ".jpg",
                     "image/jpg": ".jpg",
                     "image/gif": ".gif",
                     "image/webp": ".webp",
-                    "audio/mpeg": ".mp3",
-                    "audio/mp3": ".mp3",
-                    "audio/mp4": ".m4a",
-                    "audio/wav": ".wav",
-                    "audio/ogg": ".ogg",
-                    "audio/webm": ".webm",
                     "application/pdf": ".pdf",
                     "text/plain": ".txt",
                 }.get(mime_key, "")
         if not suffix:
             source_url = getattr(attachment, "source_url", None)
-            if isinstance(source_url, str) and source_url:
-                source_suffix = Path(urlparse(source_url).path).suffix.lower()
-                if source_suffix in DISCORD_AUDIO_SUFFIXES:
-                    suffix = source_suffix
+            is_audio = is_audio_mime_or_path(
+                mime_type=getattr(attachment, "mime_type", None),
+                file_name=getattr(attachment, "file_name", None),
+                source_url=source_url if isinstance(source_url, str) else None,
+                kind=getattr(attachment, "kind", None),
+            )
+            if is_audio:
+                suffix = audio_extension_for_input(
+                    mime_type=getattr(attachment, "mime_type", None),
+                    file_name=getattr(attachment, "file_name", None),
+                    source_url=source_url if isinstance(source_url, str) else None,
+                    default=".ogg",
+                )
         return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
 
     async def _find_paused_flow_run(
