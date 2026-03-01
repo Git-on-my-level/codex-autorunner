@@ -364,6 +364,38 @@ function currentDockerEnvPassthrough(
     .join(", ");
 }
 
+function currentDockerProfile(
+  destination: Record<string, unknown> | null | undefined
+): string {
+  return typeof destination?.profile === "string"
+    ? String(destination.profile).trim()
+    : "";
+}
+
+function currentDockerWorkdir(
+  destination: Record<string, unknown> | null | undefined
+): string {
+  return typeof destination?.workdir === "string"
+    ? String(destination.workdir).trim()
+    : "";
+}
+
+function currentDockerExplicitEnv(
+  destination: Record<string, unknown> | null | undefined
+): string {
+  const raw = destination?.env;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "";
+  return Object.entries(raw as Record<string, unknown>)
+    .map(([key, value]) => {
+      const cleanKey = String(key || "").trim();
+      if (!cleanKey) return "";
+      if (value === null || value === undefined) return "";
+      return `${cleanKey}=${String(value)}`;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
 function currentDockerMounts(
   destination: Record<string, unknown> | null | undefined
 ): string {
@@ -374,34 +406,83 @@ function currentDockerMounts(
       if (!item || typeof item !== "object") return "";
       const source = String((item as Record<string, unknown>).source || "").trim();
       const target = String((item as Record<string, unknown>).target || "").trim();
-      return source && target ? `${source}:${target}` : "";
+      const rawReadOnly =
+        (item as Record<string, unknown>).read_only ??
+        (item as Record<string, unknown>).readOnly ??
+        (item as Record<string, unknown>).readonly;
+      const readOnly = rawReadOnly === true;
+      if (!source || !target) return "";
+      return readOnly ? `${source}:${target}:ro` : `${source}:${target}`;
     })
     .filter(Boolean);
   return mounts.join(", ");
 }
 
-function parseDockerMountList(
+function parseDockerEnvMap(
   value: string
-): { mounts: Array<{ source: string; target: string }>; error: string | null } {
-  const mounts: Array<{ source: string; target: string }> = [];
+): { env: Record<string, string>; error: string | null } {
+  const env: Record<string, string> = {};
   const entries = splitCommaSeparated(value);
   for (const entry of entries) {
-    const splitAt = entry.lastIndexOf(":");
-    if (splitAt <= 0 || splitAt >= entry.length - 1) {
+    const splitAt = entry.indexOf("=");
+    if (splitAt <= 0) {
       return {
-        mounts: [],
-        error: `Invalid mount "${entry}". Use source:target (comma-separated).`,
+        env: {},
+        error: `Invalid env entry "${entry}". Use KEY=VALUE (comma-separated).`,
       };
     }
-    const source = entry.slice(0, splitAt).trim();
-    const target = entry.slice(splitAt + 1).trim();
+    const key = entry.slice(0, splitAt).trim();
+    const mapValue = entry.slice(splitAt + 1);
+    if (!key) {
+      return {
+        env: {},
+        error: `Invalid env entry "${entry}". Use KEY=VALUE (comma-separated).`,
+      };
+    }
+    env[key] = mapValue;
+  }
+  return { env, error: null };
+}
+
+function parseDockerMountList(
+  value: string
+): {
+  mounts: Array<{ source: string; target: string; read_only?: boolean }>;
+  error: string | null;
+} {
+  const mounts: Array<{ source: string; target: string; read_only?: boolean }> = [];
+  const entries = splitCommaSeparated(value);
+  for (const entry of entries) {
+    let mountSpec = entry;
+    let readOnly: boolean | null = null;
+    const lowerEntry = entry.toLowerCase();
+    if (lowerEntry.endsWith(":ro")) {
+      mountSpec = entry.slice(0, -3);
+      readOnly = true;
+    } else if (lowerEntry.endsWith(":rw")) {
+      mountSpec = entry.slice(0, -3);
+      readOnly = false;
+    }
+    const splitAt = mountSpec.lastIndexOf(":");
+    if (splitAt <= 0 || splitAt >= mountSpec.length - 1) {
+      return {
+        mounts: [],
+        error: `Invalid mount "${entry}". Use source:target[:ro] (comma-separated).`,
+      };
+    }
+    const source = mountSpec.slice(0, splitAt).trim();
+    const target = mountSpec.slice(splitAt + 1).trim();
     if (!source || !target) {
       return {
         mounts: [],
-        error: `Invalid mount "${entry}". Use source:target (comma-separated).`,
+        error: `Invalid mount "${entry}". Use source:target[:ro] (comma-separated).`,
       };
     }
-    mounts.push({ source, target });
+    if (readOnly === true) {
+      mounts.push({ source, target, read_only: true });
+    } else {
+      mounts.push({ source, target });
+    }
   }
   return { mounts, error: null };
 }
@@ -1962,7 +2043,7 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
     }
     body.image = imageValue.trim();
     const configureAdvanced = await confirmModal(
-      "Configure optional docker fields (container name, env passthrough, mounts)?",
+      "Configure optional docker fields (container name, profile, workdir, env passthrough, explicit env, mounts)?",
       {
         confirmText: "Configure",
         cancelText: "Skip",
@@ -1989,6 +2070,30 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
         body.container_name = containerName;
       }
 
+      const profileValue = await inputModal("Docker profile (optional):", {
+        placeholder: "full-dev",
+        defaultValue: currentDockerProfile(repo.effective_destination),
+        confirmText: "Next",
+        allowEmpty: true,
+      });
+      if (profileValue === null) return false;
+      const profile = profileValue.trim();
+      if (profile) {
+        body.profile = profile;
+      }
+
+      const workdirValue = await inputModal("Docker workdir (optional):", {
+        placeholder: "/workspace",
+        defaultValue: currentDockerWorkdir(repo.effective_destination),
+        confirmText: "Next",
+        allowEmpty: true,
+      });
+      if (workdirValue === null) return false;
+      const workdir = workdirValue.trim();
+      if (workdir) {
+        body.workdir = workdir;
+      }
+
       const envPassthroughValue = await inputModal(
         "Docker env passthrough (optional, comma-separated):",
         {
@@ -2004,10 +2109,29 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
         body.env_passthrough = envPassthrough;
       }
 
-      const mountsValue = await inputModal(
-        "Docker mounts (optional, source:target pairs, comma-separated):",
+      const envMapValue = await inputModal(
+        "Docker explicit env map (optional, KEY=VALUE pairs, comma-separated):",
         {
-          placeholder: "/host/path:/workspace/path",
+          placeholder: "OPENAI_API_KEY=sk-..., CODEX_HOME=/workspace/.codex",
+          defaultValue: currentDockerExplicitEnv(repo.effective_destination),
+          confirmText: "Next",
+          allowEmpty: true,
+        }
+      );
+      if (envMapValue === null) return false;
+      const parsedEnvMap = parseDockerEnvMap(envMapValue);
+      if (parsedEnvMap.error) {
+        flash(parsedEnvMap.error, "error");
+        return false;
+      }
+      if (Object.keys(parsedEnvMap.env).length) {
+        body.env = parsedEnvMap.env;
+      }
+
+      const mountsValue = await inputModal(
+        "Docker mounts (optional, source:target[:ro] pairs, comma-separated):",
+        {
+          placeholder: "/host/path:/workspace/path, /cache:/cache:ro",
           defaultValue: currentDockerMounts(repo.effective_destination),
           confirmText: "Save",
           allowEmpty: true,

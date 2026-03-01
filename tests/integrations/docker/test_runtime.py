@@ -107,6 +107,82 @@ def test_normalize_mounts_adds_repo_root_mount(tmp_path: Path) -> None:
     assert any(m.source == "/tmp/a" and m.target == "/tmp/a" for m in mounts)
 
 
+def test_build_docker_container_spec_merges_full_dev_profile_defaults(
+    tmp_path: Path,
+) -> None:
+    home_dir = Path.home()
+    codex_path = str(home_dir / ".codex")
+    opencode_path = str(home_dir / ".local/share/opencode")
+    custom_source = str((tmp_path / "custom-src").resolve())
+    custom_target = str((tmp_path / "custom-target").resolve())
+
+    spec = build_docker_container_spec(
+        name="demo",
+        image="busybox:latest",
+        repo_root=tmp_path,
+        profile="full-dev",
+        mounts=[
+            {"source": "${HOME}/.codex", "target": "${HOME}/.codex"},
+            {"source": custom_source, "target": custom_target},
+        ],
+        env_passthrough_patterns=["CAR_*", "EXTRA_ENV"],
+        source_env={
+            "CAR_TOKEN": "car-token",
+            "OPENAI_API_KEY": "sk-test",
+            "CODEX_HOME": "/workspace/.codex",
+            "OPENCODE_SERVER_USERNAME": "user",
+            "OPENCODE_SERVER_PASSWORD": "pass",
+            "EXTRA_ENV": "extra",
+            "UNRELATED": "ignore",
+        },
+    )
+
+    codex_mounts = [
+        mount
+        for mount in spec.mounts
+        if mount.source == codex_path and mount.target == codex_path
+    ]
+    assert len(codex_mounts) == 1
+    assert any(
+        mount.source == opencode_path and mount.target == opencode_path
+        for mount in spec.mounts
+    )
+    assert any(
+        mount.source == custom_source and mount.target == custom_target
+        for mount in spec.mounts
+    )
+    assert spec.env["CAR_TOKEN"] == "car-token"
+    assert spec.env["OPENAI_API_KEY"] == "sk-test"
+    assert spec.env["CODEX_HOME"] == "/workspace/.codex"
+    assert spec.env["OPENCODE_SERVER_USERNAME"] == "user"
+    assert spec.env["OPENCODE_SERVER_PASSWORD"] == "pass"
+    assert spec.env["EXTRA_ENV"] == "extra"
+    assert "UNRELATED" not in spec.env
+
+
+def test_build_docker_container_spec_applies_user_override_for_expanded_mount_paths(
+    tmp_path: Path,
+) -> None:
+    home_dir = Path.home()
+    codex_path = str(home_dir / ".codex")
+
+    spec = build_docker_container_spec(
+        name="demo",
+        image="busybox:latest",
+        repo_root=tmp_path,
+        profile="full-dev",
+        mounts=[{"source": codex_path, "target": codex_path, "read_only": True}],
+    )
+
+    codex_mounts = [
+        mount
+        for mount in spec.mounts
+        if mount.source == codex_path and mount.target == codex_path
+    ]
+    assert len(codex_mounts) == 1
+    assert codex_mounts[0].read_only is True
+
+
 def test_ensure_container_running_starts_existing_stopped_container() -> None:
     calls: list[list[str]] = []
 
@@ -231,6 +307,60 @@ def test_run_exec_raises_with_stderr_details() -> None:
     runtime = DockerRuntime(run_fn=_run)
     with pytest.raises(DockerRuntimeError, match="boom from exec"):
         runtime.run_exec("demo", ["false"])
+
+
+def test_preflight_container_reports_actionable_failures() -> None:
+    calls: list[list[str]] = []
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        _ = kwargs
+        return _proc(
+            cmd,
+            stdout=(
+                "MISSING_BINARIES=codex,pnpm\n"
+                "MISSING_FILES=/home/me/.codex/auth.json,"
+                "/home/me/.local/share/opencode/auth.json\n"
+                "UNWRITABLE_WORKDIR=/workspace/repo\n"
+            ),
+        )
+
+    runtime = DockerRuntime(run_fn=_run)
+    with pytest.raises(DockerRuntimeError) as exc_info:
+        runtime.preflight_container(
+            "demo",
+            required_binaries=["codex", "pnpm"],
+            required_readable_files=[
+                "/home/me/.codex/auth.json",
+                "/home/me/.local/share/opencode/auth.json",
+            ],
+            workdir="/workspace/repo",
+        )
+    message = str(exc_info.value)
+    assert "missing required binaries: codex, pnpm" in message
+    assert "unreadable required auth files:" in message
+    assert "/home/me/.codex/auth.json" in message
+    assert "/home/me/.local/share/opencode/auth.json" in message
+    assert "workdir is not writable: /workspace/repo" in message
+    assert calls
+    assert calls[0][:3] == ["docker", "exec", "demo"]
+    assert calls[0][-3] == "sh"
+    assert calls[0][-2] == "-lc"
+    assert "command -v" in calls[0][-1]
+
+
+def test_preflight_container_raises_when_exec_fails() -> None:
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return _proc(cmd, returncode=1, stderr="preflight exec failed")
+
+    runtime = DockerRuntime(run_fn=_run)
+    with pytest.raises(DockerRuntimeError, match="preflight exec failed"):
+        runtime.preflight_container(
+            "demo",
+            required_binaries=["codex"],
+            workdir="/workspace/repo",
+        )
 
 
 def test_stop_container_returns_false_for_missing_container() -> None:

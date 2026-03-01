@@ -5,12 +5,17 @@ import datetime as dt
 import fnmatch
 import logging
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ...core.destinations import DockerReadiness, probe_docker_readiness
 from ...core.utils import subprocess_env
+from .profile_contracts import (
+    DockerProfileContract,
+    resolve_docker_profile_contract,
+)
 
 logger = logging.getLogger("codex_autorunner.integrations.docker.runtime")
 
@@ -76,6 +81,174 @@ def select_passthrough_env(
     return selected
 
 
+def _dedupe_strings(values: Sequence[str]) -> tuple[str, ...]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        normalized = str(item).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return tuple(deduped)
+
+
+def _merge_env_passthrough_patterns(
+    profile_contract: Optional[DockerProfileContract],
+    user_patterns: Optional[Sequence[str]],
+) -> tuple[str, ...]:
+    defaults = (
+        profile_contract.default_env_passthrough if profile_contract is not None else ()
+    )
+    return _dedupe_strings([*defaults, *(user_patterns or ())])
+
+
+def _normalize_mount_candidate(
+    mount: DockerMount | Mapping[str, Any],
+) -> Optional[DockerMount | dict[str, Any]]:
+    if isinstance(mount, DockerMount):
+        if not mount.source.strip() or not mount.target.strip():
+            return None
+        return DockerMount(
+            source=mount.source.strip(),
+            target=mount.target.strip(),
+            read_only=bool(mount.read_only),
+        )
+    if not isinstance(mount, Mapping):
+        return None
+    source = mount.get("source")
+    target = mount.get("target")
+    if not isinstance(source, str) or not source.strip():
+        return None
+    if not isinstance(target, str) or not target.strip():
+        return None
+    read_only = bool(mount.get("read_only", False))
+    return {
+        "source": source.strip(),
+        "target": target.strip(),
+        "read_only": read_only,
+    }
+
+
+def _merge_mounts(
+    profile_contract: Optional[DockerProfileContract],
+    user_mounts: Optional[Sequence[DockerMount | Mapping[str, Any]]],
+    *,
+    repo_root: Path,
+    home_dir: Path,
+) -> tuple[DockerMount | Mapping[str, Any], ...]:
+    merged: list[DockerMount | Mapping[str, Any]] = []
+    index_by_pair: dict[tuple[str, str], int] = {}
+
+    defaults: list[DockerMount | Mapping[str, Any]] = []
+    if profile_contract is not None:
+        defaults = [
+            {
+                "source": mount.source,
+                "target": mount.target,
+                "read_only": mount.read_only,
+            }
+            for mount in profile_contract.default_mounts
+        ]
+
+    for raw_mount in [*defaults, *(user_mounts or ())]:
+        normalized = _normalize_mount_candidate(raw_mount)
+        if normalized is None:
+            continue
+        if isinstance(normalized, DockerMount):
+            pair = (normalized.source, normalized.target)
+        else:
+            pair = (
+                str(normalized.get("source", "")),
+                str(normalized.get("target", "")),
+            )
+        pair = (
+            _expand_template(pair[0], repo_root=repo_root, home_dir=home_dir),
+            _expand_template(pair[1], repo_root=repo_root, home_dir=home_dir),
+        )
+        existing_idx = index_by_pair.get(pair)
+        if existing_idx is None:
+            index_by_pair[pair] = len(merged)
+            merged.append(normalized)
+            continue
+        # User mounts should override defaults when source/target collide.
+        merged[existing_idx] = normalized
+    return tuple(merged)
+
+
+def _build_preflight_script(
+    *,
+    required_binaries: Sequence[str],
+    required_readable_files: Sequence[str],
+    workdir: Optional[str],
+) -> str:
+    binaries = _dedupe_strings(required_binaries)
+    readable_files = _dedupe_strings(required_readable_files)
+
+    script_lines: list[str] = ["set -eu", "missing_binaries=''", "missing_files=''"]
+    if binaries:
+        script_lines.append(
+            f"for binary in {' '.join(shlex.quote(item) for item in binaries)}; do"
+        )
+        script_lines.extend(
+            [
+                '  if ! command -v "$binary" >/dev/null 2>&1; then',
+                '    if [ -n "$missing_binaries" ]; then',
+                '      missing_binaries="$missing_binaries,$binary"',
+                "    else",
+                '      missing_binaries="$binary"',
+                "    fi",
+                "  fi",
+                "done",
+            ]
+        )
+
+    if readable_files:
+        script_lines.append(
+            f"for required_file in {' '.join(shlex.quote(item) for item in readable_files)}; do"
+        )
+        script_lines.extend(
+            [
+                '  if [ ! -r "$required_file" ]; then',
+                '    if [ -n "$missing_files" ]; then',
+                '      missing_files="$missing_files,$required_file"',
+                "    else",
+                '      missing_files="$required_file"',
+                "    fi",
+                "  fi",
+                "done",
+            ]
+        )
+
+    script_lines.append(f"workdir_path={shlex.quote(str(workdir or ''))}")
+    script_lines.extend(
+        [
+            "unwritable_workdir=''",
+            'if [ -n "$workdir_path" ] && [ ! -w "$workdir_path" ]; then',
+            '  unwritable_workdir="$workdir_path"',
+            "fi",
+            "printf 'MISSING_BINARIES=%s\\n' \"$missing_binaries\"",
+            "printf 'MISSING_FILES=%s\\n' \"$missing_files\"",
+            "printf 'UNWRITABLE_WORKDIR=%s\\n' \"$unwritable_workdir\"",
+        ]
+    )
+    return "\n".join(script_lines)
+
+
+def _parse_preflight_field(output: str, key: str) -> str:
+    prefix = f"{key}="
+    for line in output.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    return ""
+
+
+def _split_preflight_csv(value: str) -> tuple[str, ...]:
+    if not value.strip():
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
 def normalize_mounts(
     repo_root: Path,
     mounts: Optional[Sequence[DockerMount | Mapping[str, Any]]] = None,
@@ -119,6 +292,7 @@ def build_docker_container_spec(
     name: str,
     image: str,
     repo_root: Path,
+    profile: Optional[str] = None,
     mounts: Optional[Sequence[DockerMount | Mapping[str, Any]]] = None,
     env_passthrough_patterns: Optional[Sequence[str]] = None,
     explicit_env: Optional[Mapping[str, str]] = None,
@@ -132,8 +306,19 @@ def build_docker_container_spec(
 
     repo_abs = repo_root.resolve()
     home_dir = Path.home()
+    profile_contract = resolve_docker_profile_contract(profile)
+    merged_mounts = _merge_mounts(
+        profile_contract,
+        mounts,
+        repo_root=repo_abs,
+        home_dir=home_dir,
+    )
+    merged_patterns = _merge_env_passthrough_patterns(
+        profile_contract,
+        env_passthrough_patterns,
+    )
     passthrough = select_passthrough_env(
-        env_passthrough_patterns or (),
+        merged_patterns,
         source_env=source_env,
     )
     merged_env = dict(sorted(passthrough.items()))
@@ -156,7 +341,7 @@ def build_docker_container_spec(
     return DockerContainerSpec(
         name=name.strip(),
         image=image.strip(),
-        mounts=normalize_mounts(repo_abs, mounts),
+        mounts=normalize_mounts(repo_abs, merged_mounts),
         env=merged_env,
         workdir=(
             _expand_template(str(workdir), repo_root=repo_abs, home_dir=home_dir)
@@ -318,6 +503,59 @@ class DockerRuntime:
                 f"({proc.returncode}) in {container_name}: {details}"
             )
         return proc
+
+    def preflight_container(
+        self,
+        container_name: str,
+        *,
+        required_binaries: Sequence[str] = (),
+        required_readable_files: Sequence[str] = (),
+        workdir: Optional[str] = None,
+        timeout_seconds: float = 15.0,
+    ) -> None:
+        script = _build_preflight_script(
+            required_binaries=required_binaries,
+            required_readable_files=required_readable_files,
+            workdir=workdir,
+        )
+        proc = self.run_exec(
+            container_name,
+            ["sh", "-lc", script],
+            timeout_seconds=timeout_seconds,
+            check=False,
+        )
+        if proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").strip() or "unknown error"
+            raise DockerRuntimeError(
+                f"Docker preflight command failed in {container_name}: {details}"
+            )
+
+        missing_binaries = _split_preflight_csv(
+            _parse_preflight_field(proc.stdout or "", "MISSING_BINARIES")
+        )
+        missing_files = _split_preflight_csv(
+            _parse_preflight_field(proc.stdout or "", "MISSING_FILES")
+        )
+        unwritable_workdir = _parse_preflight_field(
+            proc.stdout or "",
+            "UNWRITABLE_WORKDIR",
+        )
+        errors: list[str] = []
+        if missing_binaries:
+            errors.append(
+                "missing required binaries: " + ", ".join(sorted(missing_binaries))
+            )
+        if missing_files:
+            errors.append(
+                "unreadable required auth files: " + ", ".join(sorted(missing_files))
+            )
+        if unwritable_workdir:
+            errors.append(f"workdir is not writable: {unwritable_workdir}")
+        if errors:
+            detail = "; ".join(errors)
+            raise DockerRuntimeError(
+                f"Docker preflight failed in {container_name}: {detail}"
+            )
 
     def stop_container(
         self,

@@ -21,7 +21,10 @@ from ....core.chat_bindings import (
     active_chat_binding_counts,
 )
 from ....core.config import ConfigError
-from ....core.destinations import resolve_effective_repo_destination
+from ....core.destinations import (
+    parse_destination_config,
+    resolve_effective_repo_destination,
+)
 from ....core.flows import FlowEventType, FlowStore
 from ....core.git_utils import git_is_clean
 from ....core.logging_utils import safe_log
@@ -1236,6 +1239,12 @@ def build_hub_repo_routes(
             container_name = (payload.container_name or "").strip()
             if container_name:
                 destination["container_name"] = container_name
+            profile = (payload.profile or "").strip()
+            if profile:
+                destination["profile"] = profile
+            workdir = (payload.workdir or "").strip()
+            if workdir:
+                destination["workdir"] = workdir
             env_passthrough = [
                 str(item).strip()
                 for item in (payload.env_passthrough or [])
@@ -1243,7 +1252,18 @@ def build_hub_repo_routes(
             ]
             if env_passthrough:
                 destination["env_passthrough"] = env_passthrough
-            mounts: list[dict[str, str]] = []
+            explicit_env: dict[str, str] = {}
+            for raw_key, raw_value in (payload.env or {}).items():
+                key = str(raw_key or "").strip()
+                if not key:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Docker env keys must be non-empty strings",
+                    )
+                explicit_env[key] = str(raw_value)
+            if explicit_env:
+                destination["env"] = explicit_env
+            mounts: list[dict[str, Any]] = []
             for item in payload.mounts or []:
                 source = str((item or {}).get("source") or "").strip()
                 target = str((item or {}).get("target") or "").strip()
@@ -1252,7 +1272,20 @@ def build_hub_repo_routes(
                         status_code=400,
                         detail="Each mount requires non-empty source and target",
                     )
-                mounts.append({"source": source, "target": target})
+                mount_payload: dict[str, Any] = {"source": source, "target": target}
+                read_only = (item or {}).get("read_only")
+                if read_only is None and "readOnly" in (item or {}):
+                    read_only = (item or {}).get("readOnly")
+                if read_only is None and "readonly" in (item or {}):
+                    read_only = (item or {}).get("readonly")
+                if read_only is not None:
+                    if not isinstance(read_only, bool):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Mount read_only must be a boolean when provided",
+                        )
+                    mount_payload["read_only"] = read_only
+                mounts.append(mount_payload)
             if mounts:
                 destination["mounts"] = mounts
         else:
@@ -1269,6 +1302,12 @@ def build_hub_repo_routes(
             raise HTTPException(
                 status_code=400, detail=f"Invalid destination payload: {destination!r}"
             )
+        parsed_destination = parse_destination_config(
+            normalized_destination, context="destination"
+        )
+        if not parsed_destination.valid:
+            detail = "; ".join(parsed_destination.errors)
+            raise HTTPException(status_code=400, detail=detail)
 
         manifest, repos_by_id, repo = await asyncio.to_thread(
             _resolve_manifest_repo, repo_id

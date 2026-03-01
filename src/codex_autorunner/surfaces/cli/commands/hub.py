@@ -44,6 +44,13 @@ def register_hub_commands(
             )
         return {"source": source, "target": target}
 
+    def _parse_env_map_ref(value: str) -> tuple[str, str]:
+        key, sep, raw_value = value.partition("=")
+        key = key.strip()
+        if sep != "=" or not key:
+            raise_exit(f"Invalid --env-map value: {value!r}. Expected format KEY=VALUE")
+        return key, raw_value
+
     @destination_app.command("show")
     def hub_destination_show(
         repo_id: str = typer.Argument(..., help="Repo id from hub manifest"),
@@ -102,10 +109,28 @@ def register_hub_commands(
             "--env",
             help="Repeat to add env passthrough patterns (example: CAR_*)",
         ),
+        env_map: Optional[list[str]] = typer.Option(
+            None,
+            "--env-map",
+            help="Repeat explicit docker env entries using KEY=VALUE format",
+        ),
         mount: Optional[list[str]] = typer.Option(
             None,
             "--mount",
             help="Repeat bind mount entries using source:target format",
+        ),
+        mount_ro: Optional[list[str]] = typer.Option(
+            None,
+            "--mount-ro",
+            help="Repeat read-only bind mount entries using source:target format",
+        ),
+        profile: Optional[str] = typer.Option(
+            None,
+            "--profile",
+            help="Docker runtime profile (example: full-dev)",
+        ),
+        workdir: Optional[str] = typer.Option(
+            None, "--workdir", help="Docker workdir override inside the container"
         ),
         path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
         output_json: bool = typer.Option(
@@ -128,9 +153,28 @@ def register_hub_commands(
             env_passthrough = [item.strip() for item in (env or []) if item.strip()]
             if env_passthrough:
                 destination["env_passthrough"] = env_passthrough
-            mounts = [_parse_mount_ref(item) for item in (mount or [])]
+            explicit_env: dict[str, str] = {}
+            for entry in env_map or []:
+                env_key, env_value = _parse_env_map_ref(entry)
+                explicit_env[env_key] = env_value
+            if explicit_env:
+                destination["env"] = explicit_env
+            mounts: list[dict[str, Any]] = [
+                _parse_mount_ref(item) for item in (mount or [])
+            ]
+            mounts.extend(
+                {
+                    **_parse_mount_ref(item),
+                    "read_only": True,
+                }
+                for item in (mount_ro or [])
+            )
             if mounts:
                 destination["mounts"] = mounts
+            if isinstance(profile, str) and profile.strip():
+                destination["profile"] = profile.strip()
+            if isinstance(workdir, str) and workdir.strip():
+                destination["workdir"] = workdir.strip()
         else:
             raise_exit(
                 f"Unsupported destination kind: {kind!r}. Use 'local' or 'docker'."

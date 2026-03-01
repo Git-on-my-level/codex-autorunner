@@ -386,6 +386,18 @@ def register_flow_commands(
         snapshot = build_flow_status_snapshot(engine.repo_root, record, store)
         health = snapshot.get("worker_health")
         effective_ticket = snapshot.get("effective_current_ticket")
+        state = record.state if isinstance(record.state, dict) else {}
+        reason_summary = state.get("reason_summary")
+        normalized_reason_summary = (
+            reason_summary.strip()
+            if isinstance(reason_summary, str) and reason_summary.strip()
+            else None
+        )
+        error_message = (
+            record.error_message.strip()
+            if isinstance(record.error_message, str) and record.error_message.strip()
+            else None
+        )
         return {
             "run_id": record.id,
             "flow_type": record.flow_type,
@@ -398,6 +410,11 @@ def register_flow_commands(
             "last_event_at": snapshot.get("last_event_at"),
             "current_ticket": effective_ticket,
             "ticket_progress": snapshot.get("ticket_progress"),
+            "reason_summary": normalized_reason_summary,
+            "error_message": error_message,
+            # Compatibility aliases for downstream consumers expecting these keys.
+            "failure_reason": normalized_reason_summary,
+            "error": error_message,
             "worker": (
                 {
                     "status": health.status,
@@ -430,6 +447,12 @@ def register_flow_commands(
         )
         worker = payload.get("worker") or {}
         status = payload.get("status") or ""
+        reason_summary = payload.get("reason_summary")
+        if isinstance(reason_summary, str) and reason_summary.strip():
+            typer.echo(f"Summary: {reason_summary.strip()}")
+        error_message = payload.get("error_message")
+        if isinstance(error_message, str) and error_message.strip():
+            typer.echo(f"Error: {error_message.strip()}")
         if worker and status not in {"completed", "failed", "stopped"}:
             typer.echo(
                 f"Worker: {worker.get('status')} pid={worker.get('pid')} {worker.get('message') or ''}".rstrip()

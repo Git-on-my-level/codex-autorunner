@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 class Payload(BaseModel):
@@ -244,11 +244,35 @@ class HubDestinationSetRequest(Payload):
         default=None,
         validation_alias=AliasChoices("container_name", "containerName", "name"),
     )
+    workdir: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("workdir", "workDir"),
+    )
+    profile: Optional[str] = None
     env_passthrough: Optional[List[str]] = Field(
         default=None,
-        validation_alias=AliasChoices("env_passthrough", "envPassthrough", "env"),
+        validation_alias=AliasChoices("env_passthrough", "envPassthrough"),
     )
-    mounts: Optional[List[Dict[str, str]]] = None
+    env: Optional[Dict[str, str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("env", "explicit_env", "explicitEnv"),
+    )
+    mounts: Optional[List[Dict[str, Any]]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_env_alias(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        raw_env = data.get("env")
+        if raw_env is None or not isinstance(raw_env, list):
+            return data
+        if "env_passthrough" in data or "envPassthrough" in data:
+            return data
+        normalized = dict(data)
+        normalized["env_passthrough"] = raw_env
+        normalized.pop("env", None)
+        return normalized
 
 
 class SessionStopRequest(Payload):
