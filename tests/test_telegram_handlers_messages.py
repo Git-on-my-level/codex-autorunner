@@ -115,6 +115,24 @@ def test_select_voice_candidate_prefers_voice() -> None:
     assert candidate is not None
     assert candidate.kind == "voice"
     assert candidate.file_id == "v1"
+    assert candidate.mime_type == "audio/ogg"
+
+
+def test_select_voice_candidate_normalizes_generic_audio_mime_by_suffix() -> None:
+    message = _message(
+        audio=TelegramAudio(
+            "a1",
+            None,
+            180,
+            "clip.ogg",
+            "application/octet-stream",
+            200,
+        )
+    )
+    candidate = select_voice_candidate(message)
+    assert candidate is not None
+    assert candidate.kind == "audio"
+    assert candidate.mime_type == "audio/ogg"
 
 
 def test_select_file_candidate_uses_document() -> None:

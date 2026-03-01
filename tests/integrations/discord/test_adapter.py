@@ -181,6 +181,33 @@ def test_adapter_infers_audio_kind_without_content_type() -> None:
     assert event.attachments[1].kind == "audio"
 
 
+def test_adapter_infers_audio_kind_with_generic_content_type_and_duration() -> None:
+    adapter = DiscordChatAdapter(
+        rest_client=_UnusedRestClient(),  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+    event = adapter.parse_message_event(
+        _message_payload(
+            message_id="m-5",
+            content="",
+            attachments=[
+                {
+                    "id": "att-audio-generic",
+                    "filename": "voice-message",
+                    "content_type": "application/octet-stream",
+                    "duration_secs": 6,
+                    "size": 1024,
+                    "url": "https://cdn.discordapp.com/attachments/no-ext",
+                }
+            ],
+        )
+    )
+
+    assert isinstance(event, ChatMessageEvent)
+    assert len(event.attachments) == 1
+    assert event.attachments[0].kind == "audio"
+
+
 def test_discord_text_renderer_split_text_has_no_part_prefix() -> None:
     renderer = DiscordTextRenderer()
     rendered = RenderedText(text=("alpha " * 500), parse_mode=None)

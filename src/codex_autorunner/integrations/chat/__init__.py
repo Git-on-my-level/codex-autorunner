@@ -61,8 +61,12 @@ from .handlers import (
 )
 from .media import (
     ChatVoiceInput,
+    audio_content_type_for_input,
+    audio_extension_for_input,
     format_media_batch_failure,
+    is_audio_mime_or_path,
     is_image_mime_or_path,
+    normalize_mime_type,
 )
 from .models import (
     ChatAction,
@@ -148,10 +152,13 @@ __all__ = [
     "SendTextRequest",
     "TextRenderer",
     "build_dispatch_context",
+    "audio_content_type_for_input",
+    "audio_extension_for_input",
     "conversation_id_for",
     "decode_logical_callback",
     "encode_logical_callback",
     "format_media_batch_failure",
+    "is_audio_mime_or_path",
     "handle_custom_text_input",
     "is_image_mime_or_path",
     "is_bypass_event",
@@ -168,4 +175,5 @@ __all__ = [
     "TurnTriggerMode",
     "run_chat_bootstrap_steps",
     "should_trigger_plain_text_turn",
+    "normalize_mime_type",
 ]

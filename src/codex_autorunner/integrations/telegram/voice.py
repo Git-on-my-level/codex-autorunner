@@ -11,6 +11,10 @@ from typing import Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
+from ...integrations.chat.media import (
+    audio_content_type_for_input,
+    audio_extension_for_input,
+)
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from .config import TelegramBotConfig
 from .constants import (
@@ -182,12 +186,19 @@ class TelegramVoiceManager:
                 record.file_size = len(data)
             await self._store.update_pending_voice(record)
         data = path.read_bytes()
+        transcript_name = record.file_name or path.name
+        if not Path(transcript_name).suffix:
+            transcript_name = path.name
         try:
             result = await self._voice_service.transcribe_async(
                 data,
                 client="telegram",
-                filename=record.file_name or path.name,
-                content_type=record.mime_type,
+                filename=transcript_name,
+                content_type=audio_content_type_for_input(
+                    mime_type=record.mime_type,
+                    file_name=transcript_name,
+                    source_url=None,
+                ),
             )
         except VoiceServiceError as exc:
             log_event(
@@ -379,20 +390,12 @@ class TelegramVoiceManager:
         *,
         file_path: Optional[str],
     ) -> str:
-        for candidate in (file_name, file_path):
-            if candidate:
-                suffix = Path(candidate).suffix
-                if suffix:
-                    return suffix
-        if mime_type == "audio/ogg":
-            return ".ogg"
-        if mime_type == "audio/opus":
-            return ".opus"
-        if mime_type == "audio/mpeg":
-            return ".mp3"
-        if mime_type == "audio/wav":
-            return ".wav"
-        return ".dat"
+        return audio_extension_for_input(
+            mime_type=mime_type,
+            file_name=file_name,
+            source_url=file_path,
+            default=".dat",
+        )
 
     def _remove_voice_file(self, record: PendingVoiceRecord) -> None:
         if not record.download_path:

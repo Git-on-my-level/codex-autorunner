@@ -948,7 +948,101 @@ async def test_message_create_audio_attachment_without_content_type_still_transc
         assert fake_voice.calls
         assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
         assert fake_voice.calls[0]["filename"] == "voice-note.ogg"
-        assert fake_voice.calls[0]["content_type"] is None
+        assert fake_voice.calls[0]["content_type"] == "audio/ogg"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_audio_attachment_with_generic_content_type_transcribes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/audio-generic-content-type"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"voice-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-audio-4",
+                            "filename": "voice-message",
+                            "content_type": "application/octet-stream",
+                            "duration_secs": 8,
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("transcribed generic mime")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "Transcript: transcribed generic mime" in prompt
+        assert fake_voice.calls
+        assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
+        assert fake_voice.calls[0]["content_type"] == "audio/ogg"
+        assert str(fake_voice.calls[0]["filename"]).endswith(".ogg")
     finally:
         await store.close()
 
