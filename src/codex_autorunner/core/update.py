@@ -12,6 +12,7 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
 from .git_utils import GitError, run_git
+from .locks import process_matches_identity
 from .update_paths import resolve_update_paths
 
 
@@ -20,6 +21,7 @@ class UpdateInProgressError(RuntimeError):
 
 
 _UPDATE_LOCK_STARTUP_GRACE_SECONDS = 10.0
+_UPDATE_LOCK_CMD_HINTS = ("codex_autorunner.core.update_runner",)
 
 
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
@@ -386,11 +388,7 @@ def _read_update_lock() -> Optional[dict[str, object]]:
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
+    return process_matches_identity(pid)
 
 
 def _update_lock_active() -> Optional[dict]:
@@ -402,8 +400,13 @@ def _update_lock_active() -> Optional[dict]:
             pass
         return None
     pid = lock.get("pid")
-    if isinstance(pid, int) and _pid_is_running(pid):
-        return lock
+    if isinstance(pid, int):
+        pid_matches = process_matches_identity(
+            pid,
+            expected_cmd_substrings=_UPDATE_LOCK_CMD_HINTS,
+        )
+        if pid_matches:
+            return lock
     try:
         _update_lock_path().unlink()
     except OSError:

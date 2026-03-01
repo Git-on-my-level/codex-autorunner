@@ -207,6 +207,48 @@ def test_reaper_skips_active_records(monkeypatch, tmp_path: Path) -> None:
     assert registry.read_process_record(tmp_path, "opencode", "ws-active") is not None
 
 
+def test_reaper_reaps_when_owner_pid_command_mismatches(
+    monkeypatch, tmp_path: Path
+) -> None:
+    rec = _record(
+        workspace_id="ws-owner-mismatch",
+        pid=4211,
+        pgid=4211,
+        owner_pid=9001,
+        started_at=_started_at(hours_ago=1),
+    )
+    registry.write_process_record(tmp_path, rec)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pid_is_running",
+        lambda pid: pid == 9001,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper.process_command_matches",
+        lambda pid, _cmd: False if pid == 9001 else None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pgid_is_running",
+        lambda _pgid: False,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.killpg",
+        lambda _pgid, _sig: None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.kill",
+        lambda _pid, _sig: None,
+    )
+
+    summary = reap_managed_processes(tmp_path, max_record_age_seconds=24 * 60 * 60)
+
+    assert summary.removed == 1
+    assert summary.skipped == 0
+    assert (
+        registry.read_process_record(tmp_path, "opencode", "ws-owner-mismatch") is None
+    )
+
+
 def test_reaper_reaps_old_records_even_if_owner_running(
     monkeypatch, tmp_path: Path
 ) -> None:

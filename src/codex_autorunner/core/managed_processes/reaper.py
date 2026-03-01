@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 
+from ..locks import process_command_matches
 from ..process_termination import terminate_record
 from .registry import ProcessRecord, delete_process_record, list_process_records
 
@@ -14,6 +15,7 @@ REAPER_GRACE_SECONDS: Final = 0.2
 REAPER_KILL_SECONDS: Final = 0.2
 
 DEFAULT_MAX_RECORD_AGE_SECONDS = 6 * 60 * 60
+_OWNER_PROCESS_CMD_HINTS: Final = ("codex_autorunner", "codex-autorunner", "car ")
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -124,7 +126,9 @@ def _pgid_is_running(pgid: int) -> bool:
 
 def _record_is_running(record: ProcessRecord) -> bool:
     if record.pid is not None and _pid_is_running(record.pid):
-        return True
+        cmd_matches = process_command_matches(record.pid, record.command)
+        if cmd_matches is not False:
+            return True
     if record.pgid is None:
         return False
     return _pgid_is_running(record.pgid)
@@ -140,6 +144,13 @@ def reap_managed_processes(
     summary = ReapSummary()
     for record in list_process_records(repo_root):
         owner_running = _pid_is_running(record.owner_pid)
+        if owner_running:
+            owner_matches = process_command_matches(
+                record.owner_pid,
+                _OWNER_PROCESS_CMD_HINTS,
+            )
+            if owner_matches is False:
+                owner_running = False
         record_old = _is_older_than(record, max_record_age_seconds)
         should_reap = force or (not owner_running) or record_old
 

@@ -19,7 +19,7 @@ from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.flows.models import FlowRunRecord
 from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
 from ...core.hub import HubSupervisor
-from ...core.locks import process_alive
+from ...core.locks import process_matches_identity
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
@@ -107,6 +107,7 @@ from .types import (
 from .voice import TelegramVoiceManager
 
 TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
+_TELEGRAM_LOCK_CMD_HINTS = ("codex_autorunner", "codex-autorunner", "car ")
 
 
 def _build_opencode_supervisor(
@@ -565,7 +566,10 @@ class TelegramBotService(
         except FileExistsError as exc:
             existing = _read_lock_payload(lock_path)
             pid = existing.get("pid") if isinstance(existing, dict) else None
-            if isinstance(pid, int) and process_alive(pid):
+            if isinstance(pid, int) and process_matches_identity(
+                pid,
+                expected_cmd_substrings=_TELEGRAM_LOCK_CMD_HINTS,
+            ):
                 log_event(
                     self._logger,
                     logging.ERROR,

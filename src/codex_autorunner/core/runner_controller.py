@@ -1,7 +1,7 @@
 import threading
 from typing import Callable, Optional
 
-from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive, read_lock_info
+from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_matches_identity
 from .runner_process import build_runner_cmd, spawn_detached
 from .runtime import LockError, RuntimeContext
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
@@ -28,10 +28,14 @@ class ProcessRunnerController:
     def reconcile(self) -> None:
         lock_pid = None
         if self.ctx.lock_path.exists():
-            info = read_lock_info(self.ctx.lock_path)
-            lock_pid = info.pid if info.pid and process_alive(info.pid) else None
-            if not lock_pid:
+            assessment = assess_lock(
+                self.ctx.lock_path,
+                expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+            )
+            if assessment.freeable:
                 self.ctx.lock_path.unlink(missing_ok=True)
+            else:
+                lock_pid = assessment.pid
 
         durable = self.ctx.config.durable_writes
         with state_lock(self.ctx.state_path):
@@ -58,7 +62,10 @@ class ProcessRunnerController:
                 return
 
             pid = state.runner_pid
-            if pid and not process_alive(pid):
+            if pid and not process_matches_identity(
+                pid,
+                expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+            ):
                 status = state.status
                 exit_code = state.last_exit_code
                 finished_at = state.last_run_finished_at
@@ -92,9 +99,8 @@ class ProcessRunnerController:
         assessment = self._clear_freeable_lock()
         if assessment.freeable:
             return
-        info = read_lock_info(self.ctx.lock_path)
-        pid = info.pid
-        if pid and process_alive(pid):
+        pid = assessment.pid
+        if pid:
             raise LockError(
                 f"Another autorunner is active (pid={pid}); use --force to override"
             )
