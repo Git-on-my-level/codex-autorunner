@@ -734,5 +734,7 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     assert "env_passthrough" in hub_source
     assert "mounts" in hub_source
     assert "hubRepoSearchInput" in hub_source
+    assert "hub-chat-binding-row" in hub_source
+    assert 'header.textContent = "Channels"' not in hub_source
     assert "copy_channel_key" not in hub_source
     assert "Copied channel ref" not in hub_source
