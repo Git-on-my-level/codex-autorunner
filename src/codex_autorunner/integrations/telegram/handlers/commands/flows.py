@@ -59,6 +59,9 @@ _FLOW_ACTION_TOKENS = {
     "help",
     "status",
     "runs",
+    "start",
+    "bootstrap",
+    "restart",
     "issue",
     "plan",
     "resume",
@@ -114,6 +117,8 @@ def _flow_help_lines() -> list[str]:
         "Flow commands:",
         "/flow status [run_id]",
         "/flow runs [N]",
+        "/flow start [--force-new]",
+        "/flow restart [run_id]",
         "/flow issue <issue#|url>",
         "/flow plan <text>",
         "/flow resume [run_id]",
@@ -558,6 +563,12 @@ class FlowCommands(SharedHelpers):
                 await self._handle_flow_runs(
                     message, repo_root, rest_argv, repo_id=target_repo_id
                 )
+                return
+            if action in {"start", "bootstrap"}:
+                await self._handle_flow_bootstrap(message, repo_root, rest_argv)
+                return
+            if action == "restart":
+                await self._handle_flow_restart(message, repo_root, rest_argv)
                 return
             if action == "issue":
                 await self._handle_flow_issue(message, repo_root, remainder)
