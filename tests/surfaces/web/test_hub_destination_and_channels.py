@@ -309,10 +309,10 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
         repo_root / "src" / "codex_autorunner" / "static" / "index.html"
     ).read_text(encoding="utf-8")
     assert 'id="hub-channel-query"' in index_html
-    assert 'id="hub-channel-limit"' in index_html
     assert 'id="hub-channel-search"' in index_html
     assert 'id="hub-channel-refresh"' in index_html
     assert 'id="hub-channel-list"' in index_html
+    assert "Copy Ref copies a PMA delivery target ref" in index_html
 
     hub_source = (
         repo_root / "src" / "codex_autorunner" / "static_src" / "hub.ts"
@@ -323,5 +323,5 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     assert "container_name" in hub_source
     assert "env_passthrough" in hub_source
     assert "mounts" in hub_source
-    assert "hub-channel-limit" in hub_source
     assert "copy_channel_key" in hub_source
+    assert "Copied channel ref" in hub_source

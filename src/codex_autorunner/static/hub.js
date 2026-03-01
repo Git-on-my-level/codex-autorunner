@@ -40,7 +40,6 @@ const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 const hubVersionEl = document.getElementById("hub-version");
 const pmaVersionEl = document.getElementById("pma-version");
 const hubChannelQueryInput = document.getElementById("hub-channel-query");
-const hubChannelLimitInput = document.getElementById("hub-channel-limit");
 const hubChannelSearchBtn = document.getElementById("hub-channel-search");
 const hubChannelRefreshBtn = document.getElementById("hub-channel-refresh");
 const hubChannelListEl = document.getElementById("hub-channel-list");
@@ -212,19 +211,6 @@ function parseDockerMountList(value) {
         mounts.push({ source, target });
     }
     return { mounts, error: null };
-}
-function resolveHubChannelLimit() {
-    const raw = (hubChannelLimitInput?.value || "").trim();
-    if (!raw)
-        return 100;
-    const parsed = Number(raw);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-        throw new Error("Channel directory limit must be a positive integer.");
-    }
-    if (parsed > 1000) {
-        throw new Error("Channel directory limit must be <= 1000.");
-    }
-    return parsed;
 }
 function setButtonLoading(scanning) {
     const buttons = [
@@ -1470,7 +1456,7 @@ function renderHubChannelEntries(entries) {
             <div class="hub-channel-key">${escapeHtml(row.key)}</div>
             <div class="hub-channel-meta muted small">${escapeHtml(label)} · seen ${escapeHtml(seen)}</div>
           </div>
-          <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(row.key)}">Copy</button>
+          <button class="ghost sm" data-action="copy_channel_key" data-key="${escapeHtml(row.key)}" title="Copy PMA delivery target ref">Copy Ref</button>
         </div>
       `;
     })
@@ -1480,18 +1466,17 @@ function renderHubChannelEntries(entries) {
 async function loadHubChannelDirectory({ silent = false } = {}) {
     const query = (hubChannelQueryInput?.value || "").trim();
     try {
-        const limit = resolveHubChannelLimit();
         const params = new URLSearchParams();
-        params.set("limit", String(limit));
         if (query)
             params.set("query", query);
         if (hubChannelRefreshBtn)
             hubChannelRefreshBtn.disabled = true;
         if (hubChannelSearchBtn)
             hubChannelSearchBtn.disabled = true;
-        if (hubChannelLimitInput)
-            hubChannelLimitInput.disabled = true;
-        const payload = (await api(`/hub/chat/channels?${params.toString()}`, {
+        const path = params.toString()
+            ? `/hub/chat/channels?${params.toString()}`
+            : "/hub/chat/channels";
+        const payload = (await api(path, {
             method: "GET",
         }));
         renderHubChannelEntries(Array.isArray(payload.entries) ? payload.entries : []);
@@ -1506,8 +1491,6 @@ async function loadHubChannelDirectory({ silent = false } = {}) {
             hubChannelRefreshBtn.disabled = false;
         if (hubChannelSearchBtn)
             hubChannelSearchBtn.disabled = false;
-        if (hubChannelLimitInput)
-            hubChannelLimitInput.disabled = false;
     }
 }
 async function copyTextToClipboard(value) {
@@ -1722,14 +1705,6 @@ function attachHubHandlers() {
             }
         });
     }
-    if (hubChannelLimitInput) {
-        hubChannelLimitInput.addEventListener("keydown", (event) => {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                loadHubChannelDirectory().catch(() => { });
-            }
-        });
-    }
     if (hubChannelListEl) {
         hubChannelListEl.addEventListener("click", (event) => {
             const target = event.target;
@@ -1740,8 +1715,8 @@ function attachHubHandlers() {
             if (!key)
                 return;
             copyTextToClipboard(key)
-                .then(() => flash(`Copied key: ${key}`, "success"))
-                .catch((err) => flash(err.message || "Failed to copy key", "error"));
+                .then(() => flash(`Copied channel ref: ${key}. Paste it into PMA > Delivery targets.`, "success"))
+                .catch((err) => flash(err.message || "Failed to copy channel ref", "error"));
         });
     }
     if (newRepoBtn) {

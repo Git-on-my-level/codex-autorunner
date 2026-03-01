@@ -70,6 +70,10 @@ from ....core.state_roots import is_within_allowed_root
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from ....integrations.chat.channel_directory import (
+    ChannelDirectoryStore,
+    channel_entry_key,
+)
 from ....integrations.discord.config import (
     DEFAULT_STATE_FILE as DISCORD_DEFAULT_STATE_FILE,
 )
@@ -478,7 +482,34 @@ def build_pma_routes() -> APIRouter:
             payload["delivery_status"] = delivery_status
         return payload
 
-    def _serialize_delivery_targets_state(state: dict[str, Any]) -> dict[str, Any]:
+    def _friendly_channel_label_by_target_key(hub_root: Path) -> dict[str, str]:
+        try:
+            entries = ChannelDirectoryStore(hub_root).list_entries(limit=None)
+        except Exception:
+            logger.exception("Failed to load channel directory for PMA target labels")
+            return {}
+
+        labels: dict[str, str] = {}
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            key = channel_entry_key(entry)
+            if not isinstance(key, str) or not key:
+                continue
+            target_delivery_key = f"chat:{key}"
+            if target_delivery_key in labels:
+                continue
+            display = entry.get("display")
+            if isinstance(display, str) and display.strip():
+                labels[target_delivery_key] = display.strip()
+        return labels
+
+    def _serialize_delivery_targets_state(
+        state: dict[str, Any], *, hub_root: Optional[Path] = None
+    ) -> dict[str, Any]:
+        friendly_labels: dict[str, str] = {}
+        if hub_root is not None:
+            friendly_labels = _friendly_channel_label_by_target_key(hub_root)
         targets = [
             target for target in state.get("targets", []) if isinstance(target, dict)
         ]
@@ -494,6 +525,7 @@ def build_pma_routes() -> APIRouter:
                 {
                     "key": key,
                     "label": format_pma_target_label(target),
+                    "friendly_label": friendly_labels.get(key),
                     "target": target,
                     "active": False,
                 }
@@ -1160,12 +1192,18 @@ def build_pma_routes() -> APIRouter:
     @router.get("/targets")
     def pma_targets_list(request: Request) -> dict[str, Any]:
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        return _serialize_delivery_targets_state(store.load())
+        return _serialize_delivery_targets_state(
+            store.load(),
+            hub_root=request.app.state.config.root,
+        )
 
     @router.get("/targets/active")
     def pma_targets_active(request: Request) -> dict[str, Any]:
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        payload = _serialize_delivery_targets_state(store.load())
+        payload = _serialize_delivery_targets_state(
+            store.load(),
+            hub_root=request.app.state.config.root,
+        )
         rows = [row for row in payload.get("targets", []) if isinstance(row, dict)]
         active_key = payload.get("active_target_key")
         active_row = next(
@@ -1213,7 +1251,10 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail=f"Target not found: {key}")
 
         changed = sink_store.set_active_target(key)
-        payload = _serialize_delivery_targets_state(store.load())
+        payload = _serialize_delivery_targets_state(
+            store.load(),
+            hub_root=request.app.state.config.root,
+        )
         payload["active_target"] = next(
             (
                 row
@@ -1251,7 +1292,10 @@ def build_pma_routes() -> APIRouter:
 
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
         store.add_target(target)
-        payload = _serialize_delivery_targets_state(store.load())
+        payload = _serialize_delivery_targets_state(
+            store.load(),
+            hub_root=request.app.state.config.root,
+        )
         payload.update({"status": "ok", "action": "add", "key": key})
         return payload
 
@@ -1278,7 +1322,10 @@ def build_pma_routes() -> APIRouter:
 
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
         removed = store.remove_target(target)
-        payload = _serialize_delivery_targets_state(store.load())
+        payload = _serialize_delivery_targets_state(
+            store.load(),
+            hub_root=request.app.state.config.root,
+        )
         payload.update(
             {"status": "ok", "action": "remove", "key": key, "removed": bool(removed)}
         )
@@ -1288,7 +1335,10 @@ def build_pma_routes() -> APIRouter:
     def pma_targets_clear(request: Request) -> dict[str, Any]:
         store = PmaDeliveryTargetsStore(request.app.state.config.root)
         store.set_targets([])
-        payload = _serialize_delivery_targets_state(store.load())
+        payload = _serialize_delivery_targets_state(
+            store.load(),
+            hub_root=request.app.state.config.root,
+        )
         payload.update({"status": "ok", "action": "clear"})
         return payload
 

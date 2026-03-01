@@ -15,6 +15,7 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
+from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.integrations.pma_delivery import PmaDeliveryOutcome
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.cli import pma_cli
@@ -337,6 +338,30 @@ def test_pma_targets_active_rejects_invalid_inputs(hub_env) -> None:
     assert "Target not found" in (not_found.json().get("detail") or "")
 
 
+def test_pma_targets_include_friendly_channel_labels(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    ChannelDirectoryStore(hub_env.hub_root).record_seen(
+        "telegram",
+        "-100123",
+        "777",
+        "Team Room / Build",
+        {"chat_type": "supergroup"},
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    add = client.post("/hub/pma/targets/add", json={"ref": "telegram:-100123:777"})
+    assert add.status_code == 200
+
+    listed = client.get("/hub/pma/targets")
+    assert listed.status_code == 200
+    rows = listed.json()["targets"]
+    target_row = next(row for row in rows if row["key"] == "chat:telegram:-100123:777")
+    assert target_row["friendly_label"] == "Team Room / Build"
+    assert target_row["label"] == "telegram:-100123:777"
+
+
 def test_pma_targets_web_state_matches_cli_helper(tmp_path: Path) -> None:
     web_root = tmp_path / "web-hub"
     cli_root = tmp_path / "cli-hub"
@@ -420,6 +445,7 @@ def test_pma_ui_target_management_controls_present() -> None:
     assert "/hub/pma/targets/remove" in pma_source
     assert "/hub/pma/targets/clear" in pma_source
     assert "Set active" in pma_source
+    assert "friendly_label" in pma_source
 
 
 def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
