@@ -103,6 +103,55 @@ def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     assert base.destination == {"kind": "local"}
 
 
+def test_hub_destination_set_route_supports_extended_docker_fields(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    supervisor.create_repo("base")
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    set_docker = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "container_name": "car-demo",
+            "env_passthrough": ["CAR_*", "PATH"],
+            "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+        },
+    )
+    assert set_docker.status_code == 200
+    payload = set_docker.json()
+    assert payload["configured_destination"] == {
+        "kind": "docker",
+        "image": "busybox:latest",
+        "container_name": "car-demo",
+        "env_passthrough": ["CAR_*", "PATH"],
+        "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+    }
+    assert payload["effective_destination"] == {
+        "kind": "docker",
+        "image": "busybox:latest",
+        "container_name": "car-demo",
+        "env_passthrough": ["CAR_*", "PATH"],
+        "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+    }
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    base = manifest.get("base")
+    assert base is not None
+    assert base.destination == {
+        "kind": "docker",
+        "image": "busybox:latest",
+        "container_name": "car-demo",
+        "env_passthrough": ["CAR_*", "PATH"],
+        "mounts": [{"source": "/tmp/src", "target": "/workspace/src"}],
+    }
+
+
 def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _create_hub_supervisor(hub_root)
@@ -116,6 +165,19 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
     bad_kind = client.post("/hub/repos/base/destination", json={"kind": "ssh"})
     assert bad_kind.status_code == 400
     assert "Use 'local' or 'docker'" in bad_kind.json()["detail"]
+
+    bad_mount = client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "mounts": [{"source": "/tmp/src"}],
+        },
+    )
+    assert bad_mount.status_code == 400
+    assert (
+        "Each mount requires non-empty source and target" in bad_mount.json()["detail"]
+    )
 
     unknown_repo = client.post(
         "/hub/repos/missing-repo/destination",
@@ -215,9 +277,17 @@ def test_hub_channel_directory_route_lists_and_filters(tmp_path: Path) -> None:
     assert len(filtered_rows) == 1
     assert filtered_rows[0]["key"] == "discord:chan-123:guild-1"
 
+    limited = client.get("/hub/chat/channels", params={"limit": 1})
+    assert limited.status_code == 200
+    assert len(limited.json()["entries"]) == 1
+
     bad_limit = client.get("/hub/chat/channels", params={"limit": 0})
     assert bad_limit.status_code == 400
     assert "limit must be greater than 0" in bad_limit.json()["detail"]
+
+    bad_limit_high = client.get("/hub/chat/channels", params={"limit": 1001})
+    assert bad_limit_high.status_code == 400
+    assert "limit must be <= 1000" in bad_limit_high.json()["detail"]
 
 
 def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
@@ -226,6 +296,7 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
         repo_root / "src" / "codex_autorunner" / "static" / "index.html"
     ).read_text(encoding="utf-8")
     assert 'id="hub-channel-query"' in index_html
+    assert 'id="hub-channel-limit"' in index_html
     assert 'id="hub-channel-search"' in index_html
     assert 'id="hub-channel-refresh"' in index_html
     assert 'id="hub-channel-list"' in index_html
@@ -236,4 +307,8 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     assert "set_destination" in hub_source
     assert "/hub/repos/${encodeURIComponent(repo.id)}/destination" in hub_source
     assert "/hub/chat/channels" in hub_source
+    assert "container_name" in hub_source
+    assert "env_passthrough" in hub_source
+    assert "mounts" in hub_source
+    assert "hub-channel-limit" in hub_source
     assert "copy_channel_key" in hub_source

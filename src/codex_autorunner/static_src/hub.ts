@@ -222,6 +222,9 @@ const pmaVersionEl = document.getElementById("pma-version");
 const hubChannelQueryInput = document.getElementById(
   "hub-channel-query"
 ) as HTMLInputElement | null;
+const hubChannelLimitInput = document.getElementById(
+  "hub-channel-limit"
+) as HTMLInputElement | null;
 const hubChannelSearchBtn = document.getElementById(
   "hub-channel-search"
 ) as HTMLButtonElement | null;
@@ -360,6 +363,79 @@ function formatDestinationSummary(
     return image ? `docker:${image}` : "docker";
   }
   return "local";
+}
+
+function splitCommaSeparated(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function currentDockerEnvPassthrough(
+  destination: Record<string, unknown> | null | undefined
+): string {
+  const raw = destination?.env_passthrough;
+  if (!Array.isArray(raw)) return "";
+  return raw
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+function currentDockerMounts(
+  destination: Record<string, unknown> | null | undefined
+): string {
+  const raw = destination?.mounts;
+  if (!Array.isArray(raw)) return "";
+  const mounts = raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const source = String((item as Record<string, unknown>).source || "").trim();
+      const target = String((item as Record<string, unknown>).target || "").trim();
+      return source && target ? `${source}:${target}` : "";
+    })
+    .filter(Boolean);
+  return mounts.join(", ");
+}
+
+function parseDockerMountList(
+  value: string
+): { mounts: Array<{ source: string; target: string }>; error: string | null } {
+  const mounts: Array<{ source: string; target: string }> = [];
+  const entries = splitCommaSeparated(value);
+  for (const entry of entries) {
+    const splitAt = entry.lastIndexOf(":");
+    if (splitAt <= 0 || splitAt >= entry.length - 1) {
+      return {
+        mounts: [],
+        error: `Invalid mount "${entry}". Use source:target (comma-separated).`,
+      };
+    }
+    const source = entry.slice(0, splitAt).trim();
+    const target = entry.slice(splitAt + 1).trim();
+    if (!source || !target) {
+      return {
+        mounts: [],
+        error: `Invalid mount "${entry}". Use source:target (comma-separated).`,
+      };
+    }
+    mounts.push({ source, target });
+  }
+  return { mounts, error: null };
+}
+
+function resolveHubChannelLimit(): number {
+  const raw = (hubChannelLimitInput?.value || "").trim();
+  if (!raw) return 100;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error("Channel directory limit must be a positive integer.");
+  }
+  if (parsed > 1000) {
+    throw new Error("Channel directory limit must be <= 1000.");
+  }
+  return parsed;
 }
 
 function setButtonLoading(scanning: boolean): void {
@@ -1900,6 +1976,68 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
       return false;
     }
     body.image = imageValue.trim();
+    const configureAdvanced = await confirmModal(
+      "Configure optional docker fields (container name, env passthrough, mounts)?",
+      {
+        confirmText: "Configure",
+        cancelText: "Skip",
+        danger: false,
+      }
+    );
+    if (configureAdvanced) {
+      const currentContainerName =
+        typeof repo.effective_destination?.container_name === "string"
+          ? String(repo.effective_destination.container_name)
+          : "";
+      const containerNameValue = await inputModal(
+        "Docker container name (optional):",
+        {
+          placeholder: "car-runner",
+          defaultValue: currentContainerName,
+          confirmText: "Next",
+          allowEmpty: true,
+        }
+      );
+      if (containerNameValue === null) return false;
+      const containerName = containerNameValue.trim();
+      if (containerName) {
+        body.container_name = containerName;
+      }
+
+      const envPassthroughValue = await inputModal(
+        "Docker env passthrough (optional, comma-separated):",
+        {
+          placeholder: "CAR_*, PATH",
+          defaultValue: currentDockerEnvPassthrough(repo.effective_destination),
+          confirmText: "Next",
+          allowEmpty: true,
+        }
+      );
+      if (envPassthroughValue === null) return false;
+      const envPassthrough = splitCommaSeparated(envPassthroughValue);
+      if (envPassthrough.length) {
+        body.env_passthrough = envPassthrough;
+      }
+
+      const mountsValue = await inputModal(
+        "Docker mounts (optional, source:target pairs, comma-separated):",
+        {
+          placeholder: "/host/path:/workspace/path",
+          defaultValue: currentDockerMounts(repo.effective_destination),
+          confirmText: "Save",
+          allowEmpty: true,
+        }
+      );
+      if (mountsValue === null) return false;
+      const parsedMounts = parseDockerMountList(mountsValue);
+      if (parsedMounts.error) {
+        flash(parsedMounts.error, "error");
+        return false;
+      }
+      if (parsedMounts.mounts.length) {
+        body.mounts = parsedMounts.mounts;
+      }
+    }
   } else if (kind !== "local") {
     flash("Unsupported destination kind. Use local or docker.", "error");
     return false;
@@ -1949,12 +2087,14 @@ function renderHubChannelEntries(entries: HubChannelEntry[]): void {
 
 async function loadHubChannelDirectory({ silent = false }: { silent?: boolean } = {}): Promise<void> {
   const query = (hubChannelQueryInput?.value || "").trim();
-  const params = new URLSearchParams();
-  params.set("limit", "100");
-  if (query) params.set("query", query);
   try {
+    const limit = resolveHubChannelLimit();
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (query) params.set("query", query);
     if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = true;
     if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = true;
+    if (hubChannelLimitInput) hubChannelLimitInput.disabled = true;
     const payload = (await api(`/hub/chat/channels?${params.toString()}`, {
       method: "GET",
     })) as HubChannelDirectoryResponse;
@@ -1966,6 +2106,7 @@ async function loadHubChannelDirectory({ silent = false }: { silent?: boolean } 
   } finally {
     if (hubChannelRefreshBtn) hubChannelRefreshBtn.disabled = false;
     if (hubChannelSearchBtn) hubChannelSearchBtn.disabled = false;
+    if (hubChannelLimitInput) hubChannelLimitInput.disabled = false;
   }
 }
 
@@ -2186,6 +2327,14 @@ function attachHubHandlers(): void {
   }
   if (hubChannelQueryInput) {
     hubChannelQueryInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        loadHubChannelDirectory().catch(() => {});
+      }
+    });
+  }
+  if (hubChannelLimitInput) {
+    hubChannelLimitInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
         loadHubChannelDirectory().catch(() => {});
