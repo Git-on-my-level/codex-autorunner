@@ -219,6 +219,15 @@ class ChatBotServiceCore:
                     await asyncio.gather(*owner._spawned_tasks, return_exceptions=True)
             finally:
                 try:
+                    await self._dispatcher.close()
+                except Exception as exc:
+                    log_event(
+                        owner._logger,
+                        logging.WARNING,
+                        f"{self._platform}.dispatcher.close_failed",
+                        exc=exc,
+                    )
+                try:
                     await owner._bot.close()
                 except Exception as exc:
                     log_event(

@@ -133,3 +133,37 @@ def test_active_session_caps_pending_input(monkeypatch):
         assert session.loop.writer_added is True
     finally:
         loop.close()
+
+
+def test_active_session_caps_subscribers():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    class DummyLoop:
+        def add_reader(self, _fd, _cb):
+            return None
+
+        def remove_reader(self, _fd):
+            return None
+
+    class DummyPTY:
+        fd = 0
+
+        def __init__(self):
+            self.closed = False
+            self.last_active = 0.0
+
+    try:
+        session = ActiveSession("s", DummyPTY(), DummyLoop())  # type: ignore[arg-type]
+        created = [
+            session.add_subscriber(include_replay_end=False)
+            for _ in range(pty_session.PTY_SUBSCRIBER_MAX + 3)
+        ]
+        evicted = created[:3]
+
+        assert len(session.subscribers) == pty_session.PTY_SUBSCRIBER_MAX
+        for queue in evicted:
+            assert queue not in session.subscribers
+            assert queue.get_nowait() is None
+    finally:
+        loop.close()

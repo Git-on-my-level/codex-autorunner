@@ -3,6 +3,8 @@ import { api, escapeHtml, flash, openModal, resolvePath } from "./utils.js";
 let bellInitialized = false;
 let modalOpen = false;
 let closeModal = null;
+let bellPollIntervalId = null;
+let unloadCleanupInstalled = false;
 function getBellButtons() {
     return Array.from(document.querySelectorAll(".notification-bell"));
 }
@@ -176,10 +178,10 @@ function attachModalHandlers() {
 export function initNotificationBell() {
     if (bellInitialized)
         return;
-    bellInitialized = true;
     const buttons = getBellButtons();
     if (!buttons.length)
         return;
+    bellInitialized = true;
     buttons.forEach((btn) => {
         btn.addEventListener("click", () => {
             openNotificationsModal();
@@ -187,11 +189,22 @@ export function initNotificationBell() {
     });
     attachModalHandlers();
     void refreshNotifications({ render: false, silent: true });
-    window.setInterval(() => {
-        if (document.hidden)
-            return;
-        void refreshNotifications({ render: false, silent: true });
-    }, 15000);
+    if (bellPollIntervalId === null) {
+        bellPollIntervalId = window.setInterval(() => {
+            if (document.hidden)
+                return;
+            void refreshNotifications({ render: false, silent: true });
+        }, 15000);
+    }
+    if (!unloadCleanupInstalled) {
+        unloadCleanupInstalled = true;
+        window.addEventListener("beforeunload", () => {
+            if (bellPollIntervalId !== null) {
+                clearInterval(bellPollIntervalId);
+                bellPollIntervalId = null;
+            }
+        });
+    }
 }
 export const __notificationBellTest = {
     refreshNotifications,

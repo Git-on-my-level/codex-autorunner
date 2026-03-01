@@ -9,6 +9,8 @@ let bellInitialized = false;
 let messagesInitialized = false;
 let activeRunId = null;
 let selectedRunId = null;
+let messageBellPollIntervalId = null;
+let messageBellUnloadCleanupInstalled = false;
 const MESSAGE_REFRESH_REASONS = ["initial", "background", "manual"];
 const threadsEl = document.getElementById("messages-thread-list");
 const detailEl = document.getElementById("messages-thread-detail");
@@ -116,13 +118,24 @@ export function initMessageBell() {
     bellInitialized = true;
     // Cheap polling. (The repo shell already does other polling; keep this light.)
     refreshBell();
-    window.setInterval(() => {
-        if (document.hidden)
-            return;
-        if (!isRepoHealthy())
-            return;
-        refreshBell();
-    }, 15000);
+    if (messageBellPollIntervalId === null) {
+        messageBellPollIntervalId = window.setInterval(() => {
+            if (document.hidden)
+                return;
+            if (!isRepoHealthy())
+                return;
+            refreshBell();
+        }, 15000);
+    }
+    if (!messageBellUnloadCleanupInstalled) {
+        messageBellUnloadCleanupInstalled = true;
+        window.addEventListener("beforeunload", () => {
+            if (messageBellPollIntervalId !== null) {
+                clearInterval(messageBellPollIntervalId);
+                messageBellPollIntervalId = null;
+            }
+        });
+    }
     subscribe("repo:health", (payload) => {
         const status = payload?.status || "";
         if (status === "ok" || status === "degraded") {

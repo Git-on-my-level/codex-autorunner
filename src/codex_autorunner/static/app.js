@@ -14,7 +14,7 @@ import { initHealthGate } from "./health.js";
 import { initContextspace } from "./contextspace.js";
 import { initDashboard } from "./dashboard.js";
 import { initArchive } from "./archive.js";
-import { initPMA } from "./pma.js";
+import { initPMA, setPMARefreshActive } from "./pma.js";
 import { initNotifications } from "./notifications.js";
 let pmaInitialized = false;
 async function initPMAView() {
@@ -30,6 +30,7 @@ function showHubView() {
         hubShell.classList.remove("hidden");
     if (pmaShell)
         pmaShell.classList.add("hidden");
+    setPMARefreshActive(false);
     updateModeToggle("manual");
     updateUrlParams({ view: null });
 }
@@ -41,7 +42,9 @@ function showPMAView() {
     if (pmaShell)
         pmaShell.classList.remove("hidden");
     updateModeToggle("pma");
-    void initPMAView();
+    void initPMAView().then(() => {
+        setPMARefreshActive(true);
+    });
     updateUrlParams({ view: "pma" });
 }
 function updateModeToggle(mode) {

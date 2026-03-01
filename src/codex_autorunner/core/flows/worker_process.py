@@ -538,14 +538,24 @@ def spawn_flow_worker(
     stderr_handle = stderr_path.open("ab")
 
     cmd = _build_worker_cmd(entrypoint, normalized_run_id, repo_root)
-
-    proc = subprocess.Popen(
-        cmd,
-        cwd=repo_root,
-        start_new_session=True,
-        stdout=stdout_handle,
-        stderr=stderr_handle,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=repo_root,
+            start_new_session=True,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+        )
+    except Exception:
+        try:
+            stdout_handle.close()
+        except Exception:
+            pass
+        try:
+            stderr_handle.close()
+        except Exception:
+            pass
+        raise
 
     _write_worker_metadata(
         _worker_metadata_path(artifacts_dir), proc.pid, cmd, repo_root

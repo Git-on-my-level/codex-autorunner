@@ -40,6 +40,8 @@ interface HubMessageItem {
 let bellInitialized = false;
 let modalOpen = false;
 let closeModal: (() => void) | null = null;
+let bellPollIntervalId: ReturnType<typeof setInterval> | null = null;
+let unloadCleanupInstalled = false;
 
 function getBellButtons(): HTMLButtonElement[] {
   return Array.from(document.querySelectorAll<HTMLButtonElement>(".notification-bell"));
@@ -218,9 +220,9 @@ function attachModalHandlers(): void {
 
 export function initNotificationBell(): void {
   if (bellInitialized) return;
-  bellInitialized = true;
   const buttons = getBellButtons();
   if (!buttons.length) return;
+  bellInitialized = true;
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
       openNotificationsModal();
@@ -228,10 +230,21 @@ export function initNotificationBell(): void {
   });
   attachModalHandlers();
   void refreshNotifications({ render: false, silent: true });
-  window.setInterval(() => {
-    if (document.hidden) return;
-    void refreshNotifications({ render: false, silent: true });
-  }, 15000);
+  if (bellPollIntervalId === null) {
+    bellPollIntervalId = window.setInterval(() => {
+      if (document.hidden) return;
+      void refreshNotifications({ render: false, silent: true });
+    }, 15000);
+  }
+  if (!unloadCleanupInstalled) {
+    unloadCleanupInstalled = true;
+    window.addEventListener("beforeunload", () => {
+      if (bellPollIntervalId !== null) {
+        clearInterval(bellPollIntervalId);
+        bellPollIntervalId = null;
+      }
+    });
+  }
 }
 
 export const __notificationBellTest = {

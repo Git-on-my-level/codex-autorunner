@@ -187,6 +187,27 @@ async def test_dispatcher_supports_custom_bypass_rules() -> None:
     assert observed[:4] == ["normal-1-start", "bypass", "normal-1-end", "queued"]
 
 
+@pytest.mark.anyio
+async def test_dispatcher_close_cancels_workers_and_queued_events() -> None:
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        entered.set()
+        await asyncio.sleep(10)
+
+    await dispatcher.dispatch(_message_event("normal-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2"), handler)
+
+    await asyncio.wait_for(dispatcher.close(), timeout=1.0)
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert observed == ["normal-1"]
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected_param"),
     [
