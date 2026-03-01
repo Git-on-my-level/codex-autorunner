@@ -312,6 +312,8 @@ class DiscordBotService:
         self._app_server_lock = asyncio.Lock()
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
         self._channel_directory_store = ChannelDirectoryStore(self._config.root)
+        self._guild_name_cache: dict[str, str] = {}
+        self._channel_name_cache: dict[str, str] = {}
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
         if generated_hub_config.exists():
@@ -2573,12 +2575,12 @@ class DiscordBotService:
             if event is not None:
                 await self._dispatcher.dispatch(event, self._handle_chat_event)
         elif event_type == "MESSAGE_CREATE":
-            self._record_channel_directory_seen_from_message_payload(payload)
+            await self._record_channel_directory_seen_from_message_payload(payload)
             event = self._chat_adapter.parse_message_event(payload)
             if event is not None:
                 await self._dispatch_chat_event(event)
 
-    def _record_channel_directory_seen_from_message_payload(
+    async def _record_channel_directory_seen_from_message_payload(
         self, payload: dict[str, Any]
     ) -> None:
         channel_id = self._coerce_id(payload.get("channel_id"))
@@ -2594,6 +2596,26 @@ class DiscordBotService:
             payload.get("channel_name"),
             self._nested_text(payload, "channel", "name"),
         )
+        if channel_label_raw is not None:
+            channel_label_raw = channel_label_raw.lstrip("#")
+            self._channel_name_cache[channel_id] = channel_label_raw
+        else:
+            if channel_id in self._channel_name_cache:
+                cached_channel = self._channel_name_cache[channel_id]
+                channel_label_raw = cached_channel if cached_channel else None
+            else:
+                channel_label_raw = await self._resolve_channel_name(channel_id)
+
+        if guild_id is not None:
+            if guild_label is not None:
+                self._guild_name_cache[guild_id] = guild_label
+            else:
+                if guild_id in self._guild_name_cache:
+                    cached_guild = self._guild_name_cache[guild_id]
+                    guild_label = cached_guild if cached_guild else None
+                else:
+                    guild_label = await self._resolve_guild_name(guild_id)
+
         channel_label = (
             f"#{channel_label_raw.lstrip('#')}"
             if channel_label_raw is not None
@@ -2626,6 +2648,62 @@ class DiscordBotService:
                 guild_id=guild_id,
                 exc=exc,
             )
+
+    async def _resolve_channel_name(self, channel_id: str) -> Optional[str]:
+        fetch = getattr(self._rest, "get_channel", None)
+        if not callable(fetch):
+            self._channel_name_cache[channel_id] = ""
+            return None
+        try:
+            payload = await fetch(channel_id=channel_id)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_directory.channel_lookup_failed",
+                channel_id=channel_id,
+                exc=exc,
+            )
+            self._channel_name_cache[channel_id] = ""
+            return None
+        if not isinstance(payload, dict):
+            self._channel_name_cache[channel_id] = ""
+            return None
+        channel_label = self._first_non_empty_text(payload.get("name"))
+        if channel_label is None:
+            self._channel_name_cache[channel_id] = ""
+            return None
+        normalized = channel_label.lstrip("#")
+        self._channel_name_cache[channel_id] = normalized
+
+        return normalized
+
+    async def _resolve_guild_name(self, guild_id: str) -> Optional[str]:
+        fetch = getattr(self._rest, "get_guild", None)
+        if not callable(fetch):
+            self._guild_name_cache[guild_id] = ""
+            return None
+        try:
+            payload = await fetch(guild_id=guild_id)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.channel_directory.guild_lookup_failed",
+                guild_id=guild_id,
+                exc=exc,
+            )
+            self._guild_name_cache[guild_id] = ""
+            return None
+        if not isinstance(payload, dict):
+            self._guild_name_cache[guild_id] = ""
+            return None
+        guild_label = self._first_non_empty_text(payload.get("name"))
+        if guild_label is None:
+            self._guild_name_cache[guild_id] = ""
+            return None
+        self._guild_name_cache[guild_id] = guild_label
+        return guild_label
 
     @staticmethod
     def _nested_text(payload: dict[str, Any], key: str, field: str) -> Optional[str]:

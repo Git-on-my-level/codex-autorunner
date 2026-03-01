@@ -456,17 +456,20 @@ def _extract_chat_title(chat_payload: Any) -> Optional[str]:
 
 
 def _extract_thread_title(message_payload: Any, reply_to_payload: Any) -> Optional[str]:
+    # Prefer explicit rename events first, then topic creation from the current
+    # message only. Reply metadata often carries the original topic creation
+    # payload forever, which becomes stale after a rename.
     for candidate in (message_payload, reply_to_payload):
-        title = _extract_forum_topic_name(candidate)
+        title = _extract_forum_topic_name(candidate, keys=("forum_topic_edited",))
         if title is not None:
             return title
-    return None
+    return _extract_forum_topic_name(message_payload, keys=("forum_topic_created",))
 
 
-def _extract_forum_topic_name(payload: Any) -> Optional[str]:
+def _extract_forum_topic_name(payload: Any, *, keys: tuple[str, ...]) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
-    for key in ("forum_topic_created", "forum_topic_edited"):
+    for key in keys:
         raw = payload.get(key)
         if not isinstance(raw, dict):
             continue

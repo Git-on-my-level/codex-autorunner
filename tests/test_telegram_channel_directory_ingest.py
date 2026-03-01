@@ -65,7 +65,7 @@ async def test_inbound_message_records_channel_directory_with_titles(
         assert entry["chat_id"] == "-1001"
         assert entry["thread_id"] == "77"
         assert entry["display"] == "Team Room / Ops"
-        assert entry["meta"] == {"chat_type": "supergroup"}
+        assert entry["meta"] == {"chat_type": "supergroup", "topic_title": "Ops"}
     finally:
         await service._bot.close()
 
@@ -112,5 +112,180 @@ async def test_inbound_message_records_channel_directory_with_id_fallbacks(
         assert entry["thread_id"] == "88"
         assert entry["display"] == "-1001 / 88"
         assert entry["meta"] == {"chat_type": "supergroup"}
+    finally:
+        await service._bot.close()
+
+
+def test_parse_update_ignores_stale_reply_topic_created() -> None:
+    update = parse_update(
+        {
+            "update_id": 3,
+            "message": {
+                "message_id": 12,
+                "chat": {"id": -1001, "type": "supergroup", "title": "Team Room"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "from": {"id": 42},
+                "text": "normal message",
+                "date": 1700000002,
+                "reply_to_message": {
+                    "message_id": 1,
+                    "forum_topic_created": {"name": "Original Topic"},
+                },
+            },
+        }
+    )
+    assert update is not None
+    assert update.message is not None
+    assert update.message.thread_title is None
+
+
+@pytest.mark.anyio
+async def test_inbound_message_preserves_and_updates_topic_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+
+    async def _noop_handle_message(_service: TelegramBotService, _message) -> None:
+        return None
+
+    monkeypatch.setattr(
+        telegram_service_module.message_handlers,
+        "handle_message",
+        _noop_handle_message,
+    )
+
+    created = parse_update(
+        {
+            "update_id": 4,
+            "message": {
+                "message_id": 20,
+                "chat": {"id": -1001, "type": "supergroup", "title": "Team Room"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "from": {"id": 42},
+                "text": "created",
+                "date": 1700000100,
+                "forum_topic_created": {"name": "Ops"},
+            },
+        }
+    )
+    stale_reply = parse_update(
+        {
+            "update_id": 5,
+            "message": {
+                "message_id": 21,
+                "chat": {"id": -1001, "type": "supergroup", "title": "Team Room"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "from": {"id": 42},
+                "text": "normal",
+                "date": 1700000101,
+                "reply_to_message": {
+                    "message_id": 1,
+                    "forum_topic_created": {"name": "Old Name"},
+                },
+            },
+        }
+    )
+    edited = parse_update(
+        {
+            "update_id": 6,
+            "message": {
+                "message_id": 22,
+                "chat": {"id": -1001, "type": "supergroup", "title": "Team Room"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "from": {"id": 42},
+                "text": "renamed",
+                "date": 1700000102,
+                "forum_topic_edited": {"name": "Ops Renamed"},
+            },
+        }
+    )
+    after_rename = parse_update(
+        {
+            "update_id": 7,
+            "message": {
+                "message_id": 23,
+                "chat": {"id": -1001, "type": "supergroup", "title": "Team Room"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "from": {"id": 42},
+                "text": "after rename",
+                "date": 1700000103,
+            },
+        }
+    )
+
+    assert created and created.message
+    assert stale_reply and stale_reply.message
+    assert edited and edited.message
+    assert after_rename and after_rename.message
+
+    try:
+        await service._handle_message(created.message)
+        await service._handle_message(stale_reply.message)
+        await service._handle_message(edited.message)
+        await service._handle_message(after_rename.message)
+        entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["display"] == "Team Room / Ops Renamed"
+        assert entry["meta"] == {
+            "chat_type": "supergroup",
+            "topic_title": "Ops Renamed",
+        }
+    finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_inbound_message_parses_legacy_display_when_chat_title_contains_separator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+
+    async def _noop_handle_message(_service: TelegramBotService, _message) -> None:
+        return None
+
+    monkeypatch.setattr(
+        telegram_service_module.message_handlers,
+        "handle_message",
+        _noop_handle_message,
+    )
+
+    # Seed a legacy-style entry without meta.topic_title.
+    ChannelDirectoryStore(tmp_path).record_seen(
+        "telegram",
+        "-1001",
+        "77",
+        "Team / Room / Ops",
+        {"chat_type": "supergroup"},
+    )
+
+    update = parse_update(
+        {
+            "update_id": 8,
+            "message": {
+                "message_id": 24,
+                "chat": {"id": -1001, "type": "supergroup", "title": "Team / Room"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "from": {"id": 42},
+                "text": "no title metadata",
+                "date": 1700000104,
+            },
+        }
+    )
+    assert update and update.message
+
+    try:
+        await service._handle_message(update.message)
+        entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["display"] == "Team / Room / Ops"
+        assert entry["meta"] == {"chat_type": "supergroup", "topic_title": "Ops"}
     finally:
         await service._bot.close()

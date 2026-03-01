@@ -200,6 +200,14 @@ class DiscordRestClient:
         payload = await self._request("GET", "/gateway/bot")
         return payload if isinstance(payload, dict) else {}
 
+    async def get_channel(self, *, channel_id: str) -> dict[str, Any]:
+        payload = await self._request("GET", f"/channels/{channel_id}")
+        return payload if isinstance(payload, dict) else {}
+
+    async def get_guild(self, *, guild_id: str) -> dict[str, Any]:
+        payload = await self._request("GET", f"/guilds/{guild_id}")
+        return payload if isinstance(payload, dict) else {}
+
     async def list_application_commands(
         self, *, application_id: str, guild_id: str | None = None
     ) -> list[dict[str, Any]]:

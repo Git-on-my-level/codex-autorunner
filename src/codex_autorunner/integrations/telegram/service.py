@@ -1214,6 +1214,7 @@ class TelegramBotService(
             if isinstance(message.chat_title, str) and message.chat_title.strip()
             else str(message.chat_id)
         )
+        topic_label: Optional[str] = None
         if thread_id is None:
             display = chat_label
         else:
@@ -1221,13 +1222,27 @@ class TelegramBotService(
                 message.thread_title.strip()
                 if isinstance(message.thread_title, str)
                 and message.thread_title.strip()
-                else thread_id
+                else None
             )
+            if topic_label is None:
+                topic_label = self._existing_topic_label(
+                    chat_id=str(message.chat_id),
+                    thread_id=thread_id,
+                    chat_label=chat_label,
+                )
+            if topic_label is None:
+                topic_label = thread_id
             display = f"{chat_label} / {topic_label}"
 
         meta: dict[str, Any] = {}
         if isinstance(message.chat_type, str) and message.chat_type.strip():
             meta["chat_type"] = message.chat_type.strip()
+        if (
+            thread_id is not None
+            and isinstance(topic_label, str)
+            and topic_label != thread_id
+        ):
+            meta["topic_title"] = topic_label
 
         try:
             self._channel_directory_store.record_seen(
@@ -1247,6 +1262,47 @@ class TelegramBotService(
                 message_id=message.message_id,
                 exc=exc,
             )
+
+    def _existing_topic_label(
+        self, *, chat_id: str, thread_id: str, chat_label: str
+    ) -> Optional[str]:
+        try:
+            entries = self._channel_directory_store.list_entries(limit=None)
+        except Exception:
+            return None
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("platform") != "telegram":
+                continue
+            if str(entry.get("chat_id") or "") != chat_id:
+                continue
+            if str(entry.get("thread_id") or "") != thread_id:
+                continue
+
+            meta = entry.get("meta")
+            if isinstance(meta, dict):
+                topic_title = meta.get("topic_title")
+                if isinstance(topic_title, str):
+                    normalized = topic_title.strip()
+                    if normalized:
+                        return normalized
+
+            display = entry.get("display")
+            if isinstance(display, str):
+                prefix = f"{chat_label} / "
+                if display.startswith(prefix):
+                    topic_part = display[len(prefix) :].strip()
+                    if topic_part and topic_part != thread_id:
+                        return topic_part
+                separator_index = display.rfind(" / ")
+                if separator_index >= 0:
+                    topic_part = display[separator_index + 3 :].strip()
+                    if topic_part and topic_part != thread_id:
+                        return topic_part
+            break
+        return None
 
     async def _handle_edited_message(self, message: TelegramMessage) -> None:
         await message_handlers.handle_edited_message(self, message)
