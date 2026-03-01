@@ -1255,7 +1255,8 @@ main {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .hub-repo-control {
@@ -1283,7 +1284,8 @@ main {
 }
 
 .hub-repo-search-control {
-  flex: 1 1 240px;
+  flex: 0 1 220px;
+  min-width: 140px;
 }
 
 .hub-repo-search-input {
@@ -1437,7 +1439,7 @@ main {
 .hub-repo-mainline {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   min-width: 0;
   overflow: hidden;
 }
@@ -1457,7 +1459,8 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .hub-repo-clickable:hover .hub-repo-title {
@@ -7372,18 +7375,24 @@ button.loading::after {
     width: 100%;
     justify-content: flex-start;
     gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .hub-repo-control {
-    flex: 1 1 160px;
+    flex: 0 0 auto;
   }
 
   .hub-repo-select {
-    width: 100%;
+    width: auto;
+    min-width: 86px;
+    max-width: 130px;
   }
 
   .hub-repo-search-control {
-    flex: 1 1 100%;
+    flex: 1 1 120px;
+    min-width: 100px;
   }
 
   .hub-repo-search-input {
