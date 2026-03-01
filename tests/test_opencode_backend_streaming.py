@@ -6,7 +6,7 @@ import pytest
 
 from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.runtime import extract_session_id
-from codex_autorunner.core.ports.run_event import Completed, OutputDelta
+from codex_autorunner.core.ports.run_event import Completed, OutputDelta, TokenUsage
 from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
@@ -126,3 +126,45 @@ async def test_opencode_streaming_real_events_ignore_user_prompt(
     assert not final_message.startswith("Write a concise two-sentence")
     assert final_message.startswith("Debugging")
     assert "".join(assistant_chunks).strip() == final_message
+
+
+@pytest.mark.anyio
+async def test_opencode_backend_emits_single_canonical_usage_and_persists(
+    tmp_path: Path,
+) -> None:
+    session_id = "s-usage"
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data=(
+                '{"sessionID":"s-usage","properties":{"part":{"type":"step-finish",'
+                '"tokens":{"input":10,"output":5}}}}'
+            ),
+        ),
+        SSEEvent(
+            event="message.updated",
+            data=(
+                '{"sessionID":"s-usage","properties":{"info":{"tokens":'
+                '{"input":10,"output":5,"cache":{"read":2}}}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s-usage"}'),
+    ]
+
+    backend = OpenCodeBackend(workspace_root=tmp_path, supervisor=None)
+    backend._client = _FakeOpenCodeClient(events)
+
+    run_events = [event async for event in backend.run_turn_events(session_id, "Ping")]
+    usage_events = [event for event in run_events if isinstance(event, TokenUsage)]
+    assert len(usage_events) == 1
+    assert usage_events[0].usage["totalTokens"] == 17
+    assert usage_events[0].usage["cachedInputTokens"] == 2
+
+    persisted_path = (
+        tmp_path / ".codex-autorunner" / "usage" / "opencode_turn_usage.jsonl"
+    )
+    lines = persisted_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["session_id"] == "s-usage"
+    assert payload["usage"]["total_tokens"] == 17

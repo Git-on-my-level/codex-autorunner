@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -8,7 +9,9 @@ from codex_autorunner.core.usage import (
     get_repo_usage_series_cached,
     get_repo_usage_summary_cached,
     get_usage_series_cache,
+    persist_opencode_usage_snapshot,
     summarize_hub_usage,
+    summarize_opencode_repo_usage,
     summarize_repo_usage,
 )
 
@@ -29,6 +32,15 @@ def _write_session(
     existing = list(target.glob("*.jsonl"))
     session_path = target / f"session-{len(existing)}.jsonl"
     session_path.write_text("\n".join(json.dumps(entry) for entry in lines) + "\n")
+
+
+def _write_opencode_session(
+    repo_root: Path, payload: dict, *, name: str = "session"
+) -> None:
+    target = repo_root / ".opencode" / "sessions" / "2025" / "12" / "01"
+    target.mkdir(parents=True, exist_ok=True)
+    session_path = target / f"{name}.json"
+    session_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _refresh_usage_cache(codex_home: Path) -> None:
@@ -564,3 +576,179 @@ def test_hub_usage_summary_cache_matches_baseline(tmp_path):
         == baseline_per_repo["repo-two"].totals.total_tokens
     )
     assert cached_unmatched.events == baseline_unmatched.events
+
+
+def test_summarize_repo_usage_skips_malformed_codex_timestamps(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    codex_home = tmp_path / "codex"
+
+    _write_session(
+        codex_home,
+        repo_root,
+        [
+            {
+                "timestamp": "bad timestamp",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 99,
+                            "output_tokens": 1,
+                            "total_tokens": 100,
+                        }
+                    },
+                },
+            },
+            {
+                "timestamp": "2025-12-01T00:02:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 4,
+                            "output_tokens": 3,
+                            "total_tokens": 7,
+                        }
+                    },
+                },
+            },
+        ],
+    )
+
+    summary = summarize_repo_usage(repo_root, codex_home=codex_home)
+    assert summary.events == 1
+    assert summary.totals.total_tokens == 7
+
+
+def test_opencode_fallback_detects_cumulative_semantics(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _write_opencode_session(
+        repo_root,
+        {
+            "messages": [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "usage": {
+                        "inputTokens": 6,
+                        "outputTokens": 4,
+                        "totalTokens": 10,
+                    },
+                },
+                {
+                    "timestamp": "2025-12-01T00:02:00Z",
+                    "usage": {
+                        "inputTokens": 9,
+                        "outputTokens": 6,
+                        "totalTokens": 15,
+                    },
+                },
+            ]
+        },
+        name="cumulative",
+    )
+
+    summary = summarize_opencode_repo_usage(repo_root)
+    assert summary.events == 2
+    assert summary.totals.total_tokens == 15
+    opencode_meta = (summary.source_confidence or {}).get("opencode") or {}
+    assert opencode_meta.get("source") == "session_estimated"
+    assert opencode_meta.get("session_cumulative_files") == 1
+
+
+def test_opencode_summary_prefers_persisted_turn_usage(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _write_opencode_session(
+        repo_root,
+        {
+            "messages": [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "usage": {
+                        "inputTokens": 500,
+                        "outputTokens": 500,
+                        "totalTokens": 1000,
+                    },
+                }
+            ]
+        },
+        name="fallback",
+    )
+
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-1",
+        usage={"inputTokens": 7, "outputTokens": 3, "totalTokens": 10},
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-1",
+        usage={"inputTokens": 8, "outputTokens": 4, "totalTokens": 12},
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-2",
+        usage={"inputTokens": 5, "outputTokens": 3, "totalTokens": 8},
+    )
+
+    summary = summarize_opencode_repo_usage(repo_root)
+    assert summary.events == 2
+    assert summary.totals.total_tokens == 20
+    opencode_meta = (summary.source_confidence or {}).get("opencode") or {}
+    assert opencode_meta.get("source") == "persisted_normalized"
+    assert opencode_meta.get("persisted_duplicates") == 1
+
+
+def test_repo_usage_summary_cached_reports_source_confidence(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    codex_home = tmp_path / "codex"
+
+    _write_session(
+        codex_home,
+        repo_root,
+        [
+            {
+                "timestamp": "2025-12-01T00:01:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 5,
+                            "output_tokens": 2,
+                            "total_tokens": 7,
+                        }
+                    },
+                },
+            }
+        ],
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-1",
+        usage={"inputTokens": 2, "outputTokens": 1, "totalTokens": 3},
+    )
+
+    _refresh_usage_cache(codex_home)
+    summary, status = get_repo_usage_summary_cached(repo_root, codex_home=codex_home)
+
+    assert status == "ready"
+    assert summary.totals.total_tokens == 10
+    confidence = summary.source_confidence or {}
+    assert (confidence.get("codex") or {}).get("source") == "codex_cache"
+    assert (confidence.get("opencode") or {}).get("source") == "persisted_normalized"
+
+    since = datetime(2025, 12, 1, tzinfo=timezone.utc)
+    ranged_summary, _ = get_repo_usage_summary_cached(
+        repo_root, codex_home=codex_home, since=since
+    )
+    assert ranged_summary.totals.total_tokens == 10

@@ -442,6 +442,7 @@ class RepoUsageResponse(ResponseModel):
     events: int
     totals: TokenTotalsResponse
     latest_rate_limits: Optional[Dict[str, Any]]
+    source_confidence: Optional[Dict[str, Any]] = None
 
 
 class UsageSeriesEntryResponse(ResponseModel):

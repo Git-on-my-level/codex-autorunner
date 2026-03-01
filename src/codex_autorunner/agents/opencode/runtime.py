@@ -72,6 +72,7 @@ class OpenCodeMessageResult:
 class OpenCodeTurnOutput:
     text: str
     error: Optional[str] = None
+    usage: Optional[dict[str, Any]] = None
 
 
 def split_model_id(model: Optional[str]) -> Optional[dict[str, str]]:
@@ -789,6 +790,7 @@ async def collect_opencode_output_from_events(
             Optional[int],
         ]
     ] = None
+    latest_usage_snapshot: Optional[dict[str, Any]] = None
     part_types: dict[str, str] = {}
     seen_question_request_ids: set[tuple[Optional[str], str]] = set()
     logged_permission_errors: set[str] = set()
@@ -995,8 +997,8 @@ async def collect_opencode_output_from_events(
         return context_window
 
     async def _emit_usage_update(payload: Any, *, is_primary_session: bool) -> None:
-        nonlocal last_usage_signature
-        if part_handler is None or not is_primary_session:
+        nonlocal last_usage_signature, latest_usage_snapshot
+        if not is_primary_session:
             return
         usage = _extract_usage_payload(payload)
         if usage is None:
@@ -1036,7 +1038,9 @@ async def collect_opencode_output_from_events(
         if context_window is not None:
             usage_snapshot["modelContextWindow"] = context_window
         if usage_snapshot:
-            await part_handler("usage", usage_snapshot, None)
+            latest_usage_snapshot = dict(usage_snapshot)
+            if part_handler is not None:
+                await part_handler("usage", usage_snapshot, None)
 
     stream_factory = event_stream_factory
     if events is None and stream_factory is None:
@@ -1617,7 +1621,11 @@ async def collect_opencode_output_from_events(
             if pending_text or pending_no_id:
                 _flush_all_pending_text()
 
-    return OpenCodeTurnOutput(text="".join(text_parts).strip(), error=error)
+    return OpenCodeTurnOutput(
+        text="".join(text_parts).strip(),
+        error=error,
+        usage=latest_usage_snapshot,
+    )
 
 
 async def collect_opencode_output(

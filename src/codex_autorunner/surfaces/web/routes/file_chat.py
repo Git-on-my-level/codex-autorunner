@@ -29,6 +29,7 @@ from ....core import drafts as draft_utils
 from ....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
 from ....core.file_chat_keys import ticket_chat_scope, ticket_state_key
 from ....core.state import now_iso
+from ....core.usage import persist_opencode_usage_snapshot
 from ....core.utils import atomic_write, find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
 from .shared import SSE_HEADERS
@@ -858,6 +859,14 @@ def build_file_chat_routes() -> APIRouter:
             interrupt_task.cancel()
             await supervisor.mark_turn_finished(repo_root)
 
+        if output_result.usage:
+            persist_opencode_usage_snapshot(
+                repo_root,
+                session_id=session_id,
+                turn_id=turn_id,
+                usage=output_result.usage,
+                source="live_stream",
+            )
         if output_result.error:
             raise FileChatError(output_result.error)
         agent_message = _parse_agent_message(output_result.text)
