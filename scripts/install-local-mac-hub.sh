@@ -46,6 +46,32 @@ OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
 
+ensure_login_shell_path() {
+  local path_entry marker_start marker_end
+  path_entry="$1"
+  marker_start="# >>> codex-autorunner local-bin >>>"
+  marker_end="# <<< codex-autorunner local-bin <<<"
+  if [[ -z "${HOME:-}" || ! -d "${HOME}" ]]; then
+    echo "Skipping login-shell PATH bootstrap; HOME is unavailable." >&2
+    return 0
+  fi
+  for profile in "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
+    mkdir -p "$(dirname "${profile}")"
+    touch "${profile}"
+    if grep -Fq "${marker_start}" "${profile}"; then
+      continue
+    fi
+    {
+      echo ""
+      echo "${marker_start}"
+      echo "# Ensure pipx-installed CAR is available in login/non-interactive shells."
+      printf 'export PATH="%s:$PATH"\n' "${path_entry}"
+      echo "${marker_end}"
+    } >> "${profile}"
+    echo "Updated ${profile} to include ${path_entry} in PATH."
+  done
+}
+
 is_loopback_host() {
   case "$1" in
     localhost|127.*|::1)
@@ -112,6 +138,7 @@ fi
 
 echo "Installing codex-autorunner from ${PACKAGE_SRC} via pipx..."
 pipx install --force "${PACKAGE_SRC}"
+ensure_login_shell_path "${LOCAL_BIN}"
 
 PIPX_ROOT="${PIPX_ROOT:-$HOME/.local/pipx}"
 PIPX_VENV="${PIPX_VENV:-$PIPX_ROOT/venvs/codex-autorunner}"

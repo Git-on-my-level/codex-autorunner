@@ -47,6 +47,32 @@ PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 HUB_BIN="${HUB_BIN:-$HOME/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner}"
 
+ensure_login_shell_path() {
+  local path_entry marker_start marker_end
+  path_entry="$1"
+  marker_start="# >>> codex-autorunner local-bin >>>"
+  marker_end="# <<< codex-autorunner local-bin <<<"
+  if [[ -z "${HOME:-}" || ! -d "${HOME}" ]]; then
+    echo "Skipping login-shell PATH bootstrap; HOME is unavailable." >&2
+    return 0
+  fi
+  for profile in "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
+    mkdir -p "$(dirname "${profile}")"
+    touch "${profile}"
+    if grep -Fq "${marker_start}" "${profile}"; then
+      continue
+    fi
+    {
+      echo ""
+      echo "${marker_start}"
+      echo "# Ensure pipx-installed CAR is available in login/non-interactive shells."
+      printf 'export PATH="%s:$PATH"\n' "${path_entry}"
+      echo "${marker_end}"
+    } >> "${profile}"
+    echo "Updated ${profile} to include ${path_entry} in PATH."
+  done
+}
+
 if [[ ! -x "${HUB_BIN}" ]]; then
   fallback="$HOME/.local/pipx/venvs/codex-autorunner/bin/codex-autorunner"
   if [[ -x "${fallback}" ]]; then
@@ -55,6 +81,8 @@ if [[ ! -x "${HUB_BIN}" ]]; then
     HUB_BIN="$HOME/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner"
   fi
 fi
+
+ensure_login_shell_path "${LOCAL_BIN}"
 
 mkdir -p "$(dirname "${LAUNCH_AGENT}")"
 mkdir -p "${CAR_ROOT}/.codex-autorunner"

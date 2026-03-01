@@ -19,6 +19,7 @@ set -euo pipefail
 #   HEALTH_TIMEOUT_SECONDS       web health timeout (default: 30)
 #   HEALTH_INTERVAL_SECONDS      web health poll interval (default: 0.5)
 #   HELPER_PYTHON                python binary used for install/status writes
+#   LOCAL_BIN                    User-local bin path to ensure in login shells (default: ~/.local/bin)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -31,6 +32,7 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:4173/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
 HELPER_PYTHON="${HELPER_PYTHON:-}"
+LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
 
 write_status() {
   local status message
@@ -64,6 +66,32 @@ fail() {
   echo "${message}" >&2
   write_status "error" "${message}"
   exit 1
+}
+
+ensure_login_shell_path() {
+  local path_entry marker_start marker_end
+  path_entry="$1"
+  marker_start="# >>> codex-autorunner local-bin >>>"
+  marker_end="# <<< codex-autorunner local-bin <<<"
+  if [[ -z "${HOME:-}" || ! -d "${HOME}" ]]; then
+    echo "Skipping login-shell PATH bootstrap; HOME is unavailable." >&2
+    return 0
+  fi
+  for profile in "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
+    mkdir -p "$(dirname "${profile}")"
+    touch "${profile}"
+    if grep -Fq "${marker_start}" "${profile}"; then
+      continue
+    fi
+    {
+      echo ""
+      echo "${marker_start}"
+      echo "# Ensure user-local CAR binaries are available in login/non-interactive shells."
+      printf 'export PATH="%s:$PATH"\n' "${path_entry}"
+      echo "${marker_end}"
+    } >> "${profile}"
+    echo "Updated ${profile} to include ${path_entry} in PATH."
+  done
 }
 
 normalize_update_target() {
@@ -162,6 +190,7 @@ PY
 echo "Installing codex-autorunner from ${PACKAGE_SRC}..."
 "${HELPER_PYTHON}" -m pip -q install --upgrade pip
 "${HELPER_PYTHON}" -m pip -q install --upgrade "${PACKAGE_SRC}"
+ensure_login_shell_path "${LOCAL_BIN}"
 
 echo "Reloading systemd user manager..."
 systemctl --user daemon-reload
