@@ -35,6 +35,7 @@ from ....tickets.files import (
     safe_relpath,
     ticket_is_done,
 )
+from ....tickets.ingest_state import INGEST_STATE_FILENAME
 from ....tickets.lint import lint_ticket_directory, parse_ticket_index
 
 
@@ -132,7 +133,7 @@ def register_flow_commands(
         for path in sorted(ticket_dir.iterdir()):
             if not path.is_file():
                 continue
-            if path.name == "AGENTS.md":
+            if path.name in {"AGENTS.md", INGEST_STATE_FILENAME}:
                 continue
             if parse_ticket_index(path.name) is None:
                 rel_path = safe_relpath(path, ticket_root)
@@ -948,6 +949,21 @@ You are the first ticket in a new ticket_flow run.
             typer.echo("Ticket flow preflight failed:", err=True)
             _print_preflight_report(report)
             raise_exit("Fix the above errors before resuming the ticket flow.")
+
+        assert normalized_run_id is not None
+        store = _open_flow_store(engine)
+        try:
+            record = store.get_flow_run(normalized_run_id)
+            if not record:
+                raise_exit("No ticket_flow runs found.")
+            payload = _ticket_flow_status_payload(engine, record, store)
+        finally:
+            store.close()
+
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        _print_ticket_flow_status(payload)
 
     @ticket_flow_app.command("stop")
     def ticket_flow_stop(

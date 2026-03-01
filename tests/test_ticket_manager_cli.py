@@ -111,3 +111,14 @@ def test_insert_rejects_title_with_count_gt_one(repo: Path) -> None:
     res = _run(repo, "insert", "--before", "1", "--count", "2", "--title", "Nope")
     assert res.returncode != 0
     assert "--title is only supported with --count 1" in res.stderr
+
+
+def test_tool_lint_ignores_ingest_receipt_file(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+    _run(repo, "create", "--title", "Only", "--agent", "codex")
+    (tickets / "ingest_state.json").write_text("{}", encoding="utf-8")
+
+    res = _run(repo, "lint")
+    assert res.returncode == 0
+    assert "Invalid ticket filename" not in res.stderr

@@ -50,6 +50,7 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})([^/]*)\\.md$", re.IGNORECASE)
+_IGNORED_NON_TICKET_FILENAMES = {"AGENTS.md", "ingest_state.json"}
 
 
 @dataclass
@@ -71,7 +72,7 @@ def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
     for path in sorted(ticket_dir.iterdir()):
         if not path.is_file():
             continue
-        if path.name == "AGENTS.md":
+        if path.name in _IGNORED_NON_TICKET_FILENAMES:
             continue
         m = _TICKET_NAME_RE.match(path.name)
         if not m:

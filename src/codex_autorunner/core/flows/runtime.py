@@ -29,6 +29,29 @@ class FlowRuntime:
         self.emit_lifecycle_event = emit_lifecycle_event
         self._stop_check_interval = 0.5
 
+    def _build_transition_token(self, event_type: str, record: FlowRunRecord) -> str:
+        status_value = (
+            record.status.value
+            if isinstance(record.status, FlowRunStatus)
+            else str(record.status)
+        )
+        finished_at = record.finished_at or ""
+        return f"{event_type}:{record.id}:{status_value}:{finished_at}"
+
+    def _with_transition_metadata(
+        self,
+        event_type: str,
+        record: FlowRunRecord,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = dict(data or {})
+        token = self._build_transition_token(event_type, record)
+        payload.setdefault("transition_token", token)
+        payload.setdefault(
+            "transition_idempotency_key", f"lifecycle:{event_type}:{record.id}:{token}"
+        )
+        return payload
+
     def _emit_lifecycle(
         self,
         event_type: str,
@@ -132,7 +155,12 @@ class FlowRuntime:
                     if not updated:
                         raise RuntimeError(f"Failed to stop flow run {run_id}")
                     record = updated
-                    self._emit_lifecycle("flow_stopped", "", run_id, {})
+                    self._emit_lifecycle(
+                        "flow_stopped",
+                        "",
+                        run_id,
+                        self._with_transition_metadata("flow_stopped", record),
+                    )
                     break
 
                 step_id = next_steps.pop()
@@ -182,7 +210,14 @@ class FlowRuntime:
                     f"Failed to update flow run {run_id} to failed state"
                 ) from e
             record = updated
-            self._emit_lifecycle("flow_failed", "", run_id, {"error": str(e)})
+            self._emit_lifecycle(
+                "flow_failed",
+                "",
+                run_id,
+                self._with_transition_metadata(
+                    "flow_failed", record, {"error": str(e)}
+                ),
+            )
             return record
 
     async def _execute_step(
@@ -301,7 +336,12 @@ class FlowRuntime:
                         f"Failed to update flow run after step {step_id}"
                     )
                 record = updated
-                self._emit_lifecycle("flow_completed", "", record.id, {})
+                self._emit_lifecycle(
+                    "flow_completed",
+                    "",
+                    record.id,
+                    self._with_transition_metadata("flow_completed", record),
+                )
 
             elif outcome.status == FlowRunStatus.FAILED:
                 self._emit(
@@ -340,7 +380,12 @@ class FlowRuntime:
                     )
                 record = updated
                 self._emit_lifecycle(
-                    "flow_failed", "", record.id, {"error": outcome.error or ""}
+                    "flow_failed",
+                    "",
+                    record.id,
+                    self._with_transition_metadata(
+                        "flow_failed", record, {"error": outcome.error or ""}
+                    ),
                 )
 
             elif outcome.status == FlowRunStatus.STOPPED:
@@ -368,7 +413,12 @@ class FlowRuntime:
                         f"Failed to update flow run after step {step_id}"
                     )
                 record = updated
-                self._emit_lifecycle("flow_stopped", "", record.id, {})
+                self._emit_lifecycle(
+                    "flow_stopped",
+                    "",
+                    record.id,
+                    self._with_transition_metadata("flow_stopped", record),
+                )
 
             elif outcome.status == FlowRunStatus.PAUSED:
                 self._emit(

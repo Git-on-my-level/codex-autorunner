@@ -14,9 +14,12 @@ from ....core.chat_bindings import active_chat_binding_counts
 from ....core.config import ConfigError
 from ....core.destinations import resolve_effective_repo_destination
 from ....core.logging_utils import safe_log
-from ....core.pma_context import get_latest_ticket_flow_run_state
+from ....core.pma_context import (
+    get_latest_ticket_flow_run_state_with_record,
+)
 from ....core.request_context import get_request_id
 from ....core.runtime import LockError
+from ....core.ticket_flow_projection import build_canonical_state_v1
 from ....core.ticket_flow_summary import (
     build_ticket_flow_display,
     build_ticket_flow_summary,
@@ -318,13 +321,26 @@ def build_hub_repo_routes(
                     total_count=0,
                     run_id=None,
                 )
-            repo_dict["run_state"] = get_latest_ticket_flow_run_state(
+            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
                 snapshot.path, snapshot.id
+            )
+            repo_dict["run_state"] = run_state
+            repo_dict["canonical_state_v1"] = build_canonical_state_v1(
+                repo_root=snapshot.path,
+                repo_id=snapshot.id,
+                run_state=repo_dict["run_state"],
+                record=run_record,
+                preferred_run_id=(
+                    str(snapshot.last_run_id)
+                    if snapshot.last_run_id is not None
+                    else None
+                ),
             )
         else:
             repo_dict["ticket_flow"] = None
             repo_dict["ticket_flow_display"] = None
             repo_dict["run_state"] = None
+            repo_dict["canonical_state_v1"] = None
         return repo_dict
 
     def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict]:

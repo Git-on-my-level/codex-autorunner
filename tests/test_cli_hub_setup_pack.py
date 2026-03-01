@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -93,6 +94,14 @@ def test_hub_tickets_setup_pack_new_mode_assigns_and_preserves_depends_on(
     assert fm1.get("agent") == "opencode"
     assert fm2.get("agent") == "codex"
     assert fm1.get("depends_on") == ["TICKET-002"]
+
+    receipt_path = ticket_dir / "ingest_state.json"
+    assert receipt_path.exists()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["schema_version"] == 1
+    assert receipt["ingested"] is True
+    assert receipt["source"] == "setup_pack_new"
+    assert receipt["ingested_at"]
 
 
 def test_hub_tickets_setup_pack_new_mode_start_invokes_ticket_flow_start(

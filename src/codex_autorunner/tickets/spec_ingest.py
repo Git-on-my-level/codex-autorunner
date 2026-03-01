@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from ..contextspace.paths import contextspace_doc_path, read_contextspace_doc
 from .files import list_ticket_paths, safe_relpath
+from .ingest_state import ingest_state_path, write_ingest_receipt
+
+logger = logging.getLogger(__name__)
 
 
 class SpecIngestTicketsError(Exception):
@@ -72,6 +76,23 @@ When you need ongoing context, you may also consult (optional):
 """
 
     ticket_path.write_text(template, encoding="utf-8")
+    first_ticket_path = safe_relpath(ticket_path, repo_root)
+    try:
+        write_ingest_receipt(
+            repo_root,
+            source="spec_ingest",
+            details={
+                "created": 1,
+                "first_ticket_path": first_ticket_path,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to write ingest receipt at %s after spec ingest: %s",
+            safe_relpath(ingest_state_path(repo_root), repo_root),
+            exc,
+        )
     return SpecIngestTicketsResult(
-        created=1, first_ticket_path=safe_relpath(ticket_path, repo_root)
+        created=1,
+        first_ticket_path=first_ticket_path,
     )

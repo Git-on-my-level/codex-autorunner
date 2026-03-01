@@ -40,6 +40,24 @@ def _seed_paused_run(repo_root: Path, run_id: str) -> None:
         store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
 
 
+def _seed_completed_run(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
+
+
 def _write_dispatch_history(
     repo_root: Path, run_id: str, seq: int, *, mode: str = "pause"
 ) -> None:
@@ -54,6 +72,21 @@ def _write_dispatch_history(
     entry_dir.mkdir(parents=True, exist_ok=True)
     (entry_dir / "DISPATCH.md").write_text(
         f"---\nmode: {mode}\ntitle: dispatch-{seq}\n---\n\nPlease review.\n",
+        encoding="utf-8",
+    )
+
+
+def _write_ticket(repo_root: Path, ticket_name: str, *, done: bool) -> None:
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / ticket_name).write_text(
+        (
+            "---\n"
+            f"title: {ticket_name}\n"
+            f"done: {'true' if done else 'false'}\n"
+            "---\n\n"
+            "Body\n"
+        ),
         encoding="utf-8",
     )
 
@@ -502,6 +535,79 @@ def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None
     assert "unreadable dispatch metadata" in (item.get("reason") or "").lower()
     run_state = item.get("run_state") or {}
     assert run_state.get("state") == "blocked"
+
+
+def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> None:
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    for ticket in ticket_dir.glob("TICKET-*.md"):
+        ticket.unlink()
+    _write_ticket(hub_env.repo_root, "TICKET-001.md", done=False)
+    _write_ticket(hub_env.repo_root, "TICKET-002.md", done=True)
+
+    run_id = "16161616-1616-1616-1616-161616161616"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    repos = snapshot.get("repos") or []
+    repo_entry = next(repo for repo in repos if repo.get("id") == hub_env.repo_id)
+    canonical = repo_entry.get("canonical_state_v1") or {}
+
+    assert canonical.get("schema_version") == 1
+    assert canonical.get("repo_id") == hub_env.repo_id
+    assert canonical.get("repo_root") == str(hub_env.repo_root)
+    assert canonical.get("ingested") is True
+    assert canonical.get("ingest_source") == "ticket_files"
+    assert canonical.get("frontmatter_total_count") == 2
+    assert canonical.get("frontmatter_done_count") == 1
+    assert canonical.get("effective_next_ticket") == "TICKET-001.md"
+    assert canonical.get("latest_run_id") == run_id
+    assert canonical.get("latest_run_status") == "paused"
+    assert canonical.get("state") == "paused"
+    assert canonical.get("attention_required") is True
+    assert isinstance(canonical.get("recommended_actions"), list)
+    assert canonical.get("recommended_action")
+    assert canonical.get("recommendation_confidence") in {"high", "medium", "low"}
+    assert canonical.get("observed_at")
+    assert canonical.get("recommendation_generated_at")
+
+
+def test_build_hub_snapshot_marks_stale_start_new_flow_recommendations(hub_env) -> None:
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    for ticket in ticket_dir.glob("TICKET-*.md"):
+        ticket.unlink()
+    _write_ticket(hub_env.repo_root, "TICKET-001.md", done=False)
+
+    run_id = "17171717-1717-1717-1717-171717171717"
+    _seed_completed_run(hub_env.repo_root, run_id)
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    repos = snapshot.get("repos") or []
+    repo_entry = next(repo for repo in repos if repo.get("id") == hub_env.repo_id)
+    canonical = repo_entry.get("canonical_state_v1") or {}
+
+    assert canonical.get("latest_run_id") == run_id
+    assert canonical.get("latest_run_status") == "completed"
+    assert canonical.get("effective_next_ticket") == "TICKET-001.md"
+    assert "ticket_flow start" in (canonical.get("recommended_action") or "")
+    assert canonical.get("recommendation_stale_reason")
+    assert canonical.get("recommendation_confidence") == "low"
 
 
 def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:

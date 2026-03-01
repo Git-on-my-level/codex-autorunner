@@ -32,6 +32,7 @@ All durable artifacts must live under one of these roots:
 **Notable repo-local artifacts**:
 - `flows/<run_id>/chat/inbound.jsonl` - Mirrored inbound chat events for a flow run
 - `flows/<run_id>/chat/outbound.jsonl` - Mirrored outbound chat events for a flow run
+- `tickets/ingest_state.json` - Canonical ticket-ingest receipt (`ingested`, `ingested_at`, `source`)
 
 **Resolution**: `resolve_repo_state_root(repo_root)` in `core/state_roots.py`
 

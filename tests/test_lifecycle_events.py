@@ -1,8 +1,15 @@
 """Test lifecycle events system."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 
+from codex_autorunner.core.flows import (
+    FlowController,
+    FlowDefinition,
+    FlowRunRecord,
+    StepOutcome,
+)
 from codex_autorunner.core.lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
@@ -127,9 +134,155 @@ def test_lifecycle_event_store_prune():
         assert len(pruned) == 5
 
 
+def test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        emitter = LifecycleEventEmitter(tmp_path)
+        received_ids: list[str] = []
+
+        def _listener(event: LifecycleEvent) -> None:
+            received_ids.append(event.event_id)
+
+        emitter.add_listener(_listener)
+
+        first_event = LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_COMPLETED,
+            repo_id="repo-1",
+            run_id="run-1",
+            data={"transition_token": "completed:1"},
+            timestamp="2026-03-01T10:00:00+00:00",
+        )
+        duplicate_event = LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_COMPLETED,
+            repo_id="repo-1",
+            run_id="run-1",
+            data={"transition_token": "completed:1"},
+            timestamp="2026-03-01T10:01:00+00:00",
+        )
+
+        first_id = emitter.emit(first_event)
+        duplicate_id = emitter.emit(duplicate_event)
+
+        assert duplicate_id == first_id
+        assert received_ids == [first_id]
+
+        events = emitter._store.load()
+        assert len(events) == 1
+        assert len(emitter._store.get_unprocessed()) == 1
+
+        stored = events[0]
+        assert stored.event_id == first_id
+        assert stored.event_type == LifecycleEventType.FLOW_COMPLETED
+        assert stored.data["transition_token"] == "completed:1"
+        assert stored.data["duplicate_count"] == 1
+        assert stored.data["first_seen_at"] == "2026-03-01T10:00:00+00:00"
+        assert stored.data["last_seen_at"] == "2026-03-01T10:01:00+00:00"
+
+
+def test_non_duplicate_events_still_append():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        store = LifecycleEventStore(tmp_path)
+
+        store.append(
+            LifecycleEvent(
+                event_type=LifecycleEventType.FLOW_COMPLETED,
+                repo_id="repo-1",
+                run_id="run-1",
+                data={"transition_token": "completed:1"},
+            )
+        )
+        store.append(
+            LifecycleEvent(
+                event_type=LifecycleEventType.FLOW_COMPLETED,
+                repo_id="repo-1",
+                run_id="run-1",
+                data={"transition_token": "completed:2"},
+            )
+        )
+        store.append(
+            LifecycleEvent(
+                event_type=LifecycleEventType.DISPATCH_CREATED,
+                repo_id="repo-1",
+                run_id="run-1",
+            )
+        )
+        store.append(
+            LifecycleEvent(
+                event_type=LifecycleEventType.DISPATCH_CREATED,
+                repo_id="repo-1",
+                run_id="run-1",
+            )
+        )
+
+        events = store.load()
+        assert len(events) == 4
+        assert [event.event_type for event in events] == [
+            LifecycleEventType.FLOW_COMPLETED,
+            LifecycleEventType.FLOW_COMPLETED,
+            LifecycleEventType.DISPATCH_CREATED,
+            LifecycleEventType.DISPATCH_CREATED,
+        ]
+
+
+def test_runtime_terminal_events_include_transition_metadata():
+    async def _run() -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            repo_root = tmp_path / "repo"
+            repo_root.mkdir(parents=True, exist_ok=True)
+
+            async def complete_step(
+                record: FlowRunRecord, input_data: dict
+            ) -> StepOutcome:
+                await asyncio.sleep(0)
+                return StepOutcome.complete(output={"done": True})
+
+            definition = FlowDefinition(
+                flow_type="test_flow",
+                initial_step="step1",
+                steps={"step1": complete_step},
+            )
+            definition.validate()
+
+            controller = FlowController(
+                definition=definition,
+                db_path=repo_root / ".codex-autorunner" / "flows.db",
+                artifacts_root=repo_root / ".codex-autorunner" / "flows",
+                hub_root=tmp_path,
+            )
+            controller.initialize()
+            try:
+                record = await controller.start_flow(input_data={})
+                await controller.run_flow(record.id)
+            finally:
+                controller.shutdown()
+
+            store = LifecycleEventStore(tmp_path)
+            completed = [
+                event
+                for event in store.load()
+                if event.event_type == LifecycleEventType.FLOW_COMPLETED
+            ]
+            assert completed
+            payload = completed[-1].data
+            transition_token = payload.get("transition_token")
+            idempotency_key = payload.get("transition_idempotency_key")
+            assert isinstance(transition_token, str)
+            assert transition_token
+            assert isinstance(idempotency_key, str)
+            assert idempotency_key
+            assert transition_token in idempotency_key
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     test_lifecycle_event_store_load_save()
     test_lifecycle_event_store_get_unprocessed()
     test_lifecycle_event_emitter()
     test_lifecycle_event_store_prune()
+    test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id()
+    test_non_duplicate_events_still_append()
+    test_runtime_terminal_events_include_transition_metadata()
     print("All tests passed!")

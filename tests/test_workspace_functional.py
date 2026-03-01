@@ -1,4 +1,5 @@
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -256,6 +257,13 @@ def test_spec_ingest_ticket_generation(hub_env, client, repo: Path):
     ticket_files = list(tickets_dir.glob("TICKET-*.md"))
     assert len(ticket_files) == 1
     assert (tickets_dir / "TICKET-001.md").exists()
+    receipt_path = tickets_dir / "ingest_state.json"
+    assert receipt_path.exists()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["schema_version"] == 1
+    assert receipt["ingested"] is True
+    assert receipt["source"] == "spec_ingest"
+    assert receipt["ingested_at"]
 
 
 def test_ticket_runner_workspace_doc_injection(hub_env, repo: Path):

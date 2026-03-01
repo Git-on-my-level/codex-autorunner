@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import re
 import zipfile
 from pathlib import Path
@@ -13,7 +14,10 @@ from ..core.utils import atomic_write
 from .doctor import TicketDoctorReport, format_or_doctor_tickets
 from .files import list_ticket_paths
 from .frontmatter import split_markdown_frontmatter
+from .ingest_state import ingest_state_path, write_ingest_receipt
 from .lint import parse_ticket_index
+
+logger = logging.getLogger(__name__)
 
 _FALSE_GOAL_FIXUPS = (
     ("done: falsegoal:", "done: false\ngoal:"),
@@ -198,6 +202,22 @@ def setup_ticket_pack(
     if doctor_report.errors:
         raise TicketPackSetupError(
             "Ticket doctor failed: " + "; ".join(doctor_report.errors)
+        )
+
+    try:
+        write_ingest_receipt(
+            target_path,
+            source="setup_pack_new",
+            details={
+                "extracted_count": len(extracted_files),
+                "assigned_count": len(assigned_files),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to write ingest receipt at %s after setup_pack_new: %s",
+            ingest_state_path(target_path),
+            exc,
         )
 
     return TicketPackSetupReport(

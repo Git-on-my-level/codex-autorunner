@@ -54,6 +54,18 @@ def _create_hub_supervisor(hub_root: Path) -> HubSupervisor:
     )
 
 
+def _assert_repo_canonical_state_v1(repo_entry: dict) -> None:
+    canonical = repo_entry.get("canonical_state_v1") or {}
+    assert canonical.get("schema_version") == 1
+    assert canonical.get("repo_id") == repo_entry["id"]
+    assert Path(str(canonical.get("repo_root") or "")).name == repo_entry["id"]
+    assert canonical.get("ingest_source") == "ticket_files"
+    assert isinstance(canonical.get("recommended_actions"), list)
+    assert canonical.get("recommendation_confidence") in {"high", "medium", "low"}
+    assert canonical.get("observed_at")
+    assert canonical.get("recommendation_generated_at")
+
+
 def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _create_hub_supervisor(hub_root)
@@ -92,6 +104,7 @@ def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
         "kind": "docker",
         "image": "busybox:latest",
     }
+    _assert_repo_canonical_state_v1(base_entry)
 
     set_local = client.post("/hub/repos/base/destination", json={"kind": "local"})
     assert set_local.status_code == 200
