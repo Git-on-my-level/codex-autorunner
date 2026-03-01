@@ -569,6 +569,23 @@ def _render_hub_snapshot(
             status = _truncate(str(repo.get("status", "")), max_field_chars)
             last_run_id = _truncate(str(repo.get("last_run_id", "")), max_field_chars)
             last_exit = _truncate(str(repo.get("last_exit_code", "")), max_field_chars)
+            destination = (
+                repo.get("effective_destination")
+                if isinstance(repo.get("effective_destination"), dict)
+                else {}
+            )
+            destination_kind = _truncate(
+                str(destination.get("kind", "local")), max_field_chars
+            )
+            destination_text = destination_kind or "local"
+            if destination_kind == "docker":
+                image = _truncate(
+                    str(destination.get("image", "")),
+                    max_field_chars,
+                )
+                destination_text = (
+                    f"docker:{image}" if image else "docker:image-missing"
+                )
             ticket_flow = _render_ticket_flow_summary(repo.get("ticket_flow"))
             run_state = repo.get("run_state") or {}
             state = _truncate(str(run_state.get("state", "")), max_field_chars)
@@ -580,6 +597,7 @@ def _render_hub_snapshot(
             )
             lines.append(
                 f"- {repo_id} ({display_name}): status={status} "
+                f"destination={destination_text} "
                 f"last_run_id={last_run_id} last_exit_code={last_exit} "
                 f"ticket_flow={ticket_flow} state={state}"
             )
@@ -1402,6 +1420,11 @@ async def build_hub_snapshot(
     )
     repos: list[dict[str, Any]] = []
     for snap in snapshots[:max_repos]:
+        effective_destination = (
+            dict(snap.effective_destination)
+            if isinstance(snap.effective_destination, dict)
+            else {"kind": "local"}
+        )
         summary: dict[str, Any] = {
             "id": snap.id,
             "display_name": snap.display_name,
@@ -1410,6 +1433,7 @@ async def build_hub_snapshot(
             "last_run_started_at": snap.last_run_started_at,
             "last_run_finished_at": snap.last_run_finished_at,
             "last_exit_code": snap.last_exit_code,
+            "effective_destination": effective_destination,
             "ticket_flow": None,
             "run_state": None,
         }
