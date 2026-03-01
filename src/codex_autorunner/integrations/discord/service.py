@@ -37,6 +37,7 @@ from ...core.flows.ux_helpers import (
     seed_issue_from_text,
     ticket_progress,
 )
+from ...core.flows.worker_process import check_worker_health, clear_worker_metadata
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
@@ -4276,13 +4277,26 @@ class DiscordBotService:
             )
             return
 
-        if target is not None and not target.status.is_terminal():
+        if target is not None and target.status.is_active():
+            self._stop_flow_worker(workspace_root, target.id)
             controller = build_ticket_flow_controller(workspace_root)
             try:
                 await controller.stop_flow(target.id)
             except ValueError as exc:
                 await self._respond_ephemeral(
                     interaction_id, interaction_token, str(exc)
+                )
+                return
+            latest = await self._wait_for_flow_terminal(workspace_root, target.id)
+            if latest is None or not latest.status.is_terminal():
+                status_value = latest.status.value if latest is not None else "unknown"
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    (
+                        f"Run {target.id} is still active ({status_value}); "
+                        "restart aborted to avoid concurrent workers. Try again after it stops."
+                    ),
                 )
                 return
 
@@ -4390,6 +4404,57 @@ class DiscordBotService:
             close = getattr(handle, "close", None)
             if callable(close):
                 close()
+
+    @staticmethod
+    def _stop_flow_worker(workspace_root: Path, run_id: str) -> None:
+        health = check_worker_health(workspace_root, run_id)
+        if health.is_alive and health.pid:
+            try:
+                subprocess.run(["kill", str(health.pid)], check=False)
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Failed to stop worker %s: %s", run_id, exc
+                )
+        if health.status in {"dead", "mismatch", "invalid"}:
+            clear_worker_metadata(health.artifact_path.parent)
+
+    async def _wait_for_flow_terminal(
+        self,
+        workspace_root: Path,
+        run_id: str,
+        *,
+        timeout_seconds: float = 10.0,
+        poll_interval_seconds: float = 0.25,
+    ) -> Optional[FlowRunRecord]:
+        deadline = time.monotonic() + max(timeout_seconds, poll_interval_seconds)
+        latest: Optional[FlowRunRecord] = None
+
+        while time.monotonic() < deadline:
+            try:
+                store = self._open_flow_store(workspace_root)
+            except (sqlite3.Error, OSError, RuntimeError):
+                break
+            try:
+                record = self._resolve_flow_run_by_id(store, run_id=run_id)
+                if record is None:
+                    return None
+                latest = record
+                if record.status.is_terminal():
+                    return record
+                record, _updated, locked = reconcile_flow_run(
+                    workspace_root, record, store
+                )
+                latest = record
+                if record.status.is_terminal():
+                    return record
+                if locked:
+                    # Another reconciler holds the lock; keep polling.
+                    pass
+            finally:
+                store.close()
+            await asyncio.sleep(poll_interval_seconds)
+
+        return latest
 
     async def _handle_flow_resume(
         self,

@@ -1770,8 +1770,25 @@ You are the first ticket in a new ticket_flow run.
             run_id_raw = self._first_non_flag(argv)
             if run_id_raw:
                 run_id, error = self._resolve_run_id_input(store, run_id_raw)
-                if error is None and run_id:
+                if error:
+                    await self._send_message(
+                        message.chat_id,
+                        error,
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                if run_id:
                     record = store.get_flow_run(run_id)
+                    if record is None:
+                        await self._send_message(
+                            message.chat_id,
+                            f"No ticket flow run found for {_code(run_id)}.",
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            parse_mode="Markdown",
+                        )
+                        return
             else:
                 record = _select_latest_run(store, lambda run: run.status.is_active())
         finally:
