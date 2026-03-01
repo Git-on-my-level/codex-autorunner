@@ -134,6 +134,21 @@ def _flow_interaction(name: str, options: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+def _flow_component_interaction(custom_id: str) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "token": "token-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "type": 3,
+        "member": {"user": {"id": "user-1"}},
+        "data": {
+            "component_type": 2,
+            "custom_id": custom_id,
+        },
+    }
+
+
 def _create_run(workspace: Path, run_id: str, *, status: FlowRunStatus) -> None:
     db_path = workspace / ".codex-autorunner" / "flows.db"
     with FlowStore(db_path) as store:
@@ -216,6 +231,74 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert "Recent ticket_flow runs (limit=2)" in runs_payload
         assert paused_run_id in runs_payload
         assert completed_run_id in runs_payload
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_refresh_button_updates_existing_status_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(workspace, run_id, status=FlowRunStatus.RUNNING)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    reconcile_calls: list[str] = []
+
+    def _fake_reconcile(_repo_root, record, _store, logger=None):
+        reconcile_calls.append(record.id)
+        if len(reconcile_calls) == 1:
+            return record, False, False
+        return (
+            record.model_copy(update={"status": FlowRunStatus.COMPLETED}),
+            True,
+            False,
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.reconcile_flow_run",
+        _fake_reconcile,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": run_id}],
+            ),
+            _flow_component_interaction(f"flow:{run_id}:refresh"),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        initial_payload = rest.interaction_responses[0]["payload"]
+        refresh_payload = rest.interaction_responses[1]["payload"]
+
+        assert initial_payload["type"] == 4
+        assert "Status: running" in initial_payload["data"]["content"]
+
+        assert refresh_payload["type"] == 7
+        assert "Status: completed" in refresh_payload["data"]["content"]
     finally:
         await store.close()
 
@@ -307,6 +390,227 @@ async def test_flow_plan_seeds_issue_md(tmp_path: Path) -> None:
         assert "Ship MVP in 3 steps" in issue_path.read_text(encoding="utf-8")
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Seeded ISSUE.md from your plan." in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_start_reuses_active_or_paused_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    ensure_calls: list[tuple[Path, str, bool]] = []
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.ensure_worker",
+        lambda repo_root, run_id, is_terminal=False: (
+            ensure_calls.append((repo_root, run_id, is_terminal)) or {}
+        ),
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="start", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        await service.run_forever()
+        assert ensure_calls == [(workspace, paused_run_id, False)]
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert f"Reusing ticket_flow run {paused_run_id} (paused)." in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_restart_starts_new_run_for_failed_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    failed_run_id = str(uuid.uuid4())
+    _create_run(workspace, failed_run_id, status=FlowRunStatus.FAILED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    class _FakeController:
+        def __init__(self) -> None:
+            self.start_calls: list[dict[str, Any]] = []
+            self.stop_calls: list[str] = []
+
+        async def start_flow(
+            self, *, input_data: dict[str, Any], metadata: dict[str, Any]
+        ) -> FlowRunRecord:
+            self.start_calls.append({"input_data": input_data, "metadata": metadata})
+            return FlowRunRecord(
+                id="run-new",
+                flow_type="ticket_flow",
+                status=FlowRunStatus.RUNNING,
+                input_data={},
+                state={},
+                created_at="2026-01-01T00:00:00Z",
+            )
+
+        async def stop_flow(self, run_id: str) -> FlowRunRecord:
+            self.stop_calls.append(run_id)
+            return FlowRunRecord(
+                id=run_id,
+                flow_type="ticket_flow",
+                status=FlowRunStatus.STOPPED,
+                input_data={},
+                state={},
+                created_at="2026-01-01T00:00:00Z",
+            )
+
+    controller = _FakeController()
+    ensure_calls: list[tuple[Path, str, bool]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
+        lambda _workspace_root: controller,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.ensure_worker",
+        lambda repo_root, run_id, is_terminal=False: (
+            ensure_calls.append((repo_root, run_id, is_terminal)) or {}
+        ),
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="restart", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        await service.run_forever()
+        assert controller.stop_calls == []
+        assert len(controller.start_calls) == 1
+        assert controller.start_calls[0]["metadata"]["force_new"] is True
+        assert controller.start_calls[0]["metadata"]["origin"] == "discord"
+        assert ensure_calls == [(workspace, "run-new", False)]
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Started new ticket_flow run run-new." in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_restart_aborts_when_active_run_does_not_terminate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    running_run_id = str(uuid.uuid4())
+    _create_run(workspace, running_run_id, status=FlowRunStatus.RUNNING)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    class _FakeController:
+        def __init__(self) -> None:
+            self.start_calls: list[dict[str, Any]] = []
+            self.stop_calls: list[str] = []
+
+        async def start_flow(
+            self, *, input_data: dict[str, Any], metadata: dict[str, Any]
+        ) -> FlowRunRecord:
+            self.start_calls.append({"input_data": input_data, "metadata": metadata})
+            return FlowRunRecord(
+                id="run-should-not-start",
+                flow_type="ticket_flow",
+                status=FlowRunStatus.RUNNING,
+                input_data={},
+                state={},
+                created_at="2026-01-01T00:00:00Z",
+            )
+
+        async def stop_flow(self, run_id: str) -> FlowRunRecord:
+            self.stop_calls.append(run_id)
+            return FlowRunRecord(
+                id=run_id,
+                flow_type="ticket_flow",
+                status=FlowRunStatus.STOPPING,
+                input_data={},
+                state={},
+                created_at="2026-01-01T00:00:00Z",
+            )
+
+    async def _fake_wait_for_terminal(
+        self, _workspace_root: Path, run_id: str, **_kwargs: Any
+    ) -> FlowRunRecord:
+        return FlowRunRecord(
+            id=run_id,
+            flow_type="ticket_flow",
+            status=FlowRunStatus.STOPPING,
+            input_data={},
+            state={},
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+    stopped_workers: list[str] = []
+    controller = _FakeController()
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
+        lambda _workspace_root: controller,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.DiscordBotService._wait_for_flow_terminal",
+        _fake_wait_for_terminal,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.DiscordBotService._stop_flow_worker",
+        staticmethod(lambda _workspace_root, run_id: stopped_workers.append(run_id)),
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="restart", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        await service.run_forever()
+        assert controller.stop_calls == [running_run_id]
+        assert stopped_workers == [running_run_id]
+        assert controller.start_calls == []
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "restart aborted to avoid concurrent workers" in content
     finally:
         await store.close()
 

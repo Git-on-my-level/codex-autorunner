@@ -149,6 +149,38 @@ def test_adapter_parses_attachment_source_url_metadata() -> None:
     )
 
 
+def test_adapter_infers_audio_kind_without_content_type() -> None:
+    adapter = DiscordChatAdapter(
+        rest_client=_UnusedRestClient(),  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+    event = adapter.parse_message_event(
+        _message_payload(
+            message_id="m-4",
+            content="",
+            attachments=[
+                {
+                    "id": "att-audio-1",
+                    "filename": "voice-message.ogg",
+                    "size": 1024,
+                    "url": "https://cdn.discordapp.com/attachments/voice-message.ogg",
+                },
+                {
+                    "id": "att-audio-2",
+                    "size": 2048,
+                    "duration_secs": 4,
+                    "proxy_url": "https://media.discordapp.net/attachments/audio.opus",
+                },
+            ],
+        )
+    )
+
+    assert isinstance(event, ChatMessageEvent)
+    assert len(event.attachments) == 2
+    assert event.attachments[0].kind == "audio"
+    assert event.attachments[1].kind == "audio"
+
+
 def test_discord_text_renderer_split_text_has_no_part_prefix() -> None:
     renderer = DiscordTextRenderer()
     rendered = RenderedText(text=("alpha " * 500), parse_mode=None)

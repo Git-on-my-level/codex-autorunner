@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,7 +33,10 @@ from codex_autorunner.integrations.discord.config import (
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.service import DiscordBotService
+from codex_autorunner.integrations.discord.service import (
+    DiscordBotService,
+    DiscordMessageTurnResult,
+)
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
 
@@ -857,6 +861,187 @@ async def test_message_create_audio_attachment_does_not_transcribe_when_voice_di
         await store.close()
 
 
+@pytest.mark.anyio
+async def test_message_create_audio_attachment_without_content_type_still_transcribes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/audio-missing-content-type"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"voice-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-audio-3",
+                            "filename": "voice-note.ogg",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("transcribed despite missing mime")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "Transcript: transcribed despite missing mime" in prompt
+        assert fake_voice.calls
+        assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
+        assert fake_voice.calls[0]["filename"] == "voice-note.ogg"
+        assert fake_voice.calls[0]["content_type"] is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_video_attachment_does_not_transcribe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    attachment_url = "https://cdn.discordapp.com/attachments/video-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"video-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-video-1",
+                            "filename": "clip.mp4",
+                            "content_type": "video/mp4",
+                            "size": 11,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("ignored for video")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        assert "Transcript:" not in captured_prompts[0]
+        assert fake_voice.calls == []
+    finally:
+        await store.close()
+
+
 def test_voice_service_for_workspace_uses_hub_config_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1000,6 +1185,22 @@ def test_voice_service_for_workspace_caches_env_by_workspace(
     assert voice_service_b.env.get("OPENAI_API_KEY") == "key-b"
 
 
+def test_build_attachment_filename_uses_source_url_audio_suffix(tmp_path: Path) -> None:
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+    )
+    attachment = SimpleNamespace(
+        file_name=None,
+        mime_type=None,
+        source_url="https://cdn.discordapp.com/attachments/voice-message.opus?foo=bar",
+    )
+
+    file_name = service._build_attachment_filename(attachment, index=1)
+
+    assert file_name.endswith(".opus")
+
+
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,
@@ -1099,6 +1300,8 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
         await service.run_forever()
         assert rest.deleted_channel_messages
         assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
+        assert rest.edited_channel_messages
+        assert rest.edited_channel_messages[-1]["payload"].get("components") == []
         assert any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
@@ -2421,6 +2624,103 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
         assert outbox
         assert any(
             "queued reply" in item.payload_json.get("content", "") for item in outbox
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_session_compact_reuses_preview_without_part_numbering(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _CompactOrchestrator:
+        def get_thread_id(self, session_key: str) -> Optional[str]:
+            _ = session_key
+            return "thread-1"
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return _CompactOrchestrator()
+
+    summary = "\n".join(
+        [
+            f"- compact summary detail line {idx} with enough content to wrap"
+            for idx in range(1, 30)
+        ]
+    )
+
+    async def _fake_run_turn(
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return DiscordMessageTurnResult(
+            final_message=summary,
+            preview_message_id="preview-1",
+        )
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+    service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_compact(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert rest.edited_channel_messages
+        compact_preview_edit = rest.edited_channel_messages[-1]
+        assert compact_preview_edit["message_id"] == "preview-1"
+        components = compact_preview_edit["payload"].get("components") or []
+        assert components
+        button = components[0]["components"][0]
+        assert button["label"] == "Continue"
+        assert button["custom_id"] == "continue_turn"
+
+        rendered_chunks = [compact_preview_edit["payload"].get("content", "")]
+        rendered_chunks.extend(
+            msg["payload"].get("content", "") for msg in rest.channel_messages
+        )
+        assert len(rendered_chunks) > 1
+        assert any("Conversation Summary" in chunk for chunk in rendered_chunks)
+        assert all(
+            not re.match(r"^Part \d+/\d+$", (chunk.splitlines() or [""])[0].strip())
+            for chunk in rendered_chunks
         )
     finally:
         await store.close()

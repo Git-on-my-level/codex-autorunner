@@ -7,6 +7,7 @@ from codex_autorunner.integrations.discord.components import (
     build_action_row,
     build_bind_picker,
     build_button,
+    build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
     build_select_menu,
@@ -84,12 +85,13 @@ class TestBuildBindPicker:
 
 
 class TestBuildFlowStatusButtons:
-    def test_paused_status_has_resume_and_archive(self) -> None:
+    def test_paused_status_has_resume_restart_and_archive(self) -> None:
         rows = build_flow_status_buttons("run-123", "paused")
         assert len(rows) == 2
         resume_row = rows[0]
         assert resume_row["components"][0]["label"] == "Resume"
         assert resume_row["components"][0]["style"] == DISCORD_BUTTON_STYLE_SUCCESS
+        assert resume_row["components"][1]["label"] == "Restart"
         archive_row = rows[1]
         assert archive_row["components"][0]["label"] == "Archive"
 
@@ -101,13 +103,14 @@ class TestBuildFlowStatusButtons:
         assert buttons[0]["style"] == DISCORD_BUTTON_STYLE_DANGER
         assert buttons[1]["label"] == "Refresh"
 
-    def test_terminal_status_has_archive_and_refresh(self) -> None:
+    def test_terminal_status_has_restart_archive_and_refresh(self) -> None:
         for status in ["completed", "stopped", "failed"]:
             rows = build_flow_status_buttons("run-123", status)
             assert len(rows) == 1
             buttons = rows[0]["components"]
-            assert buttons[0]["label"] == "Archive"
-            assert buttons[1]["label"] == "Refresh"
+            assert buttons[0]["label"] == "Restart"
+            assert buttons[1]["label"] == "Archive"
+            assert buttons[2]["label"] == "Refresh"
 
 
 class TestBuildFlowRunsPicker:
@@ -124,3 +127,13 @@ class TestBuildFlowRunsPicker:
         menu = picker["components"][0]
         assert len(menu["options"]) == 1
         assert menu["options"][0]["value"] == "none"
+
+
+class TestTurnButtons:
+    def test_build_continue_turn_button(self) -> None:
+        row = build_continue_turn_button()
+        assert row["type"] == 1
+        button = row["components"][0]
+        assert button["label"] == "Continue"
+        assert button["custom_id"] == "continue_turn"
+        assert button["style"] == DISCORD_BUTTON_STYLE_SUCCESS

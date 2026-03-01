@@ -205,3 +205,23 @@ async def test_flow_archive_defaults_latest_paused(
         assert store.get_flow_run(run_paused) is None
     finally:
         store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_restart_rejects_invalid_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = _init_store(tmp_path, monkeypatch).close()
+    handler = _FlowLifecycleHandler()
+    bootstrap_calls: list[list[str]] = []
+
+    async def _fake_bootstrap(
+        _message: TelegramMessage, _repo_root: Path, argv: list[str]
+    ) -> None:
+        bootstrap_calls.append(argv)
+
+    monkeypatch.setattr(handler, "_handle_flow_bootstrap", _fake_bootstrap)
+    await handler._handle_flow_restart(_message(), tmp_path, argv=["not-a-run-id"])
+
+    assert any("Invalid run_id." in text for text in handler.sent)
+    assert bootstrap_calls == []
