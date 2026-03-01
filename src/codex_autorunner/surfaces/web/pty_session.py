@@ -266,10 +266,7 @@ class ActiveSession:
                             self.id,
                         )
                         self.remove_subscriber(queue)
-                        try:
-                            queue.put_nowait(None)
-                        except asyncio.QueueFull:
-                            pass
+                        self._enqueue_close_sentinel(queue)
             else:
                 self.close()
         except OSError:
@@ -283,18 +280,39 @@ class ActiveSession:
             if stale not in self.subscribers:
                 continue
             self.subscribers.discard(stale)
-            try:
-                stale.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            self._enqueue_close_sentinel(stale)
         q: asyncio.Queue[object] = asyncio.Queue(maxsize=PTY_SUBSCRIBER_QUEUE_MAX)
         for chunk in self.buffer:
-            q.put_nowait(chunk)
+            self._enqueue_replay_chunk(q, chunk)
         if include_replay_end:
-            q.put_nowait(REPLAY_END)
+            self._enqueue_replay_chunk(q, REPLAY_END)
         self.subscribers.add(q)
         self._subscriber_order.append(q)
         return q
+
+    def _enqueue_replay_chunk(
+        self, queue: asyncio.Queue[object], chunk: object
+    ) -> None:
+        while True:
+            try:
+                queue.put_nowait(chunk)
+                return
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+
+    def _enqueue_close_sentinel(self, queue: asyncio.Queue[object]) -> None:
+        while True:
+            try:
+                queue.put_nowait(None)
+                return
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
 
     def refresh_alt_screen_state(self) -> None:
         state = self._alt_screen_active
@@ -360,10 +378,7 @@ class ActiveSession:
             except (OSError, IOError) as exc:
                 logger.debug("Failed to terminate PTY during close: %s", exc)
         for queue in list(self.subscribers):
-            try:
-                queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            self._enqueue_close_sentinel(queue)
         self.subscribers.clear()
         self._subscriber_order.clear()
 
