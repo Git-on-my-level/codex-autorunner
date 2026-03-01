@@ -12,11 +12,9 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
-from codex_autorunner.integrations.pma_delivery import deliver_pma_output_to_active_sink
 from codex_autorunner.integrations.telegram.state import TelegramStateStore
 from codex_autorunner.manifest import load_manifest, save_manifest
 
@@ -45,7 +43,6 @@ async def _process_one_item(
     hub_root: Path,
     *,
     queue: PmaQueue,
-    telegram_state_path: Path,
     assistant_text: str = "ok",
 ) -> None:
     processed = asyncio.Event()
@@ -62,13 +59,6 @@ async def _process_one_item(
                 "event_type": lifecycle_event.get("event_type"),
             },
             assistant_text=assistant_text,
-        )
-        await deliver_pma_output_to_active_sink(
-            hub_root=hub_root,
-            assistant_text=assistant_text,
-            turn_id=turn_id,
-            lifecycle_event=lifecycle_event,
-            telegram_state_path=telegram_state_path,
         )
         processed.set()
         return {"status": "ok", "turn_id": turn_id, "message": assistant_text}
@@ -96,7 +86,6 @@ async def test_reactive_flow_failed_writes_transcript_web_sink(tmp_path: Path) -
         await _process_one_item(
             hub_root,
             queue=queue,
-            telegram_state_path=hub_root / "telegram_state.sqlite3",
         )
 
         items = await queue.list_items("pma:default")
@@ -125,16 +114,6 @@ async def test_reactive_dispatch_created_does_not_enqueue_telegram_outbox(
     supervisor._stop_lifecycle_event_processor()
 
     try:
-        PmaDeliveryTargetsStore(hub_root).set_targets(
-            [
-                {
-                    "kind": "chat",
-                    "platform": "telegram",
-                    "chat_id": "1",
-                    "thread_id": "2",
-                }
-            ]
-        )
         repo_root = hub_root / "repo-1"
         repo_root.mkdir(parents=True, exist_ok=True)
         _register_repo(hub_root, repo_root, "repo-1")
@@ -147,7 +126,6 @@ async def test_reactive_dispatch_created_does_not_enqueue_telegram_outbox(
         await _process_one_item(
             hub_root,
             queue=queue,
-            telegram_state_path=hub_root / "telegram_state.sqlite3",
         )
 
         telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")

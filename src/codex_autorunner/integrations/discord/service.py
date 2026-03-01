@@ -2256,10 +2256,6 @@ class DiscordBotService:
             pass
         elif subcommand == "status":
             pass
-        elif subcommand == "targets":
-            pass
-        elif subcommand == "target":
-            pass
         else:
             await self._respond_ephemeral(
                 interaction_id,
@@ -5441,12 +5437,6 @@ class DiscordBotService:
         elif subcommand == "status":
             await self._handle_pma_status(
                 interaction_id, interaction_token, channel_id=channel_id
-            )
-        elif subcommand in {"target", "targets"}:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "PMA target commands were removed. PMA now supports only on/off/status.",
             )
         else:
             await self._respond_ephemeral(

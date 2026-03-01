@@ -114,29 +114,21 @@ class HermesReadinessScorecard:
 
 DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
     HermesReadinessSignalSpec(
-        signal_id="web.contract_routes_static",
+        signal_id="web.contract_target_routes_removed",
         category=CATEGORY_WEB,
-        description="Web PMA target endpoints remain as deprecated compatibility stubs",
+        description="Web PMA target endpoints are removed",
         weight=2.0,
-        kind="static_contains",
-        path="src/codex_autorunner/surfaces/web/routes/pma.py",
-        patterns=(
-            '@router.post("/targets/add")',
-            '@router.post("/targets/remove")',
-            '@router.post("/targets/clear")',
-            '@router.post("/targets/active")',
-            '"deprecated": True',
-        ),
+        kind="pytest",
+        nodeids=("tests/test_pma_routes.py::test_pma_target_endpoints_are_removed",),
     ),
     HermesReadinessSignalSpec(
-        signal_id="web.behavior_delivery_status",
+        signal_id="web.behavior_chat_response_contract",
         category=CATEGORY_WEB,
-        description="Web PMA chat reports delivery status under no-target semantics",
+        description="Web PMA chat responses exclude legacy delivery compatibility fields",
         weight=4.0,
         kind="pytest",
         nodeids=(
-            "tests/test_pma_routes.py::test_pma_chat_exposes_delivery_status_summary[no_targets-skipped]",
-            "tests/test_pma_routes.py::test_pma_chat_delivery_status_reflects_dispatch_failure",
+            "tests/test_pma_routes.py::test_pma_chat_response_omits_legacy_delivery_fields",
         ),
     ),
     HermesReadinessSignalSpec(
@@ -175,14 +167,14 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         ),
     ),
     HermesReadinessSignalSpec(
-        signal_id="chat.tests_target_commands_deprecated",
+        signal_id="chat.tests_target_commands_absent",
         category=CATEGORY_CHAT,
-        description="Legacy PMA target commands are deprecated/no-op across chat surfaces",
+        description="PMA target commands are absent/unknown across chat surfaces",
         weight=2.0,
         kind="pytest",
         nodeids=(
-            "tests/test_telegram_pma_routing.py::test_pma_target_commands_are_deprecated_noop",
-            "tests/integrations/discord/test_pma_commands.py::test_pma_target_add_list_remove_and_clear",
+            "tests/test_telegram_pma_routing.py::test_pma_targets_subcommand_uses_usage_text",
+            "tests/integrations/discord/test_pma_commands.py::test_pma_target_group_returns_unknown_subcommand",
         ),
     ),
     HermesReadinessSignalSpec(
@@ -207,37 +199,25 @@ DEFAULT_SIGNAL_SPECS_SMOKE: tuple[HermesReadinessSignalSpec, ...] = (
         ),
     ),
     HermesReadinessSignalSpec(
-        signal_id="fallback.contract_outcome_fields_static",
+        signal_id="fallback.tests_reactive_pipeline_no_outbox_side_effects",
         category=CATEGORY_FALLBACK,
-        description="Web PMA route includes delivery outcome fields in responses",
-        weight=2.0,
-        kind="static_contains",
-        path="src/codex_autorunner/surfaces/web/routes/pma.py",
-        patterns=(
-            "delivery_outcome",
-            "dispatch_delivery_outcome",
-        ),
-    ),
-    HermesReadinessSignalSpec(
-        signal_id="fallback.tests_no_target_delivery",
-        category=CATEGORY_FALLBACK,
-        description="PMA delivery helpers return no-target semantics across turn and dispatch paths",
-        weight=4.0,
+        description="Reactive PMA pipeline execution does not enqueue Telegram outbox side effects",
+        weight=6.0,
         kind="pytest",
         nodeids=(
-            "tests/integrations/test_pma_delivery_routing.py::test_pma_delivery_returns_no_targets_even_with_legacy_target_state",
-            "tests/integrations/test_pma_dispatch_delivery_routing.py::test_pma_dispatch_delivery_returns_no_targets_with_valid_dispatch",
-        ),
-    ),
-    HermesReadinessSignalSpec(
-        signal_id="fallback.tests_no_side_effect_delivery",
-        category=CATEGORY_FALLBACK,
-        description="PMA delivery no-target mode does not enqueue chat outbox side effects",
-        weight=4.0,
-        kind="pytest",
-        nodeids=(
-            "tests/integrations/test_pma_delivery_routing.py::test_pma_delivery_no_targets_has_no_outbox_side_effects",
+            "tests/core/test_pma_reactive_pipeline.py::test_reactive_flow_failed_writes_transcript_web_sink",
             "tests/core/test_pma_reactive_pipeline.py::test_reactive_dispatch_created_does_not_enqueue_telegram_outbox",
+        ),
+    ),
+    HermesReadinessSignalSpec(
+        signal_id="fallback.tests_pma_routes_clean_contract",
+        category=CATEGORY_FALLBACK,
+        description="PMA routes expose clean contract with targets removed and no legacy delivery fields",
+        weight=4.0,
+        kind="pytest",
+        nodeids=(
+            "tests/test_pma_routes.py::test_pma_target_endpoints_are_removed",
+            "tests/test_pma_routes.py::test_pma_chat_response_omits_legacy_delivery_fields",
         ),
     ),
 )
