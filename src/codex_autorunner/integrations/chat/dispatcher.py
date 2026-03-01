@@ -254,6 +254,26 @@ class ChatDispatcher:
 
         await self._idle_event.wait()
 
+    async def close(self) -> None:
+        """Cancel worker tasks and clear queued work."""
+
+        async with self._lock:
+            workers = list(self._workers.values())
+            self._queues.clear()
+            if not workers and self._active_handlers == 0:
+                self._idle_event.set()
+
+        for task in workers:
+            task.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+
+        async with self._lock:
+            self._workers.clear()
+            self._queues.clear()
+            if self._active_handlers == 0:
+                self._idle_event.set()
+
     async def _enqueue(
         self,
         conversation_id: str,

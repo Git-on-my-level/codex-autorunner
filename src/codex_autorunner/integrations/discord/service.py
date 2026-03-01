@@ -385,6 +385,8 @@ class DiscordBotService:
         finally:
             with contextlib.suppress(Exception):
                 await self._dispatcher.wait_idle()
+            with contextlib.suppress(Exception):
+                await self._dispatcher.close()
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await dispatcher_loop_task

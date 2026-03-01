@@ -34,6 +34,8 @@ PTY_WRITE_CHUNK_BYTES = 16 * 1024
 PTY_WRITE_FLUSH_MAX_BYTES = 256 * 1024
 # Hard cap to prevent unbounded buffering when the PTY can't accept input.
 PTY_PENDING_MAX_BYTES = 1024 * 1024
+PTY_SUBSCRIBER_QUEUE_MAX = 256
+PTY_SUBSCRIBER_MAX = 64
 
 
 def default_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -136,6 +138,9 @@ class ActiveSession:
         self._buffer_bytes = 0
         self.buffer: collections.deque[bytes] = collections.deque()
         self.subscribers: set[asyncio.Queue[object]] = set()
+        self._subscriber_order: collections.deque[asyncio.Queue[object]] = (
+            collections.deque()
+        )
         self.lock = asyncio.Lock()
         self.loop = loop
         # Buffered input keeps the event loop from blocking on PTY writes.
@@ -260,6 +265,8 @@ class ActiveSession:
                             "Subscriber queue full, dropping data for session %s",
                             self.id,
                         )
+                        self.remove_subscriber(queue)
+                        self._enqueue_close_sentinel(queue)
             else:
                 self.close()
         except OSError:
@@ -268,13 +275,44 @@ class ActiveSession:
     def add_subscriber(
         self, *, include_replay_end: bool = True
     ) -> asyncio.Queue[object]:
-        q: asyncio.Queue[object] = asyncio.Queue()
+        while len(self.subscribers) >= PTY_SUBSCRIBER_MAX and self._subscriber_order:
+            stale = self._subscriber_order.popleft()
+            if stale not in self.subscribers:
+                continue
+            self.subscribers.discard(stale)
+            self._enqueue_close_sentinel(stale)
+        q: asyncio.Queue[object] = asyncio.Queue(maxsize=PTY_SUBSCRIBER_QUEUE_MAX)
         for chunk in self.buffer:
-            q.put_nowait(chunk)
+            self._enqueue_replay_chunk(q, chunk)
         if include_replay_end:
-            q.put_nowait(REPLAY_END)
+            self._enqueue_replay_chunk(q, REPLAY_END)
         self.subscribers.add(q)
+        self._subscriber_order.append(q)
         return q
+
+    def _enqueue_replay_chunk(
+        self, queue: asyncio.Queue[object], chunk: object
+    ) -> None:
+        while True:
+            try:
+                queue.put_nowait(chunk)
+                return
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+
+    def _enqueue_close_sentinel(self, queue: asyncio.Queue[object]) -> None:
+        while True:
+            try:
+                queue.put_nowait(None)
+                return
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
 
     def refresh_alt_screen_state(self) -> None:
         state = self._alt_screen_active
@@ -319,6 +357,10 @@ class ActiveSession:
 
     def remove_subscriber(self, q: asyncio.Queue[object]):
         self.subscribers.discard(q)
+        try:
+            self._subscriber_order.remove(q)
+        except ValueError:
+            pass
 
     def close(self):
         try:
@@ -336,11 +378,9 @@ class ActiveSession:
             except (OSError, IOError) as exc:
                 logger.debug("Failed to terminate PTY during close: %s", exc)
         for queue in list(self.subscribers):
-            try:
-                queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            self._enqueue_close_sentinel(queue)
         self.subscribers.clear()
+        self._subscriber_order.clear()
 
     def mark_input_activity(self) -> None:
         now = time.time()

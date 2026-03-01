@@ -133,3 +133,104 @@ def test_active_session_caps_pending_input(monkeypatch):
         assert session.loop.writer_added is True
     finally:
         loop.close()
+
+
+def test_active_session_caps_subscribers():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    class DummyLoop:
+        def add_reader(self, _fd, _cb):
+            return None
+
+        def remove_reader(self, _fd):
+            return None
+
+    class DummyPTY:
+        fd = 0
+
+        def __init__(self):
+            self.closed = False
+            self.last_active = 0.0
+
+    try:
+        session = ActiveSession("s", DummyPTY(), DummyLoop())  # type: ignore[arg-type]
+        created = [
+            session.add_subscriber(include_replay_end=False)
+            for _ in range(pty_session.PTY_SUBSCRIBER_MAX + 3)
+        ]
+        evicted = created[:3]
+
+        assert len(session.subscribers) == pty_session.PTY_SUBSCRIBER_MAX
+        for queue in evicted:
+            assert queue not in session.subscribers
+            assert queue.get_nowait() is None
+    finally:
+        loop.close()
+
+
+def test_add_subscriber_replay_handles_queue_overflow():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    class DummyLoop:
+        def add_reader(self, _fd, _cb):
+            return None
+
+        def remove_reader(self, _fd):
+            return None
+
+    class DummyPTY:
+        fd = 0
+
+        def __init__(self):
+            self.closed = False
+            self.last_active = 0.0
+
+    try:
+        session = ActiveSession("s", DummyPTY(), DummyLoop())  # type: ignore[arg-type]
+        for _ in range(pty_session.PTY_SUBSCRIBER_QUEUE_MAX + 20):
+            session.buffer.append(b"x")
+        queue = session.add_subscriber()
+
+        assert queue.qsize() == pty_session.PTY_SUBSCRIBER_QUEUE_MAX
+        last = None
+        while not queue.empty():
+            last = queue.get_nowait()
+        assert last is pty_session.REPLAY_END
+    finally:
+        loop.close()
+
+
+def test_enqueue_close_sentinel_drains_full_queue():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    class DummyLoop:
+        def add_reader(self, _fd, _cb):
+            return None
+
+        def remove_reader(self, _fd):
+            return None
+
+    class DummyPTY:
+        fd = 0
+
+        def __init__(self):
+            self.closed = False
+            self.last_active = 0.0
+
+    try:
+        session = ActiveSession("s", DummyPTY(), DummyLoop())  # type: ignore[arg-type]
+        queue: asyncio.Queue[object] = asyncio.Queue(maxsize=2)
+        queue.put_nowait("a")
+        queue.put_nowait("b")
+
+        session._enqueue_close_sentinel(queue)
+
+        tail = None
+        while not queue.empty():
+            tail = queue.get_nowait()
+        assert tail is None
+    finally:
+        loop.close()

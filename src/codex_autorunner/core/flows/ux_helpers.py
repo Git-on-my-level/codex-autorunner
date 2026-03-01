@@ -248,12 +248,19 @@ def ensure_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> di
         return {"status": "reused", "health": health}
 
     proc, stdout_handle, stderr_handle = spawn_flow_worker(repo_root, run_id)
+    # Parent-side stream handles are only needed for process spawn wiring.
+    # Closing immediately avoids leaking file descriptors in long-lived services.
+    for stream in (stdout_handle, stderr_handle):
+        try:
+            stream.close()
+        except Exception:
+            pass
     return {
         "status": "spawned",
         "health": health,
         "proc": proc,
-        "stdout": stdout_handle,
-        "stderr": stderr_handle,
+        "stdout": None,
+        "stderr": None,
     }
 
 

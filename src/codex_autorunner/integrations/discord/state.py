@@ -35,6 +35,7 @@ class DiscordStateStore:
             max_workers=1, thread_name_prefix="discord-state"
         )
         self._connection: Optional[sqlite3.Connection] = None
+        self._closed = False
 
     @property
     def path(self) -> Path:
@@ -44,8 +45,22 @@ class DiscordStateStore:
         await self._run(self._ensure_initialized_sync)
 
     async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         await self._run(self._close_sync)
         self._executor.shutdown(wait=True)
+
+    def __del__(self) -> None:
+        # Best-effort cleanup when callers forget to await close().
+        try:
+            self._close_sync()
+        except Exception:
+            pass
+        try:
+            self._executor.shutdown(wait=False)
+        except Exception:
+            pass
 
     async def upsert_binding(
         self,

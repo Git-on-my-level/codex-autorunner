@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 from codex_autorunner.core.flows import ux_helpers
+from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
 from codex_autorunner.integrations.github.service import RepoInfo
 
 
@@ -82,3 +86,45 @@ def test_seed_issue_from_github(tmp_path):
     assert result.repo_slug == "org/repo"
     assert "# Issue #5" in result.content
     assert "alice" in result.content
+
+
+def test_ensure_worker_closes_spawned_stream_handles(monkeypatch, tmp_path: Path):
+    class DummyStream:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    proc = SimpleNamespace(pid=123)
+    stdout = DummyStream()
+    stderr = DummyStream()
+
+    health = FlowWorkerHealth(
+        status="dead",
+        pid=None,
+        cmdline=[],
+        artifact_path=tmp_path / ".codex-autorunner" / "flows" / "run",
+    )
+    health.artifact_path.parent.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        ux_helpers, "check_worker_health", lambda *_args, **_kwargs: health
+    )
+    monkeypatch.setattr(
+        ux_helpers, "clear_worker_metadata", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        ux_helpers,
+        "spawn_flow_worker",
+        lambda *_args, **_kwargs: (proc, stdout, stderr),
+    )
+
+    result = ux_helpers.ensure_worker(tmp_path, "3022db08-82b8-40dd-8cfa-d04eb0fcded2")
+
+    assert result["status"] == "spawned"
+    assert result["proc"] is proc
+    assert result["stdout"] is None
+    assert result["stderr"] is None
+    assert stdout.closed is True
+    assert stderr.closed is True

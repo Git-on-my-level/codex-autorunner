@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.flows import worker_process
 
 
@@ -114,3 +116,34 @@ def test_read_process_cmdline_falls_back_without_wide_flag(monkeypatch) -> None:
     assert cmdline is not None
     assert seen[0] == ["ps", "-ww", "-p", "456", "-o", "command="]
     assert seen[1] == ["ps", "-p", "456", "-o", "command="]
+
+
+def test_spawn_flow_worker_closes_streams_when_popen_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class DummyHandle:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    opened: list[DummyHandle] = []
+
+    def fake_open(_self, _mode="r", *args, **kwargs):  # type: ignore[no-untyped-def]
+        handle = DummyHandle()
+        opened.append(handle)
+        return handle
+
+    def fail_popen(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("spawn failed")
+
+    monkeypatch.setattr(worker_process.Path, "open", fake_open)
+    monkeypatch.setattr(subprocess, "Popen", fail_popen)
+
+    run_id = "3022db08-82b8-40dd-8cfa-d04eb0fcded2"
+    with pytest.raises(RuntimeError, match="spawn failed"):
+        worker_process.spawn_flow_worker(tmp_path, run_id)
+
+    assert len(opened) == 2
+    assert all(handle.closed for handle in opened)
