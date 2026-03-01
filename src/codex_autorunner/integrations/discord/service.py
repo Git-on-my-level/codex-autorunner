@@ -2209,7 +2209,7 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
+                "Unknown PMA subcommand. Use on, off, status, targets, or target.",
             )
             return
         await self._handle_pma_command(
@@ -5050,7 +5050,7 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Unknown PMA subcommand. Use on, off, or status.",
+                "Unknown PMA subcommand. Use on, off, status, targets, or target.",
             )
 
     async def _handle_pma_on(
