@@ -852,7 +852,9 @@ def build_file_chat_routes() -> APIRouter:
                 fallback = parse_message_response(prompt_response)
                 if fallback.text:
                     output_result = type(output_result)(
-                        text=fallback.text, error=fallback.error
+                        text=fallback.text,
+                        error=output_result.error or fallback.error,
+                        usage=output_result.usage,
                     )
         finally:
             timeout_task.cancel()
