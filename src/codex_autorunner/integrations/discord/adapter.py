@@ -10,6 +10,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Optional, Sequence
+from urllib.parse import urlparse
 
 from ..chat.adapter import ChatAdapter, SendAttachmentRequest, SendTextRequest
 from ..chat.capabilities import ChatCapabilities
@@ -46,6 +47,18 @@ from .rest import DiscordRestClient
 DISCORD_EPHEMERAL_FLAG = 64
 _MAX_INTERACTION_TOKEN_CACHE = 4096
 _MAX_MESSAGE_INTERACTION_TOKEN_CACHE = 4096
+_DISCORD_AUDIO_SUFFIXES = {
+    ".aac",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".mp4",
+    ".oga",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".webm",
+}
 
 
 class DiscordTextRenderer(TextRenderer):
@@ -272,6 +285,12 @@ class DiscordChatAdapter(ChatAdapter):
                     kind = "video"
                 elif content_type.startswith("audio/"):
                     kind = "audio"
+            elif self._looks_like_audio_attachment(
+                file_name=filename if isinstance(filename, str) else None,
+                source_url=source_url if isinstance(source_url, str) else None,
+                duration_secs=attachment.get("duration_secs"),
+            ):
+                kind = "audio"
 
             attachments.append(
                 ChatAttachment(
@@ -285,6 +304,24 @@ class DiscordChatAdapter(ChatAdapter):
             )
 
         return tuple(attachments)
+
+    @staticmethod
+    def _looks_like_audio_attachment(
+        *,
+        file_name: Optional[str],
+        source_url: Optional[str],
+        duration_secs: Any,
+    ) -> bool:
+        if isinstance(duration_secs, (int, float)) and duration_secs > 0:
+            return True
+        if isinstance(file_name, str):
+            if Path(file_name).suffix.lower() in _DISCORD_AUDIO_SUFFIXES:
+                return True
+        if isinstance(source_url, str) and source_url:
+            path = urlparse(source_url).path
+            if Path(path).suffix.lower() in _DISCORD_AUDIO_SUFFIXES:
+                return True
+        return False
 
     def _parse_interaction_to_event(
         self, payload: dict[str, Any]
