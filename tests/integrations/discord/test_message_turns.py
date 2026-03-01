@@ -1295,6 +1295,26 @@ def test_build_attachment_filename_uses_source_url_audio_suffix(tmp_path: Path) 
     assert file_name.endswith(".opus")
 
 
+def test_build_attachment_filename_does_not_infer_audio_suffix_for_video(
+    tmp_path: Path,
+) -> None:
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+    )
+    attachment = SimpleNamespace(
+        file_name="clip",
+        mime_type="video/mp4",
+        source_url="https://cdn.discordapp.com/attachments/clip",
+        kind="video",
+    )
+
+    file_name = service._build_attachment_filename(attachment, index=1)
+
+    assert not file_name.endswith(".m4a")
+    assert Path(file_name).suffix == ""
+
+
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,

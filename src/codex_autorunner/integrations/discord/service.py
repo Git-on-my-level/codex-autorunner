@@ -1202,12 +1202,13 @@ class DiscordBotService:
                 source_url=source_url if isinstance(source_url, str) else None,
                 kind=getattr(attachment, "kind", None),
             )
-            suffix = audio_extension_for_input(
-                mime_type=getattr(attachment, "mime_type", None),
-                file_name=getattr(attachment, "file_name", None),
-                source_url=source_url if isinstance(source_url, str) else None,
-                default=".ogg" if is_audio else "",
-            )
+            if is_audio:
+                suffix = audio_extension_for_input(
+                    mime_type=getattr(attachment, "mime_type", None),
+                    file_name=getattr(attachment, "file_name", None),
+                    source_url=source_url if isinstance(source_url, str) else None,
+                    default=".ogg",
+                )
         return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
 
     async def _find_paused_flow_run(
