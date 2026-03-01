@@ -199,3 +199,18 @@ def build_cancel_turn_button(
             )
         ]
     )
+
+
+def build_continue_turn_button(
+    *,
+    custom_id: str = "continue_turn",
+) -> dict[str, Any]:
+    return build_action_row(
+        [
+            build_button(
+                "Continue",
+                custom_id,
+                style=DISCORD_BUTTON_STYLE_SUCCESS,
+            )
+        ]
+    )

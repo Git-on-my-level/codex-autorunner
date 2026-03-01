@@ -123,6 +123,7 @@ from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_bind_picker,
     build_cancel_turn_button,
+    build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
 )
@@ -1413,7 +1414,9 @@ class DiscordBotService:
             if not force and content == progress_rendered:
                 return
             payload: dict[str, Any] = {"content": content}
-            if not remove_components:
+            if remove_components:
+                payload["components"] = []
+            else:
                 payload["components"] = [build_cancel_turn_button()]
             try:
                 await self._rest.edit_channel_message(
@@ -5160,6 +5163,21 @@ class DiscordBotService:
                     )
                 return
 
+            if custom_id == "cancel_turn":
+                await self._handle_cancel_turn_button(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                return
+
+            if custom_id == "continue_turn":
+                await self._handle_continue_turn_button(
+                    interaction_id,
+                    interaction_token,
+                )
+                return
+
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -5249,6 +5267,13 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                )
+                return
+
+            if custom_id == "continue_turn":
+                await self._handle_continue_turn_button(
+                    interaction_id,
+                    interaction_token,
                 )
                 return
 
@@ -6016,9 +6041,53 @@ class DiscordBotService:
         chunks = chunk_discord_message(
             f"**Conversation Summary:**\n\n{response_text}",
             max_len=self._config.max_message_length,
-            with_numbering=True,
+            with_numbering=False,
         )
-        for chunk in chunks:
+        if not chunks:
+            chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
+
+        next_chunk_index = 0
+        continue_button_applied = False
+        preview_message_id = (
+            turn_result.preview_message_id
+            if isinstance(turn_result.preview_message_id, str)
+            and turn_result.preview_message_id
+            else None
+        )
+
+        if preview_message_id:
+            try:
+                await self._rest.edit_channel_message(
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    payload={
+                        "content": chunks[0],
+                        "components": [build_continue_turn_button()],
+                    },
+                )
+                continue_button_applied = True
+                next_chunk_index = 1
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.compact.preview_edit_failed",
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    exc=exc,
+                )
+
+        if not continue_button_applied:
+            await self._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": chunks[0],
+                    "components": [build_continue_turn_button()],
+                },
+            )
+            next_chunk_index = 1
+
+        for chunk in chunks[next_chunk_index:]:
             await self._send_channel_message_safe(channel_id, {"content": chunk})
 
     async def _handle_car_rollout(
@@ -6255,6 +6324,20 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+        )
+
+    async def _handle_continue_turn_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> None:
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            (
+                "Compaction complete. Send your next message to continue this "
+                "session, or use `/car new` to start a fresh session."
+            ),
         )
 
 
