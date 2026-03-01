@@ -4,9 +4,10 @@ import json
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, cast
 
 logger = logging.getLogger("codex_autorunner.core.usage")
 
@@ -80,12 +81,14 @@ class UsageSummary:
     totals: TokenTotals
     events: int
     latest_rate_limits: Optional[Dict[str, Any]]
+    source_confidence: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
             "events": self.events,
             "totals": self.totals.to_dict(),
             "latest_rate_limits": self.latest_rate_limits,
+            "source_confidence": self.source_confidence,
         }
 
 
@@ -102,6 +105,72 @@ def _coerce_totals(payload: Optional[Dict[str, Any]]) -> TokenTotals:
 
 CODEX_AGENT_ID = "codex"
 OPENCODE_AGENT_ID = "opencode"
+_OPENCODE_PERSISTED_USAGE_REL_PATH = Path(
+    ".codex-autorunner/usage/opencode_turn_usage.jsonl"
+)
+
+OPENCODE_USAGE_SOURCE_PERSISTED = "persisted_normalized"
+OPENCODE_USAGE_SOURCE_FALLBACK = "session_estimated"
+OPENCODE_USAGE_SOURCE_NONE = "none"
+
+
+@dataclasses.dataclass
+class _OpenCodeAggregationStats:
+    persisted_records: int = 0
+    persisted_events: int = 0
+    persisted_parse_errors: int = 0
+    persisted_duplicates: int = 0
+    session_files: int = 0
+    session_entries: int = 0
+    session_events: int = 0
+    session_parse_errors: int = 0
+    session_cumulative_files: int = 0
+    session_delta_files: int = 0
+    aggregation_ms: int = 0
+
+
+def _build_codex_confidence(events: int) -> Dict[str, Any]:
+    confidence = "high" if events > 0 else "none"
+    return {"source": "codex_cache", "confidence": confidence, "events": events}
+
+
+def _build_opencode_confidence(
+    source: str, stats: _OpenCodeAggregationStats
+) -> Dict[str, Any]:
+    confidence = "none"
+    if source == OPENCODE_USAGE_SOURCE_PERSISTED:
+        confidence = "high"
+    elif source == OPENCODE_USAGE_SOURCE_FALLBACK:
+        confidence = "low"
+    return {
+        "source": source,
+        "confidence": confidence,
+        "events": (
+            stats.persisted_events
+            if source == OPENCODE_USAGE_SOURCE_PERSISTED
+            else stats.session_events
+        ),
+        "persisted_events": stats.persisted_events,
+        "persisted_records": stats.persisted_records,
+        "persisted_parse_errors": stats.persisted_parse_errors,
+        "persisted_duplicates": stats.persisted_duplicates,
+        "session_events": stats.session_events,
+        "session_entries": stats.session_entries,
+        "session_files": stats.session_files,
+        "session_parse_errors": stats.session_parse_errors,
+        "session_cumulative_files": stats.session_cumulative_files,
+        "session_delta_files": stats.session_delta_files,
+        "aggregation_ms": stats.aggregation_ms,
+    }
+
+
+def _merge_confidence(*maps: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    for item in maps:
+        if isinstance(item, dict):
+            merged.update(item)
+    return merged
+
 
 _OPENCODE_USAGE_KEYS = {
     "input_tokens": [
@@ -174,6 +243,77 @@ def _coerce_opencode_totals(payload: Optional[Dict[str, Any]]) -> TokenTotals:
         reasoning_output_tokens=reasoning_tokens,
         total_tokens=total_tokens,
     )
+
+
+def _token_totals_has_values(totals: TokenTotals) -> bool:
+    return any(
+        (
+            totals.input_tokens,
+            totals.cached_input_tokens,
+            totals.output_tokens,
+            totals.reasoning_output_tokens,
+            totals.total_tokens,
+        )
+    )
+
+
+def _clamp_non_negative_totals(totals: TokenTotals) -> TokenTotals:
+    return TokenTotals(
+        input_tokens=max(0, totals.input_tokens),
+        cached_input_tokens=max(0, totals.cached_input_tokens),
+        output_tokens=max(0, totals.output_tokens),
+        reasoning_output_tokens=max(0, totals.reasoning_output_tokens),
+        total_tokens=max(0, totals.total_tokens),
+    )
+
+
+def _opencode_persisted_usage_path(repo_root: Path) -> Path:
+    return repo_root / _OPENCODE_PERSISTED_USAGE_REL_PATH
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def persist_opencode_usage_snapshot(
+    repo_root: Path,
+    *,
+    session_id: Optional[str],
+    turn_id: Optional[str],
+    usage: Optional[Dict[str, Any]],
+    source: str = "live_stream",
+) -> bool:
+    if not isinstance(usage, dict):
+        return False
+    totals = _coerce_opencode_totals(usage)
+    if not _token_totals_has_values(totals):
+        return False
+    payload: Dict[str, Any] = {
+        "version": 1,
+        "timestamp": _iso_now(),
+        "session_id": session_id or "",
+        "turn_id": turn_id or "",
+        "source": source or "live_stream",
+        "usage": totals.to_dict(),
+    }
+    provider_id = usage.get("providerID") or usage.get("providerId")
+    model_id = usage.get("modelID") or usage.get("modelId")
+    if isinstance(provider_id, str) and provider_id:
+        payload["provider_id"] = provider_id
+    if isinstance(model_id, str) and model_id:
+        payload["model_id"] = model_id
+    context_window = usage.get("modelContextWindow")
+    if isinstance(context_window, (int, float)):
+        payload["model_context_window"] = int(context_window)
+    path = _opencode_persisted_usage_path(repo_root.resolve())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        return True
+    except OSError as exc:
+        logger.debug("Failed to persist OpenCode usage at %s: %s", path, exc)
+        return False
 
 
 def _looks_like_opencode_usage(payload: Any) -> bool:
@@ -358,7 +498,10 @@ def iter_token_events(
                         rate_limits = payload.get("rate_limits")
                         ts = record.get("timestamp")
                         if ts and rate_limits:
-                            timestamp = _parse_timestamp(ts)
+                            try:
+                                timestamp = _parse_timestamp(ts)
+                            except UsageError:
+                                continue
                             if since and timestamp < since:
                                 continue
                             if until and timestamp > until:
@@ -386,7 +529,10 @@ def iter_token_events(
                     timestamp_raw = record.get("timestamp")
                     if not timestamp_raw:
                         continue
-                    timestamp = _parse_timestamp(timestamp_raw)
+                    try:
+                        timestamp = _parse_timestamp(timestamp_raw)
+                    except UsageError:
+                        continue
                     if since and timestamp < since:
                         continue
                     if until and timestamp > until:
@@ -406,23 +552,149 @@ def iter_token_events(
             logger.debug("Failed to process session file %s: %s", session_path, exc)
 
 
-def iter_opencode_events(
+def _totals_is_non_decreasing(current: TokenTotals, previous: TokenTotals) -> bool:
+    return (
+        current.input_tokens >= previous.input_tokens
+        and current.cached_input_tokens >= previous.cached_input_tokens
+        and current.output_tokens >= previous.output_tokens
+        and current.reasoning_output_tokens >= previous.reasoning_output_tokens
+        and current.total_tokens >= previous.total_tokens
+    )
+
+
+def _infer_opencode_file_semantics(raw_totals: List[TokenTotals]) -> str:
+    if len(raw_totals) < 2:
+        return "delta"
+    previous = raw_totals[0]
+    saw_increase = False
+    for current in raw_totals[1:]:
+        if not _totals_is_non_decreasing(current, previous):
+            return "delta"
+        if current.total_tokens > previous.total_tokens:
+            saw_increase = True
+        previous = current
+    return "cumulative" if saw_increase else "delta"
+
+
+def _iter_opencode_persisted_events(
+    repo_root: Path,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    stats: Optional[_OpenCodeAggregationStats] = None,
+) -> List[TokenEvent]:
+    path = _opencode_persisted_usage_path(repo_root)
+    if not path.exists():
+        return []
+    try:
+        fallback_ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        fallback_ts = datetime.now(timezone.utc)
+
+    rows: List[Tuple[str, int, datetime, TokenTotals, Optional[str]]] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for index, line in enumerate(handle):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stats is not None:
+                    stats.persisted_records += 1
+                try:
+                    payload = json.loads(stripped)
+                except json.JSONDecodeError:
+                    if stats is not None:
+                        stats.persisted_parse_errors += 1
+                    continue
+                if not isinstance(payload, dict):
+                    if stats is not None:
+                        stats.persisted_parse_errors += 1
+                    continue
+                usage_payload = payload.get("usage")
+                if not isinstance(usage_payload, dict):
+                    if stats is not None:
+                        stats.persisted_parse_errors += 1
+                    continue
+                delta = _coerce_opencode_totals(usage_payload)
+                if not _token_totals_has_values(delta):
+                    continue
+                timestamp = _parse_opencode_timestamp(
+                    payload.get("timestamp"), fallback_ts
+                )
+                model = _format_opencode_model(
+                    cast(Optional[str], payload.get("model_id")),
+                    cast(Optional[str], payload.get("provider_id")),
+                )
+                session_id = payload.get("session_id")
+                turn_id = payload.get("turn_id")
+                if (
+                    isinstance(session_id, str)
+                    and session_id
+                    and isinstance(turn_id, str)
+                    and turn_id
+                ):
+                    dedupe_key = f"{session_id}:{turn_id}"
+                else:
+                    dedupe_key = f"line:{index}"
+                rows.append((dedupe_key, index, timestamp, delta, model))
+    except OSError as exc:
+        logger.debug("Failed to read persisted OpenCode usage at %s: %s", path, exc)
+        if stats is not None:
+            stats.persisted_parse_errors += 1
+        return []
+
+    deduped: Dict[str, Tuple[int, datetime, TokenTotals, Optional[str]]] = {}
+    for dedupe_key, index, timestamp, delta, model in rows:
+        if stats is not None and dedupe_key in deduped:
+            stats.persisted_duplicates += 1
+        deduped[dedupe_key] = (index, timestamp, delta, model)
+
+    ordered = sorted(
+        deduped.values(),
+        key=lambda row: (row[1], row[0]),
+    )
+    totals = TokenTotals()
+    events: List[TokenEvent] = []
+    for _index, timestamp, delta, model in ordered:
+        totals.add(delta)
+        if since and timestamp < since:
+            continue
+        if until and timestamp > until:
+            continue
+        event = TokenEvent(
+            timestamp=timestamp,
+            session_path=path,
+            cwd=repo_root,
+            model=model,
+            totals=copy.deepcopy(totals),
+            delta=delta,
+            rate_limits=None,
+            agent=OPENCODE_AGENT_ID,
+        )
+        events.append(event)
+        if stats is not None:
+            stats.persisted_events += 1
+    return events
+
+
+def _iter_opencode_session_events(
     repo_roots: Iterable[Path],
     *,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
+    stats: Optional[_OpenCodeAggregationStats] = None,
 ) -> Iterable[TokenEvent]:
-    """
-    Yield token usage events from OpenCode session JSON files in repos.
-    Events are ordered by repo root and file path; per-file ordering matches entry order.
-    """
     for repo_root in sorted({path.resolve() for path in repo_roots}):
         for session_path in _iter_opencode_session_files(repo_root):
+            if stats is not None:
+                stats.session_files += 1
             try:
                 with open(session_path, "r", encoding="utf-8") as f:
                     payload = json.loads(f.read())
             except (OSError, json.JSONDecodeError) as exc:
                 logger.debug("Failed to read session file %s: %s", session_path, exc)
+                if stats is not None:
+                    stats.session_parse_errors += 1
                 continue
 
             try:
@@ -431,6 +703,8 @@ def iter_opencode_events(
                 )
             except OSError as exc:
                 logger.debug("Failed to get mtime for %s: %s", session_path, exc)
+                if stats is not None:
+                    stats.session_parse_errors += 1
                 mtime = datetime.now(timezone.utc)
 
             top_model = payload.get("model") if isinstance(payload, dict) else None
@@ -443,39 +717,111 @@ def iter_opencode_events(
             if not entries:
                 continue
 
-            totals = TokenTotals()
+            normalized: List[Tuple[datetime, TokenTotals, Optional[str]]] = []
             for container, usage in entries:
-                delta = _coerce_opencode_totals(usage)
-                if not any(
-                    (
-                        delta.input_tokens,
-                        delta.cached_input_tokens,
-                        delta.output_tokens,
-                        delta.reasoning_output_tokens,
-                        delta.total_tokens,
-                    )
-                ):
+                if stats is not None:
+                    stats.session_entries += 1
+                raw_totals = _coerce_opencode_totals(usage)
+                if not _token_totals_has_values(raw_totals):
                     continue
-                totals.add(delta)
                 timestamp = _extract_opencode_timestamp(container, mtime)
+                model = _extract_opencode_model(container, top_model, top_provider)
+                normalized.append((timestamp, raw_totals, model))
+            if not normalized:
+                continue
+
+            semantics = _infer_opencode_file_semantics(
+                [raw_totals for _, raw_totals, _ in normalized]
+            )
+            if stats is not None:
+                if semantics == "cumulative":
+                    stats.session_cumulative_files += 1
+                else:
+                    stats.session_delta_files += 1
+
+            previous_raw: Optional[TokenTotals] = None
+            running_totals = TokenTotals()
+            for timestamp, raw_totals, model in normalized:
+                if semantics == "cumulative":
+                    if previous_raw is None:
+                        delta = raw_totals
+                    else:
+                        delta = _clamp_non_negative_totals(
+                            raw_totals.diff(previous_raw)
+                        )
+                    previous_raw = raw_totals
+                    running_totals = copy.deepcopy(raw_totals)
+                else:
+                    delta = raw_totals
+                    running_totals.add(delta)
+
+                if not _token_totals_has_values(delta):
+                    continue
                 if since and timestamp < since:
                     continue
                 if until and timestamp > until:
                     continue
-                model = _extract_opencode_model(container, top_model, top_provider)
+                if stats is not None:
+                    stats.session_events += 1
                 yield TokenEvent(
                     timestamp=timestamp,
                     session_path=session_path,
                     cwd=repo_root,
                     model=model,
-                    totals=copy.deepcopy(totals),
+                    totals=copy.deepcopy(running_totals),
                     delta=delta,
                     rate_limits=None,
                     agent=OPENCODE_AGENT_ID,
                 )
 
 
-def summarize_repo_usage(
+def _collect_opencode_repo_events(
+    repo_root: Path,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Tuple[List[TokenEvent], Dict[str, Any]]:
+    stats = _OpenCodeAggregationStats()
+    started = time.monotonic()
+    repo_root = repo_root.resolve()
+    persisted_events = _iter_opencode_persisted_events(
+        repo_root, since=since, until=until, stats=stats
+    )
+    if persisted_events:
+        stats.aggregation_ms = int((time.monotonic() - started) * 1000)
+        return persisted_events, _build_opencode_confidence(
+            OPENCODE_USAGE_SOURCE_PERSISTED, stats
+        )
+
+    session_events = list(
+        _iter_opencode_session_events(
+            [repo_root], since=since, until=until, stats=stats
+        )
+    )
+    stats.aggregation_ms = int((time.monotonic() - started) * 1000)
+    source = (
+        OPENCODE_USAGE_SOURCE_FALLBACK if session_events else OPENCODE_USAGE_SOURCE_NONE
+    )
+    return session_events, _build_opencode_confidence(source, stats)
+
+
+def iter_opencode_events(
+    repo_roots: Iterable[Path],
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Iterable[TokenEvent]:
+    """
+    Yield OpenCode token events using canonical persisted turn snapshots when
+    available, falling back to `.opencode/sessions` parsing otherwise.
+    """
+    for repo_root in sorted({path.resolve() for path in repo_roots}):
+        events, _ = _collect_opencode_repo_events(repo_root, since=since, until=until)
+        for event in events:
+            yield event
+
+
+def _summarize_codex_repo_usage(
     repo_root: Path,
     codex_home: Optional[Path] = None,
     *,
@@ -486,22 +832,21 @@ def summarize_repo_usage(
     totals = TokenTotals()
     events = 0
     latest_rate_limits: Optional[dict] = None
-
     for event in iter_token_events(codex_home, since=since, until=until):
         if event.cwd and (event.cwd == repo_root or repo_root in event.cwd.parents):
             totals.add(event.delta)
             events += 1
             if event.rate_limits:
                 latest_rate_limits = event.rate_limits
-    for event in iter_opencode_events([repo_root], since=since, until=until):
-        totals.add(event.delta)
-        events += 1
     return UsageSummary(
-        totals=totals, events=events, latest_rate_limits=latest_rate_limits
+        totals=totals,
+        events=events,
+        latest_rate_limits=latest_rate_limits,
+        source_confidence={"codex": _build_codex_confidence(events)},
     )
 
 
-def summarize_hub_usage(
+def _summarize_codex_hub_usage(
     repo_map: List[Tuple[str, Path]],
     codex_home: Optional[Path] = None,
     *,
@@ -513,6 +858,64 @@ def summarize_hub_usage(
         repo_id: UsageSummary(TokenTotals(), 0, None) for repo_id, _ in repo_map
     }
     unmatched = UsageSummary(TokenTotals(), 0, None)
+    _match_repo, _heuristic_match_base = _build_repo_matchers(repo_map)
+    for event in iter_token_events(codex_home, since=since, until=until):
+        repo_id = _match_repo(event.cwd)
+        if repo_id is None:
+            repo_id = _heuristic_match_base(event.cwd)
+        if repo_id is None:
+            unmatched.totals.add(event.delta)
+            unmatched.events += 1
+            if event.rate_limits:
+                unmatched.latest_rate_limits = event.rate_limits
+            continue
+        summary = per_repo[repo_id]
+        summary.totals.add(event.delta)
+        summary.events += 1
+        if event.rate_limits:
+            summary.latest_rate_limits = event.rate_limits
+    for _repo_id, summary in per_repo.items():
+        summary.source_confidence = {"codex": _build_codex_confidence(summary.events)}
+    unmatched.source_confidence = {"codex": _build_codex_confidence(unmatched.events)}
+    return per_repo, unmatched
+
+
+def summarize_repo_usage(
+    repo_root: Path,
+    codex_home: Optional[Path] = None,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> UsageSummary:
+    codex_summary = _summarize_codex_repo_usage(
+        repo_root, codex_home=codex_home, since=since, until=until
+    )
+    totals = TokenTotals()
+    totals.add(codex_summary.totals)
+    events = codex_summary.events
+    opencode_events, opencode_confidence = _collect_opencode_repo_events(
+        repo_root.resolve(), since=since, until=until
+    )
+    for event in opencode_events:
+        totals.add(event.delta)
+        events += 1
+    return UsageSummary(
+        totals=totals,
+        events=events,
+        latest_rate_limits=codex_summary.latest_rate_limits,
+        source_confidence=_merge_confidence(
+            codex_summary.source_confidence, {"opencode": opencode_confidence}
+        ),
+    )
+
+
+def _build_repo_matchers(
+    repo_map: List[Tuple[str, Path]],
+) -> Tuple[
+    Callable[[Optional[Path]], Optional[str]],
+    Callable[[Optional[Path]], Optional[str]],
+]:
+    repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
 
     def _match_repo(cwd: Optional[Path]) -> Optional[str]:
         if not cwd:
@@ -547,34 +950,29 @@ def summarize_hub_usage(
                     return repo_id
         return None
 
-    for event in iter_token_events(codex_home, since=since, until=until):
-        repo_id = _match_repo(event.cwd)
-        if repo_id is None:
-            repo_id = _heuristic_match_base(event.cwd)
-        if repo_id is None:
-            unmatched.totals.add(event.delta)
-            unmatched.events += 1
-            if event.rate_limits:
-                unmatched.latest_rate_limits = event.rate_limits
-            continue
-        summary = per_repo[repo_id]
-        summary.totals.add(event.delta)
-        summary.events += 1
-        if event.rate_limits:
-            summary.latest_rate_limits = event.rate_limits
+    return _match_repo, _heuristic_match_base
 
-    for event in iter_opencode_events(
-        [path for _, path in repo_map], since=since, until=until
-    ):
-        repo_id = _match_repo(event.cwd)
-        if repo_id is None:
-            repo_id = _heuristic_match_base(event.cwd)
-        if repo_id is None:
-            continue
-        summary = per_repo[repo_id]
-        summary.totals.add(event.delta)
-        summary.events += 1
 
+def summarize_hub_usage(
+    repo_map: List[Tuple[str, Path]],
+    codex_home: Optional[Path] = None,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Tuple[Dict[str, UsageSummary], UsageSummary]:
+    repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
+    per_repo, unmatched = _summarize_codex_hub_usage(
+        repo_map, codex_home=codex_home, since=since, until=until
+    )
+    opencode_per_repo = summarize_opencode_hub_usage(repo_map, since=since, until=until)
+    for repo_id, summary in per_repo.items():
+        extra = opencode_per_repo.get(repo_id)
+        if extra:
+            summary.totals.add(extra.totals)
+            summary.events += extra.events
+            summary.source_confidence = _merge_confidence(
+                summary.source_confidence, extra.source_confidence
+            )
     return per_repo, unmatched
 
 
@@ -585,11 +983,19 @@ def summarize_opencode_repo_usage(
     until: Optional[datetime] = None,
 ) -> UsageSummary:
     totals = TokenTotals()
+    events_list, confidence = _collect_opencode_repo_events(
+        repo_root, since=since, until=until
+    )
     events = 0
-    for event in iter_opencode_events([repo_root], since=since, until=until):
+    for event in events_list:
         totals.add(event.delta)
         events += 1
-    return UsageSummary(totals=totals, events=events, latest_rate_limits=None)
+    return UsageSummary(
+        totals=totals,
+        events=events,
+        latest_rate_limits=None,
+        source_confidence={"opencode": confidence},
+    )
 
 
 def summarize_opencode_hub_usage(
@@ -599,28 +1005,20 @@ def summarize_opencode_hub_usage(
     until: Optional[datetime] = None,
 ) -> Dict[str, UsageSummary]:
     repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
-    per_repo: Dict[str, UsageSummary] = {
-        repo_id: UsageSummary(TokenTotals(), 0, None) for repo_id, _ in repo_map
-    }
-
-    def _match_repo(cwd: Optional[Path]) -> Optional[str]:
-        if not cwd:
-            return None
-        for repo_id, repo_path in repo_map:
-            if cwd == repo_path or repo_path in cwd.parents:
-                return repo_id
-        return None
-
-    for event in iter_opencode_events(
-        [path for _, path in repo_map], since=since, until=until
-    ):
-        repo_id = _match_repo(event.cwd)
-        if repo_id is None:
-            continue
-        summary = per_repo[repo_id]
-        summary.totals.add(event.delta)
-        summary.events += 1
-
+    per_repo: Dict[str, UsageSummary] = {}
+    for repo_id, repo_path in repo_map:
+        totals = TokenTotals()
+        events_list, confidence = _collect_opencode_repo_events(
+            repo_path, since=since, until=until
+        )
+        for event in events_list:
+            totals.add(event.delta)
+        per_repo[repo_id] = UsageSummary(
+            totals=totals,
+            events=len(events_list),
+            latest_rate_limits=None,
+            source_confidence={"opencode": confidence},
+        )
     return per_repo
 
 
@@ -1303,7 +1701,7 @@ class UsageSeriesCache:
         until: Optional[datetime],
     ) -> UsageSummary:
         if since or until:
-            return summarize_repo_usage(
+            return _summarize_codex_repo_usage(
                 repo_root,
                 codex_home=self.codex_home,
                 since=since,
@@ -1325,6 +1723,7 @@ class UsageSeriesCache:
             totals=acc.totals,
             events=acc.events,
             latest_rate_limits=acc.latest_rate_limits,
+            source_confidence={"codex": _build_codex_confidence(acc.events)},
         )
 
     def _build_hub_summary(
@@ -1336,7 +1735,7 @@ class UsageSeriesCache:
         until: Optional[datetime],
     ) -> Tuple[Dict[str, UsageSummary], UsageSummary]:
         if since or until:
-            return summarize_hub_usage(
+            return _summarize_codex_hub_usage(
                 repo_map,
                 codex_home=self.codex_home,
                 since=since,
@@ -1402,6 +1801,7 @@ class UsageSeriesCache:
                 totals=acc.totals,
                 events=acc.events,
                 latest_rate_limits=acc.latest_rate_limits,
+                source_confidence={"codex": _build_codex_confidence(acc.events)},
             )
             for repo_id, acc in per_repo.items()
         }
@@ -1409,6 +1809,7 @@ class UsageSeriesCache:
             totals=unmatched.totals,
             events=unmatched.events,
             latest_rate_limits=unmatched.latest_rate_limits,
+            source_confidence={"codex": _build_codex_confidence(unmatched.events)},
         )
         return per_repo_summary, unmatched_summary
 
@@ -1785,14 +2186,7 @@ def _build_hub_opencode_series(
         raise UsageError(f"Unsupported segment: {segment}")
 
     repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
-
-    def _match_repo(cwd: Optional[Path]) -> Optional[str]:
-        if not cwd:
-            return None
-        for repo_id, repo_path in repo_map:
-            if cwd == repo_path or repo_path in cwd.parents:
-                return repo_id
-        return None
+    _match_repo, _heuristic_match_base = _build_repo_matchers(repo_map)
 
     series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
     timestamps: List[datetime] = []
@@ -1801,6 +2195,8 @@ def _build_hub_opencode_series(
     )
     for event in events:
         repo_id = _match_repo(event.cwd)
+        if repo_id is None:
+            repo_id = _heuristic_match_base(event.cwd)
         if repo_id is None:
             continue
         bucket_label = _bucket_label(_bucket_start(event.timestamp, bucket), bucket)
@@ -1982,6 +2378,10 @@ def get_repo_usage_summary_cached(
         totals=TokenTotals(),
         events=summary.events + opencode_summary.events,
         latest_rate_limits=summary.latest_rate_limits,
+        source_confidence=_merge_confidence(
+            {"codex": _build_codex_confidence(summary.events)},
+            opencode_summary.source_confidence,
+        ),
     )
     merged.totals.add(summary.totals)
     merged.totals.add(opencode_summary.totals)
@@ -2055,10 +2455,22 @@ def get_hub_usage_summary_cached(
                 totals=TokenTotals(),
                 events=summary.events + extra.events,
                 latest_rate_limits=summary.latest_rate_limits,
+                source_confidence=_merge_confidence(
+                    {"codex": _build_codex_confidence(summary.events)},
+                    extra.source_confidence,
+                ),
             )
             merged.totals.add(summary.totals)
             merged.totals.add(extra.totals)
             merged_per_repo[repo_id] = merged
         else:
+            summary.source_confidence = _merge_confidence(
+                summary.source_confidence,
+                {"codex": _build_codex_confidence(summary.events)},
+            )
             merged_per_repo[repo_id] = summary
+    unmatched.source_confidence = _merge_confidence(
+        unmatched.source_confidence,
+        {"codex": _build_codex_confidence(unmatched.events)},
+    )
     return merged_per_repo, unmatched, status

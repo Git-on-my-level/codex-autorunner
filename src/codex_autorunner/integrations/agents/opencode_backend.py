@@ -36,6 +36,7 @@ from ...core.ports.run_event import (
     ToolCall,
 )
 from ...core.text_delta_coalescer import StreamingTextCoalescer
+from ...core.usage import persist_opencode_usage_snapshot
 
 _logger = logging.getLogger(__name__)
 
@@ -144,6 +145,7 @@ class OpenCodeBackend(AgentBackend):
     ) -> AsyncGenerator[RunEvent, None]:
         client = await self._ensure_client()
         workspace_root = self._workspace_root or Path(".")
+        self._last_token_total = None
 
         if session_id:
             self._session_id = session_id
@@ -186,6 +188,7 @@ class OpenCodeBackend(AgentBackend):
         event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
         self._event_formatter.reset()
         assistant_stream_coalescer = StreamingTextCoalescer()
+        latest_usage_snapshot: Optional[dict[str, Any]] = None
 
         async def _enqueue_lines(lines: list[str]) -> None:
             for line in lines:
@@ -198,9 +201,9 @@ class OpenCodeBackend(AgentBackend):
         async def _part_handler(
             part_type: str, part: dict[str, Any], delta_text: Optional[str]
         ) -> None:
+            nonlocal latest_usage_snapshot
             if part_type == "usage" and isinstance(part, dict):
-                self._last_token_total = _usage_to_token_total(part)
-                await event_queue.put(TokenUsage(timestamp=now_iso(), usage=dict(part)))
+                latest_usage_snapshot = dict(part)
                 await _enqueue_lines(self._event_formatter.format_usage(part))
             else:
                 await _enqueue_lines(
@@ -315,12 +318,28 @@ class OpenCodeBackend(AgentBackend):
             fallback = parse_message_response(prompt_response)
             if fallback.text:
                 output_result = OpenCodeTurnOutput(
-                    text=fallback.text, error=output_result.error
+                    text=fallback.text,
+                    error=output_result.error,
+                    usage=output_result.usage,
                 )
             if fallback.error and not output_result.error:
                 output_result = OpenCodeTurnOutput(
-                    text=output_result.text, error=fallback.error
+                    text=output_result.text,
+                    error=fallback.error,
+                    usage=output_result.usage,
                 )
+
+        canonical_usage = output_result.usage or latest_usage_snapshot
+        if isinstance(canonical_usage, dict):
+            persist_opencode_usage_snapshot(
+                workspace_root,
+                session_id=self._session_id,
+                turn_id=self._last_turn_id,
+                usage=canonical_usage,
+                source="live_stream",
+            )
+            self._last_token_total = _usage_to_token_total(canonical_usage)
+            yield TokenUsage(timestamp=now_iso(), usage=dict(canonical_usage))
 
         if output_result.text:
             yield Completed(timestamp=now_iso(), final_message=output_result.text)

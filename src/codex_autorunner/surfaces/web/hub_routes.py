@@ -49,6 +49,7 @@ def register_simple_hub_routes(app: FastAPI, context: "HubAppContext") -> None:
                     "events": summary.events,
                     "totals": summary.totals.to_dict(),
                     "latest_rate_limits": summary.latest_rate_limits,
+                    "source_confidence": summary.source_confidence,
                 }
                 for repo_id, summary in per_repo.items()
             ],

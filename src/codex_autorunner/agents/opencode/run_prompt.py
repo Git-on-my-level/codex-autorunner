@@ -5,8 +5,9 @@ import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
+from ...core.usage import persist_opencode_usage_snapshot
 from .runtime import (
     PERMISSION_ALLOW,
     OpenCodeTurnOutput,
@@ -26,6 +27,7 @@ class OpenCodeRunResult:
     turn_id: str
     output_text: str
     output_error: Optional[str]
+    usage: Optional[dict[str, Any]]
     stopped: bool
     timed_out: bool
 
@@ -232,6 +234,7 @@ async def run_opencode_prompt(
 
     output_text = output_result.text if output_result else ""
     output_error = output_result.error if output_result else None
+    output_usage = output_result.usage if output_result else None
     if prompt_task.done() and not output_text:
         try:
             prompt_response = prompt_task.result()
@@ -244,11 +247,21 @@ async def run_opencode_prompt(
             if fallback.error and not output_error:
                 output_error = fallback.error
 
+    if output_usage:
+        persist_opencode_usage_snapshot(
+            Path(config.workspace_root),
+            session_id=session_id,
+            turn_id=turn_id,
+            usage=output_usage,
+            source="live_stream",
+        )
+
     return OpenCodeRunResult(
         session_id=session_id,
         turn_id=turn_id,
         output_text=output_text,
         output_error=output_error,
+        usage=output_usage,
         stopped=stopped,
         timed_out=timed_out,
     )

@@ -355,6 +355,36 @@ async def test_collect_output_emits_usage_when_detail_breakdown_changes() -> Non
 
 
 @pytest.mark.anyio
+async def test_collect_output_returns_latest_usage_snapshot_without_handler() -> None:
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"part":{"type":"step-finish",'
+                '"tokens":{"input":10,"output":5}}}}'
+            ),
+        ),
+        SSEEvent(
+            event="message.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"info":{"tokens":'
+                '{"input":10,"output":5,"cache":{"read":2}}}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == ""
+    assert output.error is None
+    assert output.usage is not None
+    assert output.usage["totalTokens"] == 17
+    assert output.usage["cachedInputTokens"] == 2
+
+
+@pytest.mark.anyio
 async def test_collect_output_prefers_aggregate_usage_over_part_tokens() -> None:
     seen: list[dict[str, int]] = []
 
