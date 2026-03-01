@@ -37,6 +37,7 @@ from ...core.flows.ux_helpers import (
     seed_issue_from_text,
     ticket_progress,
 )
+from ...core.flows.worker_process import check_worker_health, clear_worker_metadata
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
@@ -2060,6 +2061,22 @@ class DiscordBotService:
                     options=options,
                 )
                 return
+            if command_path == ("car", "flow", "start"):
+                await self._handle_flow_start(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options=options,
+                )
+                return
+            if command_path == ("car", "flow", "restart"):
+                await self._handle_flow_restart(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options=options,
+                )
+                return
             if command_path == ("car", "flow", "resume"):
                 await self._handle_flow_resume(
                     interaction_id,
@@ -2812,6 +2829,8 @@ class DiscordBotService:
             "/car flow runs [limit] - List flow runs",
             "/car flow issue <issue#|url> - Seed ISSUE.md from GitHub",
             "/car flow plan <text> - Seed ISSUE.md from plan text",
+            "/car flow start [force_new] - Start flow (or reuse active/paused)",
+            "/car flow restart [run_id] - Restart flow with a fresh run",
             "/car flow resume [run_id] - Resume a paused flow",
             "/car flow stop [run_id] - Stop a flow",
             "/car flow archive [run_id] - Archive a flow",
@@ -4142,6 +4161,198 @@ class DiscordBotService:
             "Seeded ISSUE.md from your plan.",
         )
 
+    async def _handle_flow_start(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        force_new = bool(options.get("force_new"))
+        restart_from = options.get("restart_from")
+
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.flow.store_open_failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            try:
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.query_failed",
+                    exc=exc,
+                    workspace_root=str(workspace_root),
+                )
+                raise DiscordTransientError(
+                    f"Failed to query flow runs: {exc}",
+                    user_message="Unable to query flow database. Please try again later.",
+                ) from None
+        finally:
+            store.close()
+
+        if not force_new:
+            active_or_paused = next(
+                (
+                    record
+                    for record in runs
+                    if record.status in {FlowRunStatus.RUNNING, FlowRunStatus.PAUSED}
+                ),
+                None,
+            )
+            if active_or_paused is not None:
+                ensure_result = ensure_worker(
+                    workspace_root,
+                    active_or_paused.id,
+                    is_terminal=active_or_paused.status.is_terminal(),
+                )
+                self._close_worker_handles(ensure_result)
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    f"Reusing ticket_flow run {active_or_paused.id} ({active_or_paused.status.value}).",
+                )
+                return
+
+        metadata: dict[str, Any] = {"origin": "discord", "force_new": force_new}
+        if isinstance(restart_from, str) and restart_from.strip():
+            metadata["restart_from"] = restart_from.strip()
+
+        controller = build_ticket_flow_controller(workspace_root)
+        try:
+            started = await controller.start_flow(input_data={}, metadata=metadata)
+        except ValueError as exc:
+            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            return
+
+        ensure_result = ensure_worker(
+            workspace_root, started.id, is_terminal=started.status.is_terminal()
+        )
+        self._close_worker_handles(ensure_result)
+        prefix = "Started new" if force_new else "Started"
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"{prefix} ticket_flow run {started.id}.",
+        )
+
+    async def _handle_flow_restart(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        run_id_opt = options.get("run_id")
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.flow.store_open_failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            target: Optional[FlowRunRecord] = None
+            if isinstance(run_id_opt, str) and run_id_opt.strip():
+                try:
+                    target = self._resolve_flow_run_by_id(
+                        store, run_id=run_id_opt.strip()
+                    )
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        run_id=run_id_opt.strip(),
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow run: {exc}",
+                        user_message="Unable to query flow database. Please try again later.",
+                    ) from None
+            else:
+                try:
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                except (sqlite3.Error, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.query_failed",
+                        exc=exc,
+                        workspace_root=str(workspace_root),
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to query flow runs: {exc}",
+                        user_message="Unable to query flow database. Please try again later.",
+                    ) from None
+                target = next(
+                    (record for record in runs if record.status.is_active()), None
+                )
+        finally:
+            store.close()
+
+        if isinstance(run_id_opt, str) and run_id_opt.strip() and target is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"No ticket_flow run found for run_id {run_id_opt.strip()}.",
+            )
+            return
+
+        if target is not None and target.status.is_active():
+            self._stop_flow_worker(workspace_root, target.id)
+            controller = build_ticket_flow_controller(workspace_root)
+            try:
+                await controller.stop_flow(target.id)
+            except ValueError as exc:
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, str(exc)
+                )
+                return
+            latest = await self._wait_for_flow_terminal(workspace_root, target.id)
+            if latest is None or not latest.status.is_terminal():
+                status_value = latest.status.value if latest is not None else "unknown"
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    (
+                        f"Run {target.id} is still active ({status_value}); "
+                        "restart aborted to avoid concurrent workers. Try again after it stops."
+                    ),
+                )
+                return
+
+        await self._handle_flow_start(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options={
+                "force_new": True,
+                "restart_from": target.id if target is not None else None,
+            },
+        )
+
     async def _handle_flow_recover(
         self,
         interaction_id: str,
@@ -4236,6 +4447,57 @@ class DiscordBotService:
             close = getattr(handle, "close", None)
             if callable(close):
                 close()
+
+    @staticmethod
+    def _stop_flow_worker(workspace_root: Path, run_id: str) -> None:
+        health = check_worker_health(workspace_root, run_id)
+        if health.is_alive and health.pid:
+            try:
+                subprocess.run(["kill", str(health.pid)], check=False)
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Failed to stop worker %s: %s", run_id, exc
+                )
+        if health.status in {"dead", "mismatch", "invalid"}:
+            clear_worker_metadata(health.artifact_path.parent)
+
+    async def _wait_for_flow_terminal(
+        self,
+        workspace_root: Path,
+        run_id: str,
+        *,
+        timeout_seconds: float = 10.0,
+        poll_interval_seconds: float = 0.25,
+    ) -> Optional[FlowRunRecord]:
+        deadline = time.monotonic() + max(timeout_seconds, poll_interval_seconds)
+        latest: Optional[FlowRunRecord] = None
+
+        while time.monotonic() < deadline:
+            try:
+                store = self._open_flow_store(workspace_root)
+            except (sqlite3.Error, OSError, RuntimeError):
+                break
+            try:
+                record = self._resolve_flow_run_by_id(store, run_id=run_id)
+                if record is None:
+                    return None
+                latest = record
+                if record.status.is_terminal():
+                    return record
+                record, _updated, locked = reconcile_flow_run(
+                    workspace_root, record, store
+                )
+                latest = record
+                if record.status.is_terminal():
+                    return record
+                if locked:
+                    # Another reconciler holds the lock; keep polling.
+                    pass
+            finally:
+                store.close()
+            await asyncio.sleep(poll_interval_seconds)
+
+        return latest
 
     async def _handle_flow_resume(
         self,
@@ -5496,6 +5758,13 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']}).",
+            )
+        elif action == "restart":
+            await self._handle_flow_restart(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                options={"run_id": run_id},
             )
         elif action == "refresh":
             await self._handle_flow_status(

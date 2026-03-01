@@ -7,6 +7,7 @@ SUB_COMMAND = 1
 SUB_COMMAND_GROUP = 2
 STRING = 3
 INTEGER = 4
+BOOLEAN = 5
 
 
 def build_application_commands() -> list[dict[str, Any]]:
@@ -343,6 +344,32 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "text",
                                     "description": "Plan text",
                                     "required": True,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "start",
+                            "description": "Start a flow (reuses active/paused run)",
+                            "options": [
+                                {
+                                    "type": BOOLEAN,
+                                    "name": "force_new",
+                                    "description": "Start a new run even if one is active/paused",
+                                    "required": False,
+                                }
+                            ],
+                        },
+                        {
+                            "type": SUB_COMMAND,
+                            "name": "restart",
+                            "description": "Restart a flow from a fresh run",
+                            "options": [
+                                {
+                                    "type": STRING,
+                                    "name": "run_id",
+                                    "description": "Flow run id (optional)",
+                                    "required": False,
                                 }
                             ],
                         },
