@@ -1,18 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import sqlite3
 from collections.abc import Callable, Iterable
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Optional
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Body, FastAPI, HTTPException
 from starlette.routing import Mount
 from starlette.types import ASGIApp
 
-from ....core.chat_bindings import active_chat_binding_counts
+from ....core.chat_bindings import (
+    DISCORD_STATE_FILE_DEFAULT,
+    TELEGRAM_STATE_FILE_DEFAULT,
+    active_chat_binding_counts,
+)
 from ....core.config import ConfigError
 from ....core.destinations import resolve_effective_repo_destination
+from ....core.flows import FlowEventType, FlowStore
+from ....core.git_utils import git_is_clean
 from ....core.logging_utils import safe_log
 from ....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
@@ -24,10 +35,19 @@ from ....core.ticket_flow_summary import (
     build_ticket_flow_display,
     build_ticket_flow_summary,
 )
+from ....integrations.app_server.threads import (
+    FILE_CHAT_OPENCODE_PREFIX,
+    FILE_CHAT_PREFIX,
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from ....integrations.chat.channel_directory import (
     ChannelDirectoryStore,
     channel_entry_key,
 )
+from ....integrations.telegram.state import topic_key
 from ....manifest import load_manifest, normalize_manifest_destination, save_manifest
 from ..app_state import HubAppContext
 from ..schemas import (
@@ -366,6 +386,665 @@ def build_hub_repo_routes(
             "issues": list(resolution.issues),
         }
 
+    def _normalize_agent(value: Any) -> str:
+        if isinstance(value, str) and value.strip().lower() == "opencode":
+            return "opencode"
+        return "codex"
+
+    def _normalize_scope(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _coerce_int(value: Any) -> int:
+        if isinstance(value, bool):
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _coerce_usage_int(value: Any) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _state_db_path(section: str, default_path: str) -> Path:
+        raw = context.config.raw if isinstance(context.config.raw, dict) else {}
+        section_cfg = raw.get(section)
+        state_file = default_path
+        if isinstance(section_cfg, dict):
+            candidate = section_cfg.get("state_file")
+            if isinstance(candidate, str) and candidate.strip():
+                state_file = candidate.strip()
+        path = Path(state_file)
+        if not path.is_absolute():
+            path = (context.config.root / path).resolve()
+        return path
+
+    def _telegram_require_topics_enabled() -> bool:
+        raw = context.config.raw if isinstance(context.config.raw, dict) else {}
+        telegram_cfg = raw.get("telegram_bot")
+        if not isinstance(telegram_cfg, dict):
+            return False
+        return bool(telegram_cfg.get("require_topics", False))
+
+    def _workspace_path_candidates(value: Any) -> list[str]:
+        if not isinstance(value, str):
+            return []
+        raw = value.strip()
+        if not raw:
+            return []
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for token in (raw, unquote(raw)):
+            normalized = token.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append(normalized)
+            if "@" in normalized:
+                suffix = normalized.rsplit("@", 1)[1].strip()
+                if suffix and suffix not in seen:
+                    seen.add(suffix)
+                    candidates.append(suffix)
+        return candidates
+
+    def _canonical_workspace_path(value: Any) -> Optional[str]:
+        for candidate in _workspace_path_candidates(value):
+            path = Path(candidate).expanduser()
+            if not path.is_absolute():
+                continue
+            try:
+                return str(path.resolve())
+            except Exception:
+                return str(path)
+        return None
+
+    def _repo_id_by_workspace_path(snapshots: Iterable[Any]) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for snapshot in snapshots:
+            repo_id = getattr(snapshot, "id", None)
+            path = getattr(snapshot, "path", None)
+            if not isinstance(repo_id, str) or not isinstance(path, Path):
+                continue
+            mapping[str(path)] = repo_id
+            try:
+                mapping[str(path.resolve())] = repo_id
+            except Exception:
+                pass
+        return mapping
+
+    def _resolve_repo_id(
+        raw_repo_id: Any,
+        workspace_path: Any,
+        repo_id_by_workspace: dict[str, str],
+    ) -> Optional[str]:
+        if isinstance(raw_repo_id, str) and raw_repo_id.strip():
+            return raw_repo_id.strip()
+        for candidate in _workspace_path_candidates(workspace_path):
+            resolved = _canonical_workspace_path(candidate)
+            if resolved and resolved in repo_id_by_workspace:
+                return repo_id_by_workspace[resolved]
+            if candidate in repo_id_by_workspace:
+                return repo_id_by_workspace[candidate]
+        return None
+
+    def _open_sqlite_read_only(path: Path) -> sqlite3.Connection:
+        uri = f"{path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        except sqlite3.Error:
+            return set()
+        names: set[str] = set()
+        for row in rows:
+            name = row["name"] if isinstance(row, sqlite3.Row) else None
+            if isinstance(name, str) and name:
+                names.add(name)
+        return names
+
+    def _parse_topic_identity(
+        chat_raw: Any, thread_raw: Any, topic_raw: Any
+    ) -> tuple[Optional[int], Optional[int], Optional[str]]:
+        chat_id: Optional[int]
+        thread_id: Optional[int]
+
+        if isinstance(chat_raw, int) and not isinstance(chat_raw, bool):
+            chat_id = chat_raw
+        else:
+            chat_id = None
+        if thread_raw is None:
+            thread_id = None
+        elif isinstance(thread_raw, int) and not isinstance(thread_raw, bool):
+            thread_id = thread_raw
+        else:
+            thread_id = None
+        if chat_id is not None and (thread_raw is None or thread_id is not None):
+            return chat_id, thread_id, None
+
+        if not isinstance(topic_raw, str):
+            return None, None, None
+        parts = topic_raw.split(":", 2)
+        if len(parts) < 2:
+            return None, None, None
+        try:
+            parsed_chat_id = int(parts[0])
+        except ValueError:
+            return None, None, None
+        thread_token = parts[1]
+        parsed_thread_id: Optional[int]
+        if thread_token == "root":
+            parsed_thread_id = None
+        else:
+            try:
+                parsed_thread_id = int(thread_token)
+            except ValueError:
+                parsed_thread_id = None
+        parsed_scope = _normalize_scope(parts[2]) if len(parts) == 3 else None
+        return parsed_chat_id, parsed_thread_id, parsed_scope
+
+    def _read_discord_bindings(
+        db_path: Path, repo_id_by_workspace: dict[str, str]
+    ) -> dict[str, dict[str, Any]]:
+        if not db_path.exists():
+            return {}
+        bindings: dict[str, dict[str, Any]] = {}
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = _open_sqlite_read_only(db_path)
+            columns = _table_columns(conn, "channel_bindings")
+            if not columns:
+                return {}
+            select_cols = ["channel_id"]
+            for col in (
+                "guild_id",
+                "workspace_path",
+                "repo_id",
+                "pma_enabled",
+                "agent",
+                "updated_at",
+            ):
+                if col in columns:
+                    select_cols.append(col)
+            query = f"SELECT {', '.join(select_cols)} FROM channel_bindings"
+            if "updated_at" in columns:
+                query += " ORDER BY updated_at DESC"
+            for row in conn.execute(query).fetchall():
+                channel_id = row["channel_id"]
+                if not isinstance(channel_id, str) or not channel_id.strip():
+                    continue
+                workspace_path_raw = (
+                    row["workspace_path"] if "workspace_path" in columns else None
+                )
+                workspace_path = _canonical_workspace_path(workspace_path_raw)
+                repo_id = _resolve_repo_id(
+                    row["repo_id"] if "repo_id" in columns else None,
+                    workspace_path_raw,
+                    repo_id_by_workspace,
+                )
+                binding = {
+                    "platform": "discord",
+                    "chat_id": channel_id.strip(),
+                    "workspace_path": workspace_path,
+                    "repo_id": repo_id,
+                    "pma_enabled": (
+                        bool(row["pma_enabled"]) if "pma_enabled" in columns else False
+                    ),
+                    "agent": _normalize_agent(
+                        row["agent"] if "agent" in columns else None
+                    ),
+                    "active_thread_id": None,
+                }
+                primary_key = f"discord:{binding['chat_id']}"
+                bindings.setdefault(primary_key, binding)
+                guild_id = row["guild_id"] if "guild_id" in columns else None
+                if isinstance(guild_id, str) and guild_id.strip():
+                    bindings.setdefault(
+                        f"discord:{binding['chat_id']}:{guild_id.strip()}",
+                        binding,
+                    )
+        except Exception as exc:
+            safe_log(
+                context.logger,
+                logging.WARNING,
+                f"Hub channel enrichment failed reading discord bindings from {db_path}",
+                exc=exc,
+            )
+            return {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return bindings
+
+    def _read_telegram_scope_map(
+        conn: sqlite3.Connection,
+    ) -> Optional[dict[tuple[int, Optional[int]], Optional[str]]]:
+        try:
+            rows = conn.execute(
+                "SELECT chat_id, thread_id, scope FROM telegram_topic_scopes"
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return None
+            raise
+
+        scope_map: dict[tuple[int, Optional[int]], Optional[str]] = {}
+        for row in rows:
+            chat_id = row["chat_id"]
+            thread_id = row["thread_id"]
+            if not isinstance(chat_id, int) or isinstance(chat_id, bool):
+                continue
+            if thread_id is not None and (
+                not isinstance(thread_id, int) or isinstance(thread_id, bool)
+            ):
+                continue
+            scope_map[(chat_id, thread_id)] = _normalize_scope(row["scope"])
+        return scope_map
+
+    def _read_telegram_bindings(
+        db_path: Path, repo_id_by_workspace: dict[str, str]
+    ) -> dict[str, dict[str, Any]]:
+        if not db_path.exists():
+            return {}
+        bindings: dict[str, dict[str, Any]] = {}
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = _open_sqlite_read_only(db_path)
+            columns = _table_columns(conn, "telegram_topics")
+            if not columns:
+                return {}
+            select_cols = ["topic_key"]
+            for col in (
+                "chat_id",
+                "thread_id",
+                "scope",
+                "workspace_path",
+                "repo_id",
+                "active_thread_id",
+                "payload_json",
+                "updated_at",
+            ):
+                if col in columns:
+                    select_cols.append(col)
+            scope_map = _read_telegram_scope_map(conn)
+            query = f"SELECT {', '.join(select_cols)} FROM telegram_topics"
+            if "updated_at" in columns:
+                query += " ORDER BY updated_at DESC"
+            for row in conn.execute(query).fetchall():
+                parsed_chat_id, parsed_thread_id, parsed_scope = _parse_topic_identity(
+                    row["chat_id"] if "chat_id" in columns else None,
+                    row["thread_id"] if "thread_id" in columns else None,
+                    row["topic_key"],
+                )
+                if parsed_chat_id is None:
+                    continue
+                row_scope = (
+                    _normalize_scope(row["scope"])
+                    if "scope" in columns
+                    else parsed_scope
+                )
+                if scope_map is not None:
+                    current_scope = scope_map.get((parsed_chat_id, parsed_thread_id))
+                    if current_scope is None and row_scope is not None:
+                        continue
+                    if current_scope is not None and row_scope != current_scope:
+                        continue
+                payload_json = (
+                    row["payload_json"] if "payload_json" in columns else None
+                )
+                payload: dict[str, Any] = {}
+                if isinstance(payload_json, str) and payload_json.strip():
+                    try:
+                        candidate = json.loads(payload_json)
+                    except json.JSONDecodeError:
+                        candidate = {}
+                    if isinstance(candidate, dict):
+                        payload = candidate
+                workspace_path_raw = (
+                    row["workspace_path"]
+                    if "workspace_path" in columns
+                    else payload.get("workspace_path")
+                )
+                workspace_path = _canonical_workspace_path(workspace_path_raw)
+                repo_id = _resolve_repo_id(
+                    row["repo_id"] if "repo_id" in columns else payload.get("repo_id"),
+                    workspace_path_raw,
+                    repo_id_by_workspace,
+                )
+                active_thread_id = (
+                    row["active_thread_id"]
+                    if "active_thread_id" in columns
+                    else payload.get("active_thread_id")
+                )
+                if (
+                    not isinstance(active_thread_id, str)
+                    or not active_thread_id.strip()
+                ):
+                    active_thread_id = None
+                pma_enabled_raw = payload.get("pma_enabled")
+                if not isinstance(pma_enabled_raw, bool):
+                    pma_enabled_raw = payload.get("pmaEnabled")
+                pma_enabled = (
+                    bool(pma_enabled_raw)
+                    if isinstance(pma_enabled_raw, bool)
+                    else False
+                )
+                agent = _normalize_agent(payload.get("agent"))
+                key = (
+                    f"telegram:{parsed_chat_id}"
+                    if parsed_thread_id is None
+                    else f"telegram:{parsed_chat_id}:{parsed_thread_id}"
+                )
+                bindings.setdefault(
+                    key,
+                    {
+                        "platform": "telegram",
+                        "chat_id": str(parsed_chat_id),
+                        "thread_id": (
+                            str(parsed_thread_id)
+                            if isinstance(parsed_thread_id, int)
+                            else None
+                        ),
+                        "workspace_path": workspace_path,
+                        "repo_id": repo_id,
+                        "pma_enabled": pma_enabled,
+                        "agent": agent,
+                        "active_thread_id": active_thread_id,
+                    },
+                )
+        except Exception as exc:
+            safe_log(
+                context.logger,
+                logging.WARNING,
+                f"Hub channel enrichment failed reading telegram bindings from {db_path}",
+                exc=exc,
+            )
+            return {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return bindings
+
+    def _timestamp_rank(value: Any) -> float:
+        if isinstance(value, bool):
+            return float("-inf")
+        if isinstance(value, (int, float)):
+            return float(value)
+        if not isinstance(value, str):
+            return float("-inf")
+        text = value.strip()
+        if not text:
+            return float("-inf")
+        if text.isdigit():
+            try:
+                return float(int(text))
+            except ValueError:
+                return float("-inf")
+        normalized = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        try:
+            return datetime.fromisoformat(normalized).timestamp()
+        except ValueError:
+            return float("-inf")
+
+    def _read_usage_by_session(workspace_path: str) -> dict[str, dict[str, Any]]:
+        canonical = _canonical_workspace_path(workspace_path)
+        if canonical is None:
+            return {}
+        usage_path = (
+            Path(canonical)
+            / ".codex-autorunner"
+            / "usage"
+            / "opencode_turn_usage.jsonl"
+        )
+        if not usage_path.exists():
+            return {}
+        by_session: dict[str, dict[str, Any]] = {}
+        try:
+            with usage_path.open("r", encoding="utf-8") as handle:
+                for index, line in enumerate(handle):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        payload = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    session_id = payload.get("session_id")
+                    if not isinstance(session_id, str) or not session_id.strip():
+                        continue
+                    usage_payload = payload.get("usage")
+                    if not isinstance(usage_payload, dict):
+                        continue
+                    input_tokens = _coerce_usage_int(usage_payload.get("input_tokens"))
+                    cached_input_tokens = _coerce_usage_int(
+                        usage_payload.get("cached_input_tokens")
+                    )
+                    output_tokens = _coerce_usage_int(
+                        usage_payload.get("output_tokens")
+                    )
+                    reasoning_output_tokens = _coerce_usage_int(
+                        usage_payload.get("reasoning_output_tokens")
+                    )
+                    total_tokens = _coerce_usage_int(usage_payload.get("total_tokens"))
+                    if total_tokens is None:
+                        total_tokens = sum(
+                            value or 0
+                            for value in (
+                                input_tokens,
+                                cached_input_tokens,
+                                output_tokens,
+                                reasoning_output_tokens,
+                            )
+                        )
+                    timestamp = payload.get("timestamp")
+                    if not isinstance(timestamp, str) or not timestamp.strip():
+                        timestamp = None
+                    turn_id = payload.get("turn_id")
+                    if not isinstance(turn_id, str) or not turn_id.strip():
+                        turn_id = None
+                    rank = _timestamp_rank(timestamp)
+                    current = by_session.get(session_id)
+                    current_rank = (
+                        _timestamp_rank(current.get("timestamp"))
+                        if isinstance(current, dict)
+                        else float("-inf")
+                    )
+                    current_index = (
+                        int(current.get("__index", -1))
+                        if isinstance(current, dict)
+                        else -1
+                    )
+                    if rank < current_rank or (
+                        rank == current_rank and index <= current_index
+                    ):
+                        continue
+                    by_session[session_id] = {
+                        "total_tokens": total_tokens if total_tokens is not None else 0,
+                        "input_tokens": input_tokens if input_tokens is not None else 0,
+                        "cached_input_tokens": (
+                            cached_input_tokens
+                            if cached_input_tokens is not None
+                            else 0
+                        ),
+                        "output_tokens": (
+                            output_tokens if output_tokens is not None else 0
+                        ),
+                        "reasoning_output_tokens": (
+                            reasoning_output_tokens
+                            if reasoning_output_tokens is not None
+                            else 0
+                        ),
+                        "turn_id": turn_id,
+                        "timestamp": timestamp,
+                        "__index": index,
+                    }
+        except Exception:
+            return {}
+
+        for payload in by_session.values():
+            payload.pop("__index", None)
+        return by_session
+
+    def _build_registry_key(
+        entry: dict[str, Any],
+        binding: dict[str, Any],
+        *,
+        telegram_require_topics: bool,
+    ) -> Optional[str]:
+        platform = str(binding.get("platform") or "").strip().lower()
+        agent = _normalize_agent(binding.get("agent"))
+        pma_enabled = bool(binding.get("pma_enabled"))
+        if pma_enabled:
+            base_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+            if platform != "telegram" or not telegram_require_topics:
+                return base_key
+            chat_id_raw = entry.get("chat_id")
+            if chat_id_raw is None:
+                chat_id_raw = binding.get("chat_id")
+            thread_id_raw = entry.get("thread_id")
+            if thread_id_raw is None:
+                thread_id_raw = binding.get("thread_id")
+            try:
+                chat_id = int(str(chat_id_raw))
+            except (TypeError, ValueError):
+                return base_key
+            thread_id: Optional[int]
+            if thread_id_raw in (None, "", "root"):
+                thread_id = None
+            else:
+                try:
+                    thread_id = int(str(thread_id_raw))
+                except (TypeError, ValueError):
+                    thread_id = None
+            return f"{base_key}.{topic_key(chat_id, thread_id)}"
+
+        if platform != "discord":
+            return None
+        channel_id = binding.get("chat_id") or entry.get("chat_id")
+        workspace_path = binding.get("workspace_path")
+        if not isinstance(channel_id, str) or not channel_id.strip():
+            return None
+        if not isinstance(workspace_path, str) or not workspace_path.strip():
+            return None
+        digest = hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:12]
+        prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
+        return f"{prefix}discord.{channel_id.strip()}.{digest}"
+
+    def _registry_thread_id(
+        workspace_path: Any,
+        registry_key: str,
+        thread_map_cache: dict[str, dict[str, str]],
+    ) -> Optional[str]:
+        if not isinstance(registry_key, str) or not registry_key.strip():
+            return None
+        canonical_workspace = _canonical_workspace_path(workspace_path)
+        if canonical_workspace is None:
+            return None
+        thread_map = thread_map_cache.get(canonical_workspace)
+        if thread_map is None:
+            thread_map = {}
+            try:
+                registry = AppServerThreadRegistry(
+                    default_app_server_threads_path(Path(canonical_workspace))
+                )
+                loaded = registry.load()
+                if isinstance(loaded, dict):
+                    for key, value in loaded.items():
+                        if isinstance(key, str) and isinstance(value, str) and value:
+                            thread_map[key] = value
+            except Exception:
+                thread_map = {}
+            thread_map_cache[canonical_workspace] = thread_map
+        try:
+            resolved = thread_map.get(registry_key)
+            if isinstance(resolved, str) and resolved:
+                return resolved
+        except Exception:
+            return None
+        return None
+
+    def _is_working(run_state: Optional[dict[str, Any]]) -> bool:
+        if not isinstance(run_state, dict):
+            return False
+        state = run_state.get("state")
+        flow_status = run_state.get("flow_status")
+        if isinstance(state, str) and state.strip().lower() == "running":
+            return True
+        if isinstance(flow_status, str) and flow_status.strip().lower() in {
+            "running",
+            "pending",
+            "stopping",
+        }:
+            return True
+        return False
+
+    def _load_workspace_run_data(
+        workspace_path: str,
+        repo_id: Optional[str],
+        cache: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        canonical = _canonical_workspace_path(workspace_path)
+        if canonical is None:
+            return {}
+        cached = cache.get(canonical)
+        if cached is not None:
+            return cached
+
+        payload: dict[str, Any] = {"run_state": None, "diff_stats": None, "dirty": None}
+        workspace_root = Path(canonical)
+        run_record = None
+        try:
+            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
+                workspace_root,
+                repo_id or workspace_root.name,
+            )
+            payload["run_state"] = run_state
+        except Exception:
+            run_record = None
+        if run_record is not None:
+            db_path = workspace_root / ".codex-autorunner" / "flows.db"
+            if db_path.exists():
+                try:
+                    with FlowStore(db_path) as store:
+                        events = store.get_events_by_type(
+                            run_record.id, FlowEventType.DIFF_UPDATED
+                        )
+                    totals = {"insertions": 0, "deletions": 0, "files_changed": 0}
+                    for event in events:
+                        data = event.data or {}
+                        totals["insertions"] += _coerce_int(data.get("insertions"))
+                        totals["deletions"] += _coerce_int(data.get("deletions"))
+                        totals["files_changed"] += _coerce_int(
+                            data.get("files_changed")
+                        )
+                    payload["diff_stats"] = totals
+                except Exception:
+                    payload["diff_stats"] = None
+        try:
+            if (workspace_root / ".git").exists():
+                payload["dirty"] = not git_is_clean(workspace_root)
+        except Exception:
+            payload["dirty"] = None
+        cache[canonical] = payload
+        return payload
+
     @router.get("/hub/repos")
     async def list_repos():
         safe_log(context.logger, logging.INFO, "Hub list_repos")
@@ -617,20 +1296,153 @@ def build_hub_repo_routes(
 
         store = ChannelDirectoryStore(context.config.root)
         entries = await asyncio.to_thread(store.list_entries, query=query, limit=limit)
+        snapshots: list[Any] = []
+        try:
+            snapshots = await asyncio.to_thread(context.supervisor.list_repos)
+        except Exception as exc:
+            safe_log(
+                context.logger,
+                logging.WARNING,
+                "Hub channel enrichment failed listing repo snapshots",
+                exc=exc,
+            )
+        repo_id_by_workspace = _repo_id_by_workspace_path(snapshots)
+        discord_state_path = _state_db_path("discord_bot", DISCORD_STATE_FILE_DEFAULT)
+        telegram_state_path = _state_db_path(
+            "telegram_bot", TELEGRAM_STATE_FILE_DEFAULT
+        )
+        telegram_require_topics = _telegram_require_topics_enabled()
+        discord_bindings_task = asyncio.to_thread(
+            _read_discord_bindings, discord_state_path, repo_id_by_workspace
+        )
+        telegram_bindings_task = asyncio.to_thread(
+            _read_telegram_bindings, telegram_state_path, repo_id_by_workspace
+        )
+        discord_bindings, telegram_bindings = await asyncio.gather(
+            discord_bindings_task,
+            telegram_bindings_task,
+            return_exceptions=False,
+        )
+        run_cache: dict[str, dict[str, Any]] = {}
+        usage_cache: dict[str, dict[str, dict[str, Any]]] = {}
+        thread_map_cache: dict[str, dict[str, str]] = {}
+
         rows: list[dict[str, Any]] = []
         for entry in entries:
             key = channel_entry_key(entry)
             if not isinstance(key, str):
                 continue
-            rows.append(
-                {
-                    "key": key,
-                    "display": entry.get("display"),
-                    "seen_at": entry.get("seen_at"),
-                    "meta": entry.get("meta"),
-                    "entry": entry,
-                }
+            row: dict[str, Any] = {
+                "key": key,
+                "display": entry.get("display"),
+                "seen_at": entry.get("seen_at"),
+                "meta": entry.get("meta"),
+                "entry": entry,
+            }
+            platform = str(entry.get("platform") or "").strip().lower()
+            binding_source = (
+                discord_bindings if platform == "discord" else telegram_bindings
             )
+            binding = binding_source.get(key)
+            if isinstance(binding, dict):
+                try:
+                    repo_id = binding.get("repo_id")
+                    if isinstance(repo_id, str) and repo_id:
+                        row["repo_id"] = repo_id
+                    workspace_path = binding.get("workspace_path")
+                    if isinstance(workspace_path, str) and workspace_path:
+                        row["workspace_path"] = workspace_path
+                    pma_enabled = bool(binding.get("pma_enabled"))
+                    active_thread_id: Optional[str] = None
+                    if platform == "telegram" and not pma_enabled:
+                        direct_thread = binding.get("active_thread_id")
+                        if isinstance(direct_thread, str) and direct_thread:
+                            active_thread_id = direct_thread
+                    else:
+                        registry_key = _build_registry_key(
+                            entry,
+                            binding,
+                            telegram_require_topics=telegram_require_topics,
+                        )
+                        if registry_key:
+                            resolved = _registry_thread_id(
+                                workspace_path,
+                                registry_key,
+                                thread_map_cache,
+                            )
+                            if isinstance(resolved, str) and resolved:
+                                active_thread_id = resolved
+                    if isinstance(active_thread_id, str) and active_thread_id:
+                        row["active_thread_id"] = active_thread_id
+
+                    run_data: dict[str, Any] = {}
+                    if isinstance(workspace_path, str) and workspace_path:
+                        run_data = _load_workspace_run_data(
+                            workspace_path,
+                            repo_id if isinstance(repo_id, str) else None,
+                            run_cache,
+                        )
+                    run_state = (
+                        run_data.get("run_state")
+                        if isinstance(run_data, dict)
+                        else None
+                    )
+                    if isinstance(run_data.get("diff_stats"), dict):
+                        row["diff_stats"] = run_data["diff_stats"]
+                    if isinstance(run_data.get("dirty"), bool):
+                        row["dirty"] = run_data["dirty"]
+
+                    if isinstance(active_thread_id, str) and active_thread_id:
+                        if _is_working(
+                            run_state if isinstance(run_state, dict) else None
+                        ):
+                            channel_status = "working"
+                        else:
+                            channel_status = "final"
+                    else:
+                        channel_status = "clean"
+                    row["channel_status"] = channel_status
+                    row["status_label"] = channel_status
+
+                    if (
+                        isinstance(workspace_path, str)
+                        and workspace_path
+                        and isinstance(active_thread_id, str)
+                        and active_thread_id
+                    ):
+                        usage_by_session = usage_cache.get(workspace_path)
+                        if usage_by_session is None:
+                            usage_by_session = _read_usage_by_session(workspace_path)
+                            usage_cache[workspace_path] = usage_by_session
+                        usage_payload = usage_by_session.get(active_thread_id)
+                        if isinstance(usage_payload, dict):
+                            row["token_usage"] = {
+                                "total_tokens": _coerce_int(
+                                    usage_payload.get("total_tokens")
+                                ),
+                                "input_tokens": _coerce_int(
+                                    usage_payload.get("input_tokens")
+                                ),
+                                "cached_input_tokens": _coerce_int(
+                                    usage_payload.get("cached_input_tokens")
+                                ),
+                                "output_tokens": _coerce_int(
+                                    usage_payload.get("output_tokens")
+                                ),
+                                "reasoning_output_tokens": _coerce_int(
+                                    usage_payload.get("reasoning_output_tokens")
+                                ),
+                                "turn_id": usage_payload.get("turn_id"),
+                                "timestamp": usage_payload.get("timestamp"),
+                            }
+                except Exception as exc:
+                    safe_log(
+                        context.logger,
+                        logging.WARNING,
+                        f"Hub channel enrichment failed for {key}",
+                        exc=exc,
+                    )
+            rows.append(row)
         return {"entries": rows}
 
     @router.get("/hub/repos/{repo_id}/remove-check")
