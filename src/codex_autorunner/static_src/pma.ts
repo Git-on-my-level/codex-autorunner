@@ -572,34 +572,11 @@ function normalizeDeliveryStatus(value: unknown): PMADeliveryStatus | null {
   ) {
     return normalized;
   }
-  if (normalized === "no_targets" || normalized === "no_content" || normalized === "invalid") {
-    return "skipped";
-  }
   return null;
 }
 
 function summarizeDeliveryStatus(result: Record<string, unknown>): PMADeliveryStatus | null {
-  const topLevel = normalizeDeliveryStatus(result.delivery_status);
-  if (topLevel) return topLevel;
-
-  const statuses: PMADeliveryStatus[] = [];
-  const outcomeFields = ["delivery_outcome", "dispatch_delivery_outcome"];
-  outcomeFields.forEach((fieldName) => {
-    const outcome = result[fieldName];
-    if (!outcome || typeof outcome !== "object") return;
-    const status = normalizeDeliveryStatus((outcome as Record<string, unknown>).status);
-    if (status) statuses.push(status);
-  });
-
-  if (!statuses.length) return null;
-  const distinct = new Set(statuses);
-  const hasSuccess = distinct.has("success");
-  const hasFailed = distinct.has("failed");
-  if (distinct.has("partial_success") || (hasSuccess && hasFailed)) return "partial_success";
-  if (hasFailed) return "failed";
-  if (hasSuccess) return "success";
-  if (distinct.has("duplicate_only")) return "duplicate_only";
-  return "skipped";
+  return normalizeDeliveryStatus(result.delivery_status);
 }
 
 function deriveDeliverySummary(payload: unknown): PMADeliverySummary | null {

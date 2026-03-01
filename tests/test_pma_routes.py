@@ -13,9 +13,7 @@ from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
-from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
-from codex_autorunner.integrations.pma_delivery import PmaDeliveryOutcome
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from tests.conftest import write_test_config
@@ -96,183 +94,29 @@ def _install_fake_successful_chat_supervisor(
     app.state.app_server_supervisor = FakeSupervisor()
 
 
-def _delivery_outcome_for_status(status: str) -> PmaDeliveryOutcome:
-    if status == "success":
-        return PmaDeliveryOutcome(
-            status=status,
-            configured_targets=1,
-            delivered_targets=1,
-            failed_targets=0,
-        )
-    if status == "partial_success":
-        return PmaDeliveryOutcome(
-            status=status,
-            configured_targets=2,
-            delivered_targets=1,
-            failed_targets=1,
-        )
-    if status == "failed":
-        return PmaDeliveryOutcome(
-            status=status,
-            configured_targets=1,
-            delivered_targets=0,
-            failed_targets=1,
-        )
-    if status == "duplicate_only":
-        return PmaDeliveryOutcome(
-            status=status,
-            configured_targets=1,
-            delivered_targets=0,
-            failed_targets=0,
-            skipped_duplicates=1,
-            skipped_duplicate_keys=["web"],
-        )
-    return PmaDeliveryOutcome(
-        status="no_targets",
-        configured_targets=0,
-        delivered_targets=0,
-        failed_targets=0,
-    )
-
-
-def _seed_pma_targets(hub_root: Path) -> None:
-    store = PmaDeliveryTargetsStore(hub_root)
-    store.set_targets(
-        [
-            {"kind": "web"},
-            {"kind": "chat", "platform": "telegram", "chat_id": "100"},
-        ]
-    )
-
-
-def _assert_deprecated_targets_payload(
-    payload: dict[str, Any], *, expected_legacy_count: Optional[int] = None
+@pytest.mark.parametrize(
+    ("method", "endpoint", "body"),
+    [
+        ("GET", "/hub/pma/targets", None),
+        ("GET", "/hub/pma/targets/active", None),
+        ("POST", "/hub/pma/targets/active", {"key": "chat:telegram:100"}),
+        ("POST", "/hub/pma/targets/add", {"ref": "web"}),
+        ("POST", "/hub/pma/targets/remove", {"key": "web"}),
+        ("POST", "/hub/pma/targets/clear", {}),
+    ],
+)
+def test_pma_target_endpoints_are_removed(
+    hub_env, method: str, endpoint: str, body: Optional[dict[str, Any]]
 ) -> None:
-    assert payload.get("status") == "deprecated"
-    assert payload.get("deprecated") is True
-    assert payload.get("active_target_key") is None
-    assert payload.get("active_target") is None
-    assert payload.get("targets") == []
-    assert payload.get("message") == "PMA delivery targets are deprecated and ignored."
-    if expected_legacy_count is not None:
-        assert payload.get("legacy_targets_ignored") == expected_legacy_count
-
-
-def _assert_no_targets_mutation(
-    store: PmaDeliveryTargetsStore, expected: dict[str, Any]
-):
-    assert store.load() == expected
-
-
-def test_pma_targets_endpoints_are_deprecated(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
-    _seed_pma_targets(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
-    store = PmaDeliveryTargetsStore(hub_env.hub_root)
-    expected_state = store.load()
 
-    for endpoint in ["/hub/pma/targets", "/hub/pma/targets/active"]:
+    if method == "GET":
         resp = client.get(endpoint)
-        assert resp.status_code == 200
-        payload = resp.json()
-        _assert_deprecated_targets_payload(
-            payload, expected_legacy_count=len(expected_state["targets"])
-        )
-        _assert_no_targets_mutation(store, expected_state)
-
-
-@pytest.mark.parametrize(
-    ("endpoint", "body", "expected_updates"),
-    [
-        (
-            "/hub/pma/targets/active",
-            {"key": "chat:telegram:100"},
-            {"action": "set_active", "changed": False, "key": "chat:telegram:100"},
-        ),
-        ("/hub/pma/targets/add", {"ref": "web"}, {"action": "add", "key": "web"}),
-        (
-            "/hub/pma/targets/remove",
-            {"key": "web"},
-            {"action": "remove", "removed": False, "key": "web"},
-        ),
-        ("/hub/pma/targets/clear", {}, {"action": "clear"}),
-    ],
-)
-def test_pma_targets_mutation_endpoints_are_deprecated_noop(
-    hub_env, endpoint: str, body: dict[str, Any], expected_updates: dict[str, Any]
-) -> None:
-    _enable_pma(hub_env.hub_root)
-    _seed_pma_targets(hub_env.hub_root)
-    store = PmaDeliveryTargetsStore(hub_env.hub_root)
-    expected_state = store.load()
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-
-    resp = client.post(endpoint, json=body)
-    assert resp.status_code == 200
-    payload = resp.json()
-    _assert_deprecated_targets_payload(
-        payload, expected_legacy_count=len(expected_state["targets"])
-    )
-    for key, value in expected_updates.items():
-        assert payload.get(key) == value
-    _assert_no_targets_mutation(store, expected_state)
-
-
-@pytest.mark.parametrize(
-    ("endpoint", "body", "expected_action"),
-    [
-        ("/hub/pma/targets/active", {"key": "   "}, "set_active"),
-        ("/hub/pma/targets/active", {"ref": "   "}, "set_active"),
-        ("/hub/pma/targets/add", {"ref": "   "}, "add"),
-        ("/hub/pma/targets/remove", {"key": "   "}, "remove"),
-    ],
-)
-def test_pma_targets_mutation_endpoints_ignore_blank_keys(
-    hub_env, endpoint: str, body: dict[str, Any], expected_action: str
-) -> None:
-    _enable_pma(hub_env.hub_root)
-    _seed_pma_targets(hub_env.hub_root)
-    store = PmaDeliveryTargetsStore(hub_env.hub_root)
-    expected_state = store.load()
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-
-    resp = client.post(endpoint, json=body)
-    assert resp.status_code == 200
-    payload = resp.json()
-    _assert_deprecated_targets_payload(
-        payload, expected_legacy_count=len(expected_state["targets"])
-    )
-    assert payload.get("action") == expected_action
-    assert payload.get("key") is None
-    _assert_no_targets_mutation(store, expected_state)
-
-
-@pytest.mark.parametrize(
-    "endpoint",
-    [
-        "/hub/pma/targets/active",
-        "/hub/pma/targets/add",
-        "/hub/pma/targets/remove",
-    ],
-)
-def test_pma_targets_mutation_endpoints_reject_non_object_body(
-    hub_env, endpoint: str
-) -> None:
-    _enable_pma(hub_env.hub_root)
-    _seed_pma_targets(hub_env.hub_root)
-    store = PmaDeliveryTargetsStore(hub_env.hub_root)
-    expected_state = store.load()
-    app = create_hub_app(hub_env.hub_root)
-    client = TestClient(app)
-
-    resp = client.post(endpoint, json=["not", "an", "object"])
-    assert resp.status_code == 400
-    payload = resp.json()
-    assert payload.get("detail") == "Request body must be an object"
-    _assert_no_targets_mutation(store, expected_state)
+    else:
+        resp = client.post(endpoint, json=body)
+    assert resp.status_code == 404
 
 
 def test_pma_agents_endpoint(hub_env) -> None:
@@ -376,178 +220,19 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
     }
 
 
-@pytest.mark.parametrize(
-    ("delivery_outcome_status", "expected_delivery_status"),
-    [
-        ("success", "success"),
-        ("partial_success", "partial_success"),
-        ("failed", "failed"),
-        ("duplicate_only", "duplicate_only"),
-        ("no_targets", "skipped"),
-    ],
-)
-def test_pma_chat_exposes_delivery_status_summary(
-    hub_env,
-    monkeypatch: pytest.MonkeyPatch,
-    delivery_outcome_status: str,
-    expected_delivery_status: str,
-) -> None:
+def test_pma_chat_response_omits_legacy_delivery_fields(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    async def _fake_deliver_output(**kwargs):
-        _ = kwargs
-        return _delivery_outcome_for_status(delivery_outcome_status)
-
-    monkeypatch.setattr(
-        pma_routes, "deliver_pma_output_to_active_sink", _fake_deliver_output
-    )
-
-    class FakeTurnHandle:
-        def __init__(self) -> None:
-            self.turn_id = "turn-delivery-summary"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {"agent_messages": ["assistant text"], "raw_events": [], "errors": []},
-            )()
-
-    class FakeClient:
-        async def thread_resume(self, thread_id: str) -> None:
-            _ = thread_id
-            return None
-
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        def __init__(self) -> None:
-            self.client = FakeClient()
-
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return self.client
-
-    app.state.app_server_supervisor = FakeSupervisor()
+    _install_fake_successful_chat_supervisor(app, turn_id="turn-clean-response")
 
     client = TestClient(app)
     resp = client.post("/hub/pma/chat", json={"message": "hi"})
     assert resp.status_code == 200
     payload = resp.json()
     assert payload.get("status") == "ok"
-    assert (payload.get("delivery_outcome") or {}).get(
-        "status"
-    ) == delivery_outcome_status
-    assert payload.get("delivery_status") == expected_delivery_status
-
-
-def test_pma_chat_delivery_status_reflects_dispatch_failure(
-    hub_env, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-
-    async def _fake_deliver_output(**kwargs):
-        _ = kwargs
-        return _delivery_outcome_for_status("success")
-
-    async def _fake_deliver_dispatches(**kwargs):
-        _ = kwargs
-        return PmaDeliveryOutcome(
-            status="failed",
-            configured_targets=1,
-            delivered_targets=0,
-            failed_targets=1,
-            dispatch_count=1,
-        )
-
-    monkeypatch.setattr(
-        pma_routes, "deliver_pma_output_to_active_sink", _fake_deliver_output
-    )
-    monkeypatch.setattr(
-        pma_routes,
-        "list_pma_dispatches_for_turn",
-        lambda *_args, **_kwargs: [
-            {
-                "dispatch_id": "dispatch-1",
-                "title": "Dispatch title",
-                "body": "Dispatch body",
-                "priority": "high",
-                "links": [],
-            }
-        ],
-    )
-    monkeypatch.setattr(
-        pma_routes,
-        "deliver_pma_dispatches_to_delivery_targets",
-        _fake_deliver_dispatches,
-    )
-
-    class FakeTurnHandle:
-        def __init__(self) -> None:
-            self.turn_id = "turn-dispatch-failure"
-
-        async def wait(self, timeout=None):
-            _ = timeout
-            return type(
-                "Result",
-                (),
-                {"agent_messages": ["assistant text"], "raw_events": [], "errors": []},
-            )()
-
-    class FakeClient:
-        async def thread_resume(self, thread_id: str) -> None:
-            _ = thread_id
-            return None
-
-        async def thread_start(self, root: str) -> dict:
-            _ = root
-            return {"id": "thread-1"}
-
-        async def turn_start(
-            self,
-            thread_id: str,
-            prompt: str,
-            approval_policy: str,
-            sandbox_policy: str,
-            **turn_kwargs,
-        ):
-            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
-
-    class FakeSupervisor:
-        def __init__(self) -> None:
-            self.client = FakeClient()
-
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return self.client
-
-    app.state.app_server_supervisor = FakeSupervisor()
-
-    client = TestClient(app)
-    resp = client.post("/hub/pma/chat", json={"message": "hi"})
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload.get("status") == "ok"
-    assert (payload.get("delivery_outcome") or {}).get("status") == "success"
-    assert (payload.get("dispatch_delivery_outcome") or {}).get("status") == "failed"
-    assert payload.get("delivery_status") == "partial_success"
+    assert "delivery_outcome" not in payload
+    assert "dispatch_delivery_outcome" not in payload
+    assert "delivery_status" not in payload
 
 
 def test_pma_chat_github_injection_uses_raw_user_message(

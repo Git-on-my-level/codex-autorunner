@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -115,29 +114,6 @@ def _pma_interaction(*, subcommand: str, user_id: str = "user-1") -> dict[str, A
         "data": {
             "name": "pma",
             "options": [{"type": 1, "name": subcommand, "options": []}],
-        },
-    }
-
-
-def _pma_target_interaction(
-    *, action: str, ref: str | None = None, user_id: str = "user-1"
-) -> dict[str, Any]:
-    subcommand: dict[str, Any] = {
-        "type": 1,
-        "name": action,
-        "options": [],
-    }
-    if ref is not None:
-        subcommand["options"] = [{"type": 3, "name": "ref", "value": ref}]
-    return {
-        "id": "inter-target",
-        "token": "token-target",
-        "channel_id": "channel-1",
-        "guild_id": "guild-1",
-        "member": {"user": {"id": user_id}},
-        "data": {
-            "name": "pma",
-            "options": [{"type": 2, "name": "target", "options": [subcommand]}],
         },
     }
 
@@ -459,89 +435,30 @@ async def test_pma_command_registration_includes_pma_commands() -> None:
 
 
 @pytest.mark.anyio
-async def test_pma_target_add_list_remove_and_clear(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    target_store = PmaDeliveryTargetsStore(tmp_path)
-    target_store.set_targets(
-        [{"kind": "chat", "platform": "telegram", "chat_id": "-1001"}]
-    )
-    gateway = _FakeGateway(
-        [
-            _pma_target_interaction(action="add", ref="here"),
-            _pma_interaction(subcommand="targets"),
-            _pma_target_interaction(action="rm", ref="here"),
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 3
-        for response in rest.interaction_responses:
-            assert (
-                response["payload"]["data"]["content"]
-                == "PMA target commands were removed. PMA now supports only on/off/status."
-            )
-        assert target_store.load()["targets"] == [
-            {"kind": "chat", "platform": "telegram", "chat_id": "-1001"}
-        ]
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_pma_target_active_show_and_set(tmp_path: Path) -> None:
+async def test_pma_target_group_returns_unknown_subcommand(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     rest = _FakeRest()
     gateway = _FakeGateway(
         [
-            _pma_target_interaction(action="active"),
-            _pma_target_interaction(action="active", ref="show"),
-            _pma_target_interaction(action="active", ref="status"),
-            _pma_target_interaction(action="active", ref="set telegram:-2002:77"),
-            _pma_target_interaction(action="active", ref="telegram:-2002:77"),
-            _pma_target_interaction(action="active", ref="chat:telegram:-2002:77"),
-            _pma_target_interaction(action="active", ref="chat:discord:42"),
+            {
+                "id": "inter-target",
+                "token": "token-target",
+                "channel_id": "channel-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {
+                    "name": "pma",
+                    "options": [
+                        {
+                            "type": 2,
+                            "name": "target",
+                            "options": [{"type": 1, "name": "add", "options": []}],
+                        }
+                    ],
+                },
+            }
         ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 7
-        for response in rest.interaction_responses:
-            assert (
-                response["payload"]["data"]["content"]
-                == "PMA target commands were removed. PMA now supports only on/off/status."
-            )
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_pma_target_active_invalid_ref_returns_usage(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [_pma_target_interaction(action="active", ref="telegram:abc")]
     )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
@@ -556,67 +473,6 @@ async def test_pma_target_active_invalid_ref_returns_usage(tmp_path: Path) -> No
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
-        assert (
-            content
-            == "PMA target commands were removed. PMA now supports only on/off/status."
-        )
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_pma_target_add_invalid_ref_returns_usage(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway([_pma_target_interaction(action="add", ref="telegram:abc")])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
-        assert (
-            content
-            == "PMA target commands were removed. PMA now supports only on/off/status."
-        )
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_discord_can_add_telegram_target_to_delivery_store(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [_pma_target_interaction(action="add", ref="telegram:-123:77")]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        assert (
-            rest.interaction_responses[0]["payload"]["data"]["content"]
-            == "PMA target commands were removed. PMA now supports only on/off/status."
-        )
-        assert PmaDeliveryTargetsStore(tmp_path).load().get("targets", []) == []
+        assert content == "Unknown PMA subcommand. Use on, off, or status."
     finally:
         await store.close()

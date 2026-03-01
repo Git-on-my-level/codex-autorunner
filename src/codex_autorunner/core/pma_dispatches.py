@@ -162,13 +162,6 @@ def list_pma_dispatches(
     return dispatches
 
 
-def list_pma_dispatches_for_turn(hub_root: Path, turn_id: str) -> list[PmaDispatch]:
-    if not isinstance(turn_id, str) or not turn_id:
-        return []
-    dispatches = list_pma_dispatches(hub_root, include_resolved=False)
-    return [d for d in dispatches if d.source_turn_id == turn_id]
-
-
 def find_pma_dispatch_path(hub_root: Path, dispatch_id: str) -> Optional[Path]:
     if not isinstance(dispatch_id, str) or not dispatch_id:
         return None
@@ -218,7 +211,6 @@ __all__ = [
     "ensure_pma_dispatches_dir",
     "parse_pma_dispatch",
     "list_pma_dispatches",
-    "list_pma_dispatches_for_turn",
     "find_pma_dispatch_path",
     "resolve_pma_dispatch",
 ]

@@ -12,7 +12,6 @@ from codex_autorunner.core.app_server_threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
-from codex_autorunner.core.pma_delivery_targets import PmaDeliveryTargetsStore
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
 )
@@ -1331,21 +1330,15 @@ async def test_pma_status_reports_disabled_mode(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_pma_target_commands_are_deprecated_noop(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    store = PmaDeliveryTargetsStore(hub_root)
-    store.set_targets([{"kind": "chat", "platform": "discord", "chat_id": "111"}])
-    handler = _PmaTargetsHandler(hub_root=hub_root, record=TelegramTopicRecord())
+async def test_pma_targets_subcommand_uses_usage_text(tmp_path: Path) -> None:
+    handler = _PmaTargetsHandler(
+        hub_root=tmp_path / "hub", record=TelegramTopicRecord()
+    )
     message = _make_pma_message(chat_id=-1001, thread_id=55)
 
     await handler._handle_pma(message, "targets", _RuntimeStub())
-    assert (
-        handler.sent[-1]
-        == "PMA target commands were removed. PMA now supports only on/off/status."
-    )
-    assert store.load()["targets"] == [
-        {"kind": "chat", "platform": "discord", "chat_id": "111"}
-    ]
+
+    assert handler.sent[-1] == "Usage:\n/pma [on|off|status]"
 
 
 class _HelpHandlersStub:

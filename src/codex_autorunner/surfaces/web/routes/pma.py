@@ -12,7 +12,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -42,11 +42,9 @@ from ....core.pma_context import (
     get_active_context_auto_prune_meta,
     load_pma_prompt,
 )
-from ....core.pma_delivery_targets import PmaDeliveryTargetsStore
 from ....core.pma_dispatches import (
     find_pma_dispatch_path,
     list_pma_dispatches,
-    list_pma_dispatches_for_turn,
     resolve_pma_dispatch,
 )
 from ....core.pma_lane_worker import PmaLaneWorker
@@ -64,15 +62,7 @@ from ....core.state_roots import is_within_allowed_root
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
-from ....integrations.discord.config import (
-    DEFAULT_STATE_FILE as DISCORD_DEFAULT_STATE_FILE,
-)
 from ....integrations.github.context_injection import maybe_inject_github_context
-from ....integrations.pma_delivery import (
-    deliver_pma_dispatches_to_delivery_targets,
-    deliver_pma_output_to_active_sink,
-)
-from ....integrations.telegram.config import DEFAULT_STATE_FILE
 from ..schemas import (
     PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
@@ -210,34 +200,6 @@ def build_pma_routes() -> APIRouter:
             pma_queue_root = hub_root
         return pma_queue
 
-    def _resolve_telegram_state_path(request: Request) -> Path:
-        hub_root = request.app.state.config.root
-        raw = getattr(request.app.state.config, "raw", {})
-        telegram_cfg = raw.get("telegram_bot") if isinstance(raw, dict) else {}
-        if not isinstance(telegram_cfg, dict):
-            telegram_cfg = {}
-        state_file = telegram_cfg.get("state_file")
-        if not isinstance(state_file, str) or not state_file.strip():
-            state_file = DEFAULT_STATE_FILE
-        state_path = Path(state_file)
-        if not state_path.is_absolute():
-            state_path = (hub_root / state_path).resolve()
-        return state_path
-
-    def _resolve_discord_state_path(request: Request) -> Path:
-        hub_root = request.app.state.config.root
-        raw = getattr(request.app.state.config, "raw", {})
-        discord_cfg = raw.get("discord_bot") if isinstance(raw, dict) else {}
-        if not isinstance(discord_cfg, dict):
-            discord_cfg = {}
-        state_file = discord_cfg.get("state_file")
-        if not isinstance(state_file, str) or not state_file.strip():
-            state_file = DISCORD_DEFAULT_STATE_FILE
-        state_path = Path(state_file)
-        if not state_path.is_absolute():
-            state_path = (hub_root / state_path).resolve()
-        return state_path
-
     def _is_within_root(path: Path, root: Path) -> bool:
         return is_within_allowed_root(path, allowed_roots=[root], resolve=True)
 
@@ -309,69 +271,6 @@ def build_pma_routes() -> APIRouter:
             f"{message}"
         )
 
-    async def _deliver_to_active_sink(
-        *,
-        request: Request,
-        result: dict[str, Any],
-        current: dict[str, Any],
-        lifecycle_event: Optional[dict[str, Any]],
-        turn_id: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
-        status = result.get("status") or "error"
-        if status != "ok":
-            return None
-        assistant_text = _resolve_transcript_text(result)
-        if not assistant_text.strip():
-            return None
-
-        hub_root = request.app.state.config.root
-        if not isinstance(turn_id, str) or not turn_id:
-            turn_id = _resolve_transcript_turn_id(result, current)
-        state_path = _resolve_telegram_state_path(request)
-        discord_state_path = _resolve_discord_state_path(request)
-        outcome = await deliver_pma_output_to_active_sink(
-            hub_root=hub_root,
-            assistant_text=assistant_text,
-            turn_id=turn_id,
-            lifecycle_event=lifecycle_event,
-            telegram_state_path=state_path,
-            discord_state_path=discord_state_path,
-        )
-        return outcome.to_dict()
-
-    async def _deliver_dispatches_to_active_sink(
-        *,
-        request: Request,
-        turn_id: Optional[str],
-    ) -> Optional[dict[str, Any]]:
-        if not isinstance(turn_id, str) or not turn_id:
-            return None
-        hub_root = request.app.state.config.root
-        dispatches = list_pma_dispatches_for_turn(hub_root, turn_id)
-        if not dispatches:
-            return None
-
-        state_path = _resolve_telegram_state_path(request)
-        discord_state_path = _resolve_discord_state_path(request)
-        try:
-            outcome = await deliver_pma_dispatches_to_delivery_targets(
-                hub_root=hub_root,
-                turn_id=turn_id,
-                dispatches=dispatches,
-                telegram_state_path=state_path,
-                discord_state_path=discord_state_path,
-            )
-            return outcome.to_dict()
-        except Exception:
-            logger.exception("Failed to deliver PMA dispatches to delivery targets")
-            return {
-                "status": "failed",
-                "configured_targets": 0,
-                "delivered_targets": 0,
-                "failed_targets": 1,
-                "errors": [{"target": "dispatch_delivery", "error": "delivery_failed"}],
-            }
-
     async def _persist_state(store: Optional[PmaStateStore]) -> None:
         if store is None:
             return
@@ -397,47 +296,6 @@ def build_pma_routes() -> APIRouter:
             return text_value
         return text_value[: max(0, limit - 3)] + "..."
 
-    def _normalize_delivery_status(value: Any) -> Optional[str]:
-        if not isinstance(value, str):
-            return None
-        normalized = value.strip().lower()
-        if normalized in {
-            "success",
-            "partial_success",
-            "failed",
-            "duplicate_only",
-            "skipped",
-        }:
-            return normalized
-        if normalized in {"no_targets", "no_content", "invalid"}:
-            return "skipped"
-        return "failed"
-
-    def _summarize_delivery_status(result: Mapping[str, Any]) -> Optional[str]:
-        statuses: list[str] = []
-        for field_name in ("delivery_outcome", "dispatch_delivery_outcome"):
-            outcome = result.get(field_name)
-            if not isinstance(outcome, Mapping):
-                continue
-            status = _normalize_delivery_status(outcome.get("status"))
-            if status:
-                statuses.append(status)
-        if not statuses:
-            return None
-
-        distinct = set(statuses)
-        has_success = "success" in distinct
-        has_failed = "failed" in distinct
-        if "partial_success" in distinct or (has_success and has_failed):
-            return "partial_success"
-        if has_failed:
-            return "failed"
-        if has_success:
-            return "success"
-        if "duplicate_only" in distinct:
-            return "duplicate_only"
-        return "skipped"
-
     def _format_last_result(
         result: dict[str, Any], current: dict[str, Any]
     ) -> dict[str, Any]:
@@ -461,41 +319,7 @@ def build_pma_routes() -> APIRouter:
             "started_at": current.get("started_at"),
             "finished_at": now_iso(),
         }
-        delivery_outcome = result.get("delivery_outcome")
-        if isinstance(delivery_outcome, dict):
-            payload["delivery_outcome"] = delivery_outcome
-        dispatch_delivery_outcome = result.get("dispatch_delivery_outcome")
-        if isinstance(dispatch_delivery_outcome, dict):
-            payload["dispatch_delivery_outcome"] = dispatch_delivery_outcome
-        delivery_status = _summarize_delivery_status(result)
-        if isinstance(delivery_status, str):
-            payload["delivery_status"] = delivery_status
         return payload
-
-    def _deprecated_targets_payload(
-        *, legacy_state: Optional[Mapping[str, Any]] = None
-    ) -> dict[str, Any]:
-        updated_at = now_iso()
-        legacy_targets_count = 0
-        if isinstance(legacy_state, Mapping):
-            candidate_updated_at = legacy_state.get("updated_at")
-            if isinstance(candidate_updated_at, str) and candidate_updated_at:
-                updated_at = candidate_updated_at
-            targets = legacy_state.get("targets")
-            if isinstance(targets, list):
-                legacy_targets_count = len(
-                    [target for target in targets if isinstance(target, Mapping)]
-                )
-        return {
-            "status": "deprecated",
-            "deprecated": True,
-            "message": "PMA delivery targets are deprecated and ignored.",
-            "updated_at": updated_at,
-            "active_target_key": None,
-            "active_target": None,
-            "targets": [],
-            "legacy_targets_ignored": legacy_targets_count,
-        }
 
     def _resolve_transcript_turn_id(
         result: dict[str, Any], current: dict[str, Any]
@@ -727,45 +551,6 @@ def build_pma_routes() -> APIRouter:
             error=result.get("detail") if status == "error" else None,
         )
 
-        delivery_turn_id = None
-        if isinstance(pma_last_result, dict):
-            candidate = pma_last_result.get("turn_id")
-            if isinstance(candidate, str) and candidate:
-                delivery_turn_id = candidate
-        delivery_outcome = await _deliver_to_active_sink(
-            request=request,
-            result=result,
-            current=current_snapshot,
-            lifecycle_event=lifecycle_event,
-            turn_id=delivery_turn_id,
-        )
-        if isinstance(delivery_outcome, dict):
-            result["delivery_outcome"] = delivery_outcome
-        dispatch_delivery_outcome = await _deliver_dispatches_to_active_sink(
-            request=request,
-            turn_id=delivery_turn_id,
-        )
-        if isinstance(dispatch_delivery_outcome, dict):
-            result["dispatch_delivery_outcome"] = dispatch_delivery_outcome
-        delivery_status = _summarize_delivery_status(result)
-        if isinstance(delivery_status, str):
-            result["delivery_status"] = delivery_status
-        if (
-            isinstance(delivery_outcome, dict)
-            or isinstance(dispatch_delivery_outcome, dict)
-            or isinstance(delivery_status, str)
-        ):
-            async with pma_lock:
-                if not isinstance(pma_last_result, dict):
-                    pma_last_result = {}
-                if isinstance(delivery_outcome, dict):
-                    pma_last_result["delivery_outcome"] = dict(delivery_outcome)
-                if isinstance(dispatch_delivery_outcome, dict):
-                    pma_last_result["dispatch_delivery_outcome"] = dict(
-                        dispatch_delivery_outcome
-                    )
-                if isinstance(delivery_status, str):
-                    pma_last_result["delivery_status"] = delivery_status
         _get_safety_checker(request).record_chat_result(
             agent=current_snapshot.get("agent") or "",
             status=status,
@@ -1139,76 +924,6 @@ def build_pma_routes() -> APIRouter:
             if current.get("client_turn_id") != client_turn_id:
                 current = {}
         return {"active": active, "current": current, "last_result": last_result}
-
-    @router.get("/targets")
-    def pma_targets_list(request: Request) -> dict[str, Any]:
-        store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        return _deprecated_targets_payload(legacy_state=store.load())
-
-    @router.get("/targets/active")
-    def pma_targets_active(request: Request) -> dict[str, Any]:
-        store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        return _deprecated_targets_payload(legacy_state=store.load())
-
-    @router.post("/targets/active")
-    async def pma_targets_set_active(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="Request body must be an object",
-            )
-        store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        key = str(body.get("key") or body.get("ref") or "").strip()
-        payload = _deprecated_targets_payload(legacy_state=store.load())
-        payload.update(
-            {
-                "action": "set_active",
-                "changed": False,
-            }
-        )
-        if key:
-            payload["key"] = key
-        return payload
-
-    @router.post("/targets/add")
-    async def pma_targets_add(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="Request body must be an object",
-            )
-        store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        key = str(body.get("ref") or body.get("key") or "").strip()
-        payload = _deprecated_targets_payload(legacy_state=store.load())
-        payload.update({"action": "add"})
-        if key:
-            payload["key"] = key
-        return payload
-
-    @router.post("/targets/remove")
-    async def pma_targets_remove(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="Request body must be an object",
-            )
-        store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        key = str(body.get("ref") or body.get("key") or "").strip()
-        payload = _deprecated_targets_payload(legacy_state=store.load())
-        payload.update({"action": "remove", "removed": False})
-        if key:
-            payload["key"] = key
-        return payload
-
-    @router.post("/targets/clear")
-    def pma_targets_clear(request: Request) -> dict[str, Any]:
-        store = PmaDeliveryTargetsStore(request.app.state.config.root)
-        payload = _deprecated_targets_payload(legacy_state=store.load())
-        payload.update({"action": "clear"})
-        return payload
 
     @router.get("/history")
     def list_pma_history(request: Request, limit: int = 50) -> dict[str, Any]:

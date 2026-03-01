@@ -1038,14 +1038,6 @@ class TelegramCommandHandlers(
 
         argv = self._parse_command_args(args)
         action = argv[0].lower() if argv else ""
-        if action in {"target", "targets"}:
-            await self._send_message(
-                message.chat_id,
-                "PMA target commands were removed. PMA now supports only on/off/status.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
 
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
