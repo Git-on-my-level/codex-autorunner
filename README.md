@@ -70,7 +70,9 @@ If you're working from a fresh clone of this repo, you can run the repo-local CL
 The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will bootstrap a local `.venv` and install CAR.
 
 ## Architecture docs
-- [Architecture boundaries](docs/ARCHITECTURE_BOUNDARIES.md)
+- [Codebase constitution](docs/car_constitution/10_CODEBASE_CONSTITUTION.md)
+- [Architecture map](docs/car_constitution/20_ARCHITECTURE_MAP.md)
+- [Engineering standards](docs/car_constitution/30_ENGINEERING_STANDARDS.md)
 - [Run history contract](docs/RUN_HISTORY.md)
 - [State roots contract](docs/STATE_ROOTS.md)
 
