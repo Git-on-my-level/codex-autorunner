@@ -635,37 +635,11 @@ main {
   height: 100%;
 }
 
-.hub-usage-chart {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
-  margin-bottom: 10px;
-}
-
-.hub-usage-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.hub-usage-chart-canvas {
-  height: 160px;
-  border-style: solid;
-}
-
 @media (max-width: 720px) {
   .usage-chart-header {
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
-  }
-
-  .hub-usage-chart-header {
-    flex-direction: column;
-    align-items: flex-start;
   }
 
   .usage-chart-controls {
@@ -7382,10 +7356,6 @@ button.loading::after {
   .hub-repo-note {
     font-size: 9px;
     margin-top: 3px;
-  }
-
-  .hub-usage-chart {
-    display: none;
   }
 
   /* Compact usage on mobile */
