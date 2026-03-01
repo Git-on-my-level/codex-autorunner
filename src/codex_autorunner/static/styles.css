@@ -1,3 +1,30 @@
+/*
+ * ── CAR UI STYLE GUIDE ─────────────────────────────────────────────
+ *
+ * DENSITY
+ *   Prefer compact over spacious. Mobile chrome should feel thin.
+ *   Cards: 4-8 px padding.  Touch targets: ≥ 44 px (Apple HIG).
+ *   Use --sp-* tokens (2/4/6/8/12/16/24) instead of magic numbers.
+ *
+ * BADGES
+ *   Badges (pills) belong immediately after the element they describe.
+ *   Repo rows: title then badges, left-aligned. Action buttons right.
+ *
+ * MODALS
+ *   Section groups separated by subtle border-bottom.
+ *   Danger sections: label in --error colour, no extra wrapper div.
+ *   Modal actions: right-aligned, top-bordered from body.
+ *
+ * RESPONSIVE
+ *   Avoid column stacking for repo rows; prefer horizontal wrapping.
+ *   On mobile, shrink font/padding rather than reflowing layout.
+ *
+ * TOKENS
+ *   Always reference :root variables for colours, spacing, radius.
+ *   New components must use --sp-* for all spacing values.
+ * ───────────────────────────────────────────────────────────────────
+ */
+
 /* JetBrains Mono (self-hosted). Keep in sync with Google Fonts subsets. */
 /* cyrillic */
 @font-face {
@@ -179,19 +206,40 @@
   unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
 }
 
+/*
+ * ── DESIGN TOKENS ──────────────────────────────────────────────────
+ * All new/modified components MUST use these variables.
+ * Spacing: 2-4-6-8-12-16-24 scale (--sp-*).
+ * Prefer --sp-* over magic numbers to keep density consistent.
+ * Keep mobile chrome thin: prefer ≤6 px padding on cards/stat bars
+ * and ≤ 44 px touch targets (Apple HIG minimum).
+ * ───────────────────────────────────────────────────────────────────
+ */
 :root {
   --bg: #0a0c12;
   --panel: #10131c;
+  --panel-elevated: #141825;
   --muted: #7a8ba8;
   --text: #e5ecff;
   --accent: #6cf5d8;
   --accent-2: #6ca8ff;
   --border: #1a2033;
+  --border-subtle: rgba(26, 32, 51, 0.6);
   --error: #ff5566;
   --success: #58d68d;
   --warning: #ffd166;
   --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   --radius: 3px;
+  --radius-lg: 6px;
+
+  /* Spacing scale */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 24px;
 }
 
 * {
@@ -859,11 +907,11 @@ main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 10px;
-  background: linear-gradient(120deg, rgba(108, 245, 216, 0.08), rgba(108, 168, 255, 0.05));
+  gap: var(--sp-4);
+  background: linear-gradient(120deg, rgba(108, 245, 216, 0.06), rgba(108, 168, 255, 0.03));
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: var(--sp-3) var(--sp-5);
 }
 
 .hub-hero h1 {
@@ -881,7 +929,7 @@ main {
 .hub-hero-text {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-4);
   flex-wrap: nowrap;
   min-width: 0;
   overflow: hidden;
@@ -1152,8 +1200,8 @@ main {
 
 .hub-stats {
   display: flex;
-  gap: 6px;
-  margin: 8px 0;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
 }
 
 .hub-stat {
@@ -1161,10 +1209,10 @@ main {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 10px;
+  padding: var(--sp-2) var(--sp-4);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-3);
 }
 
 .hub-stat p {
@@ -1173,7 +1221,7 @@ main {
 }
 
 .hub-stat-value {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
   margin: 0;
 }
@@ -1182,7 +1230,7 @@ main {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px;
+  padding: var(--sp-3);
 }
 
 .hub-panel-header {
@@ -1334,7 +1382,7 @@ main {
 .hub-repo-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 10px;
+  padding: var(--sp-2) var(--sp-4);
   background: var(--bg);
   transition: all 0.1s ease;
 }
@@ -1357,39 +1405,38 @@ main {
 .hub-repo-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-4);
   min-height: 28px;
 }
 
 .hub-repo-left {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-2);
   flex-shrink: 0;
 }
 
 .hub-repo-center {
-  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 
 .hub-repo-mainline {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-3);
   min-width: 0;
-  width: 100%;
   overflow: hidden;
 }
 
 .hub-repo-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-2);
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .hub-repo-title {
@@ -6651,28 +6698,28 @@ button.terminal-text-send-icon.disconnected {
 .modal-dialog {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px 24px;
+  border-radius: var(--radius-lg);
+  padding: var(--sp-6) var(--sp-7);
   max-width: 400px;
   width: 100%;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
 .modal-dialog p {
-  margin: 0 0 20px;
-  font-size: 14px;
+  margin: 0 0 var(--sp-6);
+  font-size: 13px;
   line-height: 1.5;
   color: var(--text);
 }
 
 .modal-actions {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-4);
   justify-content: flex-end;
 }
 
 .modal-actions button {
-  min-width: 80px;
+  min-width: 72px;
 }
 
 /* Input modal */
@@ -6793,20 +6840,22 @@ button.terminal-text-send-icon.disconnected {
 }
 
 .modal-header {
-  margin-bottom: 16px;
-  padding-bottom: 10px;
+  margin-bottom: var(--sp-5);
+  padding-bottom: var(--sp-4);
   border-bottom: 1px solid var(--border);
 }
 
 .modal-header .label {
-  font-size: 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .modal-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-bottom: 20px;
+  gap: var(--sp-5);
+  margin-bottom: var(--sp-6);
 }
 
 /* File Picker Modal */
@@ -6986,7 +7035,7 @@ button.terminal-text-send-icon.disconnected {
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-2);
 }
 
 .form-group label {
@@ -7145,13 +7194,13 @@ button.loading::after {
   /* Compact repo cards on tablet */
   .hub-repo-row {
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--sp-3);
   }
 
   .hub-repo-center {
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
+    gap: var(--sp-1);
   }
 
   .hub-repo-open-indicator {
@@ -7223,33 +7272,32 @@ button.loading::after {
   }
 
   .hub-hero {
-    padding: 6px 8px;
-    gap: 6px 8px;
+    padding: var(--sp-2) var(--sp-4);
+    gap: var(--sp-2) var(--sp-3);
     grid-template-columns: minmax(0, 1fr) auto auto;
     justify-items: start;
     overflow: visible;
   }
 
   .hub-hero h1 {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .hub-hero-text {
-    gap: 6px;
+    gap: var(--sp-3);
     flex-wrap: nowrap;
   }
 
   .hub-hero-actions {
-    gap: 4px;
+    gap: var(--sp-1);
     flex-wrap: nowrap;
-    width: 100%;
     justify-content: flex-start;
     overflow-x: auto;
   }
 
   .hub-mode-btn {
-    padding: 4px 8px;
-    font-size: 10px;
+    padding: 3px 6px;
+    font-size: 9px;
   }
 
   .hub-mode-long {
@@ -7261,36 +7309,38 @@ button.loading::after {
   }
 
   .hub-hero-actions button {
-    padding: 5px 8px;
-  }
-
-  .hub-version {
-    max-width: 90px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .hub-stats {
-    gap: 4px;
-    margin: 6px 0;
-  }
-
-  .hub-stat {
-    padding: 6px 10px;
-    gap: 6px;
-  }
-
-  .hub-stat-value {
-    font-size: 16px;
-  }
-
-  .hub-stat p {
+    padding: 3px 6px;
     font-size: 10px;
   }
 
+  .hub-version {
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9px;
+  }
+
+  .hub-stats {
+    gap: var(--sp-2);
+    margin: var(--sp-2) 0;
+  }
+
+  .hub-stat {
+    padding: var(--sp-2) var(--sp-3);
+    gap: var(--sp-2);
+  }
+
+  .hub-stat-value {
+    font-size: 14px;
+  }
+
+  .hub-stat p {
+    font-size: 9px;
+  }
+
   .hub-repo-panel {
-    padding: 8px;
+    padding: var(--sp-3);
   }
 
   .hub-panel-header {
@@ -7335,32 +7385,32 @@ button.loading::after {
   }
 
   .hub-repo-card {
-    padding: 8px 10px;
+    padding: var(--sp-3) var(--sp-4);
   }
 
   .hub-repo-row {
-    gap: 6px;
-    flex-direction: column;
-    align-items: flex-start;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    align-items: center;
   }
 
   .hub-repo-left {
-    gap: 3px;
+    gap: var(--sp-1);
   }
 
   .hub-repo-center {
-    width: 100%;
-    gap: 4px;
+    min-width: 0;
+    flex: 1 1 0;
+    gap: var(--sp-1);
   }
 
   .hub-repo-mainline {
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--sp-2);
   }
 
   .hub-repo-title {
     font-size: 11px;
-    min-width: 120px;
   }
 
   .hub-repo-meta-inline {
@@ -7372,15 +7422,14 @@ button.loading::after {
   }
 
   .hub-repo-right {
-    gap: 3px;
-    width: 100%;
-    justify-content: flex-start;
+    gap: var(--sp-1);
     flex-wrap: wrap;
+    margin-left: auto;
   }
 
   .hub-repo-right button {
-    padding: 5px 8px;
-    font-size: 10px;
+    padding: 3px 6px;
+    font-size: 9px;
   }
 
   .hub-repo-note {
@@ -7503,8 +7552,8 @@ button.loading::after {
   }
 
   .form-group input[type="text"] {
-    font-size: 14px;
-    padding: 10px 12px;
+    font-size: 13px;
+    padding: var(--sp-4) var(--sp-5);
   }
 
   /* Hide brand and repo name on mobile */
@@ -9722,21 +9771,97 @@ button.loading::after {
 }
 
 /* ===== Repo Settings Extensions ===== */
+.repo-settings-dialog {
+  max-width: 480px;
+}
+
+.repo-settings-dialog .modal-header {
+  margin-bottom: var(--sp-5);
+  padding-bottom: var(--sp-4);
+}
+
+.repo-settings-dialog .modal-header .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.repo-settings-dialog .modal-body {
+  gap: 0;
+}
+
+.repo-settings-dialog .form-group {
+  padding: var(--sp-5) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.repo-settings-dialog .form-group:first-child {
+  padding-top: 0;
+}
+
+.repo-settings-dialog .form-group:last-child {
+  border-bottom: none;
+  padding-bottom: var(--sp-2);
+}
+
+.repo-settings-dialog .form-group > label:first-child {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-bottom: var(--sp-1);
+}
+
+.repo-settings-dialog .form-group textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  padding: var(--sp-4);
+  line-height: 1.5;
+}
+
+.repo-settings-dialog .form-group textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-section-danger {
+  border-bottom: none !important;
+}
+
+.settings-section-danger > label:first-child {
+  color: var(--error) !important;
+}
+
+.settings-section-danger .danger {
+  margin-top: var(--sp-3);
+}
+
+.repo-settings-dialog .modal-actions {
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--border);
+  margin-top: var(--sp-2);
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-  margin-top: 6px;
+  gap: var(--sp-5);
+  margin-top: var(--sp-3);
 }
 
 .settings-toggle-row {
-  margin-top: 10px;
+  margin-top: var(--sp-4);
 }
 
 .settings-actions {
   display: flex;
-  gap: 10px;
-  margin-top: 10px;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+  align-items: center;
   flex-wrap: wrap;
 }
 
