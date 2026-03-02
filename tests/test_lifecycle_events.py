@@ -91,6 +91,34 @@ def test_lifecycle_event_store_get_unprocessed():
         assert unprocessed[1].event_id == event3.event_id
 
 
+def test_lifecycle_event_store_update_event_data_and_processed() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        store = LifecycleEventStore(tmp_path)
+
+        event = LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_FAILED,
+            repo_id="test-repo",
+            run_id="run-1",
+        )
+        store.append(event)
+
+        updated = store.update_event(
+            event.event_id,
+            data={"lifecycle_retry": {"attempts": 1, "status": "retry_scheduled"}},
+            processed=True,
+        )
+
+        assert updated is not None
+        assert updated.processed is True
+        assert updated.data["lifecycle_retry"]["attempts"] == 1
+
+        loaded = store.load()
+        assert len(loaded) == 1
+        assert loaded[0].processed is True
+        assert loaded[0].data["lifecycle_retry"]["status"] == "retry_scheduled"
+
+
 def test_lifecycle_event_emitter():
     """Test that lifecycle event emitter stores events."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -310,6 +338,7 @@ def test_runtime_terminal_events_include_transition_metadata():
 if __name__ == "__main__":
     test_lifecycle_event_store_load_save()
     test_lifecycle_event_store_get_unprocessed()
+    test_lifecycle_event_store_update_event_data_and_processed()
     test_lifecycle_event_emitter()
     test_lifecycle_event_store_prune()
     test_lifecycle_event_store_append_rewrites_malformed_file()

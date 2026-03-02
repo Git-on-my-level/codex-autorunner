@@ -298,11 +298,19 @@ def test_lifecycle_reactive_circuit_breaker(tmp_path: Path) -> None:
         supervisor.shutdown()
 
 
-def test_lifecycle_processing_failures_stay_unprocessed_and_retry(
+def test_lifecycle_processing_failures_retry_then_quarantine(
     tmp_path: Path, monkeypatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    _write_hub_config(hub_root, dispatch_interception=False)
+    _write_hub_config(
+        hub_root,
+        dispatch_interception=False,
+        extra_lines=[
+            "  lifecycle_retry_max_attempts: 2",
+            "  lifecycle_retry_initial_backoff_seconds: 0",
+            "  lifecycle_retry_max_backoff_seconds: 0",
+        ],
+    )
     supervisor = HubSupervisor(load_hub_config(hub_root))
     supervisor._stop_lifecycle_event_processor()
 
@@ -332,10 +340,28 @@ def test_lifecycle_processing_failures_stay_unprocessed_and_retry(
         assert [event.event_id for event in remaining] == [failing_event_id]
         assert attempts[failing_event_id] == 1
         assert attempts[passing_event_id] == 1
+        persisted = store.load()
+        failing = next(
+            event for event in persisted if event.event_id == failing_event_id
+        )
+        retry_meta = failing.data.get("lifecycle_retry") or {}
+        assert retry_meta.get("attempts") == 1
+        assert retry_meta.get("status") == "retry_scheduled"
+        assert retry_meta.get("quarantined") is False
 
         supervisor.process_lifecycle_events()
         remaining = store.get_unprocessed()
-        assert [event.event_id for event in remaining] == [failing_event_id]
+        assert remaining == []
         assert attempts[failing_event_id] == 2
+        persisted = store.load()
+        failing = next(
+            event for event in persisted if event.event_id == failing_event_id
+        )
+        retry_meta = failing.data.get("lifecycle_retry") or {}
+        assert retry_meta.get("attempts") == 2
+        assert retry_meta.get("status") == "quarantined"
+        assert retry_meta.get("quarantine_reason") == "max_attempts_exceeded"
+        assert retry_meta.get("dead_lettered_at")
+        assert failing.processed is True
     finally:
         supervisor.shutdown()

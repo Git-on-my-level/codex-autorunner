@@ -253,19 +253,33 @@ class LifecycleEventStore:
     def append(self, event: LifecycleEvent) -> None:
         self.append_with_result(event)
 
-    def mark_processed(self, event_id: str) -> Optional[LifecycleEvent]:
+    def update_event(
+        self,
+        event_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        processed: Optional[bool] = None,
+    ) -> Optional[LifecycleEvent]:
         if not event_id:
             return None
-        events = self.load(ensure_exists=False)
-        updated = None
-        for event in events:
-            if event.event_id == event_id:
-                event.processed = True
+        with file_lock(self._lock_path()):
+            events = self._load_unlocked()
+            updated: Optional[LifecycleEvent] = None
+            for event in events:
+                if event.event_id != event_id:
+                    continue
+                if data is not None:
+                    event.data = dict(data)
+                if processed is not None:
+                    event.processed = bool(processed)
                 updated = event
                 break
-        if updated:
-            self.save(events)
-        return updated
+            if updated is not None:
+                self._save_unlocked(events)
+            return updated
+
+    def mark_processed(self, event_id: str) -> Optional[LifecycleEvent]:
+        return self.update_event(event_id, processed=True)
 
     def get_unprocessed(self, *, limit: int = 100) -> list[LifecycleEvent]:
         events = self.load(ensure_exists=False)

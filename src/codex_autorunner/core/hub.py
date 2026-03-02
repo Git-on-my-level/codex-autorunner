@@ -42,7 +42,11 @@ from .git_utils import (
     git_upstream_status,
     run_git,
 )
-from .hub_lifecycle import HubLifecycleWorker, LifecycleEventProcessor
+from .hub_lifecycle import (
+    HubLifecycleWorker,
+    LifecycleEventProcessor,
+    LifecycleRetryPolicy,
+)
 from .lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
@@ -363,6 +367,7 @@ class HubSupervisor:
         self._lifecycle_event_processor = LifecycleEventProcessor(
             store=self.lifecycle_store,
             process_event=lambda event: self._process_lifecycle_event(event),
+            retry_policy=self._build_lifecycle_retry_policy(),
             logger=logger,
         )
         self._lifecycle_worker = HubLifecycleWorker(
@@ -1670,6 +1675,48 @@ class HubSupervisor:
         if event.event_type == LifecycleEventType.DISPATCH_CREATED:
             lines.append("Dispatch requires attention; check the repo inbox.")
         return "\n".join(lines)
+
+    def _build_lifecycle_retry_policy(self) -> LifecycleRetryPolicy:
+        raw = getattr(self.hub_config, "raw", {})
+        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
+        if not isinstance(pma_config, dict):
+            pma_config = {}
+
+        def _read_int(key: str, fallback: int, *, minimum: int = 0) -> int:
+            raw_value = pma_config.get(key, fallback)
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            return value if value >= minimum else fallback
+
+        def _read_float(key: str, fallback: float, *, minimum: float = 0.0) -> float:
+            raw_value = pma_config.get(key, fallback)
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            return value if value >= minimum else fallback
+
+        max_attempts = _read_int("lifecycle_retry_max_attempts", 3, minimum=1)
+        initial_backoff_seconds = _read_float(
+            "lifecycle_retry_initial_backoff_seconds",
+            5.0,
+            minimum=0.0,
+        )
+        max_backoff_seconds = _read_float(
+            "lifecycle_retry_max_backoff_seconds",
+            300.0,
+            minimum=0.0,
+        )
+        if max_backoff_seconds < initial_backoff_seconds:
+            max_backoff_seconds = initial_backoff_seconds
+
+        return LifecycleRetryPolicy(
+            max_attempts=max_attempts,
+            initial_backoff_seconds=initial_backoff_seconds,
+            max_backoff_seconds=max_backoff_seconds,
+        )
 
     def get_pma_safety_checker(self) -> PmaSafetyChecker:
         if self._pma_safety_checker is not None:
