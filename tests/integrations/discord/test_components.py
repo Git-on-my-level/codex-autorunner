@@ -11,9 +11,13 @@ from codex_autorunner.integrations.discord.components import (
     build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
+    build_model_effort_picker,
     build_model_picker,
+    build_review_commit_picker,
     build_select_menu,
     build_select_option,
+    build_session_threads_picker,
+    build_update_target_picker,
 )
 
 
@@ -125,6 +129,15 @@ class TestBuildModelPicker:
         assert current["default"] is True
 
 
+class TestBuildModelEffortPicker:
+    def test_builds_effort_picker(self) -> None:
+        picker = build_model_effort_picker()
+        menu = picker["components"][0]
+        assert menu["custom_id"] == "model_effort_select"
+        values = [opt["value"] for opt in menu["options"]]
+        assert values == ["none", "minimal", "low", "medium", "high", "xhigh"]
+
+
 class TestBuildFlowStatusButtons:
     def test_paused_status_has_resume_restart_and_archive(self) -> None:
         rows = build_flow_status_buttons("run-123", "paused")
@@ -168,6 +181,37 @@ class TestBuildFlowRunsPicker:
         menu = picker["components"][0]
         assert len(menu["options"]) == 1
         assert menu["options"][0]["value"] == "none"
+
+
+class TestBuildSessionThreadsPicker:
+    def test_builds_picker_with_threads(self) -> None:
+        picker = build_session_threads_picker(
+            [("th-1", "th-1 (current)"), ("th-2", "th-2")]
+        )
+        menu = picker["components"][0]
+        assert menu["custom_id"] == "session_resume_select"
+        assert len(menu["options"]) == 2
+        assert menu["options"][0]["value"] == "th-1"
+
+
+class TestBuildReviewCommitPicker:
+    def test_builds_commit_picker(self) -> None:
+        picker = build_review_commit_picker(
+            [("abcdef123456", "Fix tests"), ("0123456789ab", "Refactor")]
+        )
+        menu = picker["components"][0]
+        assert menu["custom_id"] == "review_commit_select"
+        assert len(menu["options"]) == 2
+        assert menu["options"][0]["value"] == "abcdef123456"
+
+
+class TestBuildUpdateTargetPicker:
+    def test_builds_update_target_picker(self) -> None:
+        picker = build_update_target_picker()
+        menu = picker["components"][0]
+        assert menu["custom_id"] == "update_target_select"
+        values = {opt["value"] for opt in menu["options"]}
+        assert values == {"both", "web", "chat", "telegram", "discord", "status"}
 
 
 class TestTurnButtons:

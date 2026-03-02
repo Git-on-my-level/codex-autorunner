@@ -135,3 +135,15 @@ def test_agent_and_effort_options_include_choices() -> None:
     model_effort = _find_option(model["options"], "effort")
     effort_choices = {choice["value"] for choice in model_effort.get("choices", [])}
     assert effort_choices == {"none", "minimal", "low", "medium", "high", "xhigh"}
+
+    update = _find_option(car_options, "update")
+    update_target = _find_option(update["options"], "target")
+    target_choices = {choice["value"] for choice in update_target.get("choices", [])}
+    assert target_choices == {"both", "web", "chat", "telegram", "discord", "status"}
+
+    experimental = _find_option(car_options, "experimental")
+    experimental_action = _find_option(experimental["options"], "action")
+    action_choices = {
+        choice["value"] for choice in experimental_action.get("choices", [])
+    }
+    assert action_choices == {"list", "enable", "disable"}

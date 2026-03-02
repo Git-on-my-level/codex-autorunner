@@ -213,7 +213,10 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
     rest = _FakeRest()
     gateway = _FakeGateway(
         [
-            _flow_interaction(name="status", options=[]),
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": paused_run_id}],
+            ),
             _flow_interaction(
                 name="runs", options=[{"type": 4, "name": "limit", "value": 2}]
             ),
@@ -531,7 +534,14 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
     )
 
     rest = _FakeRest()
-    gateway = _FakeGateway([_flow_interaction(name="restart", options=[])])
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="restart",
+                options=[{"type": 3, "name": "run_id", "value": failed_run_id}],
+            )
+        ]
+    )
     service = DiscordBotService(
         _config(tmp_path),
         logger=logging.getLogger("test"),
@@ -627,7 +637,14 @@ async def test_flow_restart_aborts_when_active_run_does_not_terminate(
     )
 
     rest = _FakeRest()
-    gateway = _FakeGateway([_flow_interaction(name="restart", options=[])])
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="restart",
+                options=[{"type": 3, "name": "run_id", "value": running_run_id}],
+            )
+        ]
+    )
     service = DiscordBotService(
         _config(tmp_path),
         logger=logging.getLogger("test"),
@@ -673,7 +690,14 @@ async def test_flow_recover_reconciles_active_run(
     )
 
     rest = _FakeRest()
-    gateway = _FakeGateway([_flow_interaction(name="recover", options=[])])
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="recover",
+                options=[{"type": 3, "name": "run_id", "value": running_run_id}],
+            )
+        ]
+    )
     service = DiscordBotService(
         _config(tmp_path),
         logger=logging.getLogger("test"),
@@ -737,7 +761,10 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         [
             _flow_interaction(
                 name="reply",
-                options=[{"type": 3, "name": "text", "value": "Please continue"}],
+                options=[
+                    {"type": 3, "name": "run_id", "value": paused_run_id},
+                    {"type": 3, "name": "text", "value": "Please continue"},
+                ],
             ),
         ]
     )

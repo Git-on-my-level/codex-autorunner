@@ -166,6 +166,29 @@ def build_model_picker(
     )
 
 
+def build_model_effort_picker(
+    *,
+    custom_id: str = "model_effort_select",
+    placeholder: str = "Select reasoning effort...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option(
+            label="(none)",
+            value="none",
+            description="Do not set an effort override",
+            default=True,
+        ),
+        build_select_option("minimal", "minimal"),
+        build_select_option("low", "low"),
+        build_select_option("medium", "medium"),
+        build_select_option("high", "high"),
+        build_select_option("xhigh", "xhigh"),
+    ]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
 def build_flow_status_buttons(
     run_id: str,
     status: str,
@@ -261,6 +284,66 @@ def build_flow_runs_picker(
     ]
     if not options:
         options = [build_select_option("No runs available", "none", default=True)]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
+def build_session_threads_picker(
+    threads: list[tuple[str, str]],
+    *,
+    custom_id: str = "session_resume_select",
+    placeholder: str = "Select a thread to resume...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option(
+            label=label[:100],
+            value=thread_id,
+            description="Resume this thread",
+        )
+        for thread_id, label in threads[:DISCORD_SELECT_OPTION_MAX_OPTIONS]
+    ]
+    if not options:
+        options = [build_select_option("No threads available", "none", default=True)]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
+def build_review_commit_picker(
+    commits: list[tuple[str, str]],
+    *,
+    custom_id: str = "review_commit_select",
+    placeholder: str = "Select a commit...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option(
+            label=f"{sha[:7]} - {subject}"[:100] if subject else sha[:7],
+            value=sha,
+            description=subject[:100] if subject else "Commit",
+        )
+        for sha, subject in commits[:DISCORD_SELECT_OPTION_MAX_OPTIONS]
+    ]
+    if not options:
+        options = [build_select_option("No commits available", "none", default=True)]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
+def build_update_target_picker(
+    *,
+    custom_id: str = "update_target_select",
+    placeholder: str = "Select update target...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option("both", "both", description="Web + Chat apps"),
+        build_select_option("web", "web", description="Web UI only"),
+        build_select_option("chat", "chat", description="Telegram + Discord"),
+        build_select_option("telegram", "telegram", description="Telegram only"),
+        build_select_option("discord", "discord", description="Discord only"),
+        build_select_option("status", "status", description="Show update status"),
+    ]
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
     )

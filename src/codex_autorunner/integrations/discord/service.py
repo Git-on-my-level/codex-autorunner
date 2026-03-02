@@ -128,6 +128,7 @@ from ..telegram.helpers import (
     _extract_context_usage_percent,
     _extract_thread_list_cursor,
     _format_turn_metrics,
+    _parse_review_commit_log,
 )
 from ..telegram.progress_stream import TurnProgressTracker, render_progress_text
 from .adapter import DiscordChatAdapter
@@ -142,7 +143,11 @@ from .components import (
     build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
+    build_model_effort_picker,
     build_model_picker,
+    build_review_commit_picker,
+    build_session_threads_picker,
+    build_update_target_picker,
 )
 from .config import DiscordBotConfig
 from .errors import DiscordAPIError, DiscordTransientError
@@ -191,6 +196,20 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "cannot infer the intention please clarify before proceeding."
 )
 _MODEL_LIST_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
+SESSION_RESUME_SELECT_ID = "session_resume_select"
+FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
+UPDATE_TARGET_SELECT_ID = "update_target_select"
+REVIEW_COMMIT_SELECT_ID = "review_commit_select"
+MODEL_EFFORT_SELECT_ID = "model_effort_select"
+FLOW_ACTIONS_WITH_RUN_PICKER = {
+    "status",
+    "restart",
+    "resume",
+    "stop",
+    "archive",
+    "recover",
+    "reply",
+}
 
 
 class AppServerUnavailableError(Exception):
@@ -266,6 +285,31 @@ async def _model_list_with_agent_compat(
         fallback_params = dict(request_params)
         fallback_params.pop("agent", None)
         return await client.model_list(**fallback_params)
+
+
+def _flow_action_label(action: str) -> str:
+    labels = {
+        "status": "status",
+        "restart": "restart",
+        "resume": "resume",
+        "stop": "stop",
+        "archive": "archive",
+        "recover": "recover",
+        "reply": "reply",
+    }
+    return labels.get(action, action)
+
+
+def _flow_run_matches_action(record: FlowRunRecord, action: str) -> bool:
+    if action == "resume":
+        return record.status == FlowRunStatus.PAUSED
+    if action == "reply":
+        return record.status == FlowRunStatus.PAUSED
+    if action == "stop":
+        return not record.status.is_terminal()
+    if action == "recover":
+        return not record.status.is_terminal()
+    return True
 
 
 @dataclass(frozen=True)
@@ -415,6 +459,8 @@ class DiscordBotService:
                 hub_root=str(self._config.root),
                 exc=exc,
             )
+        self._pending_model_effort: dict[str, str] = {}
+        self._pending_flow_reply_text: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",
@@ -1517,6 +1563,144 @@ class DiscordBotService:
             if not cursor:
                 break
         return entries, found_ids
+
+    async def _list_session_threads_for_picker(
+        self,
+        *,
+        workspace_root: Path,
+        current_thread_id: Optional[str],
+    ) -> list[tuple[str, str]]:
+        try:
+            client = await self._client_for_workspace(str(workspace_root))
+        except AppServerUnavailableError:
+            return []
+        if client is None:
+            return []
+        try:
+            entries, _found = await self._list_threads_paginated(
+                client,
+                limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                max_pages=3,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.session.threads_picker.failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            return []
+
+        items: list[tuple[str, str]] = []
+        seen_ids: set[str] = set()
+        for entry in entries:
+            thread_id = entry.get("id")
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            if thread_id in seen_ids:
+                continue
+            seen_ids.add(thread_id)
+            label = thread_id
+            if thread_id == current_thread_id:
+                label = f"{thread_id} (current)"
+            items.append((thread_id, label))
+            if len(items) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
+                break
+        if (
+            isinstance(current_thread_id, str)
+            and current_thread_id
+            and current_thread_id not in seen_ids
+        ):
+            if len(items) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
+                items.pop()
+            items.append((current_thread_id, f"{current_thread_id} (current)"))
+        return items
+
+    async def _list_recent_commits_for_picker(
+        self,
+        workspace_root: Path,
+        *,
+        limit: int = DISCORD_SELECT_OPTION_MAX_OPTIONS,
+    ) -> list[tuple[str, str]]:
+        cmd = [
+            "git",
+            "-C",
+            str(workspace_root),
+            "log",
+            f"-n{max(1, limit)}",
+            "--pretty=format:%H%x1f%s%x1e",
+        ]
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.review.commit_list.failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            return []
+        stdout = result.stdout if isinstance(result.stdout, str) else ""
+        if result.returncode not in (0, None) and not stdout.strip():
+            return []
+        return _parse_review_commit_log(stdout)[:limit]
+
+    async def _prompt_flow_action_picker(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        action: str,
+    ) -> None:
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+        except (sqlite3.Error, OSError) as exc:
+            raise DiscordTransientError(
+                f"Failed to query flow runs: {exc}",
+                user_message="Unable to query flow database. Please try again later.",
+            ) from None
+        finally:
+            store.close()
+
+        filtered = [run for run in runs if _flow_run_matches_action(run, action)]
+        if not filtered:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"No ticket_flow runs available for {_flow_action_label(action)}.",
+            )
+            return
+        run_tuples = [(record.id, record.status.value) for record in filtered]
+        custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
+        prompt = f"Select a run to {_flow_action_label(action)}:"
+        await self._respond_with_components(
+            interaction_id,
+            interaction_token,
+            prompt,
+            [
+                build_flow_runs_picker(
+                    run_tuples,
+                    custom_id=custom_id,
+                    placeholder=f"Select run to {_flow_action_label(action)}...",
+                )
+            ],
+        )
 
     async def _run_agent_turn_for_message(
         self,
@@ -3688,15 +3872,37 @@ class DiscordBotService:
             )
         else:
             current_thread_id = orchestrator.get_thread_id(session_key)
+            thread_items = await self._list_session_threads_for_picker(
+                workspace_root=workspace_root,
+                current_thread_id=current_thread_id,
+            )
+            if thread_items:
+                header = (
+                    f"Current thread: `{current_thread_id}`\n\n"
+                    if current_thread_id
+                    else ""
+                )
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=format_discord_message(header + "Select a thread to resume:"),
+                )
+                await self._send_followup_ephemeral(
+                    interaction_token=interaction_token,
+                    content="Choose one thread from the picker below.",
+                    components=[build_session_threads_picker(thread_items)],
+                )
+                return
             if current_thread_id:
                 text = format_discord_message(
                     f"Current thread: `{current_thread_id}`\n\n"
-                    "Use `/car resume thread_id:<thread_id>` to resume a specific thread."
+                    "No additional threads found. Use `/car session resume thread_id:<thread_id>` to resume a specific thread."
                 )
             else:
                 text = format_discord_message(
                     "No thread is currently active.\n\n"
-                    "Use `/car resume thread_id:<thread_id>` to resume a specific thread, "
+                    "Use `/car session resume thread_id:<thread_id>` to resume a specific thread, "
                     "or start a new conversation to begin."
                 )
 
@@ -3716,6 +3922,14 @@ class DiscordBotService:
         options: dict[str, Any],
     ) -> None:
         raw_target = options.get("target")
+        if not isinstance(raw_target, str) or not raw_target.strip():
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                "Select update target:",
+                [build_update_target_picker(custom_id=UPDATE_TARGET_SELECT_ID)],
+            )
+            return
         if isinstance(raw_target, str) and raw_target.strip().lower() == "status":
             await self._handle_car_update_status(
                 interaction_id=interaction_id,
@@ -3728,10 +3942,11 @@ class DiscordBotService:
                 raw_target if isinstance(raw_target, str) else None
             )
         except ValueError as exc:
-            await self._respond_ephemeral(
+            await self._respond_with_components(
                 interaction_id,
                 interaction_token,
-                f"{exc} Use target:status to check progress.",
+                f"{exc} Select update target:",
+                [build_update_target_picker(custom_id=UPDATE_TARGET_SELECT_ID)],
             )
             return
 
@@ -4128,6 +4343,98 @@ class DiscordBotService:
             f"Model set to {model_name}{effort_note}. Will apply on the next turn.",
         )
 
+    async def _handle_model_picker_selection(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        selected_model: str,
+    ) -> None:
+        model_value = selected_model.strip()
+        if not model_value:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a model and try again.",
+            )
+            return
+        if model_value in {"clear", "reset"}:
+            self._pending_model_effort.pop(channel_id, None)
+            await self._handle_car_model(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                options={"name": "clear"},
+            )
+            return
+
+        binding = await self._store.get_binding(channel_id=channel_id)
+        current_agent_raw = (
+            binding.get("agent") if binding else None
+        ) or self.DEFAULT_AGENT
+        if not isinstance(current_agent_raw, str):
+            current_agent_raw = self.DEFAULT_AGENT
+        current_agent = current_agent_raw.strip().lower()
+        if current_agent not in self.VALID_AGENT_VALUES:
+            current_agent = self.DEFAULT_AGENT
+
+        if current_agent == "codex":
+            self._pending_model_effort[channel_id] = model_value
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                (
+                    f"Selected model: `{model_value}`\n"
+                    "Select reasoning effort (or none):"
+                ),
+                [build_model_effort_picker(custom_id=MODEL_EFFORT_SELECT_ID)],
+            )
+            return
+
+        await self._handle_car_model(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            options={"name": model_value},
+        )
+
+    async def _handle_model_effort_selection(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        selected_effort: str,
+    ) -> None:
+        model_name = self._pending_model_effort.pop(channel_id, None)
+        if not isinstance(model_name, str) or not model_name:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Model selection expired. Please re-run `/car model`.",
+            )
+            return
+
+        effort_value = selected_effort.strip().lower()
+        if effort_value not in self.VALID_REASONING_EFFORTS and effort_value != "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Invalid effort '{selected_effort}'.",
+            )
+            return
+
+        model_options: dict[str, Any] = {"name": model_name}
+        if effort_value != "none":
+            model_options["effort"] = effort_value
+        await self._handle_car_model(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            options=model_options,
+        )
+
     async def _resolve_workspace_for_flow_read(
         self,
         interaction_id: str,
@@ -4334,6 +4641,14 @@ class DiscordBotService:
         update_message: bool = False,
     ) -> None:
         run_id_opt = options.get("run_id")
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="status",
+            )
+            return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -4738,6 +5053,14 @@ class DiscordBotService:
         options: dict[str, Any],
     ) -> None:
         run_id_opt = options.get("run_id")
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="restart",
+            )
+            return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -4842,6 +5165,14 @@ class DiscordBotService:
         options: dict[str, Any],
     ) -> None:
         run_id_opt = options.get("run_id")
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="recover",
+            )
+            return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -4990,6 +5321,14 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="resume",
+            )
+            return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -5107,6 +5446,14 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="stop",
+            )
+            return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -5217,6 +5564,14 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
     ) -> None:
         run_id_opt = options.get("run_id")
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="archive",
+            )
+            return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -5337,6 +5692,15 @@ class DiscordBotService:
             return
 
         run_id_opt = options.get("run_id")
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()) and channel_id:
+            self._pending_flow_reply_text[channel_id] = text.strip()
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="reply",
+            )
+            return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -6061,12 +6425,188 @@ class DiscordBotService:
                         "Please select a model and try again.",
                     )
                     return
-                await self._handle_car_model(
+                await self._handle_model_picker_selection(
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
-                    options={"name": values[0]},
+                    selected_model=values[0],
                 )
+                return
+
+            if custom_id == MODEL_EFFORT_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select reasoning effort and try again.",
+                    )
+                    return
+                await self._handle_model_effort_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    selected_effort=values[0],
+                )
+                return
+
+            if custom_id == SESSION_RESUME_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a thread and try again.",
+                    )
+                    return
+                await self._handle_car_resume(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"thread_id": values[0]},
+                )
+                return
+
+            if custom_id == UPDATE_TARGET_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select an update target and try again.",
+                    )
+                    return
+                await self._handle_car_update(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"target": values[0]},
+                )
+                return
+
+            if custom_id == REVIEW_COMMIT_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a commit and try again.",
+                    )
+                    return
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                if workspace_root:
+                    await self._handle_car_review(
+                        interaction_id,
+                        interaction_token,
+                        channel_id=channel_id,
+                        workspace_root=workspace_root,
+                        options={"target": f"commit {values[0]}"},
+                    )
+                return
+
+            if custom_id.startswith(f"{FLOW_ACTION_SELECT_PREFIX}:"):
+                action = custom_id.split(":", 1)[1].strip().lower()
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a run and try again.",
+                    )
+                    return
+                if action not in FLOW_ACTIONS_WITH_RUN_PICKER:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        f"Unknown flow action picker: {action}",
+                    )
+                    return
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                if not workspace_root:
+                    return
+                run_id = values[0]
+                if action == "status":
+                    await self._handle_flow_status(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
+                    )
+                    return
+                if action == "restart":
+                    await self._handle_flow_restart(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                    )
+                    return
+                if action == "resume":
+                    await self._handle_flow_resume(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
+                    )
+                    return
+                if action == "stop":
+                    await self._handle_flow_stop(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
+                    )
+                    return
+                if action == "archive":
+                    await self._handle_flow_archive(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
+                    )
+                    return
+                if action == "recover":
+                    await self._handle_flow_recover(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                    )
+                    return
+                if action == "reply":
+                    pending_text = self._pending_flow_reply_text.pop(channel_id, None)
+                    if not isinstance(pending_text, str) or not pending_text.strip():
+                        await self._respond_ephemeral(
+                            interaction_id,
+                            interaction_token,
+                            "Reply selection expired. Re-run `/car flow reply text:<...>`.",
+                        )
+                        return
+                    await self._handle_flow_reply(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id, "text": pending_text},
+                        channel_id=channel_id,
+                        guild_id=extract_guild_id(interaction_payload),
+                    )
+                    return
                 return
 
             if custom_id.startswith("flow:"):
@@ -6196,12 +6736,183 @@ class DiscordBotService:
                         "Please select a model and try again.",
                     )
                     return
-                await self._handle_car_model(
+                await self._handle_model_picker_selection(
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
-                    options={"name": values[0]},
+                    selected_model=values[0],
                 )
+                return
+
+            if custom_id == MODEL_EFFORT_SELECT_ID:
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select reasoning effort and try again.",
+                    )
+                    return
+                await self._handle_model_effort_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    selected_effort=values[0],
+                )
+                return
+
+            if custom_id == SESSION_RESUME_SELECT_ID:
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a thread and try again.",
+                    )
+                    return
+                await self._handle_car_resume(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"thread_id": values[0]},
+                )
+                return
+
+            if custom_id == UPDATE_TARGET_SELECT_ID:
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select an update target and try again.",
+                    )
+                    return
+                await self._handle_car_update(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"target": values[0]},
+                )
+                return
+
+            if custom_id == REVIEW_COMMIT_SELECT_ID:
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a commit and try again.",
+                    )
+                    return
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                if workspace_root:
+                    await self._handle_car_review(
+                        interaction_id,
+                        interaction_token,
+                        channel_id=channel_id,
+                        workspace_root=workspace_root,
+                        options={"target": f"commit {values[0]}"},
+                    )
+                return
+
+            if custom_id.startswith(f"{FLOW_ACTION_SELECT_PREFIX}:"):
+                action = custom_id.split(":", 1)[1].strip().lower()
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a run and try again.",
+                    )
+                    return
+                if action not in FLOW_ACTIONS_WITH_RUN_PICKER:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        f"Unknown flow action picker: {action}",
+                    )
+                    return
+                workspace_root = await self._require_bound_workspace(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                )
+                if not workspace_root:
+                    return
+                run_id = values[0]
+                if action == "status":
+                    await self._handle_flow_status(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=guild_id,
+                    )
+                    return
+                if action == "restart":
+                    await self._handle_flow_restart(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                    )
+                    return
+                if action == "resume":
+                    await self._handle_flow_resume(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=guild_id,
+                    )
+                    return
+                if action == "stop":
+                    await self._handle_flow_stop(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=guild_id,
+                    )
+                    return
+                if action == "archive":
+                    await self._handle_flow_archive(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                        channel_id=channel_id,
+                        guild_id=guild_id,
+                    )
+                    return
+                if action == "recover":
+                    await self._handle_flow_recover(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id},
+                    )
+                    return
+                if action == "reply":
+                    pending_text = self._pending_flow_reply_text.pop(channel_id, None)
+                    if not isinstance(pending_text, str) or not pending_text.strip():
+                        await self._respond_ephemeral(
+                            interaction_id,
+                            interaction_token,
+                            "Reply selection expired. Re-run `/car flow reply text:<...>`.",
+                        )
+                        return
+                    await self._handle_flow_reply(
+                        interaction_id,
+                        interaction_token,
+                        workspace_root=workspace_root,
+                        options={"run_id": run_id, "text": pending_text},
+                        channel_id=channel_id,
+                        guild_id=guild_id,
+                    )
+                    return
                 return
 
             if custom_id.startswith("flow:"):
@@ -6487,24 +7198,69 @@ class DiscordBotService:
         target_arg = options.get("target", "")
         target_type = "uncommittedChanges"
         target_value: Optional[str] = None
+        prompt_commit_picker = False
 
         if isinstance(target_arg, str) and target_arg.strip():
             target_text = target_arg.strip()
-            if target_text.lower().startswith("base "):
+            target_lower = target_text.lower()
+            if target_lower.startswith("base "):
                 branch = target_text[5:].strip()
                 if branch:
                     target_type = "baseBranch"
                     target_value = branch
-            elif target_text.lower().startswith("commit "):
-                sha = target_text[7:].strip()
+            elif target_lower == "commit" or target_lower.startswith("commit "):
+                sha = target_text[6:].strip()
                 if sha:
                     target_type = "commit"
                     target_value = sha
-            elif target_text.lower() in ("uncommitted", ""):
+                else:
+                    prompt_commit_picker = True
+            elif target_lower in ("uncommitted", ""):
                 pass
+            elif target_lower == "custom":
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Provide custom review instructions after `custom`, for example: "
+                    "`/car review target:custom focus on security regressions`.",
+                )
+                return
+            elif target_lower.startswith("custom "):
+                custom_instructions = target_text[7:].strip()
+                if not custom_instructions:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Provide custom review instructions after `custom`, for example: "
+                        "`/car review target:custom focus on security regressions`.",
+                    )
+                    return
+                target_type = "custom"
+                target_value = custom_instructions
             else:
                 target_type = "custom"
                 target_value = target_text
+
+        if prompt_commit_picker:
+            commits = await self._list_recent_commits_for_picker(workspace_root)
+            if not commits:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "No recent commits found. Use `/car review target:commit <sha>`.",
+                )
+                return
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                "Select a commit to review:",
+                [
+                    build_review_commit_picker(
+                        commits, custom_id=REVIEW_COMMIT_SELECT_ID
+                    )
+                ],
+            )
+            return
 
         await self._defer_ephemeral(
             interaction_id=interaction_id,
@@ -6847,15 +7603,19 @@ class DiscordBotService:
             feature = ""
         feature = feature.strip()
 
+        usage_text = (
+            "Usage:\n"
+            "- `/car experimental action:list`\n"
+            "- `/car experimental action:enable feature:<feature>`\n"
+            "- `/car experimental action:disable feature:<feature>`"
+        )
+
         if not action or action in ("list", "ls", "all"):
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
                 "Experimental features listing requires the app server client.\n\n"
-                "To enable/disable features, use:\n"
-                "- `/car experimental list` - list features\n"
-                "- `/car experimental enable <feature>` - enable a feature\n"
-                "- `/car experimental disable <feature>` - disable a feature",
+                f"{usage_text}",
             )
             return
 
@@ -6864,7 +7624,7 @@ class DiscordBotService:
                 await self._respond_ephemeral(
                     interaction_id,
                     interaction_token,
-                    "Usage: /car experimental enable <feature>",
+                    f"Missing feature for `enable`.\n\n{usage_text}",
                 )
                 return
             await self._respond_ephemeral(
@@ -6880,7 +7640,7 @@ class DiscordBotService:
                 await self._respond_ephemeral(
                     interaction_id,
                     interaction_token,
-                    "Usage: /car experimental disable <feature>",
+                    f"Missing feature for `disable`.\n\n{usage_text}",
                 )
                 return
             await self._respond_ephemeral(
@@ -6894,7 +7654,7 @@ class DiscordBotService:
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Unknown action: {action}. Use list, enable, or disable.",
+            f"Unknown action: {action}.\n\nValid actions: list, enable, disable.\n\n{usage_text}",
         )
 
     COMPACT_SUMMARY_PROMPT = (

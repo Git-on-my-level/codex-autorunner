@@ -97,13 +97,21 @@ def build_application_commands() -> list[dict[str, Any]]:
                 {
                     "type": SUB_COMMAND,
                     "name": "update",
-                    "description": "Update CAR service (both, web, chat, telegram, discord, or status)",
+                    "description": "Update CAR service",
                     "options": [
                         {
                             "type": STRING,
                             "name": "target",
-                            "description": "Target: both, web, chat, telegram, discord, or status (default: both)",
+                            "description": "Target: both, web, chat, telegram, discord, or status",
                             "required": False,
+                            "choices": [
+                                {"name": "both", "value": "both"},
+                                {"name": "web", "value": "web"},
+                                {"name": "chat", "value": "chat"},
+                                {"name": "telegram", "value": "telegram"},
+                                {"name": "discord", "value": "discord"},
+                                {"name": "status", "value": "status"},
+                            ],
                         }
                     ],
                 },
@@ -205,6 +213,11 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "name": "action",
                             "description": "list, enable, or disable",
                             "required": False,
+                            "choices": [
+                                {"name": "list", "value": "list"},
+                                {"name": "enable", "value": "enable"},
+                                {"name": "disable", "value": "disable"},
+                            ],
                         },
                         {
                             "type": STRING,
