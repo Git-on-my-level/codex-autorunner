@@ -307,6 +307,16 @@ def build_pma_routes() -> APIRouter:
         except Exception:
             logger.exception("Failed to persist PMA state")
 
+    async def _append_text_file(path: Path, content: str) -> None:
+        def _append() -> None:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(content)
+
+        await asyncio.to_thread(_append)
+
+    async def _atomic_write_async(path: Path, content: str) -> None:
+        await asyncio.to_thread(atomic_write, path, content)
+
     def _truncate_text(value: Any, limit: int) -> str:
         if not isinstance(value, str):
             text_value: str = "" if value is None else str(value)
@@ -2280,7 +2290,9 @@ def build_pma_routes() -> APIRouter:
         return {"status": "ok"}
 
     @router.post("/context/snapshot")
-    def snapshot_pma_context(request: Request, body: Optional[dict[str, Any]] = None):
+    async def snapshot_pma_context(
+        request: Request, body: Optional[dict[str, Any]] = None
+    ):
         hub_root = request.app.state.config.root
         try:
             ensure_pma_docs(hub_root)
@@ -2303,7 +2315,9 @@ def build_pma_routes() -> APIRouter:
         context_log_path = docs_dir / "context_log.md"
 
         try:
-            active_content = active_context_path.read_text(encoding="utf-8")
+            active_content = await asyncio.to_thread(
+                active_context_path.read_text, encoding="utf-8"
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to read active_context.md: {exc}"
@@ -2322,8 +2336,7 @@ def build_pma_routes() -> APIRouter:
             )
 
         try:
-            with context_log_path.open("a", encoding="utf-8") as f:
-                f.write(snapshot_content)
+            await _append_text_file(context_log_path, snapshot_content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to append context_log.md: {exc}"
@@ -2331,7 +2344,9 @@ def build_pma_routes() -> APIRouter:
 
         if reset:
             try:
-                atomic_write(active_context_path, pma_active_context_content())
+                await _atomic_write_async(
+                    active_context_path, pma_active_context_content()
+                )
             except Exception as exc:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to reset active_context.md: {exc}"
@@ -2345,7 +2360,7 @@ def build_pma_routes() -> APIRouter:
             "reset": reset,
         }
         try:
-            context_log_bytes = context_log_path.stat().st_size
+            context_log_bytes = (await asyncio.to_thread(context_log_path.stat)).st_size
             response["context_log_bytes"] = context_log_bytes
             if context_log_bytes > PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES:
                 response["warning"] = (
@@ -2404,17 +2419,21 @@ def build_pma_routes() -> APIRouter:
         ordered.extend(remaining)
         return ordered
 
-    def _write_doc_history(
+    async def _write_doc_history(
         hub_root: Path, doc_name: str, content: str
     ) -> Optional[Path]:
         docs_dir = _pma_docs_dir(hub_root)
         history_root = docs_dir / "_history" / doc_name
-        try:
+
+        def _write() -> Path:
             history_root.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             history_path = history_root / f"{timestamp}.md"
             atomic_write(history_path, content)
             return history_path
+
+        try:
+            return await asyncio.to_thread(_write)
         except Exception:
             logger.exception("Failed to write PMA doc history for %s", doc_name)
             return None
@@ -2484,7 +2503,7 @@ def build_pma_routes() -> APIRouter:
         return {"name": name, "content": content}
 
     @router.put("/docs/{name}")
-    def update_pma_doc(
+    async def update_pma_doc(
         name: str, request: Request, body: dict[str, str]
     ) -> dict[str, str]:
         name = _normalize_doc_name(name)
@@ -2503,12 +2522,12 @@ def build_pma_routes() -> APIRouter:
         docs_dir.mkdir(parents=True, exist_ok=True)
         doc_path = docs_dir / name
         try:
-            atomic_write(doc_path, content)
+            await _atomic_write_async(doc_path, content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
-        _write_doc_history(hub_root, name, content)
+        await _write_doc_history(hub_root, name, content)
         details = {
             "name": name,
             "size": len(content.encode("utf-8")),
