@@ -4,9 +4,17 @@ Pydantic request/response schemas for web and API routes.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class Payload(BaseModel):
@@ -613,3 +621,115 @@ class PmaManagedThreadCompactRequest(Payload):
 
 class PmaManagedThreadResumeRequest(Payload):
     backend_thread_id: str
+
+
+class PmaAutomationSubscriptionCreateRequest(Payload):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    event_types: Optional[List[str]] = Field(
+        default=None, validation_alias=AliasChoices("event_types", "eventTypes")
+    )
+    repo_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("repo_id", "repoId")
+    )
+    run_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("run_id", "runId")
+    )
+    thread_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("thread_id", "threadId")
+    )
+    lane_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("lane_id", "laneId")
+    )
+    from_state: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("from_state", "fromState")
+    )
+    to_state: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("to_state", "toState")
+    )
+    reason: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+class PmaAutomationTimerCreateRequest(Payload):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    timer_type: Optional[Literal["one_shot", "watchdog"]] = Field(
+        default=None, validation_alias=AliasChoices("timer_type", "timerType")
+    )
+    delay_seconds: Optional[int] = Field(
+        default=None, validation_alias=AliasChoices("delay_seconds", "delaySeconds")
+    )
+    idle_seconds: Optional[int] = Field(
+        default=None, validation_alias=AliasChoices("idle_seconds", "idleSeconds")
+    )
+    due_at: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("due_at", "dueAt")
+    )
+    subscription_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("subscription_id", "subscriptionId"),
+    )
+    timer_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("timer_id", "timerId")
+    )
+    repo_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("repo_id", "repoId")
+    )
+    run_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("run_id", "runId")
+    )
+    thread_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("thread_id", "threadId")
+    )
+    lane_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("lane_id", "laneId")
+    )
+    from_state: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("from_state", "fromState")
+    )
+    to_state: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("to_state", "toState")
+    )
+    reason: Optional[str] = None
+    timestamp: Optional[str] = None
+
+    @field_validator("due_at")
+    @classmethod
+    def _validate_due_at(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception as exc:
+            raise ValueError("due_at must be a valid ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @model_validator(mode="after")
+    def _validate_timer_fields(self) -> "PmaAutomationTimerCreateRequest":
+        if self.delay_seconds is not None and self.delay_seconds < 0:
+            raise ValueError("delay_seconds must be >= 0")
+        if self.idle_seconds is not None and self.idle_seconds <= 0:
+            raise ValueError("idle_seconds must be > 0")
+        if self.timer_type == "watchdog" and self.idle_seconds is None:
+            raise ValueError("idle_seconds is required for watchdog timers")
+        return self
+
+
+class PmaAutomationTimerTouchRequest(Payload):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    reason: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+class PmaAutomationTimerCancelRequest(Payload):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    reason: Optional[str] = None
+    timestamp: Optional[str] = None

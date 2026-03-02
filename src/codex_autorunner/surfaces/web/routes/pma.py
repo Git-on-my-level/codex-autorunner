@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import logging
 import re
@@ -65,6 +66,10 @@ from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....integrations.github.context_injection import maybe_inject_github_context
 from ..schemas import (
+    PmaAutomationSubscriptionCreateRequest,
+    PmaAutomationTimerCancelRequest,
+    PmaAutomationTimerCreateRequest,
+    PmaAutomationTimerTouchRequest,
     PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
     PmaManagedThreadMessageRequest,
@@ -103,6 +108,8 @@ def build_pma_routes() -> APIRouter:
     pma_audit_log: Optional[PmaAuditLog] = None
     pma_queue: Optional[PmaQueue] = None
     pma_queue_root: Optional[Path] = None
+    pma_automation_store: Optional[Any] = None
+    pma_automation_root: Optional[Path] = None
     lane_workers: dict[str, PmaLaneWorker] = {}
     item_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
@@ -200,6 +207,269 @@ def build_pma_routes() -> APIRouter:
             pma_queue = PmaQueue(hub_root)
             pma_queue_root = hub_root
         return pma_queue
+
+    async def _await_if_needed(value: Any) -> Any:
+        if asyncio.iscoroutine(value):
+            return await value
+        return value
+
+    async def _call_with_fallbacks(
+        method: Any, attempts: list[tuple[tuple[Any, ...], dict[str, Any]]]
+    ) -> Any:
+        last_type_error: Optional[TypeError] = None
+        for args, kwargs in attempts:
+            try:
+                return await _await_if_needed(method(*args, **kwargs))
+            except TypeError as exc:
+                last_type_error = exc
+                continue
+        if last_type_error is not None:
+            raise last_type_error
+        raise RuntimeError("No automation method call attempts were provided")
+
+    def _first_callable(target: Any, names: tuple[str, ...]) -> Optional[Any]:
+        for name in names:
+            candidate = getattr(target, name, None)
+            if callable(candidate):
+                return candidate
+        return None
+
+    def _discover_automation_store_class() -> Optional[type[Any]]:
+        candidates: tuple[tuple[str, str], ...] = (
+            ("codex_autorunner.core.pma_automation_store", "PmaAutomationStore"),
+            ("codex_autorunner.core.pma_automation", "PmaAutomationStore"),
+            ("codex_autorunner.core.automation_store", "AutomationStore"),
+            ("codex_autorunner.core.automation", "AutomationStore"),
+            ("codex_autorunner.core.hub_automation", "HubAutomationStore"),
+        )
+        for module_name, class_name in candidates:
+            try:
+                module = importlib.import_module(module_name)
+            except Exception:
+                continue
+            klass = getattr(module, class_name, None)
+            if isinstance(klass, type):
+                return klass
+        return None
+
+    async def _call_store_create_with_payload(
+        store: Any, method_names: tuple[str, ...], payload: dict[str, Any]
+    ) -> Any:
+        method = _first_callable(store, method_names)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Automation action unavailable")
+        return await _call_with_fallbacks(
+            method,
+            [
+                ((payload,), {}),
+                ((), {"payload": payload}),
+                ((), dict(payload)),
+            ],
+        )
+
+    async def _call_store_list(
+        store: Any, method_names: tuple[str, ...], filters: dict[str, Any]
+    ) -> Any:
+        method = _first_callable(store, method_names)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Automation action unavailable")
+        return await _call_with_fallbacks(
+            method,
+            [
+                ((), dict(filters)),
+                ((dict(filters),), {}),
+                ((), {}),
+            ],
+        )
+
+    async def _call_store_action_with_id(
+        store: Any,
+        method_names: tuple[str, ...],
+        item_id: str,
+        payload: dict[str, Any],
+        *,
+        id_aliases: tuple[str, ...],
+    ) -> Any:
+        method = _first_callable(store, method_names)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Automation action unavailable")
+        item_kwargs: dict[str, Any] = {}
+        for alias in id_aliases:
+            item_kwargs[alias] = item_id
+        merged_with_id = dict(payload)
+        if id_aliases:
+            merged_with_id[id_aliases[0]] = item_id
+        return await _call_with_fallbacks(
+            method,
+            [
+                ((item_id, dict(payload)), {}),
+                ((item_id,), dict(payload)),
+                ((item_id,), {"payload": dict(payload)}),
+                ((), item_kwargs),
+                ((), merged_with_id),
+                ((item_id,), {}),
+            ],
+        )
+
+    async def _get_automation_store(
+        request: Request, *, required: bool = True
+    ) -> Optional[Any]:
+        nonlocal pma_automation_store, pma_automation_root
+
+        hub_root = request.app.state.config.root
+        supervisor = getattr(request.app.state, "hub_supervisor", None)
+        if supervisor is not None:
+            for name in ("get_pma_automation_store", "get_automation_store"):
+                accessor = getattr(supervisor, name, None)
+                if not callable(accessor):
+                    continue
+                for args in ((), (hub_root,)):
+                    try:
+                        store = await _await_if_needed(accessor(*args))
+                    except TypeError:
+                        continue
+                    except Exception:
+                        logger.exception(
+                            "Failed to resolve automation store from %s", name
+                        )
+                        break
+                    if store is not None:
+                        return store
+                    break
+            for name in ("pma_automation_store", "automation_store"):
+                store = getattr(supervisor, name, None)
+                if store is not None:
+                    return store
+
+        if pma_automation_store is not None and pma_automation_root == hub_root:
+            return pma_automation_store
+
+        klass = _discover_automation_store_class()
+        if klass is not None:
+            for args in ((hub_root,), ()):
+                try:
+                    store = klass(*args)
+                except TypeError:
+                    continue
+                except Exception:
+                    logger.exception("Failed to initialize automation store")
+                    break
+                pma_automation_store = store
+                pma_automation_root = hub_root
+                return store
+
+        if required:
+            raise HTTPException(
+                status_code=503, detail="Hub automation store unavailable"
+            )
+        return None
+
+    async def _notify_hub_automation_transition(
+        request: Request,
+        *,
+        repo_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        from_state: str,
+        to_state: str,
+        reason: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "from_state": (from_state or "").strip(),
+            "to_state": (to_state or "").strip(),
+            "reason": _normalize_optional_text(reason) or "",
+            "timestamp": _normalize_optional_text(timestamp) or now_iso(),
+        }
+        normalized_repo_id = _normalize_optional_text(repo_id)
+        normalized_run_id = _normalize_optional_text(run_id)
+        normalized_thread_id = _normalize_optional_text(thread_id)
+        if normalized_repo_id:
+            payload["repo_id"] = normalized_repo_id
+        if normalized_run_id:
+            payload["run_id"] = normalized_run_id
+        if normalized_thread_id:
+            payload["thread_id"] = normalized_thread_id
+        if isinstance(extra, dict):
+            payload.update(extra)
+
+        supervisor = getattr(request.app.state, "hub_supervisor", None)
+        store = await _get_automation_store(request, required=False)
+        if store is None:
+            return
+
+        method = _first_callable(
+            store,
+            (
+                "notify_transition",
+                "record_transition",
+                "handle_transition",
+                "on_transition",
+                "process_transition",
+            ),
+        )
+        if method is None:
+            return
+        try:
+            await _call_with_fallbacks(
+                method,
+                [
+                    ((dict(payload),), {}),
+                    ((), {"payload": dict(payload)}),
+                    ((), dict(payload)),
+                ],
+            )
+        except Exception:
+            logger.exception("Failed to notify hub automation transition")
+            return
+
+        process_now = (
+            getattr(supervisor, "process_pma_automation_now", None)
+            if supervisor is not None
+            else None
+        )
+        if not callable(process_now):
+            return
+        try:
+            await _await_if_needed(process_now(include_timers=False))
+        except TypeError:
+            try:
+                await _await_if_needed(process_now())
+            except Exception:
+                logger.exception("Failed immediate PMA automation processing")
+        except Exception:
+            logger.exception("Failed immediate PMA automation processing")
+
+    async def _notify_managed_thread_terminal_transition(
+        request: Request,
+        *,
+        thread: dict[str, Any],
+        managed_thread_id: str,
+        managed_turn_id: str,
+        to_state: str,
+        reason: str,
+    ) -> None:
+        normalized_to_state = (to_state or "").strip().lower() or "failed"
+        await _notify_hub_automation_transition(
+            request,
+            repo_id=_normalize_optional_text(thread.get("repo_id")),
+            run_id=None,
+            thread_id=managed_thread_id,
+            from_state="running",
+            to_state=normalized_to_state,
+            reason=reason,
+            extra={
+                "event_type": f"managed_thread_{normalized_to_state}",
+                "transition_id": f"managed_turn:{managed_turn_id}:{normalized_to_state}",
+                "idempotency_key": (
+                    f"managed_turn:{managed_turn_id}:{normalized_to_state}"
+                ),
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": managed_turn_id,
+                "agent": _normalize_optional_text(thread.get("agent")) or "",
+            },
+        )
 
     def _is_within_root(path: Path, root: Path) -> bool:
         return is_within_allowed_root(path, allowed_roots=[root], resolve=True)
@@ -657,6 +927,11 @@ def build_pma_routes() -> APIRouter:
         _ = app
         await _stop_lane_worker(lane_id)
 
+    async def _stop_all_lane_workers_for_app(app: Any) -> None:
+        _ = app
+        for lane_id in list(lane_workers.keys()):
+            await _stop_lane_worker(lane_id)
+
     async def _execute_queue_item(item: Any, request: Request) -> dict[str, Any]:
         hub_root = request.app.state.config.root
         payload = item.payload
@@ -1010,6 +1285,213 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         return {"thread": thread}
 
+    @router.post("/automation/subscriptions")
+    @router.post("/subscriptions")
+    async def create_automation_subscription(
+        request: Request, payload: PmaAutomationSubscriptionCreateRequest
+    ) -> dict[str, Any]:
+        store = await _get_automation_store(request)
+        created = await _call_store_create_with_payload(
+            store,
+            (
+                "create_subscription",
+                "add_subscription",
+                "upsert_subscription",
+            ),
+            payload.model_dump(exclude_none=True),
+        )
+        if isinstance(created, dict) and "subscription" in created:
+            return created
+        return {"subscription": created}
+
+    @router.get("/automation/subscriptions")
+    @router.get("/subscriptions")
+    async def list_automation_subscriptions(
+        request: Request,
+        repo_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        lane_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        store = await _get_automation_store(request)
+        filters = {
+            "repo_id": _normalize_optional_text(repo_id),
+            "run_id": _normalize_optional_text(run_id),
+            "thread_id": _normalize_optional_text(thread_id),
+            "lane_id": _normalize_optional_text(lane_id),
+            "limit": limit,
+        }
+        subscriptions = await _call_store_list(
+            store,
+            (
+                "list_subscriptions",
+                "get_subscriptions",
+            ),
+            {k: v for k, v in filters.items() if v is not None},
+        )
+        if isinstance(subscriptions, dict) and "subscriptions" in subscriptions:
+            return subscriptions
+        if subscriptions is None:
+            subscriptions = []
+        return {"subscriptions": list(subscriptions)}
+
+    @router.delete("/automation/subscriptions/{subscription_id}")
+    @router.delete("/subscriptions/{subscription_id}")
+    async def delete_automation_subscription(
+        subscription_id: str, request: Request
+    ) -> dict[str, Any]:
+        normalized_id = (subscription_id or "").strip()
+        if not normalized_id:
+            raise HTTPException(status_code=400, detail="subscription_id is required")
+        store = await _get_automation_store(request)
+        deleted = await _call_store_action_with_id(
+            store,
+            (
+                "delete_subscription",
+                "remove_subscription",
+                "cancel_subscription",
+            ),
+            normalized_id,
+            payload={},
+            id_aliases=("subscription_id", "id"),
+        )
+        if isinstance(deleted, dict):
+            payload = dict(deleted)
+            payload.setdefault("status", "ok")
+            payload.setdefault("subscription_id", normalized_id)
+            return payload
+        return {
+            "status": "ok",
+            "subscription_id": normalized_id,
+            "deleted": True if deleted is None else bool(deleted),
+        }
+
+    @router.post("/automation/timers")
+    @router.post("/timers")
+    async def create_automation_timer(
+        request: Request, payload: PmaAutomationTimerCreateRequest
+    ) -> dict[str, Any]:
+        store = await _get_automation_store(request)
+        created = await _call_store_create_with_payload(
+            store,
+            (
+                "create_timer",
+                "add_timer",
+                "upsert_timer",
+            ),
+            payload.model_dump(exclude_none=True),
+        )
+        if isinstance(created, dict) and "timer" in created:
+            return created
+        return {"timer": created}
+
+    @router.get("/automation/timers")
+    @router.get("/timers")
+    async def list_automation_timers(
+        request: Request,
+        timer_type: Optional[str] = None,
+        subscription_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        lane_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        store = await _get_automation_store(request)
+        filters = {
+            "timer_type": _normalize_optional_text(timer_type),
+            "subscription_id": _normalize_optional_text(subscription_id),
+            "repo_id": _normalize_optional_text(repo_id),
+            "run_id": _normalize_optional_text(run_id),
+            "thread_id": _normalize_optional_text(thread_id),
+            "lane_id": _normalize_optional_text(lane_id),
+            "limit": limit,
+        }
+        timers = await _call_store_list(
+            store,
+            (
+                "list_timers",
+                "get_timers",
+            ),
+            {k: v for k, v in filters.items() if v is not None},
+        )
+        if isinstance(timers, dict) and "timers" in timers:
+            return timers
+        if timers is None:
+            timers = []
+        return {"timers": list(timers)}
+
+    @router.post("/automation/timers/{timer_id}/touch")
+    @router.post("/timers/{timer_id}/touch")
+    async def touch_automation_timer(
+        timer_id: str,
+        request: Request,
+        payload: Optional[PmaAutomationTimerTouchRequest] = None,
+    ) -> dict[str, Any]:
+        normalized_id = (timer_id or "").strip()
+        if not normalized_id:
+            raise HTTPException(status_code=400, detail="timer_id is required")
+        store = await _get_automation_store(request)
+        resolved_payload = (
+            payload.model_dump(exclude_none=True) if payload is not None else {}
+        )
+        touched = await _call_store_action_with_id(
+            store,
+            (
+                "touch_timer",
+                "refresh_timer",
+                "renew_timer",
+            ),
+            normalized_id,
+            payload=resolved_payload,
+            id_aliases=("timer_id", "id"),
+        )
+        if isinstance(touched, dict):
+            out = dict(touched)
+            out.setdefault("status", "ok")
+            out.setdefault("timer_id", normalized_id)
+            return out
+        return {"status": "ok", "timer_id": normalized_id}
+
+    @router.post("/automation/timers/{timer_id}/cancel")
+    @router.post("/timers/{timer_id}/cancel")
+    @router.delete("/automation/timers/{timer_id}")
+    @router.delete("/timers/{timer_id}")
+    async def cancel_automation_timer(
+        timer_id: str,
+        request: Request,
+        payload: Optional[PmaAutomationTimerCancelRequest] = None,
+    ) -> dict[str, Any]:
+        normalized_id = (timer_id or "").strip()
+        if not normalized_id:
+            raise HTTPException(status_code=400, detail="timer_id is required")
+        store = await _get_automation_store(request)
+        resolved_payload = (
+            payload.model_dump(exclude_none=True) if payload is not None else {}
+        )
+        cancelled = await _call_store_action_with_id(
+            store,
+            (
+                "cancel_timer",
+                "delete_timer",
+                "remove_timer",
+            ),
+            normalized_id,
+            payload=resolved_payload,
+            id_aliases=("timer_id", "id"),
+        )
+        if isinstance(cancelled, dict):
+            out = dict(cancelled)
+            out.setdefault("status", "ok")
+            out.setdefault("timer_id", normalized_id)
+            return out
+        return {"status": "ok", "timer_id": normalized_id}
+
     @router.post("/threads/{managed_thread_id}/compact")
     def compact_managed_thread(
         managed_thread_id: str,
@@ -1245,7 +1727,7 @@ def build_pma_routes() -> APIRouter:
         agent = str(thread.get("agent") or "").strip().lower()
         interrupt_event = asyncio.Event()
 
-        def _finalize_error(
+        async def _finalize_error(
             detail: str, *, backend_turn_id: Optional[str] = None
         ) -> dict[str, Any]:
             thread_store.mark_turn_finished(
@@ -1255,6 +1737,14 @@ def build_pma_routes() -> APIRouter:
                 error=detail,
                 backend_turn_id=backend_turn_id,
                 transcript_turn_id=None,
+            )
+            await _notify_managed_thread_terminal_transition(
+                request,
+                thread=thread,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                to_state="failed",
+                reason=detail,
             )
             return {
                 "status": "error",
@@ -1286,7 +1776,7 @@ def build_pma_routes() -> APIRouter:
             if agent == "opencode":
                 supervisor = getattr(request.app.state, "opencode_supervisor", None)
                 if supervisor is None:
-                    return _finalize_error("OpenCode unavailable")
+                    return await _finalize_error("OpenCode unavailable")
                 stall_timeout_seconds = None
                 try:
                     stall_timeout_seconds = (
@@ -1309,7 +1799,7 @@ def build_pma_routes() -> APIRouter:
                 supervisor = getattr(request.app.state, "app_server_supervisor", None)
                 events = getattr(request.app.state, "app_server_events", None)
                 if supervisor is None or events is None:
-                    return _finalize_error("App-server unavailable")
+                    return await _finalize_error("App-server unavailable")
                 result = await _execute_app_server(
                     supervisor,
                     events,
@@ -1322,27 +1812,27 @@ def build_pma_routes() -> APIRouter:
                     on_meta=_on_managed_turn_meta,
                 )
             else:
-                return _finalize_error(f"Unknown managed thread agent: {agent}")
+                return await _finalize_error(f"Unknown managed thread agent: {agent}")
         except HTTPException:
             logger.exception(
                 "Managed thread execution failed (managed_thread_id=%s, managed_turn_id=%s)",
                 managed_thread_id,
                 managed_turn_id,
             )
-            return _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
+            return await _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
         except Exception:
             logger.exception(
                 "Managed thread execution raised unexpected error (managed_thread_id=%s, managed_turn_id=%s)",
                 managed_thread_id,
                 managed_turn_id,
             )
-            return _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
+            return await _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
 
         result = dict(result or {})
         if str(result.get("status") or "") != "ok":
             detail = _sanitize_managed_thread_result_error(result.get("detail"))
             backend_turn_id = _normalize_optional_text(result.get("turn_id"))
-            return _finalize_error(detail, backend_turn_id=backend_turn_id)
+            return await _finalize_error(detail, backend_turn_id=backend_turn_id)
 
         assistant_text = str(result.get("message") or "")
         backend_turn_id = _normalize_optional_text(result.get("turn_id"))
@@ -1400,6 +1890,14 @@ def build_pma_routes() -> APIRouter:
                 detail = _sanitize_managed_thread_result_error(
                     (finalized_turn or {}).get("error")
                 )
+            await _notify_managed_thread_terminal_transition(
+                request,
+                thread=thread,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                to_state="failed",
+                reason=detail,
+            )
             return {
                 "status": response_status,
                 "managed_thread_id": managed_thread_id,
@@ -1412,6 +1910,14 @@ def build_pma_routes() -> APIRouter:
             managed_thread_id,
             last_turn_id=managed_turn_id,
             last_message_preview=preview,
+        )
+        await _notify_managed_thread_terminal_transition(
+            request,
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            to_state="completed",
+            reason="managed_turn_completed",
         )
         return {
             "status": "ok",
@@ -1492,6 +1998,14 @@ def build_pma_routes() -> APIRouter:
             backend_error = f"Unknown managed thread agent: {agent}"
 
         store.mark_turn_interrupted(managed_turn_id)
+        await _notify_managed_thread_terminal_transition(
+            request,
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            to_state="failed",
+            reason=backend_error or "managed_turn_interrupted",
+        )
         store.append_action(
             "managed_thread_interrupt",
             managed_thread_id=managed_thread_id,
@@ -2624,6 +3138,7 @@ def build_pma_routes() -> APIRouter:
 
     router._pma_start_lane_worker = _ensure_lane_worker_for_app  # type: ignore[attr-defined]
     router._pma_stop_lane_worker = _stop_lane_worker_for_app  # type: ignore[attr-defined]
+    router._pma_stop_all_lane_workers = _stop_all_lane_workers_for_app  # type: ignore[attr-defined]
     return router
 
 

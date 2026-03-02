@@ -639,3 +639,245 @@ def test_send_message_sanitizes_unexpected_execution_errors(hub_env) -> None:
     assert turn is not None
     assert turn["status"] == "error"
     assert turn["error"] == "Managed thread execution failed"
+
+
+def test_send_message_notifies_automation_on_completion(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.transitions: list[dict[str, object]] = []
+
+        def notify_transition(self, payload: dict[str, object]) -> None:
+            self.transitions.append(dict(payload))
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        message_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "trigger completion"},
+        )
+        assert message_resp.status_code == 200
+        assert message_resp.json()["status"] == "ok"
+
+    assert len(fake_store.transitions) == 1
+    transition = fake_store.transitions[0]
+    assert transition["thread_id"] == managed_thread_id
+    assert transition["repo_id"] == hub_env.repo_id
+    assert transition["from_state"] == "running"
+    assert transition["to_state"] == "completed"
+    assert transition["reason"] == "managed_turn_completed"
+    assert isinstance(transition.get("timestamp"), str)
+    assert str(transition.get("timestamp"))
+
+
+def test_send_message_notifies_automation_on_failure(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.transitions: list[dict[str, object]] = []
+
+        def notify_transition(self, payload: dict[str, object]) -> None:
+            self.transitions.append(dict(payload))
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            raise RuntimeError("sensitive-backend-message")
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        message_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "trigger failure"},
+        )
+        assert message_resp.status_code == 200
+        assert message_resp.json()["status"] == "error"
+
+    assert len(fake_store.transitions) == 1
+    transition = fake_store.transitions[0]
+    assert transition["thread_id"] == managed_thread_id
+    assert transition["repo_id"] == hub_env.repo_id
+    assert transition["from_state"] == "running"
+    assert transition["to_state"] == "failed"
+    assert transition["reason"] == "Managed thread execution failed"
+    assert isinstance(transition.get("timestamp"), str)
+    assert str(transition.get("timestamp"))
+
+
+def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        sub_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_types": ["managed_thread_completed"],
+                "thread_id": managed_thread_id,
+                "from_state": "running",
+                "to_state": "completed",
+                "lane_id": "pma:lane-next",
+                "idempotency_key": "managed-completion-sub",
+            },
+        )
+        assert sub_resp.status_code == 200
+
+        message_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "trigger completion"},
+        )
+        assert message_resp.status_code == 200
+        assert message_resp.json()["status"] == "ok"
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    assert automation_store.list_pending_wakeups(limit=10) == []
+    dispatched = automation_store.list_wakeups(state_filter="dispatched")
+    assert any(entry.get("thread_id") == managed_thread_id for entry in dispatched)
+
+    queue_path = (
+        hub_env.hub_root
+        / ".codex-autorunner"
+        / "pma"
+        / "queue"
+        / "pma__COLON__lane-next.jsonl"
+    )
+    assert queue_path.exists()
+    lines = [
+        line.strip()
+        for line in queue_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert lines
+    wake_ups = [
+        (json.loads(line).get("payload") or {}).get("wake_up") or {} for line in lines
+    ]
+    assert any(
+        wake_up.get("thread_id") == managed_thread_id
+        and wake_up.get("to_state") == "completed"
+        and wake_up.get("lane_id") == "pma:lane-next"
+        for wake_up in wake_ups
+    )

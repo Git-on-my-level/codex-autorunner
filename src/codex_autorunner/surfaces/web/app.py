@@ -60,6 +60,9 @@ def create_hub_app(
         app.state.pma_lane_worker_stop = getattr(
             pma_router, "_pma_stop_lane_worker", None
         )
+        app.state.pma_lane_worker_stop_all = getattr(
+            pma_router, "_pma_stop_all_lane_workers", None
+        )
     app.include_router(build_hub_filebox_routes())
 
     app.state.hub_started = False
@@ -89,6 +92,8 @@ def create_hub_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         tasks: list[asyncio.Task] = []
+        registered_pma_lane_starter = False
+        pma_lane_starter_register = None
         app.state.hub_started = True
         try:
             cleanup = reap_managed_processes(context.config.root)
@@ -170,6 +175,53 @@ def create_hub_app(
         pma_cfg = getattr(app.state.config, "pma", None)
         if pma_cfg is not None and pma_cfg.enabled:
             starter = getattr(app.state, "pma_lane_worker_start", None)
+            supervisor = getattr(app.state, "hub_supervisor", None)
+            register_lane_starter = (
+                getattr(supervisor, "set_pma_lane_worker_starter", None)
+                if supervisor is not None
+                else None
+            )
+            if starter is not None and callable(register_lane_starter):
+                loop = asyncio.get_running_loop()
+
+                def _start_lane_worker(lane_id: str) -> None:
+                    try:
+                        fut = asyncio.run_coroutine_threadsafe(
+                            starter(app, lane_id), loop
+                        )
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "PMA lane worker startup dispatch failed",
+                            exc,
+                        )
+                        return
+
+                    def _on_done(done_fut) -> None:
+                        try:
+                            done_fut.result()
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "PMA lane worker startup failed",
+                                exc,
+                            )
+
+                    fut.add_done_callback(_on_done)
+
+                try:
+                    register_lane_starter(_start_lane_worker)
+                    registered_pma_lane_starter = True
+                    pma_lane_starter_register = register_lane_starter
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "PMA lane worker registration failed",
+                        exc,
+                    )
             if starter is not None:
                 try:
                     await starter(app, "pma:default")
@@ -189,6 +241,16 @@ def create_hub_app(
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             await mount_manager.stop_repo_mounts()
+            if registered_pma_lane_starter and callable(pma_lane_starter_register):
+                try:
+                    pma_lane_starter_register(None)
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "PMA lane worker deregistration failed",
+                        exc,
+                    )
             runtime_services = getattr(app.state, "runtime_services", None)
             if runtime_services is not None:
                 try:
@@ -228,10 +290,10 @@ def create_hub_app(
             static_context = getattr(app.state, "static_assets_context", None)
             if static_context is not None:
                 static_context.close()
-            stopper = getattr(app.state, "pma_lane_worker_stop", None)
-            if stopper is not None:
+            stop_all = getattr(app.state, "pma_lane_worker_stop_all", None)
+            if stop_all is not None:
                 try:
-                    await stopper(app, "pma:default")
+                    await stop_all(app)
                 except Exception as exc:
                     safe_log(
                         app.state.logger,
@@ -239,6 +301,18 @@ def create_hub_app(
                         "PMA lane worker shutdown failed",
                         exc,
                     )
+            else:
+                stopper = getattr(app.state, "pma_lane_worker_stop", None)
+                if stopper is not None:
+                    try:
+                        await stopper(app, "pma:default")
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "PMA lane worker shutdown failed",
+                            exc,
+                        )
 
     app.router.lifespan_context = lifespan
 
