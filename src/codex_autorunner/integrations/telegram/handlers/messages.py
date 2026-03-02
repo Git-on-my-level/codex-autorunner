@@ -816,13 +816,16 @@ async def handle_media_message(
         )
         return
 
+    pma_enabled = bool(getattr(record, "pma_enabled", False))
     workspace_root = canonicalize_path(Path(record.workspace_path))
-    preferred_run_id = handlers._ticket_flow_pause_targets.get(
-        str(workspace_root), None
-    )
-    paused = handlers._get_paused_ticket_flow(
-        workspace_root, preferred_run_id=preferred_run_id
-    )
+    paused = None
+    if not pma_enabled:
+        preferred_run_id = handlers._ticket_flow_pause_targets.get(
+            str(workspace_root), None
+        )
+        paused = handlers._get_paused_ticket_flow(
+            workspace_root, preferred_run_id=preferred_run_id
+        )
     if paused:
         run_id, run_record = paused
         reply_text = caption_text.strip() if isinstance(caption_text, str) else ""

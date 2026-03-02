@@ -26,6 +26,7 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     select_voice_candidate,
     should_bypass_topic_queue,
 )
+from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
 from tests.fixtures.telegram_command_helpers import (
     bot_command_entity,
     make_command_spec,
@@ -675,6 +676,100 @@ async def test_handle_media_message_paused_flow_archives_non_reply_media_and_res
     assert resumed
     assert resumed[0][1] == run_id
     assert sent == ["Reply archived (seq 0002)."]
+
+
+@pytest.mark.anyio
+async def test_handle_media_message_ignores_paused_flow_for_pma_topics() -> None:
+    message = _message(
+        text="caption here",
+        document=TelegramDocument(
+            file_id="doc-1",
+            file_unique_id=None,
+            file_name="notes.txt",
+            mime_type="text/plain",
+            file_size=12,
+        ),
+    )
+    sent: list[str] = []
+    file_calls: list[dict[str, object]] = []
+
+    class _RouterStub:
+        async def get_topic(self, _key: str) -> object:
+            return TelegramTopicRecord(pma_enabled=True)
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    def _get_paused_ticket_flow(*_args, **_kwargs) -> object:
+        raise AssertionError("paused flow lookup should not run for PMA topics")
+
+    async def _write_user_reply(*_args, **_kwargs) -> tuple[bool, str]:
+        raise AssertionError("paused flow archival should not run for PMA topics")
+
+    async def _handle_file_message(
+        _message: TelegramMessage,
+        _runtime,
+        record,
+        file_candidate,
+        caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        _ = placeholder_id
+        file_calls.append(
+            {
+                "record": record,
+                "candidate_file_id": file_candidate.file_id,
+                "caption_text": caption_text,
+            }
+        )
+
+    async def _send_message(
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id=None,
+        reply_to=None,
+    ) -> None:
+        _ = (thread_id, reply_to)
+        sent.append(text)
+
+    handlers = types.SimpleNamespace(
+        _config=types.SimpleNamespace(
+            media=types.SimpleNamespace(
+                enabled=True,
+                max_image_bytes=1024,
+                max_file_bytes=1024,
+                images=True,
+                voice=True,
+                files=True,
+            )
+        ),
+        _router=_RouterStub(),
+        _hub_root=".",
+        _ticket_flow_pause_targets={},
+        _get_paused_ticket_flow=_get_paused_ticket_flow,
+        _write_user_reply_from_telegram=_write_user_reply,
+        _resolve_topic_key=_resolve_topic_key,
+        _send_message=_send_message,
+        _with_conversation_id=lambda text, **_kwargs: text,
+        _handle_file_message=_handle_file_message,
+    )
+
+    await handle_media_message(
+        handlers,
+        message,
+        runtime=object(),
+        caption_text="caption here",
+    )
+
+    assert sent == []
+    assert len(file_calls) == 1
+    assert file_calls[0]["candidate_file_id"] == "doc-1"
+    assert file_calls[0]["caption_text"] == "caption here"
+    record = file_calls[0]["record"]
+    assert bool(getattr(record, "pma_enabled", False)) is True
+    assert getattr(record, "workspace_path", None) == "."
 
 
 def test_media_batch_buffer_defaults() -> None:
