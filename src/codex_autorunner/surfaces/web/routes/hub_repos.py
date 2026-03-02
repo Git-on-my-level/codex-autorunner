@@ -22,8 +22,8 @@ from ....core.chat_bindings import (
 )
 from ....core.config import ConfigError
 from ....core.destinations import (
-    parse_destination_config,
     resolve_effective_repo_destination,
+    validate_destination_write_payload,
 )
 from ....core.flows import FlowEventType, FlowStore
 from ....core.git_utils import git_is_clean
@@ -51,7 +51,7 @@ from ....integrations.chat.channel_directory import (
     channel_entry_key,
 )
 from ....integrations.telegram.state import topic_key
-from ....manifest import load_manifest, normalize_manifest_destination, save_manifest
+from ....manifest import load_manifest, save_manifest
 from ..app_state import HubAppContext
 from ..schemas import (
     HubArchiveWorktreeRequest,
@@ -1230,12 +1230,7 @@ def build_hub_repo_routes(
         if normalized_kind == "local":
             destination = {"kind": "local"}
         elif normalized_kind == "docker":
-            image = (payload.image or "").strip()
-            if not image:
-                raise HTTPException(
-                    status_code=400, detail="image is required for docker destination"
-                )
-            destination = {"kind": "docker", "image": image}
+            destination = {"kind": "docker", "image": (payload.image or "").strip()}
             container_name = (payload.container_name or "").strip()
             if container_name:
                 destination["container_name"] = container_name
@@ -1252,26 +1247,12 @@ def build_hub_repo_routes(
             ]
             if env_passthrough:
                 destination["env_passthrough"] = env_passthrough
-            explicit_env: dict[str, str] = {}
-            for raw_key, raw_value in (payload.env or {}).items():
-                key = str(raw_key or "").strip()
-                if not key:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Docker env keys must be non-empty strings",
-                    )
-                explicit_env[key] = str(raw_value)
-            if explicit_env:
-                destination["env"] = explicit_env
+            if payload.env:
+                destination["env"] = dict(payload.env)
             mounts: list[dict[str, Any]] = []
             for item in payload.mounts or []:
-                source = str((item or {}).get("source") or "").strip()
-                target = str((item or {}).get("target") or "").strip()
-                if not source or not target:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Each mount requires non-empty source and target",
-                    )
+                source = str((item or {}).get("source") or "")
+                target = str((item or {}).get("target") or "")
                 mount_payload: dict[str, Any] = {"source": source, "target": target}
                 read_only = (item or {}).get("read_only")
                 if read_only is None and "readOnly" in (item or {}):
@@ -1279,11 +1260,6 @@ def build_hub_repo_routes(
                 if read_only is None and "readonly" in (item or {}):
                     read_only = (item or {}).get("readonly")
                 if read_only is not None:
-                    if not isinstance(read_only, bool):
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Mount read_only must be a boolean when provided",
-                        )
                     mount_payload["read_only"] = read_only
                 mounts.append(mount_payload)
             if mounts:
@@ -1297,17 +1273,13 @@ def build_hub_repo_routes(
                 ),
             )
 
-        normalized_destination = normalize_manifest_destination(destination)
-        if normalized_destination is None:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid destination payload: {destination!r}"
-            )
-        parsed_destination = parse_destination_config(
-            normalized_destination, context="destination"
+        validated = validate_destination_write_payload(
+            destination, context="destination"
         )
-        if not parsed_destination.valid:
-            detail = "; ".join(parsed_destination.errors)
+        if not validated.valid or validated.normalized_destination is None:
+            detail = "; ".join(validated.errors) or "Invalid destination payload"
             raise HTTPException(status_code=400, detail=detail)
+        normalized_destination = validated.normalized_destination
 
         manifest, repos_by_id, repo = await asyncio.to_thread(
             _resolve_manifest_repo, repo_id

@@ -68,6 +68,13 @@ class DestinationParseResult:
 
 
 @dataclasses.dataclass(frozen=True)
+class DestinationWriteValidationResult:
+    normalized_destination: Optional[Dict[str, Any]]
+    valid: bool
+    errors: tuple[str, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
 class DestinationResolution:
     destination: Destination
     source: str
@@ -344,6 +351,32 @@ def parse_destination_config(
     )
 
 
+def validate_destination_write_payload(
+    value: Any,
+    *,
+    context: str = "destination",
+) -> DestinationWriteValidationResult:
+    parsed = parse_destination_config(value, context=context)
+    if not parsed.valid:
+        return DestinationWriteValidationResult(
+            normalized_destination=None,
+            valid=False,
+            errors=tuple(parsed.errors),
+        )
+    normalized = normalize_manifest_destination(parsed.destination.to_dict())
+    if normalized is None:
+        return DestinationWriteValidationResult(
+            normalized_destination=None,
+            valid=False,
+            errors=(f"{context}: invalid destination payload",),
+        )
+    return DestinationWriteValidationResult(
+        normalized_destination=normalized,
+        valid=True,
+        errors=(),
+    )
+
+
 def resolve_effective_repo_destination(
     repo: ManifestRepo,
     repos_by_id: Mapping[str, ManifestRepo],
@@ -450,6 +483,7 @@ __all__ = [
     "DestinationParseResult",
     "DestinationResolution",
     "DestinationValidationIssue",
+    "DestinationWriteValidationResult",
     "DockerReadiness",
     "DockerDestination",
     "LocalDestination",
@@ -458,5 +492,6 @@ __all__ = [
     "parse_destination_config",
     "probe_docker_readiness",
     "resolve_effective_repo_destination",
+    "validate_destination_write_payload",
     "validate_manifest_destinations",
 ]

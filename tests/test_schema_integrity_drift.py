@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -67,10 +68,6 @@ def test_hub_and_repo_shared_section_validation_parity(
         load_hub_config(hub_root)
 
 
-@pytest.mark.xfail(
-    reason="Issue #830: CLI destination writes currently bypass strict parser checks",
-    strict=True,
-)
 def test_cli_and_web_destination_set_reject_invalid_profile_with_same_strictness(
     tmp_path: Path,
 ) -> None:
@@ -106,3 +103,73 @@ def test_cli_and_web_destination_set_reject_invalid_profile_with_same_strictness
     assert "unsupported docker profile 'full_deev'" in web_result.json()["detail"]
     assert cli_result.exit_code != 0
     assert "unsupported docker profile 'full_deev'" in cli_result.output
+
+
+def test_cli_and_web_destination_set_persist_same_canonical_payload(
+    tmp_path: Path,
+) -> None:
+    cli_hub_root = tmp_path / "cli-hub"
+    web_hub_root = tmp_path / "web-hub"
+    _seed_single_repo_manifest(cli_hub_root, repo_id="base")
+    _seed_single_repo_manifest(web_hub_root, repo_id="base")
+
+    cli_result = runner.invoke(
+        app,
+        [
+            "hub",
+            "destination",
+            "set",
+            "base",
+            "docker",
+            "--image",
+            "busybox:latest",
+            "--name",
+            "car-demo",
+            "--profile",
+            "full-dev",
+            "--workdir",
+            "/workspace",
+            "--env",
+            "CAR_*",
+            "--env-map",
+            "OPENAI_API_KEY=sk-test",
+            "--mount",
+            "/tmp/src:/workspace/src",
+            "--mount-ro",
+            "/tmp/cache:/workspace/cache",
+            "--json",
+            "--path",
+            str(cli_hub_root),
+        ],
+    )
+    assert cli_result.exit_code == 0
+    cli_payload = json.loads(cli_result.output)
+
+    web_client = TestClient(create_hub_app(web_hub_root))
+    web_result = web_client.post(
+        "/hub/repos/base/destination",
+        json={
+            "kind": "docker",
+            "image": "busybox:latest",
+            "container_name": "car-demo",
+            "profile": "full-dev",
+            "workdir": "/workspace",
+            "env_passthrough": ["CAR_*"],
+            "env": {"OPENAI_API_KEY": "sk-test"},
+            "mounts": [
+                {"source": "/tmp/src", "target": "/workspace/src"},
+                {
+                    "source": "/tmp/cache",
+                    "target": "/workspace/cache",
+                    "readOnly": True,
+                },
+            ],
+        },
+    )
+    assert web_result.status_code == 200
+    web_payload = web_result.json()
+
+    assert (
+        cli_payload["configured_destination"] == web_payload["configured_destination"]
+    )
+    assert cli_payload["effective_destination"] == web_payload["effective_destination"]

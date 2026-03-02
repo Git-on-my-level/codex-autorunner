@@ -440,7 +440,7 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
 
     missing_image = client.post("/hub/repos/base/destination", json={"kind": "docker"})
     assert missing_image.status_code == 400
-    assert "image is required for docker destination" in missing_image.json()["detail"]
+    assert "requires non-empty 'image'" in missing_image.json()["detail"]
 
     bad_kind = client.post("/hub/repos/base/destination", json={"kind": "ssh"})
     assert bad_kind.status_code == 400
@@ -455,9 +455,7 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
         },
     )
     assert bad_mount.status_code == 400
-    assert (
-        "Each mount requires non-empty source and target" in bad_mount.json()["detail"]
-    )
+    assert "mounts[0].target must be a non-empty string" in bad_mount.json()["detail"]
 
     bad_mount_read_only = client.post(
         "/hub/repos/base/destination",
@@ -470,7 +468,9 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
         },
     )
     assert bad_mount_read_only.status_code == 400
-    assert "Mount read_only must be a boolean" in bad_mount_read_only.json()["detail"]
+    assert (
+        "mounts[0].read_only must be a boolean" in bad_mount_read_only.json()["detail"]
+    )
 
     bad_env = client.post(
         "/hub/repos/base/destination",
@@ -481,7 +481,7 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
         },
     )
     assert bad_env.status_code == 400
-    assert "Docker env keys must be non-empty strings" in bad_env.json()["detail"]
+    assert "env keys must be non-empty strings" in bad_env.json()["detail"]
 
     bad_profile = client.post(
         "/hub/repos/base/destination",
