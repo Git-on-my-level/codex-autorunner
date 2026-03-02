@@ -13,6 +13,7 @@ from ....agents.codex.harness import CodexHarness
 from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....agents.types import ModelCatalog
+from ..services.validation import normalize_agent_id
 from .shared import SSE_HEADERS
 
 
@@ -72,7 +73,7 @@ def build_agents_routes() -> APIRouter:
 
     @router.get("/api/agents/{agent}/models")
     async def list_agent_models(agent: str, request: Request):
-        agent_id = (agent or "").strip().lower()
+        agent_id = normalize_agent_id(agent)
         engine = request.app.state.engine
         if agent_id == "codex":
             supervisor = request.app.state.app_server_supervisor
@@ -102,7 +103,7 @@ def build_agents_routes() -> APIRouter:
     async def stream_agent_turn_events(
         agent: str, turn_id: str, request: Request, thread_id: Optional[str] = None
     ):
-        agent_id = (agent or "").strip().lower()
+        agent_id = normalize_agent_id(agent)
         if agent_id == "codex":
             events = getattr(request.app.state, "app_server_events", None)
             if events is None:
