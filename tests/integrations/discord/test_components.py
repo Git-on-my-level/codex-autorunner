@@ -5,11 +5,13 @@ from codex_autorunner.integrations.discord.components import (
     DISCORD_BUTTON_STYLE_SECONDARY,
     DISCORD_BUTTON_STYLE_SUCCESS,
     build_action_row,
+    build_agent_picker,
     build_bind_picker,
     build_button,
     build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
+    build_model_picker,
     build_select_menu,
     build_select_option,
 )
@@ -82,6 +84,45 @@ class TestBuildBindPicker:
         menu = picker["components"][0]
         assert len(menu["options"]) == 1
         assert menu["options"][0]["value"] == "none"
+
+
+class TestBuildAgentPicker:
+    def test_builds_picker_with_current_agent_selected(self) -> None:
+        picker = build_agent_picker(current_agent="opencode")
+        menu = picker["components"][0]
+        assert menu["custom_id"] == "agent_select"
+        assert len(menu["options"]) == 2
+        codex = menu["options"][0]
+        opencode = menu["options"][1]
+        assert codex["value"] == "codex"
+        assert codex["default"] is False
+        assert opencode["value"] == "opencode"
+        assert opencode["default"] is True
+
+
+class TestBuildModelPicker:
+    def test_builds_picker_with_clear_option_and_models(self) -> None:
+        picker = build_model_picker(
+            [("gpt-5.3-codex", "gpt-5.3-codex"), ("openai/gpt-4o", "openai/gpt-4o")],
+            current_model="gpt-5.3-codex",
+        )
+        menu = picker["components"][0]
+        assert menu["custom_id"] == "model_select"
+        assert menu["options"][0]["value"] == "clear"
+        assert menu["options"][0]["default"] is False
+        assert menu["options"][1]["value"] == "gpt-5.3-codex"
+        assert menu["options"][1]["default"] is True
+        assert menu["options"][2]["value"] == "openai/gpt-4o"
+
+    def test_includes_current_model_even_when_not_in_first_page(self) -> None:
+        models = [(f"model-{i}", f"model-{i}") for i in range(40)]
+        picker = build_model_picker(models, current_model="special/current-model")
+        menu = picker["components"][0]
+        options = menu["options"]
+        assert len(options) == 25
+        current = options[-1]
+        assert current["value"] == "special/current-model"
+        assert current["default"] is True
 
 
 class TestBuildFlowStatusButtons:

@@ -60,6 +60,10 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "name": "name",
                             "description": "Agent name: codex or opencode",
                             "required": False,
+                            "choices": [
+                                {"name": "codex", "value": "codex"},
+                                {"name": "opencode", "value": "opencode"},
+                            ],
                         }
                     ],
                 },
@@ -79,6 +83,14 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "name": "effort",
                             "description": "Reasoning effort (codex only): none, minimal, low, medium, high, xhigh",
                             "required": False,
+                            "choices": [
+                                {"name": "none", "value": "none"},
+                                {"name": "minimal", "value": "minimal"},
+                                {"name": "low", "value": "low"},
+                                {"name": "medium", "value": "medium"},
+                                {"name": "high", "value": "high"},
+                                {"name": "xhigh", "value": "xhigh"},
+                            ],
                         },
                     ],
                 },

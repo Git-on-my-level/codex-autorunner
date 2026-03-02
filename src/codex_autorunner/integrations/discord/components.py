@@ -100,6 +100,72 @@ def build_bind_picker(
     )
 
 
+def build_agent_picker(
+    *,
+    current_agent: str,
+    custom_id: str = "agent_select",
+    placeholder: str = "Select an agent...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option(
+            label="codex",
+            value="codex",
+            description="Default Codex agent",
+            default=current_agent == "codex",
+        ),
+        build_select_option(
+            label="opencode",
+            value="opencode",
+            description="OpenCode agent (requires opencode binary)",
+            default=current_agent == "opencode",
+        ),
+    ]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
+def build_model_picker(
+    models: list[tuple[str, str]],
+    *,
+    current_model: Optional[str] = None,
+    custom_id: str = "model_select",
+    placeholder: str = "Select a model...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option(
+            label="(default model)",
+            value="clear",
+            description="Clear model override",
+            default=not current_model,
+        )
+    ]
+    rendered_models: set[str] = set()
+    option_limit = max(0, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1)
+    for model_id, label in models[:option_limit]:
+        rendered_models.add(model_id)
+        options.append(
+            build_select_option(
+                label=label,
+                value=model_id,
+                default=current_model == model_id,
+            )
+        )
+    if current_model and current_model not in rendered_models:
+        if len(options) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
+            options.pop()
+        options.append(
+            build_select_option(
+                label=f"{current_model} (current)",
+                value=current_model,
+                default=True,
+            )
+        )
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
 def build_flow_status_buttons(
     run_id: str,
     status: str,

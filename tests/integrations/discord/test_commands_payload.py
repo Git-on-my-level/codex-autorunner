@@ -120,3 +120,18 @@ def test_required_options_are_marked_required() -> None:
 
     pma_options = commands[1]["options"]
     assert [opt["name"] for opt in pma_options] == ["on", "off", "status"]
+
+
+def test_agent_and_effort_options_include_choices() -> None:
+    commands = build_application_commands()
+    car_options = commands[0]["options"]
+
+    agent = _find_option(car_options, "agent")
+    agent_name = _find_option(agent["options"], "name")
+    agent_choices = {choice["value"] for choice in agent_name.get("choices", [])}
+    assert agent_choices == {"codex", "opencode"}
+
+    model = _find_option(car_options, "model")
+    model_effort = _find_option(model["options"], "effort")
+    effort_choices = {choice["value"] for choice in model_effort.get("choices", [])}
+    assert effort_choices == {"none", "minimal", "low", "medium", "high", "xhigh"}

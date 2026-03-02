@@ -74,7 +74,10 @@ from ...core.utils import (
 )
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
-from ...integrations.app_server.client import CodexAppServerClient
+from ...integrations.app_server.client import (
+    CodexAppServerClient,
+    CodexAppServerResponseError,
+)
 from ...integrations.app_server.env import app_server_env, build_app_server_env
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
@@ -133,11 +136,13 @@ from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
+    build_agent_picker,
     build_bind_picker,
     build_cancel_turn_button,
     build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
+    build_model_picker,
 )
 from .config import DiscordBotConfig
 from .errors import DiscordAPIError, DiscordTransientError
@@ -185,10 +190,82 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
+_MODEL_LIST_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
 
 
 class AppServerUnavailableError(Exception):
     pass
+
+
+def _normalize_model_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _display_name_is_model_alias(model: str, display_name: Any) -> bool:
+    if not isinstance(display_name, str) or not display_name:
+        return False
+    return _normalize_model_name(display_name) == _normalize_model_name(model)
+
+
+def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
+    if isinstance(result, list):
+        return [entry for entry in result if isinstance(entry, dict)]
+    if isinstance(result, dict):
+        for key in ("data", "models", "items", "results"):
+            value = result.get(key)
+            if isinstance(value, list):
+                return [entry for entry in value if isinstance(entry, dict)]
+    return []
+
+
+def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
+    entries = _coerce_model_entries(result)
+    options: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    limit = max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1)
+    for entry in entries:
+        model_id = entry.get("model") or entry.get("id")
+        if not isinstance(model_id, str):
+            continue
+        model_id = model_id.strip()
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        display_name = entry.get("displayName")
+        label = model_id
+        if (
+            isinstance(display_name, str)
+            and display_name
+            and not _display_name_is_model_alias(model_id, display_name)
+        ):
+            label = f"{model_id} ({display_name})"
+        options.append((model_id, label))
+        if len(options) >= limit:
+            break
+    return options
+
+
+async def _model_list_with_agent_compat(
+    client: CodexAppServerClient,
+    *,
+    params: dict[str, Any],
+) -> Any:
+    request_params = {key: value for key, value in params.items() if value is not None}
+    requested_agent = request_params.get("agent")
+    if not isinstance(requested_agent, str) or not requested_agent:
+        requested_agent = None
+        request_params.pop("agent", None)
+    try:
+        return await client.model_list(**request_params)
+    except CodexAppServerResponseError as exc:
+        if (
+            requested_agent is None
+            or exc.code not in _MODEL_LIST_INVALID_PARAMS_ERROR_CODES
+        ):
+            raise
+        fallback_params = dict(request_params)
+        fallback_params.pop("agent", None)
+        return await client.model_list(**fallback_params)
 
 
 @dataclass(frozen=True)
@@ -3817,20 +3894,28 @@ class DiscordBotService:
             return
 
         current_agent = binding.get("agent") or self.DEFAULT_AGENT
+        if not isinstance(current_agent, str):
+            current_agent = self.DEFAULT_AGENT
+        current_agent = current_agent.strip().lower()
+        if current_agent not in self.VALID_AGENT_VALUES:
+            current_agent = self.DEFAULT_AGENT
         agent_name = options.get("name")
 
         if not agent_name:
-            lines = [
-                f"Current agent: {current_agent}",
-                "",
-                "Available agents:",
-                "  codex - Default Codex agent",
-                "  opencode - OpenCode agent (requires opencode binary)",
-                "",
-                "Use `/car agent <name>` to switch.",
-            ]
-            text = format_discord_message("\n".join(lines))
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                format_discord_message(
+                    "\n".join(
+                        [
+                            f"Current agent: {current_agent}",
+                            "",
+                            "Select an agent:",
+                        ]
+                    )
+                ),
+                [build_agent_picker(current_agent=current_agent)],
+            )
             return
 
         desired = agent_name.lower().strip()
@@ -3880,29 +3965,127 @@ class DiscordBotService:
             return
 
         current_agent = binding.get("agent") or self.DEFAULT_AGENT
+        if not isinstance(current_agent, str):
+            current_agent = self.DEFAULT_AGENT
+        current_agent = current_agent.strip().lower()
+        if current_agent not in self.VALID_AGENT_VALUES:
+            current_agent = self.DEFAULT_AGENT
         current_model = binding.get("model_override")
+        if not isinstance(current_model, str) or not current_model.strip():
+            current_model = None
         current_effort = binding.get("reasoning_effort")
         model_name = options.get("name")
         effort = options.get("effort")
 
         if not model_name:
+
+            def _fallback_model_text(note: Optional[str] = None) -> str:
+                lines = [
+                    f"Current agent: {current_agent}",
+                    f"Current model: {current_model or '(default)'}",
+                ]
+                if isinstance(current_effort, str) and current_effort.strip():
+                    lines.append(f"Reasoning effort: {current_effort}")
+                if note:
+                    lines.extend(["", note])
+                lines.extend(
+                    [
+                        "",
+                        "Use `/car model name:<id>` to set a model.",
+                        "Use `/car model name:<id> effort:<value>` to set model with reasoning effort (codex only).",
+                        "",
+                        f"Valid efforts: {', '.join(self.VALID_REASONING_EFFORTS)}",
+                    ]
+                )
+                return format_discord_message("\n".join(lines))
+
+            try:
+                client = await self._client_for_workspace(binding.get("workspace_path"))
+            except AppServerUnavailableError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.model.list.failed",
+                    channel_id=channel_id,
+                    agent=current_agent,
+                    exc=exc,
+                )
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    _fallback_model_text(
+                        "Model picker unavailable right now (app server unavailable)."
+                    ),
+                )
+                return
+            if client is None:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    _fallback_model_text(
+                        "Workspace unavailable for model picker. Re-bind this channel with `/car bind` and try again."
+                    ),
+                )
+                return
+            try:
+                result = await _model_list_with_agent_compat(
+                    client,
+                    params={
+                        "cursor": None,
+                        "limit": DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                        "agent": current_agent,
+                    },
+                )
+                model_items = _coerce_model_picker_items(result)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.model.list.failed",
+                    channel_id=channel_id,
+                    agent=current_agent,
+                    exc=exc,
+                )
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    _fallback_model_text("Failed to list models for picker."),
+                )
+                return
+
+            if not model_items and not current_model:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    _fallback_model_text("No models found from the app server."),
+                )
+                return
+
             lines = [
                 f"Current agent: {current_agent}",
                 f"Current model: {current_model or '(default)'}",
             ]
-            if current_effort:
+            if isinstance(current_effort, str) and current_effort.strip():
                 lines.append(f"Reasoning effort: {current_effort}")
             lines.extend(
                 [
                     "",
-                    "Use `/car model <name>` to set a model.",
-                    "Use `/car model <name> effort:<value>` to set model with reasoning effort (codex only).",
-                    "",
-                    f"Valid efforts: {', '.join(self.VALID_REASONING_EFFORTS)}",
+                    "Select a model override:",
+                    "(default model) clears the override.",
+                    "Use `/car model name:<id> effort:<value>` to set reasoning effort (codex only).",
                 ]
             )
-            text = format_discord_message("\n".join(lines))
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                format_discord_message("\n".join(lines)),
+                [
+                    build_model_picker(
+                        model_items,
+                        current_model=current_model,
+                    )
+                ],
+            )
             return
 
         model_name = model_name.strip()
@@ -5852,6 +6035,40 @@ class DiscordBotService:
                     )
                 return
 
+            if custom_id == "agent_select":
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select an agent and try again.",
+                    )
+                    return
+                await self._handle_car_agent(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"name": values[0]},
+                )
+                return
+
+            if custom_id == "model_select":
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a model and try again.",
+                    )
+                    return
+                await self._handle_car_model(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"name": values[0]},
+                )
+                return
+
             if custom_id.startswith("flow:"):
                 workspace_root = await self._require_bound_workspace(
                     interaction_id, interaction_token, channel_id=channel_id
@@ -5953,6 +6170,38 @@ class DiscordBotService:
                         channel_id=channel_id,
                         guild_id=guild_id,
                     )
+                return
+
+            if custom_id == "agent_select":
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select an agent and try again.",
+                    )
+                    return
+                await self._handle_car_agent(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"name": values[0]},
+                )
+                return
+
+            if custom_id == "model_select":
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a model and try again.",
+                    )
+                    return
+                await self._handle_car_model(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"name": values[0]},
+                )
                 return
 
             if custom_id.startswith("flow:"):
