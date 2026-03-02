@@ -82,6 +82,14 @@ interface HubChannelEntry {
   seen_at?: string | null;
   meta?: Record<string, unknown> | null;
   entry?: Record<string, unknown> | null;
+  source?: string | null;
+  provenance?: {
+    source?: string | null;
+    platform?: string | null;
+    managed_thread_id?: string | null;
+    agent?: string | null;
+    status?: string | null;
+  } | null;
   repo_id?: string | null;
   workspace_path?: string | null;
   active_thread_id?: string | null;
@@ -107,6 +115,8 @@ interface HubChannelEntry {
 interface HubChannelDirectoryResponse {
   entries: HubChannelEntry[];
 }
+
+type HubChannelSource = "discord" | "telegram" | "pma_thread" | "unknown";
 
 interface HubUsageRepo {
   id: string;
@@ -1268,10 +1278,12 @@ function channelSearchBlob(channel: HubChannelEntry): string {
   const parts = [
     channel.key,
     channel.display,
+    channel.source,
     channel.repo_id,
     channel.status_label || channel.channel_status,
     channel.workspace_path,
     JSON.stringify(channel.meta || {}),
+    JSON.stringify(channel.provenance || {}),
   ];
   return parts
     .map((part) => String(part || ""))
@@ -1290,6 +1302,52 @@ function toPositiveInt(value: unknown): number | null {
   return Math.floor(parsed);
 }
 
+function channelSource(channel: HubChannelEntry): HubChannelSource {
+  const raw = String(
+    channel.source || channel.provenance?.source || channel.entry?.platform || ""
+  )
+    .trim()
+    .toLowerCase();
+  if (raw === "discord" || raw === "telegram" || raw === "pma_thread") {
+    return raw;
+  }
+  return "unknown";
+}
+
+function channelSourceBadgeLabel(channel: HubChannelEntry): string {
+  const source = channelSource(channel);
+  if (source === "discord") return "Discord";
+  if (source === "telegram") return "Telegram";
+  if (source === "pma_thread") return "PMA";
+  return "Unknown";
+}
+
+function channelSourceBadgeClass(channel: HubChannelEntry): string {
+  const source = channelSource(channel);
+  if (source === "discord") return "discord";
+  if (source === "telegram") return "telegram";
+  if (source === "pma_thread") return "pma";
+  return "unknown";
+}
+
+function channelPmaDetails(channel: HubChannelEntry): string {
+  if (channelSource(channel) !== "pma_thread") return "";
+  const parts: string[] = [];
+  const agent = String(channel.provenance?.agent || channel.meta?.agent || "")
+    .trim()
+    .toLowerCase();
+  if (agent) {
+    parts.push(`agent ${agent}`);
+  }
+  const managedId = String(
+    channel.provenance?.managed_thread_id || channel.active_thread_id || ""
+  ).trim();
+  if (managedId) {
+    parts.push(`thread ${managedId.slice(0, 12)}`);
+  }
+  return parts.join(" · ");
+}
+
 function channelDisplayLabel(channel: HubChannelEntry): string {
   if (typeof channel.display === "string" && channel.display.trim()) {
     return channel.display.trim();
@@ -1302,10 +1360,14 @@ function channelMetaSummary(
   { includeRepo = true }: { includeRepo?: boolean } = {}
 ): string {
   const parts: string[] = [];
+  const pmaDetails = channelPmaDetails(channel);
   const status = String(channel.status_label || channel.channel_status || "unknown")
     .trim()
     .toLowerCase();
   parts.push(status || "unknown");
+  if (pmaDetails) {
+    parts.push(pmaDetails);
+  }
   if (channel.seen_at) {
     parts.push(`seen ${formatTimeCompact(channel.seen_at)}`);
   }
@@ -1610,6 +1672,9 @@ function renderRepos(repos: HubRepo[]): void {
     const inlineChannelRows = inlineChannels
       .map((channel) => {
         const label = channelDisplayLabel(channel);
+        const sourceBadge = `<span class="pill pill-small hub-chat-binding-source hub-chat-binding-source-${escapeHtml(
+          channelSourceBadgeClass(channel)
+        )}">${escapeHtml(channelSourceBadgeLabel(channel))}</span>`;
         const key = String(channel.key || "").trim();
         const keyMarkup =
           key && key !== label
@@ -1618,6 +1683,7 @@ function renderRepos(repos: HubRepo[]): void {
         return `
           <div class="hub-chat-binding-row">
             <div class="hub-chat-binding-main">
+              ${sourceBadge}
               <span class="hub-chat-binding-label">${escapeHtml(label)}</span>
               ${keyMarkup}
             </div>
