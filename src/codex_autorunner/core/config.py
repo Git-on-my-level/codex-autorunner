@@ -10,7 +10,7 @@ from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
 import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
-from ..manifest import load_manifest
+from ..manifest import ManifestError, load_manifest
 from .config_contract import CONFIG_VERSION, ConfigError
 from .destinations import default_local_destination, resolve_effective_repo_destination
 from .path_utils import ConfigPathError, resolve_config_path
@@ -1925,8 +1925,16 @@ def _resolve_repo_effective_destination(
 ) -> Dict[str, Any]:
     try:
         manifest = load_manifest(hub.manifest_path, hub.root)
-    except Exception:
-        return default_local_destination()
+    except ManifestError as exc:
+        raise ConfigError(
+            "Failed to resolve effective destination from hub manifest: "
+            f"{hub.manifest_path}: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise ConfigError(
+            "Failed to resolve effective destination from hub manifest: "
+            f"{hub.manifest_path}: {exc}"
+        ) from exc
     repo = manifest.get_by_path(hub.root, repo_root)
     if repo is None:
         return default_local_destination()

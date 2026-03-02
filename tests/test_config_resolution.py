@@ -483,3 +483,43 @@ def test_repo_ticket_flow_safe_alias_normalizes_to_review(tmp_path: Path) -> Non
 
     config = load_repo_config(repo_root, hub_path=hub_root)
     assert config.ticket_flow.approval_mode == "review"
+
+
+def test_load_repo_config_fails_when_manifest_version_is_unsupported(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "version: 1\nrepos: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError, match="Failed to resolve effective destination from hub manifest"
+    ):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_load_repo_config_fails_when_manifest_yaml_is_invalid(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "version: 2\nrepos:\n  - id: base\n    path: workspace/base\n    kind: [\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError, match="Failed to resolve effective destination from hub manifest"
+    ):
+        load_repo_config(repo_root, hub_path=hub_root)
