@@ -42,6 +42,7 @@ from .git_utils import (
     git_upstream_status,
     run_git,
 )
+from .hub_lifecycle import HubLifecycleWorker, LifecycleEventProcessor
 from .lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
@@ -359,9 +360,18 @@ class HubSupervisor:
         self._list_cache: Optional[List[RepoSnapshot]] = None
         self._list_lock = threading.Lock()
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
-        self._lifecycle_task_lock = threading.Lock()
-        self._lifecycle_stop_event = threading.Event()
-        self._lifecycle_thread: Optional[threading.Thread] = None
+        self._lifecycle_event_processor = LifecycleEventProcessor(
+            store=self.lifecycle_store,
+            process_event=lambda event: self._process_lifecycle_event(event),
+            logger=logger,
+        )
+        self._lifecycle_worker = HubLifecycleWorker(
+            process_once=self.process_lifecycle_events,
+            poll_interval_seconds=5.0,
+            join_timeout_seconds=2.0,
+            thread_name="lifecycle-event-processor",
+            logger=logger,
+        )
         self._dispatch_interceptor: Optional[PmaDispatchInterceptor] = None
         self._pma_safety_checker: Optional[PmaSafetyChecker] = None
         self._wire_outbox_lifecycle()
@@ -1567,39 +1577,13 @@ class HubSupervisor:
         self._process_lifecycle_event(event)
 
     def process_lifecycle_events(self) -> None:
-        events = self.lifecycle_store.get_unprocessed(limit=100)
-        if not events:
-            return
-        for event in events:
-            try:
-                self._process_lifecycle_event(event)
-            except Exception as exc:
-                logger.exception(
-                    "Failed to process lifecycle event %s: %s", event.event_id, exc
-                )
+        self._lifecycle_event_processor.process_events(limit=100)
 
     def _start_lifecycle_event_processor(self) -> None:
-        if self._lifecycle_thread is not None:
-            return
-
-        def _process_loop():
-            while not self._lifecycle_stop_event.wait(5.0):
-                try:
-                    self.process_lifecycle_events()
-                except Exception:
-                    logger.exception("Error in lifecycle event processor")
-
-        self._lifecycle_thread = threading.Thread(
-            target=_process_loop, daemon=True, name="lifecycle-event-processor"
-        )
-        self._lifecycle_thread.start()
+        self._lifecycle_worker.start()
 
     def _stop_lifecycle_event_processor(self) -> None:
-        if self._lifecycle_thread is None:
-            return
-        self._lifecycle_stop_event.set()
-        self._lifecycle_thread.join(timeout=2.0)
-        self._lifecycle_thread = None
+        self._lifecycle_worker.stop()
 
     def shutdown(self) -> None:
         self._stop_lifecycle_event_processor()
