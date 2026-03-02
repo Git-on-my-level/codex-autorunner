@@ -18,7 +18,7 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
      "forceConsistentCasingInFileNames": true,
-     "outDir": "src/codex_autorunner/static",
+      "outDir": "src/codex_autorunner/static/generated",
      "skipLibCheck": true,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -14,19 +15,52 @@ from uuid import uuid4
 from ...core.logging_utils import safe_log
 
 _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
+_ASSET_MANIFEST = "assets.json"
+
+
+def _load_asset_manifest(static_dir: Path) -> Optional[dict]:
+    manifest_path = static_dir / _ASSET_MANIFEST
+    try:
+        if manifest_path.exists():
+            with manifest_path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def _get_assets_from_manifest(manifest: dict) -> set:
+    assets = set()
+    for entry in manifest.get("generated", []):
+        assets.add(entry["path"])
+    for entry in manifest.get("manual", []):
+        assets.add(entry["path"])
+    return assets
+
+
 _REQUIRED_STATIC_ASSETS = (
     "index.html",
     "styles.css",
-    "bootstrap.js",
-    "loader.js",
-    "app.js",
+    "generated/bootstrap.js",
+    "generated/loader.js",
+    "generated/app.js",
     "vendor/xterm.js",
     "vendor/xterm-addon-fit.js",
     "vendor/xterm.css",
+    "assets.json",
 )
 
 
 def missing_static_assets(static_dir: Path) -> list[str]:
+    manifest = _load_asset_manifest(static_dir)
+    if manifest:
+        assets = _get_assets_from_manifest(manifest)
+        missing = []
+        for asset in assets:
+            if not (static_dir / asset).exists():
+                missing.append(asset)
+        return missing
+
     missing: list[str] = []
     for rel_path in _REQUIRED_STATIC_ASSETS:
         try:

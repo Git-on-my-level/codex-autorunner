@@ -1,0 +1,319 @@
+{
+  "version": "mm9eyxn5",
+  "generated": [
+    {
+      "path": "generated/agentControls.js",
+      "hash": "a1be0c6b4302"
+    },
+    {
+      "path": "generated/agentEvents.js",
+      "hash": "e58f697426cb"
+    },
+    {
+      "path": "generated/app.js",
+      "hash": "faed9c8ba74c"
+    },
+    {
+      "path": "generated/archive.js",
+      "hash": "3c7ef371c879"
+    },
+    {
+      "path": "generated/archiveApi.js",
+      "hash": "d4a6536f13d1"
+    },
+    {
+      "path": "generated/autoRefresh.js",
+      "hash": "bf56c9a0a2eb"
+    },
+    {
+      "path": "generated/bootstrap.js",
+      "hash": "53243cf17a4d"
+    },
+    {
+      "path": "generated/bus.js",
+      "hash": "ddffaad0df81"
+    },
+    {
+      "path": "generated/cache.js",
+      "hash": "9035e8151c9d"
+    },
+    {
+      "path": "generated/chatUploads.js",
+      "hash": "ff4183a158ee"
+    },
+    {
+      "path": "generated/constants.js",
+      "hash": "3dbf6aa5e3d4"
+    },
+    {
+      "path": "generated/contextspace.js",
+      "hash": "678607811b42"
+    },
+    {
+      "path": "generated/contextspaceApi.js",
+      "hash": "077ebec412ba"
+    },
+    {
+      "path": "generated/contextspaceFileBrowser.js",
+      "hash": "6d140f412676"
+    },
+    {
+      "path": "generated/dashboard.js",
+      "hash": "bde1f62b2de8"
+    },
+    {
+      "path": "generated/diffRenderer.js",
+      "hash": "700522dc7a80"
+    },
+    {
+      "path": "generated/docChatCore.js",
+      "hash": "95db3ccf6dc5"
+    },
+    {
+      "path": "generated/docChatStorage.js",
+      "hash": "b6bfae175906"
+    },
+    {
+      "path": "generated/docChatVoice.js",
+      "hash": "52e9cf0e26e2"
+    },
+    {
+      "path": "generated/docEditor.js",
+      "hash": "facc3e697e57"
+    },
+    {
+      "path": "generated/env.js",
+      "hash": "53d5acf3af8e"
+    },
+    {
+      "path": "generated/eventSummarizer.js",
+      "hash": "38ca69b6fd16"
+    },
+    {
+      "path": "generated/fileboxUi.js",
+      "hash": "5f3aea225f34"
+    },
+    {
+      "path": "generated/fileChat.js",
+      "hash": "2455487d6fbe"
+    },
+    {
+      "path": "generated/health.js",
+      "hash": "7bba46f33907"
+    },
+    {
+      "path": "generated/hub.js",
+      "hash": "81b289a794bf"
+    },
+    {
+      "path": "generated/liveUpdates.js",
+      "hash": "faaa32f04016"
+    },
+    {
+      "path": "generated/loader.js",
+      "hash": "2ae7fc99e7ae"
+    },
+    {
+      "path": "generated/messages.js",
+      "hash": "42d2a1999e61"
+    },
+    {
+      "path": "generated/mobileCompact.js",
+      "hash": "9465f39c91ab"
+    },
+    {
+      "path": "generated/notificationBell.js",
+      "hash": "7e7b652a969e"
+    },
+    {
+      "path": "generated/notifications.js",
+      "hash": "f6a04475fed8"
+    },
+    {
+      "path": "generated/pma.js",
+      "hash": "7f085328e7fa"
+    },
+    {
+      "path": "generated/preserve.js",
+      "hash": "9acb3b15191b"
+    },
+    {
+      "path": "generated/settings.js",
+      "hash": "35027dffac05"
+    },
+    {
+      "path": "generated/smartRefresh.js",
+      "hash": "551dfa331214"
+    },
+    {
+      "path": "generated/streamUtils.js",
+      "hash": "c51b92f953ec"
+    },
+    {
+      "path": "generated/tabs.js",
+      "hash": "517777c134ed"
+    },
+    {
+      "path": "generated/templateReposSettings.js",
+      "hash": "a004fe548f6b"
+    },
+    {
+      "path": "generated/terminal.js",
+      "hash": "7f767e7755c6"
+    },
+    {
+      "path": "generated/terminalManager.js",
+      "hash": "8ef89aa1d28d"
+    },
+    {
+      "path": "generated/ticketChatActions.js",
+      "hash": "98aa7d5e80f8"
+    },
+    {
+      "path": "generated/ticketChatEvents.js",
+      "hash": "2660dd7a5477"
+    },
+    {
+      "path": "generated/ticketChatStorage.js",
+      "hash": "97d7d496b314"
+    },
+    {
+      "path": "generated/ticketChatStream.js",
+      "hash": "201a2e70ce37"
+    },
+    {
+      "path": "generated/ticketEditor.js",
+      "hash": "1773e562e06e"
+    },
+    {
+      "path": "generated/tickets.js",
+      "hash": "4c8da0b34731"
+    },
+    {
+      "path": "generated/ticketTemplates.js",
+      "hash": "d7ced35f2ab6"
+    },
+    {
+      "path": "generated/ticketVoice.js",
+      "hash": "b7b2b28b9a04"
+    },
+    {
+      "path": "generated/turnEvents.js",
+      "hash": "4fa573951f7e"
+    },
+    {
+      "path": "generated/turnResume.js",
+      "hash": "bf103ec9b887"
+    },
+    {
+      "path": "generated/utils.js",
+      "hash": "8baecc199050"
+    },
+    {
+      "path": "generated/voice.js",
+      "hash": "1989138d2a6f"
+    }
+  ],
+  "manual": [
+    {
+      "path": "index.html",
+      "hash": "d1e0ac8cb576"
+    },
+    {
+      "path": "styles.css",
+      "hash": "672494bd3f6b"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-400-cyrillic-ext.woff2",
+      "hash": "9343de2ca5d9"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-400-cyrillic.woff2",
+      "hash": "4995a9a43ac6"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-400-greek.woff2",
+      "hash": "49c3da6c9a2b"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-400-latin-ext.woff2",
+      "hash": "9c38cb2d0d2d"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-400-latin.woff2",
+      "hash": "2c32b9b3ee35"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-400-vietnamese.woff2",
+      "hash": "d44eb1936043"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-500-cyrillic-ext.woff2",
+      "hash": "9343de2ca5d9"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-500-cyrillic.woff2",
+      "hash": "4995a9a43ac6"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-500-greek.woff2",
+      "hash": "49c3da6c9a2b"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-500-latin-ext.woff2",
+      "hash": "9c38cb2d0d2d"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-500-latin.woff2",
+      "hash": "2c32b9b3ee35"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-500-vietnamese.woff2",
+      "hash": "d44eb1936043"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-600-cyrillic-ext.woff2",
+      "hash": "9343de2ca5d9"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-600-cyrillic.woff2",
+      "hash": "4995a9a43ac6"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-600-greek.woff2",
+      "hash": "49c3da6c9a2b"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-600-latin-ext.woff2",
+      "hash": "9c38cb2d0d2d"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-600-latin.woff2",
+      "hash": "2c32b9b3ee35"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/JetBrainsMono-600-vietnamese.woff2",
+      "hash": "d44eb1936043"
+    },
+    {
+      "path": "vendor/fonts/jetbrains-mono/OFL.txt",
+      "hash": "a76abf002c49"
+    },
+    {
+      "path": "vendor/LICENSE.xterm",
+      "hash": "47590abc82ca"
+    },
+    {
+      "path": "vendor/xterm-addon-fit.js",
+      "hash": "10f3194c5f17"
+    },
+    {
+      "path": "vendor/xterm.css",
+      "hash": "832f3f2c603b"
+    },
+    {
+      "path": "vendor/xterm.js",
+      "hash": "f0aea0f75f48"
+    }
+  ]
+}

@@ -1241,12 +1241,12 @@ if [[ -z "${HEALTH_PATH}" ]]; then
   if [[ -n "${base_path}" ]]; then
     HEALTH_PATH="${base_path}/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
-      HEALTH_STATIC_PATH="${base_path}/static/app.js"
+      HEALTH_STATIC_PATH="${base_path}/static/generated/app.js"
     fi
   else
     HEALTH_PATH="/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
-      HEALTH_STATIC_PATH="/static/app.js"
+      HEALTH_STATIC_PATH="/static/generated/app.js"
     fi
   fi
 fi

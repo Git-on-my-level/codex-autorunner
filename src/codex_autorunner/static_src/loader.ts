@@ -14,7 +14,7 @@
 
     addScript("static/vendor/xterm.js")
       .then(() => addScript("static/vendor/xterm-addon-fit.js"))
-      .then(() => addScript("static/app.js", { type: "module" }))
+      .then(() => addScript("static/generated/app.js", { type: "module" }))
       .catch((err) => {
         console.error("Failed to load assets", err);
       });

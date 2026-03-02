@@ -15,13 +15,15 @@ def _write_required_assets(static_dir: Path) -> None:
     (static_dir / "index.html").write_text(
         "<html>__CAR_ASSET_VERSION__</html>", encoding="utf-8"
     )
-    (static_dir / "bootstrap.js").write_text(
+    (static_dir / "styles.css").write_text("body { }", encoding="utf-8")
+    generated_dir = static_dir / "generated"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    (generated_dir / "bootstrap.js").write_text(
         "console.log('bootstrap');", encoding="utf-8"
     )
-    (static_dir / "loader.js").write_text("console.log('loader');", encoding="utf-8")
-    (static_dir / "styles.css").write_text("body { }", encoding="utf-8")
-    (static_dir / "app.js").write_text("console.log('app');", encoding="utf-8")
-    (static_dir / "github.js").write_text("console.log('github');", encoding="utf-8")
+    (generated_dir / "loader.js").write_text("console.log('loader');", encoding="utf-8")
+    (generated_dir / "app.js").write_text("console.log('app');", encoding="utf-8")
+    (generated_dir / "github.js").write_text("console.log('github');", encoding="utf-8")
     vendor_dir = static_dir / "vendor"
     vendor_dir.mkdir(parents=True, exist_ok=True)
     (vendor_dir / "xterm.js").write_text("console.log('xterm');", encoding="utf-8")
@@ -29,6 +31,25 @@ def _write_required_assets(static_dir: Path) -> None:
         "console.log('fit');", encoding="utf-8"
     )
     (vendor_dir / "xterm.css").write_text("body { }", encoding="utf-8")
+    import json
+
+    manifest = {
+        "version": "test",
+        "generated": [
+            {"path": "generated/bootstrap.js", "hash": "test"},
+            {"path": "generated/loader.js", "hash": "test"},
+            {"path": "generated/app.js", "hash": "test"},
+            {"path": "generated/github.js", "hash": "test"},
+        ],
+        "manual": [
+            {"path": "index.html", "hash": "test"},
+            {"path": "styles.css", "hash": "test"},
+            {"path": "vendor/xterm.js", "hash": "test"},
+            {"path": "vendor/xterm-addon-fit.js", "hash": "test"},
+            {"path": "vendor/xterm.css", "hash": "test"},
+        ],
+    }
+    (static_dir / "assets.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def test_materialize_static_assets_survives_source_removal(
@@ -126,7 +147,7 @@ def test_repo_app_serves_cached_static_assets(
     shutil.rmtree(source_dir)
     res = client.get(f"/repos/{hub_env.repo_id}/")
     assert res.status_code == 200
-    static_res = client.get(f"/repos/{hub_env.repo_id}/static/app.js")
+    static_res = client.get(f"/repos/{hub_env.repo_id}/static/generated/app.js")
     assert static_res.status_code == 200
 
 
@@ -135,16 +156,17 @@ def test_static_assets_cached_and_compressed(
 ) -> None:
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)
-    (source_dir / "big.js").write_text("a" * 2048, encoding="utf-8")
+    (source_dir / "generated" / "big.js").write_text("a" * 2048, encoding="utf-8")
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
-    cache_res = client.get(f"/repos/{hub_env.repo_id}/static/app.js")
+    cache_res = client.get(f"/repos/{hub_env.repo_id}/static/generated/app.js")
     assert cache_res.status_code == 200
     cache_control = cache_res.headers.get("Cache-Control", "")
     assert "max-age=31536000" in cache_control
     gzip_res = client.get(
-        f"/repos/{hub_env.repo_id}/static/big.js", headers={"Accept-Encoding": "gzip"}
+        f"/repos/{hub_env.repo_id}/static/generated/big.js",
+        headers={"Accept-Encoding": "gzip"},
     )
     assert gzip_res.status_code == 200
     assert gzip_res.headers.get("Content-Encoding") == "gzip"
@@ -161,5 +183,5 @@ def test_repo_app_falls_back_to_hub_static_cache(
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
-    res = client.get(f"/repos/{hub_env.repo_id}/static/app.js")
+    res = client.get(f"/repos/{hub_env.repo_id}/static/generated/app.js")
     assert res.status_code == 200
