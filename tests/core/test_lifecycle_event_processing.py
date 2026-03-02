@@ -340,6 +340,12 @@ def test_lifecycle_subscription_enqueues_wakeup_payload(tmp_path: Path) -> None:
         assert wake_up.get("to_state") == "failed"
         assert wake_up.get("reason") == "flow_error"
         assert isinstance(wake_up.get("timestamp"), str)
+        assert wake_up.get("source") == "lifecycle_subscription"
+        assert wake_up.get("event_type") == "flow_failed"
+        message = str(payload.get("message") or "")
+        assert "source: lifecycle_subscription" in message
+        assert "event_type: flow_failed" in message
+        assert "suggested_next_action:" in message
     finally:
         supervisor.shutdown()
 
@@ -385,6 +391,12 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
         assert wake_up.get("to_state") == "follow_up"
         assert wake_up.get("reason") == "timer_due"
         assert isinstance(wake_up.get("timestamp"), str)
+        assert wake_up.get("source") == "timer"
+        assert wake_up.get("timer_id")
+        message = str(payload.get("message") or "")
+        assert "source: timer" in message
+        assert "timer_id:" in message
+        assert "/hub/pma/timers/{timer_id}/touch" in message
     finally:
         supervisor.shutdown()
 

@@ -351,6 +351,9 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
     assert "Ticket planning constraints (state machine):" in result
     assert "Managed threads vs ticket flows:" in result
     assert "car pma thread spawn" in result
+    assert "Automation continuity (subscriptions + timers):" in result
+    assert "/hub/pma/subscriptions" in result
+    assert "/hub/pma/timers" in result
     assert "active_context.md" in result
     assert "decisions.md" in result
     assert "spec.md" in result
@@ -509,6 +512,67 @@ def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
     assert repos[1]["trusted"] is False
     assert repos[1]["default_ref"] == "stable"
     assert "url" not in repos[0]
+
+
+def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        store = supervisor.get_pma_automation_store()
+        store.create_subscription(
+            {
+                "event_types": ["flow_completed"],
+                "repo_id": hub_env.repo_id,
+                "run_id": "run-1",
+                "from_state": "running",
+                "to_state": "completed",
+                "lane_id": "pma:lane-next",
+                "idempotency_key": "snapshot-sub-1",
+            }
+        )
+        store.create_timer(
+            {
+                "timer_type": "one_shot",
+                "delay_seconds": 60,
+                "repo_id": hub_env.repo_id,
+                "run_id": "run-1",
+                "reason": "watchdog",
+                "idempotency_key": "snapshot-timer-1",
+            }
+        )
+        store.enqueue_wakeup(
+            source="lifecycle_subscription",
+            repo_id=hub_env.repo_id,
+            run_id="run-1",
+            from_state="running",
+            to_state="completed",
+            reason="flow_completed",
+            timestamp="2026-01-01T00:00:00Z",
+            idempotency_key="snapshot-wakeup-1",
+        )
+
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    automation = snapshot.get("automation")
+    assert isinstance(automation, dict)
+    subscriptions = automation.get("subscriptions")
+    assert isinstance(subscriptions, dict)
+    assert int(subscriptions.get("active_count") or 0) >= 1
+    timers = automation.get("timers")
+    assert isinstance(timers, dict)
+    assert int(timers.get("pending_count") or 0) >= 1
+    wakeups = automation.get("wakeups")
+    assert isinstance(wakeups, dict)
+    assert int(wakeups.get("pending_count") or 0) >= 1
+
+    rendered = _render_hub_snapshot(snapshot)
+    assert "PMA Automation:" in rendered
+    assert "subscriptions_active=" in rendered
 
 
 def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:

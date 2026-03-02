@@ -1936,10 +1936,22 @@ class HubSupervisor:
 
     def _build_pma_wakeup_message(self, wake_up: dict[str, Any]) -> str:
         lines = ["Automation wake-up received."]
+        source = wake_up.get("source")
+        event_type = wake_up.get("event_type")
+        subscription_id = wake_up.get("subscription_id")
+        timer_id = wake_up.get("timer_id")
         repo_id = wake_up.get("repo_id")
         run_id = wake_up.get("run_id")
         thread_id = wake_up.get("thread_id")
         lane_id = wake_up.get("lane_id")
+        if source:
+            lines.append(f"source: {source}")
+        if event_type:
+            lines.append(f"event_type: {event_type}")
+        if subscription_id:
+            lines.append(f"subscription_id: {subscription_id}")
+        if timer_id:
+            lines.append(f"timer_id: {timer_id}")
         if repo_id:
             lines.append(f"repo_id: {repo_id}")
         if run_id:
@@ -1956,6 +1968,14 @@ class HubSupervisor:
             lines.append(f"reason: {wake_up['reason']}")
         if wake_up.get("timestamp"):
             lines.append(f"timestamp: {wake_up['timestamp']}")
+        if source == "timer":
+            lines.append(
+                "suggested_next_action: verify progress, then use /hub/pma/timers/{timer_id}/touch or /hub/pma/timers/{timer_id}/cancel."
+            )
+        else:
+            lines.append(
+                "suggested_next_action: inspect the transition and adjust /hub/pma/subscriptions or /hub/pma/timers as needed."
+            )
         return "\n".join(lines)
 
     def drain_pma_automation_wakeups(self, *, limit: int = 100) -> int:
@@ -1996,6 +2016,9 @@ class HubSupervisor:
                 "reason": wakeup.get("reason"),
                 "timestamp": wakeup.get("timestamp"),
                 "source": wakeup.get("source"),
+                "event_type": wakeup.get("event_type"),
+                "subscription_id": wakeup.get("subscription_id"),
+                "timer_id": wakeup.get("timer_id"),
             }
             payload = {
                 "message": self._build_pma_wakeup_message(wake_payload),
