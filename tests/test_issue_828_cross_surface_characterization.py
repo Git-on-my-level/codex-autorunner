@@ -32,9 +32,9 @@ ISSUE_828_PARITY_MATRIX = {
     },
     "flow_start": {
         "no_tickets_default_start": {
-            "web_status": 200,
+            "web_status": 400,
             "cli_exit_code": 1,
-            "parity": "drift",
+            "parity": "aligned",
         }
     },
     "destination": {
@@ -126,7 +126,8 @@ def test_issue_828_flow_start_parity_matrix_characterization(
     ) as client:
         web_start = client.post("/api/flows/ticket_flow/start", json={})
     assert web_start.status_code == matrix["web_status"]
-    assert isinstance(web_start.json().get("id"), str)
+    assert "No tickets found" in web_start.json().get("detail", "")
+    assert ".codex-autorunner/tickets" in web_start.json().get("detail", "")
 
     cli_start = RUNNER.invoke(
         app,
@@ -143,7 +144,7 @@ def test_issue_828_flow_start_parity_matrix_characterization(
     assert cli_start.exit_code == matrix["cli_exit_code"]
     assert "No tickets found." in cli_start.output
     assert "Fix the above errors before starting the ticket flow." in cli_start.output
-    assert matrix["parity"] == "drift"
+    assert matrix["parity"] == "aligned"
 
 
 def test_issue_828_destination_parity_matrix_characterization(tmp_path: Path) -> None:

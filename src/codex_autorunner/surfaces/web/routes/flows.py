@@ -27,6 +27,10 @@ from ....core.flows import (
     FlowStore,
 )
 from ....core.flows.reconciler import reconcile_flow_run
+from ....core.flows.start_policy import (
+    NO_TICKETS_START_ERROR,
+    evaluate_ticket_start_policy,
+)
 from ....core.flows.ux_helpers import (
     bootstrap_check as ux_bootstrap_check,
 )
@@ -56,7 +60,7 @@ from ....tickets.files import (
     safe_relpath,
 )
 from ....tickets.frontmatter import parse_markdown_frontmatter
-from ....tickets.lint import lint_ticket_directory, lint_ticket_frontmatter
+from ....tickets.lint import lint_ticket_frontmatter
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
     TicketBulkClearModelRequest,
@@ -475,24 +479,8 @@ def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
 
 
 def _validate_tickets(ticket_dir: Path) -> list[str]:
-    """Validate all tickets in the directory and return a list of error messages."""
-    errors: list[str] = []
-
-    if not ticket_dir.exists():
-        return errors
-
-    # Check for directory-level errors (duplicate indices)
-    dir_errors = lint_ticket_directory(ticket_dir)
-    errors.extend(dir_errors)
-
-    # Check each ticket file for frontmatter errors
-    ticket_paths = list_ticket_paths(ticket_dir)
-    for path in ticket_paths:
-        _, ticket_errors = read_ticket(path)
-        for err in ticket_errors:
-            errors.append(f"{path.relative_to(path.parent.parent)}: {err}")
-
-    return errors
+    """Validate all tickets in the directory and return linting/frontmatter errors."""
+    return list(evaluate_ticket_start_policy(ticket_dir).lint_errors)
 
 
 def _lint_after_ticket_update(ticket_dir: Path) -> list[str]:
@@ -845,16 +833,11 @@ def build_flow_routes() -> APIRouter:
 
         if flow_type == "ticket_flow" and validate_tickets:
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-            if force_new and not list_ticket_paths(ticket_dir):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "No tickets found under .codex-autorunner/tickets. "
-                        "Use /api/flows/ticket_flow/bootstrap to seed tickets."
-                    ),
-                )
+            ticket_policy = evaluate_ticket_start_policy(ticket_dir)
+            if not ticket_policy.has_tickets:
+                raise HTTPException(status_code=400, detail=NO_TICKETS_START_ERROR)
 
-            lint_errors = _validate_tickets(ticket_dir)
+            lint_errors = list(ticket_policy.lint_errors)
             if lint_errors:
                 raise HTTPException(
                     status_code=400,
