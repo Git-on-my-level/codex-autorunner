@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -14,7 +15,9 @@ from .utils import atomic_write
 logger = logging.getLogger(__name__)
 
 LIFECYCLE_EVENTS_FILENAME = "lifecycle_events.json"
+LIFECYCLE_EVENTS_DB_FILENAME = "lifecycle_events.sqlite3"
 LIFECYCLE_EVENTS_LOCK_SUFFIX = ".lock"
+LIFECYCLE_EVENTS_MALFORMED_PREFIX = "lifecycle_events.malformed"
 TRANSITION_TOKEN_KEY = "transition_token"
 
 
@@ -52,11 +55,25 @@ class LifecycleEventAppendResult:
     deduped: bool = False
 
 
+@dataclass
+class LegacyLifecycleLoadResult:
+    events: list[LifecycleEvent]
+    malformed: bool = False
+    raw_text: Optional[str] = None
+    error: Optional[str] = None
+
+
 def default_lifecycle_events_path(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / LIFECYCLE_EVENTS_FILENAME
 
 
-class LifecycleEventStore:
+def default_lifecycle_events_db_path(hub_root: Path) -> Path:
+    return hub_root / ".codex-autorunner" / LIFECYCLE_EVENTS_DB_FILENAME
+
+
+class _LegacyJsonLifecycleEventStore:
+    """Legacy JSON lifecycle events reader used for migration compatibility."""
+
     def __init__(self, hub_root: Path) -> None:
         self._path = default_lifecycle_events_path(hub_root)
 
@@ -66,6 +83,110 @@ class LifecycleEventStore:
 
     def _lock_path(self) -> Path:
         return self._path.with_suffix(LIFECYCLE_EVENTS_LOCK_SUFFIX)
+
+    @staticmethod
+    def _deserialize_event(entry: Any) -> Optional[LifecycleEvent]:
+        try:
+            if not isinstance(entry, dict):
+                return None
+            event_type_str = entry.get("event_type")
+            if not isinstance(event_type_str, str):
+                return None
+            try:
+                event_type = LifecycleEventType(event_type_str)
+            except ValueError:
+                return None
+            event_id_raw = entry.get("event_id")
+            event_id = str(event_id_raw) if isinstance(event_id_raw, str) else ""
+            if not event_id:
+                import uuid
+
+                event_id = str(uuid.uuid4())
+            origin_raw = entry.get("origin")
+            origin = (
+                str(origin_raw).strip()
+                if isinstance(origin_raw, str) and origin_raw.strip()
+                else "system"
+            )
+            data_raw = entry.get("data", {})
+            data = dict(data_raw) if isinstance(data_raw, dict) else {}
+            timestamp_raw = entry.get("timestamp", "")
+            timestamp = str(timestamp_raw) if isinstance(timestamp_raw, str) else ""
+            processed = bool(entry.get("processed", False))
+            return LifecycleEvent(
+                event_type=event_type,
+                repo_id=str(entry.get("repo_id", "")),
+                run_id=str(entry.get("run_id", "")),
+                data=data,
+                origin=origin,
+                timestamp=timestamp,
+                processed=processed,
+                event_id=event_id,
+            )
+        except Exception:
+            return None
+
+    def load_with_result(self) -> LegacyLifecycleLoadResult:
+        if not self._path.exists():
+            return LegacyLifecycleLoadResult(events=[])
+        with file_lock(self._lock_path()):
+            try:
+                raw = self._path.read_text(encoding="utf-8")
+            except OSError as exc:
+                return LegacyLifecycleLoadResult(
+                    events=[],
+                    malformed=True,
+                    error=f"read_error:{exc}",
+                )
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                return LegacyLifecycleLoadResult(
+                    events=[],
+                    malformed=True,
+                    raw_text=raw,
+                    error=f"json_decode_error:{exc}",
+                )
+
+            entries: list[Any]
+            if isinstance(payload, list):
+                entries = payload
+            elif isinstance(payload, dict):
+                legacy_events = payload.get("events")
+                if isinstance(legacy_events, list):
+                    entries = legacy_events
+                else:
+                    return LegacyLifecycleLoadResult(
+                        events=[],
+                        malformed=True,
+                        raw_text=raw,
+                        error="unsupported_legacy_shape",
+                    )
+            else:
+                return LegacyLifecycleLoadResult(
+                    events=[],
+                    malformed=True,
+                    raw_text=raw,
+                    error="unsupported_legacy_payload",
+                )
+
+            events: list[LifecycleEvent] = []
+            for entry in entries:
+                event = self._deserialize_event(entry)
+                if event is not None:
+                    events.append(event)
+            return LegacyLifecycleLoadResult(events=events)
+
+
+class _SqliteLifecycleEventStore:
+    def __init__(self, hub_root: Path) -> None:
+        self._path = default_lifecycle_events_db_path(hub_root)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize_schema()
+
+    @property
+    def path(self) -> Path:
+        return self._path
 
     @staticmethod
     def _is_terminal_flow_event(event_type: LifecycleEventType) -> bool:
@@ -132,122 +253,178 @@ class LifecycleEventStore:
         data = dict(existing.data or {})
         duplicate_count = self._parse_duplicate_count(data.get("duplicate_count"))
         first_seen_at = self._resolve_first_seen_at(
-            existing, data, fallback=duplicate_seen_at
+            existing,
+            data,
+            fallback=duplicate_seen_at,
         )
         data["duplicate_count"] = duplicate_count + 1
         data["first_seen_at"] = first_seen_at
         data["last_seen_at"] = duplicate_seen_at
         existing.data = data
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _initialize_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lifecycle_events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL,
+                    repo_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    processed INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_lifecycle_events_processed_seq
+                ON lifecycle_events (processed, seq)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_lifecycle_events_identity
+                ON lifecycle_events (event_type, repo_id, run_id)
+                """
+            )
+
+    @staticmethod
+    def _event_to_record(
+        event: LifecycleEvent,
+    ) -> tuple[str, str, str, str, str, str, str, int]:
+        return (
+            event.event_id,
+            event.event_type.value,
+            event.repo_id,
+            event.run_id,
+            json.dumps(event.data or {}, sort_keys=True),
+            event.origin,
+            event.timestamp,
+            1 if event.processed else 0,
+        )
+
+    @staticmethod
+    def _row_to_event(row: sqlite3.Row) -> Optional[LifecycleEvent]:
+        try:
+            event_type_raw = row["event_type"]
+            if not isinstance(event_type_raw, str):
+                return None
+            event_type = LifecycleEventType(event_type_raw)
+            data_raw = row["data_json"]
+            data_payload: Any = {}
+            if isinstance(data_raw, str):
+                try:
+                    data_payload = json.loads(data_raw)
+                except Exception:
+                    data_payload = {}
+            data = dict(data_payload) if isinstance(data_payload, dict) else {}
+            return LifecycleEvent(
+                event_type=event_type,
+                repo_id=str(row["repo_id"]),
+                run_id=str(row["run_id"]),
+                data=data,
+                origin=str(row["origin"]),
+                timestamp=str(row["timestamp"]),
+                processed=bool(row["processed"]),
+                event_id=str(row["event_id"]),
+            )
+        except Exception:
+            return None
+
+    def _load_rows(self, query: str, params: tuple[Any, ...]) -> list[LifecycleEvent]:
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        events: list[LifecycleEvent] = []
+        for row in rows:
+            event = self._row_to_event(row)
+            if event is not None:
+                events.append(event)
+        return events
+
+    def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
+        return self._load_rows(
+            """
+            SELECT event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
+            FROM lifecycle_events
+            ORDER BY seq ASC
+            """,
+            (),
+        )
+
+    def save(self, events: list[LifecycleEvent]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM lifecycle_events")
+            conn.executemany(
+                """
+                INSERT INTO lifecycle_events (
+                    event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [self._event_to_record(event) for event in events],
+            )
+
     def _find_duplicate_terminal_event(
-        self, events: list[LifecycleEvent], candidate: LifecycleEvent
+        self,
+        conn: sqlite3.Connection,
+        candidate: LifecycleEvent,
     ) -> Optional[LifecycleEvent]:
         if not self._is_terminal_flow_event(candidate.event_type):
             return None
         candidate_key = self._semantic_identity(candidate)
-        for existing in events:
-            if not self._is_terminal_flow_event(existing.event_type):
+        rows = conn.execute(
+            """
+            SELECT event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
+            FROM lifecycle_events
+            WHERE event_type = ? AND repo_id = ? AND run_id = ?
+            ORDER BY seq ASC
+            """,
+            (candidate.event_type.value, candidate.repo_id, candidate.run_id),
+        ).fetchall()
+        for row in rows:
+            existing = self._row_to_event(row)
+            if existing is None:
                 continue
             if self._semantic_identity(existing) == candidate_key:
                 return existing
         return None
 
-    def _load_unlocked(self) -> list[LifecycleEvent]:
-        if not self._path.exists():
-            return []
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Failed to read lifecycle events at %s: %s", self._path, exc)
-            return []
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.warning(
-                "Failed to parse lifecycle events at %s: %s", self._path, exc
-            )
-            return []
-        if not isinstance(data, list):
-            logger.warning("Lifecycle events data is not a list: %s", self._path)
-            return []
-        events: list[LifecycleEvent] = []
-        for entry in data:
-            try:
-                if not isinstance(entry, dict):
-                    continue
-                event_type_str = entry.get("event_type")
-                if not isinstance(event_type_str, str):
-                    continue
-                try:
-                    event_type = LifecycleEventType(event_type_str)
-                except ValueError:
-                    continue
-                event_id_raw = entry.get("event_id")
-                event_id = str(event_id_raw) if isinstance(event_id_raw, str) else ""
-                if not event_id:
-                    import uuid
-
-                    event_id = str(uuid.uuid4())
-                origin_raw = entry.get("origin")
-                origin = (
-                    str(origin_raw).strip()
-                    if isinstance(origin_raw, str) and origin_raw.strip()
-                    else "system"
-                )
-                event = LifecycleEvent(
-                    event_type=event_type,
-                    repo_id=str(entry.get("repo_id", "")),
-                    run_id=str(entry.get("run_id", "")),
-                    data=dict(entry.get("data", {})),
-                    origin=origin,
-                    timestamp=str(entry.get("timestamp", "")),
-                    processed=bool(entry.get("processed", False)),
-                    event_id=event_id,
-                )
-                events.append(event)
-            except Exception as exc:
-                logger.debug("Failed to parse lifecycle event entry: %s", exc)
-                continue
-        return events
-
-    def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
-        with file_lock(self._lock_path()):
-            return self._load_unlocked()
-
-    def save(self, events: list[LifecycleEvent]) -> None:
-        with file_lock(self._lock_path()):
-            self._save_unlocked(events)
-
-    def _save_unlocked(self, events: list[LifecycleEvent]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        data = [
-            {
-                "event_id": event.event_id,
-                "event_type": event.event_type.value,
-                "repo_id": event.repo_id,
-                "run_id": event.run_id,
-                "data": event.data,
-                "origin": event.origin,
-                "timestamp": event.timestamp,
-                "processed": event.processed,
-            }
-            for event in events
-        ]
-        atomic_write(self._path, json.dumps(data, indent=2) + "\n")
-
     def append_with_result(self, event: LifecycleEvent) -> LifecycleEventAppendResult:
-        with file_lock(self._lock_path()):
-            events = self._load_unlocked()
-            duplicate = self._find_duplicate_terminal_event(events, event)
+        with self._connect() as conn:
+            duplicate = self._find_duplicate_terminal_event(conn, event)
             if duplicate is not None:
                 seen_at = event.timestamp
                 if not isinstance(seen_at, str) or not seen_at.strip():
                     seen_at = datetime.now(timezone.utc).isoformat()
                 self._annotate_duplicate(duplicate, duplicate_seen_at=seen_at)
-                self._save_unlocked(events)
+                conn.execute(
+                    """
+                    UPDATE lifecycle_events
+                    SET data_json = ?
+                    WHERE event_id = ?
+                    """,
+                    (
+                        json.dumps(duplicate.data or {}, sort_keys=True),
+                        duplicate.event_id,
+                    ),
+                )
                 return LifecycleEventAppendResult(event=duplicate, deduped=True)
-            events.append(event)
-            self._save_unlocked(events)
+            conn.execute(
+                """
+                INSERT INTO lifecycle_events (
+                    event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._event_to_record(event),
+            )
             return LifecycleEventAppendResult(event=event, deduped=False)
 
     def append(self, event: LifecycleEvent) -> None:
@@ -262,37 +439,194 @@ class LifecycleEventStore:
     ) -> Optional[LifecycleEvent]:
         if not event_id:
             return None
-        with file_lock(self._lock_path()):
-            events = self._load_unlocked()
-            updated: Optional[LifecycleEvent] = None
-            for event in events:
-                if event.event_id != event_id:
-                    continue
-                if data is not None:
-                    event.data = dict(data)
-                if processed is not None:
-                    event.processed = bool(processed)
-                updated = event
-                break
-            if updated is not None:
-                self._save_unlocked(events)
-            return updated
+
+        set_clauses: list[str] = []
+        params: list[Any] = []
+        if data is not None:
+            set_clauses.append("data_json = ?")
+            params.append(json.dumps(data, sort_keys=True))
+        if processed is not None:
+            set_clauses.append("processed = ?")
+            params.append(1 if processed else 0)
+        if not set_clauses:
+            return None
+
+        params.append(event_id)
+
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE lifecycle_events SET {', '.join(set_clauses)} WHERE event_id = ?",
+                tuple(params),
+            )
+            row = conn.execute(
+                """
+                SELECT event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
+                FROM lifecycle_events
+                WHERE event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_event(row)
 
     def mark_processed(self, event_id: str) -> Optional[LifecycleEvent]:
         return self.update_event(event_id, processed=True)
 
     def get_unprocessed(self, *, limit: int = 100) -> list[LifecycleEvent]:
-        events = self.load(ensure_exists=False)
-        unprocessed = [e for e in events if not e.processed]
-        return unprocessed[:limit]
+        safe_limit = max(0, int(limit))
+        return self._load_rows(
+            """
+            SELECT event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
+            FROM lifecycle_events
+            WHERE processed = 0
+            ORDER BY seq ASC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        )
 
     def prune_processed(self, *, keep_last: int = 100) -> None:
-        events = self.load(ensure_exists=False)
-        unprocessed = [e for e in events if not e.processed]
-        processed = [e for e in events if e.processed]
-        if len(processed) > keep_last:
-            processed = processed[-keep_last:]
-        self.save(unprocessed + processed)
+        safe_keep_last = max(0, int(keep_last))
+        with self._connect() as conn:
+            if safe_keep_last == 0:
+                conn.execute("DELETE FROM lifecycle_events WHERE processed = 1")
+                return
+            conn.execute(
+                """
+                DELETE FROM lifecycle_events
+                WHERE processed = 1
+                  AND seq NOT IN (
+                    SELECT seq FROM lifecycle_events
+                    WHERE processed = 1
+                    ORDER BY seq DESC
+                    LIMIT ?
+                  )
+                """,
+                (safe_keep_last,),
+            )
+
+    def count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM lifecycle_events").fetchone()
+        if row is None:
+            return 0
+        return int(row["c"])
+
+
+class LifecycleEventStore:
+    """Lifecycle event store facade using SQLite primary storage with JSON migration."""
+
+    def __init__(self, hub_root: Path) -> None:
+        self._legacy_store = _LegacyJsonLifecycleEventStore(hub_root)
+        self._sqlite_store = _SqliteLifecycleEventStore(hub_root)
+        self._migrate_legacy_if_needed()
+
+    @property
+    def path(self) -> Path:
+        return self._sqlite_store.path
+
+    @property
+    def legacy_path(self) -> Path:
+        return self._legacy_store.path
+
+    def _quarantine_malformed_legacy_file(
+        self,
+        *,
+        raw_text: Optional[str],
+        error: Optional[str],
+    ) -> None:
+        legacy_path = self._legacy_store.path
+        if not legacy_path.exists():
+            return
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        quarantine_path = legacy_path.with_name(
+            f"{LIFECYCLE_EVENTS_MALFORMED_PREFIX}.{timestamp}.json"
+        )
+        try:
+            legacy_path.rename(quarantine_path)
+        except OSError:
+            if raw_text is not None:
+                try:
+                    atomic_write(quarantine_path, raw_text)
+                    legacy_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "Failed to quarantine malformed lifecycle events file at %s",
+                        legacy_path,
+                    )
+                    return
+            else:
+                logger.warning(
+                    "Malformed lifecycle events file at %s could not be quarantined",
+                    legacy_path,
+                )
+                return
+        logger.warning(
+            "Quarantined malformed lifecycle events file: %s (reason=%s)",
+            quarantine_path,
+            error or "unknown",
+        )
+
+    def _migrate_legacy_if_needed(self) -> None:
+        legacy_path = self._legacy_store.path
+        if not legacy_path.exists():
+            return
+        if self._sqlite_store.count() > 0:
+            return
+
+        result = self._legacy_store.load_with_result()
+        if result.malformed:
+            self._quarantine_malformed_legacy_file(
+                raw_text=result.raw_text,
+                error=result.error,
+            )
+            return
+        if not result.events:
+            return
+
+        logger.info(
+            "Migrating %s legacy lifecycle events from %s to %s",
+            len(result.events),
+            legacy_path,
+            self._sqlite_store.path,
+        )
+        for event in result.events:
+            self._sqlite_store.append_with_result(event)
+
+    def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
+        return self._sqlite_store.load(ensure_exists=ensure_exists)
+
+    def save(self, events: list[LifecycleEvent]) -> None:
+        self._sqlite_store.save(events)
+
+    def append_with_result(self, event: LifecycleEvent) -> LifecycleEventAppendResult:
+        return self._sqlite_store.append_with_result(event)
+
+    def append(self, event: LifecycleEvent) -> None:
+        self._sqlite_store.append(event)
+
+    def update_event(
+        self,
+        event_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        processed: Optional[bool] = None,
+    ) -> Optional[LifecycleEvent]:
+        return self._sqlite_store.update_event(
+            event_id,
+            data=data,
+            processed=processed,
+        )
+
+    def mark_processed(self, event_id: str) -> Optional[LifecycleEvent]:
+        return self._sqlite_store.mark_processed(event_id)
+
+    def get_unprocessed(self, *, limit: int = 100) -> list[LifecycleEvent]:
+        return self._sqlite_store.get_unprocessed(limit=limit)
+
+    def prune_processed(self, *, keep_last: int = 100) -> None:
+        self._sqlite_store.prune_processed(keep_last=keep_last)
 
 
 class LifecycleEventEmitter:
@@ -409,4 +743,5 @@ __all__ = [
     "LifecycleEventStore",
     "LifecycleEventEmitter",
     "default_lifecycle_events_path",
+    "default_lifecycle_events_db_path",
 ]
