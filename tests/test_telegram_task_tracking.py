@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import codex_autorunner.integrations.telegram.service as service_module
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.service import TelegramBotService
 
@@ -26,5 +27,36 @@ async def test_spawned_task_tracking(tmp_path: Path) -> None:
         task = service._spawn_task(_noop())
         await task
         assert task not in service._spawned_tasks
+    finally:
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_spawned_task_failure_is_logged(tmp_path: Path, monkeypatch) -> None:
+    config = TelegramBotConfig.from_raw(
+        {
+            "enabled": True,
+            "allowed_chat_ids": [123],
+            "allowed_user_ids": [456],
+        },
+        root=tmp_path,
+        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
+    )
+    service = TelegramBotService(config)
+    events: list[tuple[int, str, dict[str, object]]] = []
+
+    def _capture_log_event(_logger, level, event_name: str, **kwargs: object) -> None:
+        events.append((level, event_name, kwargs))
+
+    monkeypatch.setattr(service_module, "log_event", _capture_log_event)
+    try:
+
+        async def _boom() -> None:
+            raise RuntimeError("boom")
+
+        task = service._spawn_task(_boom())
+        with pytest.raises(RuntimeError, match="boom"):
+            await task
+        assert any(name == "telegram.task.failed" for _, name, _ in events)
     finally:
         await service._bot.close()

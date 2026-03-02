@@ -1655,10 +1655,10 @@ class HubSupervisor:
 
     def _run_coroutine(self, coro: Any) -> Any:
         try:
+            asyncio.get_running_loop()
+        except RuntimeError:
             return asyncio.run(coro)
-        except RuntimeError as exc:
-            if "asyncio.run() cannot be called" not in str(exc):
-                raise
+        else:
             loop = asyncio.new_event_loop()
             try:
                 return loop.run_until_complete(coro)

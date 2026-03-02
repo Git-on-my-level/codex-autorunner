@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
+import codex_autorunner.core.hub as hub_module
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -95,6 +96,65 @@ def _get_mounted_app(app: FastAPI, mount_path: str):
         if isinstance(route, Mount) and route.path == mount_path:
             return route.app
     return None
+
+
+def test_run_coroutine_uses_asyncio_run_without_running_loop(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+
+        async def _value() -> int:
+            return 42
+
+        assert supervisor._run_coroutine(_value()) == 42
+    finally:
+        supervisor.shutdown()
+
+
+def test_run_coroutine_uses_explicit_loop_when_running_loop_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+
+    class _FakeLoop:
+        def __init__(self) -> None:
+            self.closed = False
+            self.run_called = False
+
+        def run_until_complete(self, coro):  # type: ignore[no-untyped-def]
+            self.run_called = True
+            coro.close()
+            return "fallback-result"
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_loop = _FakeLoop()
+    monkeypatch.setattr(hub_module.asyncio, "get_running_loop", lambda: object())
+    monkeypatch.setattr(
+        hub_module.asyncio,
+        "run",
+        lambda _coro: (_ for _ in ()).throw(
+            AssertionError("asyncio.run should not run")
+        ),
+    )
+    monkeypatch.setattr(hub_module.asyncio, "new_event_loop", lambda: fake_loop)
+    try:
+
+        async def _value() -> str:
+            return "unused"
+
+        result = supervisor._run_coroutine(_value())
+        assert result == "fallback-result"
+        assert fake_loop.run_called is True
+        assert fake_loop.closed is True
+    finally:
+        supervisor.shutdown()
 
 
 def _write_discord_binding(hub_root: Path, *, channel_id: str, repo_id: str) -> None:

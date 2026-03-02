@@ -317,6 +317,25 @@ def build_pma_routes() -> APIRouter:
     async def _atomic_write_async(path: Path, content: str) -> None:
         await asyncio.to_thread(atomic_write, path, content)
 
+    def _consume_task_result(task: asyncio.Task[Any], *, name: str) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("PMA task failed: %s", name)
+
+    def _cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
+        if task.done():
+            _consume_task_result(task, name=name)
+            return
+        task.add_done_callback(
+            lambda done_task, task_name=name: _consume_task_result(
+                done_task, name=task_name
+            )
+        )
+        task.cancel()
+
     def _truncate_text(value: Any, limit: int) -> str:
         if not isinstance(value, str):
             text_value: str = "" if value is None else str(value)
@@ -1712,19 +1731,21 @@ def build_pma_routes() -> APIRouter:
                     await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
                 except Exception:
                     logger.exception("Failed to interrupt Codex turn")
-                turn_task.cancel()
+                _cancel_background_task(turn_task, name="pma.app_server.turn.wait")
                 return {"status": "error", "detail": "PMA chat timed out"}
             if interrupt_task in done:
                 try:
                     await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
                 except Exception:
                     logger.exception("Failed to interrupt Codex turn")
-                turn_task.cancel()
+                _cancel_background_task(turn_task, name="pma.app_server.turn.wait")
                 return {"status": "interrupted", "detail": "PMA chat interrupted"}
             turn_result = await turn_task
         finally:
-            timeout_task.cancel()
-            interrupt_task.cancel()
+            _cancel_background_task(timeout_task, name="pma.app_server.timeout.wait")
+            _cancel_background_task(
+                interrupt_task, name="pma.app_server.interrupt.wait"
+            )
 
         if getattr(turn_result, "errors", None):
             errors = turn_result.errors
@@ -1830,7 +1851,7 @@ def build_pma_routes() -> APIRouter:
                 prompt_response = await prompt_task
             except Exception as exc:
                 interrupt_event.set()
-                output_task.cancel()
+                _cancel_background_task(output_task, name="pma.opencode.output.collect")
                 await opencode_harness.interrupt(hub_root, session_id, None)
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1839,11 +1860,11 @@ def build_pma_routes() -> APIRouter:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if timeout_task in done:
-                output_task.cancel()
+                _cancel_background_task(output_task, name="pma.opencode.output.collect")
                 await opencode_harness.interrupt(hub_root, session_id, None)
                 return {"status": "error", "detail": "PMA chat timed out"}
             if interrupt_task in done:
-                output_task.cancel()
+                _cancel_background_task(output_task, name="pma.opencode.output.collect")
                 await opencode_harness.interrupt(hub_root, session_id, None)
                 return {"status": "interrupted", "detail": "PMA chat interrupted"}
             output_result = await output_task
@@ -1854,8 +1875,8 @@ def build_pma_routes() -> APIRouter:
                         text=fallback.text, error=fallback.error
                     )
         finally:
-            timeout_task.cancel()
-            interrupt_task.cancel()
+            _cancel_background_task(timeout_task, name="pma.opencode.timeout.wait")
+            _cancel_background_task(interrupt_task, name="pma.opencode.interrupt.wait")
             await supervisor.mark_turn_finished(hub_root)
 
         if output_result.error:
