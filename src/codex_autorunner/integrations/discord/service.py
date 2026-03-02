@@ -661,6 +661,7 @@ class DiscordBotService:
                 custom_id=custom_id,
                 values=payload_data.get("values"),
                 guild_id=payload_data.get("guild_id"),
+                user_id=event.from_user_id,
             )
             return
 
@@ -2175,6 +2176,7 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
+                user_id=user_id,
                 options=options,
             )
             return
@@ -2473,6 +2475,7 @@ class DiscordBotService:
                     options=options,
                     channel_id=channel_id,
                     guild_id=guild_id,
+                    user_id=user_id,
                 )
                 return
             await self._respond_ephemeral(
@@ -4159,12 +4162,22 @@ class DiscordBotService:
 
     VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 
+    def _pending_interaction_scope_key(
+        self,
+        *,
+        channel_id: str,
+        user_id: Optional[str],
+    ) -> str:
+        scoped_user = user_id.strip() if isinstance(user_id, str) else ""
+        return f"{channel_id}:{scoped_user or '_'}"
+
     async def _handle_car_model(
         self,
         interaction_id: str,
         interaction_token: str,
         *,
         channel_id: str,
+        user_id: Optional[str],
         options: dict[str, Any],
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
@@ -4193,6 +4206,10 @@ class DiscordBotService:
         effort = options.get("effort")
 
         if not model_name:
+            deferred = await self._defer_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
 
             def _fallback_model_text(note: Optional[str] = None) -> str:
                 lines = [
@@ -4214,6 +4231,33 @@ class DiscordBotService:
                 )
                 return format_discord_message("\n".join(lines))
 
+            async def _send_model_picker_or_fallback(
+                text: str,
+                *,
+                components: Optional[list[dict[str, Any]]] = None,
+            ) -> None:
+                if deferred:
+                    sent = await self._send_followup_ephemeral(
+                        interaction_token=interaction_token,
+                        content=text,
+                        components=components,
+                    )
+                    if sent:
+                        return
+                if components:
+                    await self._respond_with_components(
+                        interaction_id,
+                        interaction_token,
+                        text,
+                        components,
+                    )
+                    return
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    text,
+                )
+
             try:
                 client = await self._client_for_workspace(binding.get("workspace_path"))
             except AppServerUnavailableError as exc:
@@ -4225,18 +4269,14 @@ class DiscordBotService:
                     agent=current_agent,
                     exc=exc,
                 )
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
+                await _send_model_picker_or_fallback(
                     _fallback_model_text(
                         "Model picker unavailable right now (app server unavailable)."
                     ),
                 )
                 return
             if client is None:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
+                await _send_model_picker_or_fallback(
                     _fallback_model_text(
                         "Workspace unavailable for model picker. Re-bind this channel with `/car bind` and try again."
                     ),
@@ -4261,17 +4301,13 @@ class DiscordBotService:
                     agent=current_agent,
                     exc=exc,
                 )
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
+                await _send_model_picker_or_fallback(
                     _fallback_model_text("Failed to list models for picker."),
                 )
                 return
 
             if not model_items and not current_model:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
+                await _send_model_picker_or_fallback(
                     _fallback_model_text("No models found from the app server."),
                 )
                 return
@@ -4290,11 +4326,9 @@ class DiscordBotService:
                     "Use `/car model name:<id> effort:<value>` to set reasoning effort (codex only).",
                 ]
             )
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
+            await _send_model_picker_or_fallback(
                 format_discord_message("\n".join(lines)),
-                [
+                components=[
                     build_model_picker(
                         model_items,
                         current_model=current_model,
@@ -4349,6 +4383,7 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        user_id: Optional[str],
         selected_model: str,
     ) -> None:
         model_value = selected_model.strip()
@@ -4360,11 +4395,16 @@ class DiscordBotService:
             )
             return
         if model_value in {"clear", "reset"}:
-            self._pending_model_effort.pop(channel_id, None)
+            pending_key = self._pending_interaction_scope_key(
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+            self._pending_model_effort.pop(pending_key, None)
             await self._handle_car_model(
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
+                user_id=user_id,
                 options={"name": "clear"},
             )
             return
@@ -4380,7 +4420,11 @@ class DiscordBotService:
             current_agent = self.DEFAULT_AGENT
 
         if current_agent == "codex":
-            self._pending_model_effort[channel_id] = model_value
+            pending_key = self._pending_interaction_scope_key(
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+            self._pending_model_effort[pending_key] = model_value
             await self._respond_with_components(
                 interaction_id,
                 interaction_token,
@@ -4396,6 +4440,7 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            user_id=user_id,
             options={"name": model_value},
         )
 
@@ -4405,9 +4450,14 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        user_id: Optional[str],
         selected_effort: str,
     ) -> None:
-        model_name = self._pending_model_effort.pop(channel_id, None)
+        pending_key = self._pending_interaction_scope_key(
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+        model_name = self._pending_model_effort.pop(pending_key, None)
         if not isinstance(model_name, str) or not model_name:
             await self._respond_ephemeral(
                 interaction_id,
@@ -4432,6 +4482,7 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            user_id=user_id,
             options=model_options,
         )
 
@@ -5681,6 +5732,7 @@ class DiscordBotService:
         options: dict[str, Any],
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> None:
         text = options.get("text")
         if not isinstance(text, str) or not text.strip():
@@ -5693,7 +5745,11 @@ class DiscordBotService:
 
         run_id_opt = options.get("run_id")
         if not (isinstance(run_id_opt, str) and run_id_opt.strip()) and channel_id:
-            self._pending_flow_reply_text[channel_id] = text.strip()
+            pending_key = self._pending_interaction_scope_key(
+                channel_id=channel_id,
+                user_id=user_id,
+            )
+            self._pending_flow_reply_text[pending_key] = text.strip()
             await self._prompt_flow_action_picker(
                 interaction_id,
                 interaction_token,
@@ -6326,6 +6382,7 @@ class DiscordBotService:
         interaction_id = extract_interaction_id(interaction_payload)
         interaction_token = extract_interaction_token(interaction_payload)
         channel_id = extract_channel_id(interaction_payload)
+        user_id = extract_user_id(interaction_payload)
 
         if not interaction_id or not interaction_token or not channel_id:
             self._logger.warning(
@@ -6429,6 +6486,7 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
                     selected_model=values[0],
                 )
                 return
@@ -6446,6 +6504,7 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
                     selected_effort=values[0],
                 )
                 return
@@ -6590,7 +6649,11 @@ class DiscordBotService:
                     )
                     return
                 if action == "reply":
-                    pending_text = self._pending_flow_reply_text.pop(channel_id, None)
+                    pending_key = self._pending_interaction_scope_key(
+                        channel_id=channel_id,
+                        user_id=user_id,
+                    )
+                    pending_text = self._pending_flow_reply_text.pop(pending_key, None)
                     if not isinstance(pending_text, str) or not pending_text.strip():
                         await self._respond_ephemeral(
                             interaction_id,
@@ -6605,6 +6668,7 @@ class DiscordBotService:
                         options={"run_id": run_id, "text": pending_text},
                         channel_id=channel_id,
                         guild_id=extract_guild_id(interaction_payload),
+                        user_id=user_id,
                     )
                     return
                 return
@@ -6671,6 +6735,7 @@ class DiscordBotService:
         custom_id: str,
         values: Optional[list[str]] = None,
         guild_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> None:
         try:
             if custom_id == "bind_select":
@@ -6740,6 +6805,7 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
                     selected_model=values[0],
                 )
                 return
@@ -6756,6 +6822,7 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
                     selected_effort=values[0],
                 )
                 return
@@ -6896,7 +6963,11 @@ class DiscordBotService:
                     )
                     return
                 if action == "reply":
-                    pending_text = self._pending_flow_reply_text.pop(channel_id, None)
+                    pending_key = self._pending_interaction_scope_key(
+                        channel_id=channel_id,
+                        user_id=user_id,
+                    )
+                    pending_text = self._pending_flow_reply_text.pop(pending_key, None)
                     if not isinstance(pending_text, str) or not pending_text.strip():
                         await self._respond_ephemeral(
                             interaction_id,
@@ -6911,6 +6982,7 @@ class DiscordBotService:
                         options={"run_id": run_id, "text": pending_text},
                         channel_id=channel_id,
                         guild_id=guild_id,
+                        user_id=user_id,
                     )
                     return
                 return
