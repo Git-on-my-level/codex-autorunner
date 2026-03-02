@@ -704,6 +704,53 @@ def _render_hub_snapshot(
     return "\n".join(lines)
 
 
+def format_pma_discoverability_preamble(
+    *,
+    hub_root: Optional[Path] = None,
+    pma_docs: Optional[dict[str, Any]] = None,
+) -> str:
+    resolved_docs = pma_docs
+    if resolved_docs is None and hub_root is not None:
+        try:
+            resolved_docs = load_pma_workspace_docs(hub_root)
+        except Exception as exc:
+            _logger.warning("Could not load PMA workspace docs: %s", exc)
+
+    prompt = (
+        "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`.\n"
+        "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
+        "Working context: `.codex-autorunner/pma/docs/active_context.md`.\n"
+        "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
+        "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
+        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n"
+        "Note: Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` redirect to filebox.\n\n"
+    )
+
+    if resolved_docs:
+        max_lines = resolved_docs.get("active_context_max_lines")
+        line_count = resolved_docs.get("active_context_line_count")
+        auto_prune = resolved_docs.get("active_context_auto_prune") or {}
+        auto_pruned_at = auto_prune.get("last_auto_pruned_at")
+        auto_pruned_before = auto_prune.get("line_count_before")
+        auto_pruned_budget = auto_prune.get("line_budget")
+        prompt += (
+            "<pma_workspace_docs>\n"
+            "<AGENTS_MD>\n"
+            f"{resolved_docs.get('agents', '')}\n"
+            "</AGENTS_MD>\n"
+            "<ACTIVE_CONTEXT_MD>\n"
+            f"{resolved_docs.get('active_context', '')}\n"
+            "</ACTIVE_CONTEXT_MD>\n"
+            f"<ACTIVE_CONTEXT_BUDGET lines='{max_lines}' current_lines='{line_count}' />\n"
+            f"<ACTIVE_CONTEXT_AUTO_PRUNE last_at='{auto_pruned_at}' line_count_before='{auto_pruned_before}' line_budget='{auto_pruned_budget}' triggered_now='{str(bool(resolved_docs.get('active_context_auto_pruned'))).lower()}' />\n"
+            "<CONTEXT_LOG_TAIL_MD>\n"
+            f"{resolved_docs.get('context_log_tail', '')}\n"
+            "</CONTEXT_LOG_TAIL_MD>\n"
+            "</pma_workspace_docs>\n\n"
+        )
+    return prompt
+
+
 def format_pma_prompt(
     base_prompt: str,
     snapshot: dict[str, Any],
@@ -718,47 +765,8 @@ def format_pma_prompt(
         max_text_chars=limits.get("max_text_chars", PMA_MAX_TEXT),
     )
 
-    pma_docs: Optional[dict[str, Any]] = None
-    if hub_root is not None:
-        try:
-            pma_docs = load_pma_workspace_docs(hub_root)
-        except Exception as exc:
-            _logger.warning("Could not load PMA workspace docs: %s", exc)
-
     prompt = f"{base_prompt}\n\n"
-    prompt += (
-        "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`.\n"
-        "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
-        "Working context: `.codex-autorunner/pma/docs/active_context.md`.\n"
-        "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
-        "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
-        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n"
-        "Note: Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` redirect to filebox.\n\n"
-    )
-
-    if pma_docs:
-        max_lines = pma_docs.get("active_context_max_lines")
-        line_count = pma_docs.get("active_context_line_count")
-        auto_prune = pma_docs.get("active_context_auto_prune") or {}
-        auto_pruned_at = auto_prune.get("last_auto_pruned_at")
-        auto_pruned_before = auto_prune.get("line_count_before")
-        auto_pruned_budget = auto_prune.get("line_budget")
-        prompt += (
-            "<pma_workspace_docs>\n"
-            "<AGENTS_MD>\n"
-            f"{pma_docs.get('agents', '')}\n"
-            "</AGENTS_MD>\n"
-            "<ACTIVE_CONTEXT_MD>\n"
-            f"{pma_docs.get('active_context', '')}\n"
-            "</ACTIVE_CONTEXT_MD>\n"
-            f"<ACTIVE_CONTEXT_BUDGET lines='{max_lines}' current_lines='{line_count}' />\n"
-            f"<ACTIVE_CONTEXT_AUTO_PRUNE last_at='{auto_pruned_at}' line_count_before='{auto_pruned_before}' line_budget='{auto_pruned_budget}' triggered_now='{str(bool(pma_docs.get('active_context_auto_pruned'))).lower()}' />\n"
-            "<CONTEXT_LOG_TAIL_MD>\n"
-            f"{pma_docs.get('context_log_tail', '')}\n"
-            "</CONTEXT_LOG_TAIL_MD>\n"
-            "</pma_workspace_docs>\n\n"
-        )
-
+    prompt += format_pma_discoverability_preamble(hub_root=hub_root)
     prompt += f"{PMA_FASTPATH}\n\n"
     prompt += (
         "<hub_snapshot>\n"

@@ -303,11 +303,14 @@ async def test_flow_archive_defaults_latest_paused(
 @pytest.mark.anyio
 async def test_flow_reply_mirrors_chat_inbound_and_outbound(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_id = str(uuid.uuid4())
     paused_record = SimpleNamespace(
         id=run_id, status=FlowRunStatus.PAUSED, input_data={}
     )
+    controller = _ControllerStub()
+    spawned: list[str] = []
 
     async def _get_topic(_key: str):
         return SimpleNamespace(workspace_path=str(tmp_path))
@@ -330,6 +333,12 @@ async def test_flow_reply_mirrors_chat_inbound_and_outbound(
     handler._get_paused_ticket_flow = lambda *_args, **_kwargs: (run_id, paused_record)  # type: ignore[assignment]
     handler._write_user_reply_from_telegram = _write_user_reply  # type: ignore[assignment]
     handler._resolve_topic_key = _resolve_topic_key  # type: ignore[assignment]
+    monkeypatch.setattr(
+        flows_module, "_get_ticket_controller", lambda _root: controller
+    )
+    monkeypatch.setattr(
+        flows_module, "_spawn_flow_worker", lambda _root, run: spawned.append(run)
+    )
 
     message = TelegramMessage(
         update_id=2,
@@ -342,6 +351,9 @@ async def test_flow_reply_mirrors_chat_inbound_and_outbound(
         is_topic_message=True,
     )
     await handler._handle_reply(message, "hello")
+    assert controller.resume_calls == [run_id]
+    assert spawned == [run_id]
+    assert any("Resumed run" in text for text in handler.sent)
 
     inbound_path = (
         tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "inbound.jsonl"

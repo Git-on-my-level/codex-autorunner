@@ -4,7 +4,6 @@ import asyncio
 import dataclasses
 import logging
 import math
-import re
 import secrets
 import time
 from contextlib import suppress
@@ -34,7 +33,12 @@ from .....agents.opencode.runtime import (
     split_model_id,
 )
 from .....core.coercion import coerce_int
-from .....core.context_awareness import CAR_AWARENESS_BLOCK
+from .....core.context_awareness import (
+    has_file_context_signal,
+    maybe_inject_car_awareness,
+    maybe_inject_filebox_hint,
+    maybe_inject_prompt_writing_hint,
+)
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
@@ -97,20 +101,6 @@ from .command_utils import (
     _format_opencode_exception,
 )
 from .shared import SharedHelpers
-
-PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
-PROMPT_CONTEXT_HINT = (
-    "If the user asks to write a prompt, put the prompt in a ```code block```."
-)
-OUTBOX_CONTEXT_RE = re.compile(
-    r"(?:\b(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|"
-    r"gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\b|"
-    r"\.(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|"
-    r"gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\b|"
-    r"\b(?:outbox)\b)",
-    re.IGNORECASE,
-)
-
 
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"
@@ -354,22 +344,10 @@ class ExecutionCommands(SharedHelpers):
         )
 
     def _maybe_inject_prompt_context(self, prompt_text: str) -> tuple[str, bool]:
-        if not prompt_text or not prompt_text.strip():
-            return prompt_text, False
-        if PROMPT_CONTEXT_HINT in prompt_text:
-            return prompt_text, False
-        if not PROMPT_CONTEXT_RE.search(prompt_text):
-            return prompt_text, False
-        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-        injection = wrap_injected_context(PROMPT_CONTEXT_HINT)
-        return f"{prompt_text}{separator}{injection}", True
+        return maybe_inject_prompt_writing_hint(prompt_text)
 
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
-        if CAR_AWARENESS_BLOCK in prompt_text:
-            return prompt_text, False
-        if not prompt_text or not prompt_text.strip():
-            return CAR_AWARENESS_BLOCK, True
-        return f"{CAR_AWARENESS_BLOCK}\n\n{prompt_text}", True
+        return maybe_inject_car_awareness(prompt_text)
 
     def _maybe_inject_outbox_context(
         self,
@@ -378,26 +356,44 @@ class ExecutionCommands(SharedHelpers):
         record: "TelegramTopicRecord",
         topic_key: str,
     ) -> tuple[str, bool]:
-        if not prompt_text or not prompt_text.strip():
-            return prompt_text, False
-        if "Outbox (pending):" in prompt_text or "Inbox:" in prompt_text:
-            return prompt_text, False
-        if not OUTBOX_CONTEXT_RE.search(prompt_text):
-            return prompt_text, False
         inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
         outbox_dir = self._files_outbox_pending_dir(record.workspace_path, topic_key)
         topic_dir = self._files_topic_dir(record.workspace_path, topic_key)
-        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-        injection = wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(
-                inbox=str(inbox_dir),
-                outbox=str(outbox_dir),
-                topic_key=topic_key,
-                topic_dir=str(topic_dir),
-                max_bytes=self._config.media.max_file_bytes,
-            )
+        return maybe_inject_filebox_hint(
+            prompt_text,
+            hint_text=wrap_injected_context(
+                FILES_HINT_TEMPLATE.format(
+                    inbox=str(inbox_dir),
+                    outbox=str(outbox_dir),
+                    topic_key=topic_key,
+                    topic_dir=str(topic_dir),
+                    max_bytes=self._config.media.max_file_bytes,
+                )
+            ),
+            has_file_context=True,
         )
-        return f"{prompt_text}{separator}{injection}", True
+
+    def _has_turn_file_context(
+        self,
+        message: TelegramMessage,
+        prompt_text: str,
+        input_items: Optional[list[dict[str, Any]]],
+    ) -> bool:
+        if has_file_context_signal(prompt_text):
+            return True
+        if message.photos or message.document or message.audio or message.voice:
+            return True
+        if not input_items:
+            return False
+        text_item_types = {"text", "input_text"}
+        for item in input_items:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if isinstance(item_type, str) and item_type.lower() in text_item_types:
+                continue
+            return True
+        return False
 
     def _effective_policies(
         self, record: "TelegramTopicRecord"
@@ -2327,6 +2323,8 @@ class ExecutionCommands(SharedHelpers):
         message: TelegramMessage,
         prompt_text: str,
         record: "TelegramTopicRecord",
+        *,
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> tuple[str, str]:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
 
@@ -2363,18 +2361,19 @@ class ExecutionCommands(SharedHelpers):
                 message_id=message.message_id,
             )
 
-        prompt_text, injected = self._maybe_inject_outbox_context(
-            prompt_text, record=record, topic_key=key
-        )
-        if injected:
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.outbox_context.injected",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
+        if self._has_turn_file_context(message, prompt_text, input_items):
+            prompt_text, injected = self._maybe_inject_outbox_context(
+                prompt_text, record=record, topic_key=key
             )
+            if injected:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.outbox_context.injected",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    message_id=message.message_id,
+                )
 
         return prompt_text, key
 
@@ -2535,7 +2534,7 @@ class ExecutionCommands(SharedHelpers):
                 )
         else:
             prompt_text, key = await self._prepare_turn_context(
-                message, prompt_text, record
+                message, prompt_text, record, input_items=input_items
             )
 
         turn_semaphore = self._ensure_turn_semaphore()

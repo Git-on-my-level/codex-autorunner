@@ -1042,7 +1042,7 @@ class TelegramBotService(
                 return False, "Failed to archive reply"
             return (
                 True,
-                f"Reply archived (seq {dispatch.seq}). Use /flow resume to continue.",
+                f"Reply archived (seq {dispatch.seq}).",
             )
         except Exception as exc:
             self._logger.warning(

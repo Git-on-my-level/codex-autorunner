@@ -119,16 +119,12 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert second_msg.status_code == 200
         assert second_msg.json()["backend_thread_id"] == "backend-thread-2"
 
-        expected_compacted_prompt = (
-            "Context summary (from compaction):\n"
-            f"{compact_summary}\n\n"
-            "User message:\n"
-            f"{second_message}"
-        )
-        assert (
-            fake_supervisor.client.turn_start_calls[1]["prompt"]
-            == expected_compacted_prompt
-        )
+        second_prompt = fake_supervisor.client.turn_start_calls[1]["prompt"]
+        assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in second_prompt
+        assert "<user_message>" in second_prompt
+        assert "Context summary (from compaction):" in second_prompt
+        assert compact_summary in second_prompt
+        assert f"User message:\n{second_message}" in second_prompt
 
         archive_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/archive")
         assert archive_resp.status_code == 200
@@ -162,10 +158,10 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert resumed_msg.status_code == 200
         assert resumed_msg.json()["backend_thread_id"] == resume_backend_id
         assert fake_supervisor.client.resume_calls[-1] == resume_backend_id
-        assert (
-            fake_supervisor.client.turn_start_calls[2]["prompt"]
-            == "message after resume"
-        )
+        third_prompt = fake_supervisor.client.turn_start_calls[2]["prompt"]
+        assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in third_prompt
+        assert "<user_message>" in third_prompt
+        assert "message after resume" in third_prompt
 
 
 def test_create_managed_thread_validates_workspace_root_boundaries(hub_env) -> None:

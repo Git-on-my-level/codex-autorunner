@@ -10,7 +10,7 @@ from typing import Any, Optional, Sequence
 
 from ....core.logging_utils import log_event
 from ....core.utils import canonicalize_path
-from ...chat.handlers.messages import is_ticket_reply, message_text_candidate
+from ...chat.handlers.messages import message_text_candidate
 from ...chat.media import audio_content_type_for_input, is_image_mime_or_path
 from ..adapter import (
     TelegramDocument,
@@ -28,15 +28,6 @@ COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
 COALESCE_LONG_MESSAGE_THRESHOLD = TELEGRAM_MAX_MESSAGE_LENGTH - 256
 MEDIA_BATCH_WINDOW_SECONDS = 1.0
 MAX_BATCH_ITEMS = 10
-
-
-def _is_ticket_reply(message: TelegramMessage, bot_username: Optional[str]) -> bool:
-    return is_ticket_reply(
-        reply_to_is_bot=message.reply_to_is_bot,
-        reply_to_message_id=message.reply_to_message_id,
-        reply_to_username=message.reply_to_username,
-        bot_username=bot_username,
-    )
 
 
 @dataclass
@@ -370,21 +361,7 @@ async def handle_message_inner(
         paused = handlers._get_paused_ticket_flow(
             workspace_root, preferred_run_id=preferred_run_id
         )
-    if (
-        paused
-        and text
-        and not _is_ticket_reply(message, handlers._bot_username)
-        and not command
-    ):
-        await handlers._send_message(
-            message.chat_id,
-            "Ticket flow is paused. Reply to the latest dispatch message (tap Reply) or use /flow resume.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        await _clear_placeholder()
-        return
-    if paused and text and _is_ticket_reply(message, handlers._bot_username):
+    if paused and text and not command and not has_media:
         run_id, run_record = paused
         success, result = await handlers._write_user_reply_from_telegram(
             workspace_root or Path("."), run_id, run_record, message, text
@@ -395,17 +372,21 @@ async def handle_message_inner(
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
-        if success and getattr(handlers._config, "ticket_flow_auto_resume", False):
+        if success:
             await handlers._ticket_flow_bridge.auto_resume_run(
                 workspace_root or Path("."), run_id
             )
         await _clear_placeholder()
         return
 
-    if handlers._config.trigger_mode == "mentions" and not should_trigger_run(
-        message,
-        text=text,
-        bot_username=handlers._bot_username,
+    if (
+        handlers._config.trigger_mode == "mentions"
+        and not paused
+        and not should_trigger_run(
+            message,
+            text=text,
+            bot_username=handlers._bot_username,
+        )
     ):
         log_event(
             handlers._logger,
@@ -842,9 +823,15 @@ async def handle_media_message(
     paused = handlers._get_paused_ticket_flow(
         workspace_root, preferred_run_id=preferred_run_id
     )
-    if paused and caption_text and _is_ticket_reply(message, handlers._bot_username):
+    if paused:
         run_id, run_record = paused
+        reply_text = caption_text.strip() if isinstance(caption_text, str) else ""
+        if not reply_text:
+            reply_text = "Media reply attached."
         files = []
+        expected_media = bool(
+            message.photos or message.document or message.audio or message.voice
+        )
         if message.photos:
             photos = sorted(
                 message.photos,
@@ -878,8 +865,39 @@ async def handle_media_message(
             except Exception as exc:
                 handlers._logger.debug("Failed to download document: %s", exc)
                 pass
+        elif message.audio:
+            try:
+                file_info = await handlers._bot.get_file(message.audio.file_id)
+                data = await handlers._bot.download_file(
+                    file_info.file_path,
+                    max_size_bytes=handlers._config.media.max_file_bytes,
+                )
+                filename = message.audio.file_name or f"audio_{message.audio.file_id}"
+                files.append((filename, data))
+            except Exception as exc:
+                handlers._logger.debug("Failed to download audio: %s", exc)
+                pass
+        elif message.voice:
+            try:
+                file_info = await handlers._bot.get_file(message.voice.file_id)
+                data = await handlers._bot.download_file(
+                    file_info.file_path,
+                    max_size_bytes=handlers._config.media.max_voice_bytes,
+                )
+                files.append((f"voice_{message.voice.file_id}.ogg", data))
+            except Exception as exc:
+                handlers._logger.debug("Failed to download voice: %s", exc)
+                pass
+        if expected_media and not files:
+            await handlers._send_message(
+                message.chat_id,
+                "Failed to download media for paused flow reply. Please retry.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root, run_id, run_record, message, caption_text, files
+            workspace_root, run_id, run_record, message, reply_text, files
         )
         await handlers._send_message(
             message.chat_id,
@@ -887,7 +905,7 @@ async def handle_media_message(
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
-        if success and getattr(handlers._config, "ticket_flow_auto_resume", False):
+        if success:
             await handlers._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
         return
 

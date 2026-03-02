@@ -738,7 +738,12 @@ def register_flow_commands(
             help="Maximum total agent turns before pausing the run.",
         ),
     ):
-        """Bootstrap ticket_flow (seed TICKET-001 if needed) and start a run."""
+        """Bootstrap ticket_flow (seed TICKET-001 if needed) and start a run.
+
+        Breadcrumbs:
+        - Inspect all ticket_flow commands: `car flow ticket_flow --help`
+        - Check run health: `car flow ticket_flow status --run-id <run_id>`
+        """
         engine = require_repo_config(repo, hub)
         guard_unregistered_hub_repo(engine.repo_root, hub)
         db_path, artifacts_root, ticket_dir = _ticket_flow_paths(engine)
@@ -782,8 +787,10 @@ def register_flow_commands(
                 f"Warning: {len(stale_terminal)} stale run(s) found (FAILED/STOPPED)."
             )
             typer.echo(
-                f"Consider 'car flow ticket_flow resume --run-id {stale_terminal[0].id}' "
-                "to resume instead of starting fresh."
+                f"Inspect stale run state with 'car flow ticket_flow status --run-id {stale_terminal[0].id}'."
+            )
+            typer.echo(
+                f"Archive stale artifacts with 'car flow ticket_flow archive --run-id {stale_terminal[0].id} --force'."
             )
             typer.echo("Use --force-new to suppress this warning and start a new run.")
 
@@ -877,7 +884,12 @@ You are the first ticket in a new ticket_flow run.
             help="Maximum total agent turns before pausing the run.",
         ),
     ):
-        """Start or resume the latest ticket_flow run."""
+        """Start or resume the latest ticket_flow run.
+
+        Breadcrumbs:
+        - Run preflight checks first: `car flow ticket_flow preflight`
+        - Inspect run details: `car flow ticket_flow status --run-id <run_id>`
+        """
         engine = require_repo_config(repo, hub)
         guard_unregistered_hub_repo(engine.repo_root, hub)
         _, _, ticket_dir = _ticket_flow_paths(engine)
@@ -927,8 +939,10 @@ You are the first ticket in a new ticket_flow run.
                 f"Warning: {len(stale_terminal)} stale run(s) found (FAILED/STOPPED)."
             )
             typer.echo(
-                f"Consider 'car flow ticket_flow resume --run-id {stale_terminal[0].id}' "
-                "to resume instead of starting fresh."
+                f"Inspect stale run state with 'car flow ticket_flow status --run-id {stale_terminal[0].id}'."
+            )
+            typer.echo(
+                f"Archive stale artifacts with 'car flow ticket_flow archive --run-id {stale_terminal[0].id} --force'."
             )
             typer.echo("Use --force-new to suppress this warning and start a new run.")
 

@@ -222,3 +222,14 @@ def test_hub_destination_set_help_mentions_custom_image_and_docs() -> None:
     assert "required for docker kind" in clean
     assert "car hub destination set <repo_id> docker --image" in clean
     assert "docs/configuration/destinations.md" in clean
+
+
+def test_hub_destination_show_help_mentions_set_help_and_docs() -> None:
+    result = runner.invoke(app, ["hub", "destination", "show", "--help"])
+    assert result.exit_code == 0
+    output = result.output
+    clean = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    clean = " ".join(clean.split())
+    assert "Show effective execution destination for a repo." in clean
+    assert "car hub destination set --help" in clean
+    assert "docs/configuration/destinations.md" in clean

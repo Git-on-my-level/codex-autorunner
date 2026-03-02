@@ -59,6 +59,14 @@ def register_hub_commands(
             False, "--json", help="Emit JSON payload for scripting"
         ),
     ):
+        """Show effective execution destination for a repo.
+
+        Examples:
+        - Update destination config:
+          `car hub destination set --help`
+        - Deep docs:
+          `docs/configuration/destinations.md`
+        """
         config = require_hub_config(path)
         _, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
         resolution = resolve_effective_repo_destination(repo, repos_by_id)

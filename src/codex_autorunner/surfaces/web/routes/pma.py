@@ -38,6 +38,7 @@ from ....core.pma_audit import PmaActionType, PmaAuditLog
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     build_hub_snapshot,
+    format_pma_discoverability_preamble,
     format_pma_prompt,
     get_active_context_auto_prune_meta,
     load_pma_prompt,
@@ -1206,9 +1207,15 @@ def build_pma_routes() -> APIRouter:
         stored_backend_id = _normalize_optional_text(thread.get("backend_thread_id"))
         known_backend_thread_id = stored_backend_id
         compact_seed = _normalize_optional_text(thread.get("compact_seed"))
-        execution_prompt = message
+        execution_message = message
         if not stored_backend_id and compact_seed:
-            execution_prompt = _compose_compacted_prompt(compact_seed, message)
+            execution_message = _compose_compacted_prompt(compact_seed, message)
+        execution_prompt = (
+            f"{format_pma_discoverability_preamble(hub_root=hub_root)}"
+            "<user_message>\n"
+            f"{execution_message}\n"
+            "</user_message>\n"
+        )
         try:
             turn = thread_store.create_turn(
                 managed_thread_id,

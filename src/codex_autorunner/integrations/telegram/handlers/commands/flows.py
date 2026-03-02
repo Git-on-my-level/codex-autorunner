@@ -962,7 +962,9 @@ class FlowCommands(SharedHelpers):
             worker_line += f" - {health.message}"
         lines.append(worker_line)
         if status == FlowRunStatus.PAUSED:
-            lines.append("Paused: use `/flow reply <message>`, then `/flow resume`.")
+            lines.append(
+                "Paused: use `/flow reply <message>` (or send a message in chat) to resume."
+            )
         return lines
 
     def _build_flow_status_keyboard(
@@ -2031,9 +2033,36 @@ You are the first ticket in a new ticket_flow run.
         success, result = await self._write_user_reply_from_telegram(
             repo_root, run_id, run_record, message, text
         )
+        outbound_text = result
+        resume_success = False
+        if success:
+            controller = self._ticket_controller_for(repo_root)
+            try:
+                updated = await controller.resume_flow(run_id)
+            except ValueError as exc:
+                outbound_text = (
+                    f"{result} Failed to resume run {run_id}: {exc} "
+                    "Use /flow resume to continue."
+                )
+            except Exception as exc:
+                outbound_text = (
+                    f"{result} Failed to resume run {run_id}: {exc} "
+                    "Use /flow resume to continue."
+                )
+            else:
+                try:
+                    _spawn_flow_worker(repo_root, updated.id)
+                except Exception as exc:
+                    outbound_text = (
+                        f"{result} Resumed run {updated.id}, but failed to start worker: {exc}. "
+                        "Check /flow status for the run state."
+                    )
+                else:
+                    outbound_text = f"{result} Resumed run {updated.id}."
+                    resume_success = True
         await self._send_message(
             message.chat_id,
-            result,
+            outbound_text,
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -2043,8 +2072,8 @@ You are the first ticket in a new ticket_flow run.
             event_type="flow_reply_notice",
             kind="notice",
             actor="car",
-            text=result,
+            text=outbound_text,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
-            meta={"success": success},
+            meta={"success": success, "resume_success": resume_success},
         )

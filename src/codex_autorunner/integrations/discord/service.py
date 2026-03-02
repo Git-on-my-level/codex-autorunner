@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...core.config import load_repo_config, resolve_env_for_root
+from ...core.context_awareness import (
+    maybe_inject_car_awareness,
+    maybe_inject_prompt_writing_hint,
+)
 from ...core.filebox import (
     inbox_dir,
     outbox_pending_dir,
@@ -779,6 +783,26 @@ class DiscordBotService:
                     },
                 )
             return
+
+        if not pma_enabled:
+            prompt_text, injected = maybe_inject_car_awareness(prompt_text)
+            if injected:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.car_context.injected",
+                    channel_id=channel_id,
+                    message_id=event.message.message_id,
+                )
+            prompt_text, injected = maybe_inject_prompt_writing_hint(prompt_text)
+            if injected:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.prompt_context.injected",
+                    channel_id=channel_id,
+                    message_id=event.message.message_id,
+                )
 
         if pma_enabled:
             try:

@@ -1,4 +1,5 @@
 import types
+from typing import Optional
 
 import pytest
 
@@ -14,6 +15,8 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     _MediaBatchBuffer,
     build_coalesced_message,
     document_is_image,
+    handle_media_message,
+    handle_message_inner,
     has_batchable_media,
     media_batch_key,
     message_has_media,
@@ -326,6 +329,352 @@ async def test_media_batch_key_without_media_group() -> None:
     )
     key = await media_batch_key(handlers, message)
     assert key == "chat:3:thread:4:user:5:burst"
+
+
+@pytest.mark.anyio
+async def test_handle_message_inner_paused_flow_accepts_free_text_without_reply_to() -> (
+    None
+):
+    message = _message(text="yes, continue")
+    sent: list[str] = []
+    reply_calls: list[dict[str, object]] = []
+    resume_calls: list[tuple[str, str]] = []
+    run_id = "00000000-0000-0000-0000-000000000123"
+
+    runtime = object()
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+        async def get_topic(self, _key: str) -> object:
+            return types.SimpleNamespace(pma_enabled=False, workspace_path=".")
+
+    async def _write_user_reply(
+        _workspace_root,
+        _run_id: str,
+        _run_record,
+        _message: TelegramMessage,
+        text: str,
+        _files=None,
+    ) -> tuple[bool, str]:
+        reply_calls.append({"run_id": _run_id, "text": text})
+        return True, "Reply archived (seq 0001)."
+
+    class _TicketFlowBridgeStub:
+        async def auto_resume_run(self, workspace_root, paused_run_id: str) -> None:
+            resume_calls.append((str(workspace_root), paused_run_id))
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _handle_interrupt(*_args, **_kwargs) -> None:
+        return
+
+    async def _handle_pending_review_commit(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _handle_pending_review_custom(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _dismiss_review_custom_prompt(*_args, **_kwargs) -> None:
+        return
+
+    async def _delete_message(*_args, **_kwargs) -> None:
+        return
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="mentions"),
+        _resume_options={},
+        _bind_options={},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _ticket_flow_pause_targets={},
+        _ticket_flow_bridge=_TicketFlowBridgeStub(),
+        _handle_pending_resume=lambda *_args, **_kwargs: False,
+        _handle_pending_bind=lambda *_args, **_kwargs: False,
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_interrupt=_handle_interrupt,
+        _handle_pending_review_commit=_handle_pending_review_commit,
+        _handle_pending_review_custom=_handle_pending_review_custom,
+        _dismiss_review_custom_prompt=_dismiss_review_custom_prompt,
+        _command_specs={},
+        _get_paused_ticket_flow=lambda *_args, **_kwargs: (
+            run_id,
+            types.SimpleNamespace(id=run_id, input_data={}),
+        ),
+        _write_user_reply_from_telegram=_write_user_reply,
+        _delete_message=_delete_message,
+    )
+
+    async def _send_message(
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id=None,
+        reply_to=None,
+    ) -> None:
+        _ = (thread_id, reply_to)
+        sent.append(text)
+
+    handlers._send_message = _send_message
+
+    await handle_message_inner(handlers, message)
+
+    assert reply_calls == [{"run_id": run_id, "text": "yes, continue"}]
+    assert len(resume_calls) == 1
+    assert resume_calls[0][1] == run_id
+    assert sent == ["Reply archived (seq 0001)."]
+
+
+@pytest.mark.anyio
+async def test_handle_message_inner_paused_flow_with_media_uses_media_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message(
+        text="caption here",
+        document=TelegramDocument(
+            file_id="doc-1",
+            file_unique_id=None,
+            file_name="notes.txt",
+            mime_type="text/plain",
+            file_size=12,
+        ),
+    )
+    sent: list[str] = []
+    queued: list[object] = []
+    run_id = "00000000-0000-0000-0000-000000000456"
+    runtime = object()
+    media_calls: list[dict[str, object]] = []
+
+    async def _fake_handle_media_message(
+        _handlers: object,
+        msg: TelegramMessage,
+        runtime_arg: object,
+        caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        media_calls.append(
+            {
+                "message_id": msg.message_id,
+                "caption_text": caption_text,
+                "placeholder_id": placeholder_id,
+                "runtime_is_same": runtime_arg is runtime,
+            }
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.handlers.messages.handle_media_message",
+        _fake_handle_media_message,
+    )
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+        async def get_topic(self, _key: str) -> object:
+            return types.SimpleNamespace(pma_enabled=False, workspace_path=".")
+
+    async def _write_user_reply(*_args, **_kwargs) -> tuple[bool, str]:
+        raise AssertionError("paused text branch should not run for media messages")
+
+    class _TicketFlowBridgeStub:
+        async def auto_resume_run(self, workspace_root, paused_run_id: str) -> None:
+            _ = (workspace_root, paused_run_id)
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _handle_interrupt(*_args, **_kwargs) -> None:
+        return
+
+    async def _handle_pending_review_commit(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _handle_pending_review_custom(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _dismiss_review_custom_prompt(*_args, **_kwargs) -> None:
+        return
+
+    async def _delete_message(*_args, **_kwargs) -> None:
+        return
+
+    def _enqueue_topic_work(_key: str, wrapped: object) -> None:
+        queued.append(wrapped)
+
+    def _wrap_placeholder_work(
+        *,
+        chat_id: int,
+        placeholder_id: Optional[int],
+        work: object,
+    ) -> object:
+        _ = (chat_id, placeholder_id)
+        return work()
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="all"),
+        _resume_options={},
+        _bind_options={},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _ticket_flow_pause_targets={},
+        _ticket_flow_bridge=_TicketFlowBridgeStub(),
+        _handle_pending_resume=lambda *_args, **_kwargs: False,
+        _handle_pending_bind=lambda *_args, **_kwargs: False,
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_interrupt=_handle_interrupt,
+        _handle_pending_review_commit=_handle_pending_review_commit,
+        _handle_pending_review_custom=_handle_pending_review_custom,
+        _dismiss_review_custom_prompt=_dismiss_review_custom_prompt,
+        _command_specs={},
+        _get_paused_ticket_flow=lambda *_args, **_kwargs: (
+            run_id,
+            types.SimpleNamespace(id=run_id, input_data={}),
+        ),
+        _write_user_reply_from_telegram=_write_user_reply,
+        _delete_message=_delete_message,
+        _enqueue_topic_work=_enqueue_topic_work,
+        _wrap_placeholder_work=_wrap_placeholder_work,
+    )
+
+    async def _send_message(
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id=None,
+        reply_to=None,
+    ) -> None:
+        _ = (thread_id, reply_to)
+        sent.append(text)
+
+    handlers._send_message = _send_message
+
+    await handle_message_inner(handlers, message)
+    assert len(queued) == 1
+    await queued[0]
+
+    assert media_calls
+    assert media_calls[0]["caption_text"] == "caption here"
+    assert media_calls[0]["runtime_is_same"] is True
+    assert sent == []
+
+
+@pytest.mark.anyio
+async def test_handle_media_message_paused_flow_archives_non_reply_media_and_resumes() -> (
+    None
+):
+    message = _message(
+        text="caption here",
+        document=TelegramDocument(
+            file_id="doc-1",
+            file_unique_id=None,
+            file_name="notes.txt",
+            mime_type="text/plain",
+            file_size=12,
+        ),
+    )
+    sent: list[str] = []
+    archived: list[dict[str, object]] = []
+    resumed: list[tuple[str, str]] = []
+    run_id = "00000000-0000-0000-0000-000000000789"
+
+    class _RouterStub:
+        async def get_topic(self, _key: str) -> object:
+            return types.SimpleNamespace(pma_enabled=False, workspace_path=".")
+
+    class _TicketFlowBridgeStub:
+        async def auto_resume_run(self, workspace_root, paused_run_id: str) -> None:
+            resumed.append((str(workspace_root), paused_run_id))
+
+    class _BotStub:
+        async def get_file(self, _file_id: str) -> object:
+            return types.SimpleNamespace(file_path="files/doc-1")
+
+        async def download_file(
+            self, _file_path: str, *, max_size_bytes: Optional[int] = None
+        ) -> bytes:
+            _ = max_size_bytes
+            return b"doc-bytes"
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _write_user_reply(
+        _workspace_root,
+        _run_id: str,
+        _run_record,
+        _message: TelegramMessage,
+        text: str,
+        files=None,
+    ) -> tuple[bool, str]:
+        archived.append({"run_id": _run_id, "text": text, "files": files or []})
+        return True, "Reply archived (seq 0002)."
+
+    async def _send_message(
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id=None,
+        reply_to=None,
+    ) -> None:
+        _ = (thread_id, reply_to)
+        sent.append(text)
+
+    handlers = types.SimpleNamespace(
+        _config=types.SimpleNamespace(
+            media=types.SimpleNamespace(
+                enabled=True,
+                max_image_bytes=1024,
+                max_file_bytes=1024,
+                images=True,
+                voice=True,
+                files=True,
+            )
+        ),
+        _router=_RouterStub(),
+        _ticket_flow_pause_targets={},
+        _get_paused_ticket_flow=lambda *_args, **_kwargs: (
+            run_id,
+            types.SimpleNamespace(id=run_id, input_data={}),
+        ),
+        _bot=_BotStub(),
+        _logger=types.SimpleNamespace(debug=lambda *_args, **_kwargs: None),
+        _write_user_reply_from_telegram=_write_user_reply,
+        _ticket_flow_bridge=_TicketFlowBridgeStub(),
+        _resolve_topic_key=_resolve_topic_key,
+        _send_message=_send_message,
+        _with_conversation_id=lambda text, **_kwargs: text,
+    )
+
+    await handle_media_message(
+        handlers,
+        message,
+        runtime=object(),
+        caption_text="caption here",
+    )
+
+    assert archived and archived[0]["run_id"] == run_id
+    assert archived[0]["text"] == "caption here"
+    assert archived[0]["files"] == [("notes.txt", b"doc-bytes")]
+    assert resumed
+    assert resumed[0][1] == run_id
+    assert sent == ["Reply archived (seq 0002)."]
 
 
 def test_media_batch_buffer_defaults() -> None:
