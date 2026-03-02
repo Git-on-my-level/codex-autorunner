@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -40,10 +39,8 @@ ISSUE_828_PARITY_MATRIX = {
     "destination": {
         "invalid_docker_profile": {
             "web_status": 400,
-            "cli_exit_code": 0,
-            "cli_effective_destination": {"kind": "local"},
-            "cli_source": "default",
-            "parity": "drift",
+            "cli_exit_code": 1,
+            "parity": "aligned",
         }
     },
 }
@@ -181,16 +178,5 @@ def test_issue_828_destination_parity_matrix_characterization(tmp_path: Path) ->
         ],
     )
     assert cli_response.exit_code == matrix["cli_exit_code"]
-    payload = json.loads(cli_response.output)
-    assert payload["effective_destination"] == matrix["cli_effective_destination"]
-    assert payload["source"] == matrix["cli_source"]
-    assert payload["configured_destination"] == {
-        "kind": "docker",
-        "image": "busybox:latest",
-        "profile": "full_deev",
-    }
-    assert any(
-        "unsupported docker profile 'full_deev'" in issue
-        for issue in payload.get("issues", [])
-    )
-    assert matrix["parity"] == "drift"
+    assert "unsupported docker profile 'full_deev'" in cli_response.output
+    assert matrix["parity"] == "aligned"

@@ -6,7 +6,10 @@ import typer
 import uvicorn
 
 from ....core.config import HubConfig
-from ....core.destinations import resolve_effective_repo_destination
+from ....core.destinations import (
+    parse_destination_config,
+    resolve_effective_repo_destination,
+)
 from ....core.hub import HubSupervisor
 from ....manifest import load_manifest, normalize_manifest_destination, save_manifest
 from ...web.app import create_hub_app
@@ -169,7 +172,7 @@ def register_hub_commands(
             destination = {"kind": "local"}
         elif normalized_kind == "docker":
             if not isinstance(image, str) or not image.strip():
-                raise_exit("--image is required for docker destination")
+                raise_exit("image is required for docker destination")
             destination = {"kind": "docker", "image": image.strip()}
             if isinstance(name, str) and name.strip():
                 destination["container_name"] = name.strip()
@@ -206,6 +209,11 @@ def register_hub_commands(
         normalized_destination = normalize_manifest_destination(destination)
         if normalized_destination is None:
             raise_exit(f"Invalid destination payload: {destination!r}")
+        parsed_destination = parse_destination_config(
+            normalized_destination, context="destination"
+        )
+        if not parsed_destination.valid:
+            raise_exit("; ".join(parsed_destination.errors))
         repo.destination = normalized_destination
         save_manifest(config.manifest_path, manifest, config.root)
 
