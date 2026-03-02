@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence
+from typing import Callable, Literal, Mapping, Optional, Protocol, Sequence, cast
 
 import yaml
 
@@ -16,40 +16,62 @@ class Destination(Protocol):
     @property
     def kind(self) -> str: ...
 
-    def to_dict(self) -> Dict[str, Any]: ...
+    def to_dict(self) -> dict[str, object]: ...
 
 
 @dataclasses.dataclass(frozen=True)
 class LocalDestination:
     kind: str = "local"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return {"kind": self.kind}
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerMount:
+    source: str
+    target: str
+    read_only: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "source": self.source,
+            "target": self.target,
+        }
+        if self.read_only:
+            payload["read_only"] = True
+        return payload
+
+
+DockerProfile = Literal["full-dev"]
 
 
 @dataclasses.dataclass(frozen=True)
 class DockerDestination:
     image: str
     container_name: Optional[str] = None
-    mounts: tuple[Dict[str, Any], ...] = ()
+    mounts: tuple[DockerMount, ...] = ()
     env_passthrough: tuple[str, ...] = ()
     workdir: Optional[str] = None
-    profile: Optional[str] = None
-    extra: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    profile: Optional[DockerProfile] = None
+    env: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    extra: Mapping[str, object] = dataclasses.field(default_factory=dict)
     kind: str = "docker"
 
-    def to_dict(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"kind": self.kind, "image": self.image}
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {"kind": self.kind, "image": self.image}
         if self.container_name:
             payload["container_name"] = self.container_name
         if self.mounts:
-            payload["mounts"] = [dict(item) for item in self.mounts]
+            payload["mounts"] = [item.to_dict() for item in self.mounts]
         if self.env_passthrough:
             payload["env_passthrough"] = list(self.env_passthrough)
         if self.workdir:
             payload["workdir"] = self.workdir
         if self.profile:
             payload["profile"] = self.profile
+        if self.env:
+            payload["env"] = dict(self.env)
         payload.update(self.extra)
         return payload
 
@@ -73,7 +95,7 @@ class DestinationResolution:
     source: str
     issues: tuple[str, ...] = ()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return self.destination.to_dict()
 
 
@@ -163,7 +185,7 @@ def probe_docker_readiness(
     )
 
 
-def default_local_destination() -> Dict[str, Any]:
+def default_local_destination() -> dict[str, object]:
     return LocalDestination().to_dict()
 
 
@@ -172,7 +194,7 @@ def default_car_docker_container_name(repo_root: Path) -> str:
 
 
 def parse_destination_config(
-    value: Any,
+    value: object,
     *,
     context: str = "destination",
 ) -> DestinationParseResult:
@@ -211,13 +233,13 @@ def parse_destination_config(
         else:
             container_name = container_name.strip()
 
-    mounts: tuple[Dict[str, Any], ...] = ()
+    mounts: tuple[DockerMount, ...] = ()
     mounts_raw = normalized.get("mounts")
     if mounts_raw is not None:
         if not isinstance(mounts_raw, list):
             errors.append(f"{context}: optional 'mounts' must be a list")
         else:
-            parsed_mounts: list[Dict[str, Any]] = []
+            parsed_mounts: list[DockerMount] = []
             for idx, mount in enumerate(mounts_raw):
                 if not isinstance(mount, dict):
                     errors.append(
@@ -236,10 +258,7 @@ def parse_destination_config(
                         f"{context}: mounts[{idx}].target must be a non-empty string"
                     )
                     continue
-                parsed_mount: Dict[str, Any] = {
-                    "source": source.strip(),
-                    "target": target.strip(),
-                }
+                parsed_read_only = False
                 raw_read_only = mount.get("read_only")
                 if raw_read_only is None and "readOnly" in mount:
                     raw_read_only = mount.get("readOnly")
@@ -251,8 +270,14 @@ def parse_destination_config(
                             f"{context}: mounts[{idx}].read_only must be a boolean"
                         )
                         continue
-                    parsed_mount["read_only"] = raw_read_only
-                parsed_mounts.append(parsed_mount)
+                    parsed_read_only = raw_read_only
+                parsed_mounts.append(
+                    DockerMount(
+                        source=source.strip(),
+                        target=target.strip(),
+                        read_only=parsed_read_only,
+                    )
+                )
             mounts = tuple(parsed_mounts)
 
     env_passthrough: tuple[str, ...] = ()
@@ -289,13 +314,13 @@ def parse_destination_config(
             if profile != "full-dev":
                 errors.append(f"{context}: unsupported docker profile '{profile}'")
 
-    explicit_env: Optional[Dict[str, str]] = None
+    explicit_env: Optional[dict[str, str]] = None
     env_map_raw = normalized.get("env")
     if env_map_raw is not None:
         if not isinstance(env_map_raw, dict):
             errors.append(f"{context}: optional 'env' must be an object")
         else:
-            parsed_env_map: Dict[str, str] = {}
+            parsed_env_map: dict[str, str] = {}
             for raw_key, raw_value in env_map_raw.items():
                 if not isinstance(raw_key, str) or not raw_key.strip():
                     errors.append(f"{context}: env keys must be non-empty strings")
@@ -313,7 +338,7 @@ def parse_destination_config(
             errors=tuple(errors),
         )
 
-    extra = {
+    extra: dict[str, object] = {
         key: val
         for key, val in normalized.items()
         if key
@@ -328,16 +353,16 @@ def parse_destination_config(
             "env",
         }
     }
-    if explicit_env is not None:
-        extra["env"] = explicit_env
+    image_value = image if isinstance(image, str) else ""
     return DestinationParseResult(
         destination=DockerDestination(
-            image=image,  # type: ignore[arg-type]
+            image=image_value,
             container_name=container_name,
             mounts=mounts,
             env_passthrough=env_passthrough,
             workdir=workdir,
-            profile=profile,
+            profile=cast(Optional[DockerProfile], profile),
+            env=explicit_env or {},
             extra=extra,
         ),
         valid=True,
@@ -451,6 +476,7 @@ __all__ = [
     "DestinationResolution",
     "DestinationValidationIssue",
     "DockerReadiness",
+    "DockerMount",
     "DockerDestination",
     "LocalDestination",
     "default_car_docker_container_name",

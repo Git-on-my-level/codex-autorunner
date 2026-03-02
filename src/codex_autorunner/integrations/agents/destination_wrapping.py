@@ -62,13 +62,9 @@ def wrap_command_for_destination(
         image=destination.image,
         repo_root=repo_abs,
         profile=destination.profile,
-        mounts=destination.mounts,
+        mounts=[mount.to_dict() for mount in destination.mounts],
         env_passthrough_patterns=destination.env_passthrough,
-        explicit_env=(
-            destination.extra.get("env")
-            if isinstance(destination.extra, dict)
-            else None
-        ),
+        explicit_env=destination.env,
         workdir=destination.workdir,
     )
     runtime.ensure_container_running(spec)
