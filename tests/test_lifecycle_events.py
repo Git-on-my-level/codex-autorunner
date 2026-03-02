@@ -1,6 +1,7 @@
 """Test lifecycle events system."""
 
 import asyncio
+import json
 import tempfile
 from pathlib import Path
 
@@ -132,6 +133,35 @@ def test_lifecycle_event_store_prune():
 
         pruned = store.load()
         assert len(pruned) == 5
+
+
+def test_lifecycle_event_store_append_rewrites_malformed_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        store = LifecycleEventStore(tmp_path)
+        path = store.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ not-valid-json", encoding="utf-8")
+
+        assert store.load() == []
+
+        store.append(
+            LifecycleEvent(
+                event_type=LifecycleEventType.FLOW_PAUSED,
+                repo_id="test-repo",
+                run_id="run-1",
+            )
+        )
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert isinstance(payload, list)
+        assert len(payload) == 1
+
+        loaded = store.load()
+        assert len(loaded) == 1
+        assert loaded[0].event_type == LifecycleEventType.FLOW_PAUSED
+        assert loaded[0].repo_id == "test-repo"
+        assert loaded[0].run_id == "run-1"
 
 
 def test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id():
@@ -282,6 +312,7 @@ if __name__ == "__main__":
     test_lifecycle_event_store_get_unprocessed()
     test_lifecycle_event_emitter()
     test_lifecycle_event_store_prune()
+    test_lifecycle_event_store_append_rewrites_malformed_file()
     test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id()
     test_non_duplicate_events_still_append()
     test_runtime_terminal_events_include_transition_metadata()

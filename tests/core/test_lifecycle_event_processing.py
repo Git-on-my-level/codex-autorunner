@@ -296,3 +296,46 @@ def test_lifecycle_reactive_circuit_breaker(tmp_path: Path) -> None:
         assert _read_queue_items(hub_root) == []
     finally:
         supervisor.shutdown()
+
+
+def test_lifecycle_processing_failures_stay_unprocessed_and_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_hub_config(hub_root, dispatch_interception=False)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor._stop_lifecycle_event_processor()
+
+    try:
+        supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
+        supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-2")
+
+        store = LifecycleEventStore(hub_root)
+        unprocessed = store.get_unprocessed()
+        assert len(unprocessed) == 2
+        failing_event_id = unprocessed[0].event_id
+        passing_event_id = unprocessed[1].event_id
+
+        original_process = supervisor._process_lifecycle_event
+        attempts: dict[str, int] = {}
+
+        def _flaky_process(event) -> None:
+            attempts[event.event_id] = attempts.get(event.event_id, 0) + 1
+            if event.event_id == failing_event_id:
+                raise RuntimeError("characterization failure")
+            original_process(event)
+
+        monkeypatch.setattr(supervisor, "_process_lifecycle_event", _flaky_process)
+
+        supervisor.process_lifecycle_events()
+        remaining = store.get_unprocessed()
+        assert [event.event_id for event in remaining] == [failing_event_id]
+        assert attempts[failing_event_id] == 1
+        assert attempts[passing_event_id] == 1
+
+        supervisor.process_lifecycle_events()
+        remaining = store.get_unprocessed()
+        assert [event.event_id for event in remaining] == [failing_event_id]
+        assert attempts[failing_event_id] == 2
+    finally:
+        supervisor.shutdown()
