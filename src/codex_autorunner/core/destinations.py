@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence
 import yaml
 
 from ..manifest import ManifestRepo, normalize_manifest_destination
+from ..workspace import workspace_id_for_path
 from .utils import subprocess_env
 
 
@@ -164,6 +165,10 @@ def probe_docker_readiness(
 
 def default_local_destination() -> Dict[str, Any]:
     return LocalDestination().to_dict()
+
+
+def default_car_docker_container_name(repo_root: Path) -> str:
+    return f"car-ws-{workspace_id_for_path(repo_root)}"
 
 
 def parse_destination_config(
@@ -448,6 +453,7 @@ __all__ = [
     "DockerReadiness",
     "DockerDestination",
     "LocalDestination",
+    "default_car_docker_container_name",
     "default_local_destination",
     "parse_destination_config",
     "probe_docker_readiness",

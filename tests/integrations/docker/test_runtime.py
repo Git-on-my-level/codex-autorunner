@@ -374,6 +374,36 @@ def test_stop_container_returns_false_for_missing_container() -> None:
     assert runtime.stop_container("missing") is False
 
 
+def test_remove_container_returns_false_for_missing_container() -> None:
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        if cmd[1] == "inspect":
+            return _proc(cmd, returncode=1, stderr="No such object")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    assert runtime.remove_container("missing", force=False) is False
+
+
+def test_remove_container_uses_non_forced_rm_by_default() -> None:
+    calls: list[list[str]] = []
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        calls.append(list(cmd))
+        if cmd[1] == "inspect":
+            return _proc(cmd, stdout="container-id\n")
+        if cmd[1] == "rm":
+            return _proc(cmd, stdout="demo\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    removed = runtime.remove_container("demo")
+    assert removed is True
+    assert calls[0][:3] == ["docker", "inspect", "--format"]
+    assert calls[1] == ["docker", "rm", "demo"]
+
+
 def test_reap_container_if_expired_stops_container() -> None:
     calls: list[list[str]] = []
     started_at = "2020-01-01T00:00:00Z"

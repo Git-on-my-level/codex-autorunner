@@ -9,10 +9,10 @@ from ...core.destinations import (
     Destination,
     DockerDestination,
     LocalDestination,
+    default_car_docker_container_name,
     parse_destination_config,
 )
 from ...core.utils import is_within
-from ...workspace import workspace_id_for_path
 from ..docker.profile_contracts import (
     expand_profile_paths,
     resolve_docker_profile_contract,
@@ -36,10 +36,6 @@ def resolve_destination_from_config(raw_destination: object) -> Destination:
     return parsed.destination
 
 
-def _default_container_name(repo_root: Path) -> str:
-    return f"car-ws-{workspace_id_for_path(repo_root)}"
-
-
 def wrap_command_for_destination(
     *,
     command: Sequence[str],
@@ -57,7 +53,9 @@ def wrap_command_for_destination(
 
     runtime = docker_runtime or DockerRuntime()
     repo_abs = repo_root.resolve()
-    container_name = destination.container_name or _default_container_name(repo_abs)
+    container_name = destination.container_name or default_car_docker_container_name(
+        repo_abs
+    )
 
     spec = build_docker_container_spec(
         name=container_name,

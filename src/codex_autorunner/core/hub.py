@@ -27,6 +27,8 @@ from .archive import archive_worktree_snapshot, build_snapshot_id
 from .chat_bindings import repo_has_active_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .destinations import (
+    DockerDestination,
+    default_car_docker_container_name,
     default_local_destination,
     resolve_effective_repo_destination,
 )
@@ -1006,6 +1008,200 @@ class HubSupervisor:
                 f"Worktree {worktree_repo_id} has uncommitted changes; commit or stash before archiving"
             )
 
+    def _run_docker_command(
+        self, args: List[str], *, timeout_seconds: Optional[float] = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["docker", *[str(part) for part in args]],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=subprocess_env(),
+            timeout=timeout_seconds,
+        )
+
+    def _cleanup_worktree_docker_container(
+        self,
+        *,
+        worktree_repo_id: str,
+        worktree_path: Path,
+        destination: DockerDestination,
+    ) -> Dict[str, object]:
+        explicit_name = bool(destination.container_name)
+        container_name = (
+            destination.container_name
+            or default_car_docker_container_name(worktree_path.resolve())
+        )
+        if explicit_name:
+            message = (
+                "Skipping docker container cleanup for explicit container_name "
+                "(treated as shared)"
+            )
+            logger.info(
+                "Hub cleanup worktree docker skipped id=%s container=%s reason=%s",
+                worktree_repo_id,
+                container_name,
+                message,
+            )
+            return {
+                "status": "skipped_explicit",
+                "container_name": container_name,
+                "managed": False,
+                "message": message,
+            }
+
+        try:
+            inspect_proc = self._run_docker_command(
+                ["inspect", "--format", "{{.State.Running}}", container_name],
+                timeout_seconds=15,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            message = f"docker inspect failed: {exc}"
+            logger.warning(
+                "Hub cleanup worktree docker inspect failed id=%s container=%s: %s",
+                worktree_repo_id,
+                container_name,
+                exc,
+            )
+            return {
+                "status": "error",
+                "container_name": container_name,
+                "managed": True,
+                "message": message,
+            }
+        if inspect_proc.returncode != 0:
+            inspect_detail = (inspect_proc.stderr or inspect_proc.stdout or "").strip()
+            inspect_detail_lower = inspect_detail.lower()
+            if (
+                "no such object" in inspect_detail_lower
+                or "no such container" in inspect_detail_lower
+            ):
+                logger.info(
+                    "Hub cleanup worktree docker container missing id=%s container=%s",
+                    worktree_repo_id,
+                    container_name,
+                )
+                return {
+                    "status": "not_found",
+                    "container_name": container_name,
+                    "managed": True,
+                    "message": "container not found",
+                }
+            message = f"docker inspect failed: {inspect_detail or 'unknown error'}"
+            logger.warning(
+                "Hub cleanup worktree docker inspect failed id=%s container=%s: %s",
+                worktree_repo_id,
+                container_name,
+                inspect_detail,
+            )
+            return {
+                "status": "error",
+                "container_name": container_name,
+                "managed": True,
+                "message": message,
+            }
+
+        running = (inspect_proc.stdout or "").strip().lower() == "true"
+        if running:
+            try:
+                stop_proc = self._run_docker_command(
+                    ["stop", "-t", "10", container_name],
+                    timeout_seconds=15,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                message = f"docker stop failed: {exc}"
+                logger.warning(
+                    "Hub cleanup worktree docker stop failed id=%s container=%s: %s",
+                    worktree_repo_id,
+                    container_name,
+                    exc,
+                )
+                return {
+                    "status": "error",
+                    "container_name": container_name,
+                    "managed": True,
+                    "message": message,
+                }
+            if stop_proc.returncode != 0:
+                stop_detail = (stop_proc.stderr or stop_proc.stdout or "").strip()
+                message = f"docker stop failed: {stop_detail or 'unknown error'}"
+                logger.warning(
+                    "Hub cleanup worktree docker stop failed id=%s container=%s: %s",
+                    worktree_repo_id,
+                    container_name,
+                    stop_detail,
+                )
+                return {
+                    "status": "error",
+                    "container_name": container_name,
+                    "managed": True,
+                    "message": message,
+                }
+
+        try:
+            rm_proc = self._run_docker_command(
+                ["rm", container_name],
+                timeout_seconds=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            message = f"docker rm failed: {exc}"
+            logger.warning(
+                "Hub cleanup worktree docker remove failed id=%s container=%s: %s",
+                worktree_repo_id,
+                container_name,
+                exc,
+            )
+            return {
+                "status": "error",
+                "container_name": container_name,
+                "managed": True,
+                "message": message,
+            }
+
+        if rm_proc.returncode != 0:
+            rm_detail = (rm_proc.stderr or rm_proc.stdout or "").strip()
+            rm_detail_lower = rm_detail.lower()
+            if (
+                "no such object" in rm_detail_lower
+                or "no such container" in rm_detail_lower
+            ):
+                logger.info(
+                    "Hub cleanup worktree docker container already removed id=%s container=%s",
+                    worktree_repo_id,
+                    container_name,
+                )
+                return {
+                    "status": "not_found",
+                    "container_name": container_name,
+                    "managed": True,
+                    "message": "container not found",
+                }
+            message = f"docker rm failed: {rm_detail or 'unknown error'}"
+            logger.warning(
+                "Hub cleanup worktree docker remove failed id=%s container=%s: %s",
+                worktree_repo_id,
+                container_name,
+                rm_detail,
+            )
+            return {
+                "status": "error",
+                "container_name": container_name,
+                "managed": True,
+                "message": message,
+            }
+
+        logger.info(
+            "Hub cleanup worktree docker removed id=%s container=%s",
+            worktree_repo_id,
+            container_name,
+        )
+        return {
+            "status": "removed",
+            "container_name": container_name,
+            "managed": True,
+            "message": "container stopped and removed",
+        }
+
     def cleanup_worktree(
         self,
         *,
@@ -1016,7 +1212,7 @@ class HubSupervisor:
         force_archive: bool = False,
         archive_note: Optional[str] = None,
         force: bool = False,
-    ) -> None:
+    ) -> Dict[str, object]:
         if self.hub_config.pma.cleanup_require_archive and not archive:
             raise ValueError(
                 "Worktree cleanup requires archiving per PMA policy "
@@ -1075,6 +1271,19 @@ class HubSupervisor:
                 force=force_archive,
             )
 
+        repos_by_id = {repo.id: repo for repo in manifest.repos}
+        effective_destination = resolve_effective_repo_destination(entry, repos_by_id)
+        docker_cleanup: Dict[str, object] = {
+            "status": "not_applicable",
+            "message": "effective destination is not docker",
+        }
+        if isinstance(effective_destination.destination, DockerDestination):
+            docker_cleanup = self._cleanup_worktree_docker_container(
+                worktree_repo_id=worktree_repo_id,
+                worktree_path=worktree_path,
+                destination=effective_destination.destination,
+            )
+
         # Remove worktree from base repo.
         try:
             proc = run_git(
@@ -1126,6 +1335,7 @@ class HubSupervisor:
 
         manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        return {"status": "ok", "docker_cleanup": docker_cleanup}
 
     def _has_active_chat_binding(self, repo_id: str) -> bool:
         return repo_has_active_chat_binding(
