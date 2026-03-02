@@ -26,7 +26,9 @@ body
     )
 
 
-def _build_ticket_flow_app(monkeypatch, repo_root: Path, start_calls: list[dict]) -> typer.Typer:
+def _build_ticket_flow_app(
+    monkeypatch, repo_root: Path, start_calls: list[dict]
+) -> typer.Typer:
     class _FakeConfig:
         durable_writes = False
         app_server = SimpleNamespace(command=["python"])
@@ -84,14 +86,14 @@ def _build_ticket_flow_app(monkeypatch, repo_root: Path, start_calls: list[dict]
     return ticket_flow_app
 
 
-def test_ticket_flow_start_forwards_max_total_turns(monkeypatch, tmp_path: Path) -> None:
+def test_ticket_flow_start_forwards_max_total_turns(
+    monkeypatch, tmp_path: Path
+) -> None:
     _write_valid_ticket(tmp_path)
     start_calls: list[dict] = []
     ticket_flow_app = _build_ticket_flow_app(monkeypatch, tmp_path, start_calls)
 
-    result = CliRunner().invoke(
-        ticket_flow_app, ["start", "--max-total-turns", "200"]
-    )
+    result = CliRunner().invoke(ticket_flow_app, ["start", "--max-total-turns", "200"])
 
     assert result.exit_code == 0, result.output
     assert len(start_calls) == 1
