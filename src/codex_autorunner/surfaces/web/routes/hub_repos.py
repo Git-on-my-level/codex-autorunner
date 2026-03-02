@@ -1018,6 +1018,54 @@ def build_hub_repo_routes(
             payload.pop("__index", None)
         return by_session
 
+    def _resolve_pma_managed_thread_id(
+        *,
+        pma_threads: list[dict[str, Any]],
+        repo_id: Any,
+        workspace_path: Any,
+        agent: str,
+    ) -> Optional[str]:
+        normalized_repo_id = (
+            repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
+        )
+        normalized_workspace = (
+            _canonical_workspace_path(workspace_path)
+            if isinstance(workspace_path, str) and workspace_path
+            else None
+        )
+        if not pma_threads:
+            return None
+
+        def _matches(thread: dict[str, Any], *, exact_agent: bool) -> bool:
+            managed_thread_id = thread.get("managed_thread_id")
+            if not isinstance(managed_thread_id, str) or not managed_thread_id.strip():
+                return False
+            if exact_agent and _normalize_agent(thread.get("agent")) != agent:
+                return False
+            thread_workspace = thread.get("workspace_path")
+            thread_repo_id = thread.get("repo_id")
+            if (
+                normalized_workspace is not None
+                and isinstance(thread_workspace, str)
+                and thread_workspace == normalized_workspace
+            ):
+                return True
+            if (
+                normalized_repo_id is not None
+                and isinstance(thread_repo_id, str)
+                and thread_repo_id == normalized_repo_id
+            ):
+                return True
+            return False
+
+        for exact_agent in (True, False):
+            for thread in pma_threads:
+                if _matches(thread, exact_agent=exact_agent):
+                    managed_thread_id = thread.get("managed_thread_id")
+                    if isinstance(managed_thread_id, str) and managed_thread_id.strip():
+                        return managed_thread_id.strip()
+        return None
+
     def _channel_row_matches_query(row: dict[str, Any], query_text: str) -> bool:
         if not query_text:
             return True
@@ -1538,12 +1586,22 @@ def build_hub_repo_routes(
                     pma_enabled = bool(binding.get("pma_enabled"))
                     agent = _normalize_agent(binding.get("agent"))
                     if pma_enabled:
+                        managed_thread_id = _resolve_pma_managed_thread_id(
+                            pma_threads=pma_threads,
+                            repo_id=repo_id,
+                            workspace_path=workspace_path,
+                            agent=agent,
+                        )
                         row["source"] = "pma_thread"
                         row["provenance"] = {
                             "source": "pma_thread",
                             "platform": platform,
                             "agent": agent,
                         }
+                        if isinstance(managed_thread_id, str) and managed_thread_id:
+                            provenance = row.get("provenance")
+                            if isinstance(provenance, dict):
+                                provenance["managed_thread_id"] = managed_thread_id
                     elif source in {"discord", "telegram"}:
                         row["provenance"] = {
                             "source": source,
@@ -1570,10 +1628,6 @@ def build_hub_repo_routes(
                                 active_thread_id = resolved
                     if isinstance(active_thread_id, str) and active_thread_id:
                         row["active_thread_id"] = active_thread_id
-                        if row.get("source") == "pma_thread":
-                            provenance = row.get("provenance")
-                            if isinstance(provenance, dict):
-                                provenance["managed_thread_id"] = active_thread_id
 
                     run_data: dict[str, Any] = {}
                     if isinstance(workspace_path, str) and workspace_path:

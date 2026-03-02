@@ -721,6 +721,18 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
         },
     )
 
+    pma_store = PmaThreadStore(hub_root)
+    discord_pma_thread = pma_store.create_thread(
+        "opencode",
+        repo_work.path,
+        repo_id="work",
+    )
+    telegram_pma_thread = pma_store.create_thread(
+        "codex",
+        repo_work.path,
+        repo_id="work",
+    )
+
     _write_usage_rows(
         repo_work.path / ".codex-autorunner" / "usage" / "opencode_turn_usage.jsonl",
         rows=[
@@ -800,12 +812,28 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     assert discord_pma["source"] == "pma_thread"
     assert discord_pma["provenance"]["source"] == "pma_thread"
     assert discord_pma["provenance"]["agent"] == "opencode"
+    assert (
+        discord_pma["provenance"]["managed_thread_id"]
+        == discord_pma_thread["managed_thread_id"]
+    )
+    assert (
+        discord_pma["provenance"]["managed_thread_id"]
+        != discord_pma["active_thread_id"]
+    )
 
     telegram_pma = rows["telegram:-200:9"]
     assert telegram_pma["active_thread_id"] == "telegram-pma-thread"
     assert telegram_pma["source"] == "pma_thread"
     assert telegram_pma["provenance"]["source"] == "pma_thread"
     assert telegram_pma["provenance"]["agent"] == "codex"
+    assert (
+        telegram_pma["provenance"]["managed_thread_id"]
+        == telegram_pma_thread["managed_thread_id"]
+    )
+    assert (
+        telegram_pma["provenance"]["managed_thread_id"]
+        != telegram_pma["active_thread_id"]
+    )
 
     telegram_final = rows["telegram:-300:11"]
     assert telegram_final["active_thread_id"] == "tg-direct-thread"
