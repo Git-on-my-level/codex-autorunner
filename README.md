@@ -59,6 +59,9 @@ Want to set up chat apps? Read or ask your agent to read:
 - [Telegram setup guide](docs/AGENT_SETUP_TELEGRAM_GUIDE.md)
 - [Discord setup guide](docs/AGENT_SETUP_DISCORD_GUIDE.md)
 
+Need docker runtime execution (including custom images per repo/worktree)?
+- [Destination runtime guide](docs/configuration/destinations.md)
+
 ### From source (repo checkout)
 
 If you're working from a fresh clone of this repo, you can run the repo-local CLI shim:

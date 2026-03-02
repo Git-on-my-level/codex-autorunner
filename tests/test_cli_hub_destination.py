@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -215,7 +216,9 @@ def test_hub_destination_set_help_mentions_custom_image_and_docs() -> None:
     result = runner.invoke(app, ["hub", "destination", "set", "--help"])
     assert result.exit_code == 0
     output = result.output
-    assert "Bring your own image:" in output
-    assert "required for docker kind" in output
-    assert "car hub destination set <repo_id> docker --image" in output
-    assert "docs/configuration/destinations.md" in output
+    clean = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    clean = " ".join(clean.split())
+    assert "Bring your own image:" in clean
+    assert "required for docker kind" in clean
+    assert "car hub destination set <repo_id> docker --image" in clean
+    assert "docs/configuration/destinations.md" in clean
