@@ -26,8 +26,8 @@ ISSUE_828_PARITY_MATRIX = {
         },
         "invalid_upload_filename": {
             "api_status": 400,
-            "hub_status": 500,
-            "parity": "drift",
+            "hub_status": 400,
+            "parity": "aligned",
         },
     },
     "flow_start": {
@@ -103,8 +103,8 @@ def test_issue_828_filebox_parity_matrix_characterization(tmp_path: Path) -> Non
             == matrix["invalid_upload_filename"]["hub_status"]
         )
         assert bad_upload_api.json()["detail"] == "Invalid filename"
-        assert "Internal Server Error" in bad_upload_hub.text
-        assert matrix["invalid_upload_filename"]["parity"] == "drift"
+        assert bad_upload_hub.json()["detail"] == "Invalid filename"
+        assert matrix["invalid_upload_filename"]["parity"] == "aligned"
 
 
 def test_issue_828_flow_start_parity_matrix_characterization(

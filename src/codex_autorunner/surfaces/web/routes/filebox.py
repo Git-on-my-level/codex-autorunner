@@ -59,6 +59,28 @@ def _resolve_repo_root(request: Request) -> Path:
     return find_repo_root()
 
 
+async def _upload_files_to_box(
+    *, repo_root: Path, box: str, request: Request
+) -> dict[str, Any]:
+    ensure_structure(repo_root)
+    form = await request.form()
+    saved = []
+    for filename, file in form.items():
+        if not isinstance(file, UploadFile):
+            continue
+        try:
+            data = await file.read()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to read upload: %s", exc)
+            continue
+        try:
+            path = save_file(repo_root, box, filename, data)
+            saved.append(path.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "saved": saved}
+
+
 def build_filebox_routes() -> APIRouter:
     router = APIRouter(prefix="/api", tags=["filebox"])
 
@@ -87,24 +109,7 @@ def build_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
-        ensure_structure(repo_root)
-
-        form = await request.form()
-        saved = []
-        for filename, file in form.items():
-            if not isinstance(file, UploadFile):
-                continue
-            try:
-                data = await file.read()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Failed to read upload: %s", exc)
-                continue
-            try:
-                path = save_file(repo_root, box, filename, data)
-                saved.append(path.name)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"status": "ok", "saved": saved}
+        return await _upload_files_to_box(repo_root=repo_root, box=box, request=request)
 
     @router.get("/filebox/{box}/{filename}")
     def download_file(box: str, filename: str, request: Request):
@@ -200,16 +205,7 @@ def build_hub_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        ensure_structure(repo_root)
-        form = await request.form()
-        saved = []
-        for filename, file in form.items():
-            if not isinstance(file, UploadFile):
-                continue
-            data = await file.read()
-            path = save_file(repo_root, box, filename, data)
-            saved.append(path.name)
-        return {"status": "ok", "saved": saved}
+        return await _upload_files_to_box(repo_root=repo_root, box=box, request=request)
 
     @router.get("/{repo_id}/{box}/{filename}")
     def hub_download(repo_id: str, box: str, filename: str, request: Request):
