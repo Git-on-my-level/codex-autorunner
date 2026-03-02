@@ -9,6 +9,11 @@ from .lifecycle_events import (
     LifecycleEventType,
 )
 from .sse import SSEEvent, format_sse, parse_sse_lines
+from .type_debt_ledger import (
+    build_type_debt_ledger,
+    ledger_to_dict,
+    render_markdown_report,
+)
 
 __all__ = [
     "ArchiveResult",
@@ -22,4 +27,7 @@ __all__ = [
     "SSEEvent",
     "format_sse",
     "parse_sse_lines",
+    "build_type_debt_ledger",
+    "render_markdown_report",
+    "ledger_to_dict",
 ]
