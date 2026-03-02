@@ -11,7 +11,12 @@ from codex_autorunner.core.config import (
     load_repo_config,
 )
 from codex_autorunner.discovery import discover_and_init
-from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
+from codex_autorunner.manifest import (
+    load_manifest,
+    load_manifest_with_issues,
+    sanitize_repo_id,
+    save_manifest,
+)
 from tests.conftest import write_test_config
 
 
@@ -93,6 +98,54 @@ def test_load_manifest_ignores_invalid_destination_shapes(tmp_path: Path):
     assert worktree is not None
     assert base.destination is None
     assert worktree.destination is None
+
+
+def test_load_manifest_with_issues_surfaces_invalid_destination_shapes(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: base",
+                "    path: workspace/base",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+                "    destination: not-a-dict",
+                "  - id: wt",
+                "    path: worktrees/wt",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: worktree",
+                "    worktree_of: base",
+                "    destination:",
+                "      image: missing-kind",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manifest, issues = load_manifest_with_issues(manifest_path, hub_root)
+    base = manifest.get("base")
+    worktree = manifest.get("wt")
+    assert base is not None
+    assert worktree is not None
+    assert base.destination is None
+    assert worktree.destination is None
+    assert any(
+        issue.repo_id == "base"
+        and "expected a mapping with non-empty 'kind'" in issue.message
+        for issue in issues
+    )
+    assert any(
+        issue.repo_id == "wt"
+        and "expected a mapping with non-empty 'kind'" in issue.message
+        for issue in issues
+    )
 
 
 def test_discovery_adds_repo_and_autoinits(tmp_path: Path):

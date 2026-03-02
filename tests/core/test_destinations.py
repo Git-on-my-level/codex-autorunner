@@ -8,7 +8,6 @@ from codex_autorunner.core.destinations import (
     parse_destination_config,
     resolve_effective_repo_destination,
     validate_destination_write_payload,
-    validate_manifest_destinations,
 )
 from codex_autorunner.manifest import ManifestRepo
 
@@ -189,39 +188,3 @@ def test_resolve_effective_repo_destination_reports_invalid_own_destination() ->
         "image": "ghcr.io/acme/base:latest",
     }
     assert any("requires non-empty 'image'" in message for message in resolution.issues)
-
-
-def test_validate_manifest_destinations_reports_bad_shapes(tmp_path: Path) -> None:
-    manifest_path = tmp_path / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 2",
-                "repos:",
-                "  - id: good",
-                "    path: workspace/good",
-                "    kind: base",
-                "    destination:",
-                "      kind: local",
-                "  - id: bad-shape",
-                "    path: workspace/bad-shape",
-                "    kind: base",
-                "    destination: not-a-dict",
-                "  - id: bad-docker",
-                "    path: workspace/bad-docker",
-                "    kind: base",
-                "    destination:",
-                "      kind: docker",
-                "      image: 123",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    issues = validate_manifest_destinations(manifest_path)
-    assert any(issue.repo_id == "bad-shape" for issue in issues)
-    assert any(
-        issue.repo_id == "bad-docker" and "requires non-empty 'image'" in issue.message
-        for issue in issues
-    )

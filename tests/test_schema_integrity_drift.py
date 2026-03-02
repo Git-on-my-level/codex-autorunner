@@ -39,10 +39,6 @@ def _seed_single_repo_manifest(hub_root: Path, repo_id: str = "base") -> None:
         ("usage", {"cache_scope": 7}, "usage.cache_scope must be a string if provided"),
     ],
 )
-@pytest.mark.xfail(
-    reason="Issue #830: hub validation is currently weaker than repo validation",
-    strict=True,
-)
 def test_hub_and_repo_shared_section_validation_parity(
     tmp_path: Path,
     shared_section: str,
