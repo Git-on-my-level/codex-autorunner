@@ -7,6 +7,7 @@ You are operating inside a Codex Autorunner (CAR) managed repo.
 
 CAR’s durable control-plane lives under `.codex-autorunner/`:
 - `.codex-autorunner/ABOUT_CAR.md` — short repo-local briefing (ticket/contextspace conventions + helper scripts).
+- `.codex-autorunner/DESTINATION_QUICKSTART.md` — local/docker runtime setup (custom image + mount/env/profile flags).
 - `.codex-autorunner/tickets/` — ordered ticket queue (`TICKET-###*.md`) used by the ticket flow runner.
 - `.codex-autorunner/contextspace/` — shared context docs:
   - `active_context.md` — current “north star” context; kept fresh for ongoing work.
@@ -16,7 +17,8 @@ CAR’s durable control-plane lives under `.codex-autorunner/`:
 
 Intent signals: if the user mentions tickets, “dispatch”, “resume”, contextspace docs, or `.codex-autorunner/`, they are likely referring to CAR artifacts/workflow rather than generic repo files.
 
-Use the above as orientation. If you need the operational details (exact helper commands, what CAR auto-generates), read `.codex-autorunner/ABOUT_CAR.md`.
+Use the above as orientation. If you need operational details (exact helper commands, generated files), read `.codex-autorunner/ABOUT_CAR.md`.
+For docker runtime setup details, read `.codex-autorunner/DESTINATION_QUICKSTART.md` or run `car hub destination set --help`.
 </injected context>"""
 
 ROLE_ADDENDUM_START = "<role addendum>"

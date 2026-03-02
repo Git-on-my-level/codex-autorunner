@@ -24,6 +24,10 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "Destinations (execution runtime)" in prompt_content
     assert "car hub destination show" in prompt_content
     assert "car hub destination set <repo_id> docker --image <image>" in prompt_content
+    assert "car hub destination set --help" in prompt_content
+    assert ".codex-autorunner/DESTINATION_QUICKSTART.md" in prompt_content
+    assert "docs/configuration/destinations.md" in prompt_content
+    assert "docs/reference/hub-manifest-schema.md" in prompt_content
     assert "active_context.md" in prompt_content
     assert "decisions.md" in prompt_content
     assert "spec.md" in prompt_content
@@ -39,6 +43,9 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "Ticket turn prompt context" in about_content
     assert "Destinations (local/docker runtime)" in about_content
     assert "car hub destination show" in about_content
+    assert "car hub destination set --help" in about_content
+    assert ".codex-autorunner/DESTINATION_QUICKSTART.md" in about_content
+    assert "docs/configuration/destinations.md" in about_content
     assert ".codex-autorunner/filebox/inbox/" in about_content
 
 

@@ -209,3 +209,13 @@ def test_hub_destination_set_docker_supports_extended_payload_fields(
     manifest_data = yaml.safe_load(manifest_text)
     repo_data = next(item for item in manifest_data["repos"] if item["id"] == base_id)
     assert repo_data["destination"] == payload["effective_destination"]
+
+
+def test_hub_destination_set_help_mentions_custom_image_and_docs() -> None:
+    result = runner.invoke(app, ["hub", "destination", "set", "--help"])
+    assert result.exit_code == 0
+    output = result.output
+    assert "Bring your own image:" in output
+    assert "required for docker kind" in output
+    assert "car hub destination set <repo_id> docker --image" in output
+    assert "docs/configuration/destinations.md" in output

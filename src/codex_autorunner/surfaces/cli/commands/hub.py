@@ -99,7 +99,12 @@ def register_hub_commands(
         repo_id: str = typer.Argument(..., help="Repo id from hub manifest"),
         kind: str = typer.Argument(..., help="Destination kind (local|docker)"),
         image: Optional[str] = typer.Option(
-            None, "--image", help="Docker image (required for docker kind)"
+            None,
+            "--image",
+            help=(
+                "Docker image ref (required for docker kind; supports custom images "
+                "like ghcr.io/org/dev-image:tag)"
+            ),
         ),
         name: Optional[str] = typer.Option(
             None, "--name", help="Docker container name override"
@@ -127,7 +132,7 @@ def register_hub_commands(
         profile: Optional[str] = typer.Option(
             None,
             "--profile",
-            help="Docker runtime profile (example: full-dev)",
+            help="Docker runtime profile (currently supported: full-dev)",
         ),
         workdir: Optional[str] = typer.Option(
             None, "--workdir", help="Docker workdir override inside the container"
@@ -137,6 +142,16 @@ def register_hub_commands(
             False, "--json", help="Emit JSON payload for scripting"
         ),
     ):
+        """Set repo execution destination.
+
+        Examples:
+        - Bring your own image:
+          `car hub destination set <repo_id> docker --image ghcr.io/org/dev-image:tag --path <hub_root>`
+        - Inspect advanced runtime flags:
+          `car hub destination set --help`
+        - Deep docs:
+          `docs/configuration/destinations.md`
+        """
         config = require_hub_config(path)
         manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
 

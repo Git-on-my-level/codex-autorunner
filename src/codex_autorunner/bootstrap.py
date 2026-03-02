@@ -6,6 +6,7 @@ import yaml
 
 from .core.about_car import (
     ensure_about_car_file_for_repo,
+    ensure_destination_quickstart_file_for_repo,
     ensure_ticket_flow_quickstart_file_for_repo,
     ensure_tickets_agents_file_for_repo,
 )
@@ -204,6 +205,7 @@ def seed_repo_files(
         force=force,
     )
     ensure_ticket_flow_quickstart_file_for_repo(repo_root, force=force)
+    ensure_destination_quickstart_file_for_repo(repo_root, force=force)
     ensure_tickets_agents_file_for_repo(repo_root, force=force)
     ensure_ticket_linter(repo_root, force=force)
     ensure_ticket_manager(repo_root, force=force)
@@ -340,6 +342,10 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Set destination when requested:
   - `car hub destination set <repo_id> local --path <hub_root>`
   - `car hub destination set <repo_id> docker --image <image> --path <hub_root>`
+- For custom images and advanced docker options:
+  - `car hub destination set --help`
+  - Repo guide: `.codex-autorunner/DESTINATION_QUICKSTART.md`
+  - Deep docs: `docs/configuration/destinations.md`, `docs/reference/hub-manifest-schema.md`
 - For docker destinations, validate daemon connectivity and image availability before long runs.
 
 ## Ticket planning constraints
@@ -441,6 +447,13 @@ Do NOT copy `.codex-autorunner/` between worktrees:
   `car hub destination set <repo_id> local --path <hub_root>`
 - Set destination to docker:
   `car hub destination set <repo_id> docker --image <image> --path <hub_root>`
+- Bring your own image by passing any registry image ref to `--image`.
+- Discover profile/workdir/env/mount flags:
+  `car hub destination set --help`
+- Quick guide:
+  `<repo>/.codex-autorunner/DESTINATION_QUICKSTART.md`
+- Deep docs:
+  `docs/configuration/destinations.md` and `docs/reference/hub-manifest-schema.md`
 - Docker `image` is required for docker destinations.
 - If docker-backed runs fail, verify `docker --version` and `docker info`.
 

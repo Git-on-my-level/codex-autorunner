@@ -3,6 +3,8 @@ from pathlib import Path
 from codex_autorunner.core.about_car import (
     ABOUT_CAR_GENERATED_MARKER,
     ABOUT_CAR_REL_PATH,
+    DESTINATION_QUICKSTART_GENERATED_MARKER,
+    DESTINATION_QUICKSTART_REL_PATH,
 )
 from codex_autorunner.core.runtime import RuntimeContext
 from codex_autorunner.surfaces.web.routes.shared import build_codex_terminal_cmd
@@ -18,6 +20,14 @@ def test_about_car_is_seeded(repo: Path):
     assert ".codex-autorunner/contextspace/decisions.md" in text
     assert ".codex-autorunner/contextspace/spec.md" in text
     assert "lint ticket frontmatter" in text.lower()
+    assert ".codex-autorunner/DESTINATION_QUICKSTART.md" in text
+
+    destination_quickstart_path = repo / DESTINATION_QUICKSTART_REL_PATH
+    assert destination_quickstart_path.exists()
+    destination_quickstart = destination_quickstart_path.read_text(encoding="utf-8")
+    assert DESTINATION_QUICKSTART_GENERATED_MARKER in destination_quickstart
+    assert "car hub destination set <repo_id> docker --image" in destination_quickstart
+    assert "car hub destination set --help" in destination_quickstart
 
 
 def test_terminal_new_cmd_does_not_seed_about_prompt(repo: Path):

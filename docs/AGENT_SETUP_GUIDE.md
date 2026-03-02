@@ -193,6 +193,23 @@ Then verify the new run is live:
 
 Only use `resume` by default when the target run metadata is healthy and there is no active-run conflict.
 
+### Docker runtime destination discoverability
+To run a repo/worktree in a custom docker image:
+
+`car hub destination set <repo_id> docker --image <registry/image:tag> --path <hub_root>`
+
+Then verify effective destination:
+
+`car hub destination show <repo_id> --path <hub_root>`
+
+For advanced flags (`--profile`, `--mount`, `--mount-ro`, `--env`, `--env-map`, `--workdir`), run:
+
+`car hub destination set --help`
+
+Deep docs:
+- `docs/configuration/destinations.md`
+- `docs/reference/hub-manifest-schema.md`
+
 ### Web UI not loading
 Ensure `car serve` is running and check the terminal output for errors. The default port is 8765.
 
@@ -222,6 +239,8 @@ Once basic setup is complete, suggest these next steps:
 | `car hub clone <url>` | Clone a repo into the hub |
 | `car hub create <name>` | Create a new repo in the hub |
 | `car hub worktree create <base_repo_id> <branch>` | Create a hub-owned worktree (defaults to `origin/<default-branch>`) |
+| `car hub destination show <repo_id>` | Show configured/effective execution destination |
+| `car hub destination set <repo_id> docker --image <image>` | Set docker destination using a custom image |
 | `car doctor` | Validate hub/repo setup |
 
 ### Repo Commands (run from within a repo, or use `--repo`)
