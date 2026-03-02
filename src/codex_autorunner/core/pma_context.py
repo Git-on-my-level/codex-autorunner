@@ -6,7 +6,7 @@ import logging
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, TypedDict, cast
 
 from ..bootstrap import (
     ensure_pma_docs,
@@ -111,6 +111,41 @@ PMA_ACTIVE_CONTEXT_MAX_LINES = 200
 PMA_CONTEXT_LOG_TAIL_LINES = 120
 
 
+class ActiveContextState(TypedDict, total=False):
+    version: int
+    last_auto_pruned_at: str
+    line_count_before: int
+    line_budget: int
+
+
+class ActiveContextAutoPruneMeta(TypedDict):
+    last_auto_pruned_at: str
+    line_count_before: int
+    line_budget: int
+
+
+class TicketFlowWorkerCrash(TypedDict):
+    summary: Optional[str]
+    open_url: str
+    path: str
+
+
+class TicketFlowRunState(TypedDict, total=False):
+    state: str
+    blocking_reason: Optional[str]
+    current_ticket: Optional[str]
+    last_progress_at: Optional[str]
+    recommended_action: Optional[str]
+    recommended_actions: list[str]
+    attention_required: bool
+    worker_status: Optional[str]
+    crash: Optional[TicketFlowWorkerCrash]
+    flow_status: str
+    repo_id: str
+    run_id: str
+    active_run_id: Optional[str]
+
+
 def _tail_lines(text: str, max_lines: int) -> str:
     if max_lines <= 0:
         return ""
@@ -124,13 +159,30 @@ def _active_context_state_path(hub_root: Path) -> Path:
     return pma_docs_dir(hub_root) / PMA_ACTIVE_CONTEXT_STATE_FILENAME
 
 
-def _load_active_context_state(hub_root: Path) -> dict[str, Any]:
+def _coerce_active_context_state(payload: object) -> ActiveContextState:
+    if not isinstance(payload, Mapping):
+        return {}
+    state: ActiveContextState = {}
+    version = payload.get("version")
+    if isinstance(version, int):
+        state["version"] = version
+    last_pruned_at = payload.get("last_auto_pruned_at")
+    if isinstance(last_pruned_at, str) and last_pruned_at.strip():
+        state["last_auto_pruned_at"] = last_pruned_at.strip()
+    line_count_before = payload.get("line_count_before")
+    if isinstance(line_count_before, int):
+        state["line_count_before"] = line_count_before
+    line_budget = payload.get("line_budget")
+    if isinstance(line_budget, int):
+        state["line_budget"] = line_budget
+    return state
+
+
+def _load_active_context_state(hub_root: Path) -> ActiveContextState:
     path = _active_context_state_path(hub_root)
     try:
         raw = path.read_text(encoding="utf-8")
-        payload = json.loads(raw)
-        if isinstance(payload, dict):
-            return payload
+        return _coerce_active_context_state(json.loads(raw))
     except FileNotFoundError:
         pass
     except Exception as exc:
@@ -138,13 +190,15 @@ def _load_active_context_state(hub_root: Path) -> dict[str, Any]:
     return {}
 
 
-def _save_active_context_state(hub_root: Path, payload: dict[str, Any]) -> None:
+def _save_active_context_state(hub_root: Path, payload: ActiveContextState) -> None:
     path = _active_context_state_path(hub_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def get_active_context_auto_prune_meta(hub_root: Path) -> Optional[dict[str, Any]]:
+def get_active_context_auto_prune_meta(
+    hub_root: Path,
+) -> Optional[ActiveContextAutoPruneMeta]:
     payload = _load_active_context_state(hub_root)
     if not payload:
         return None
@@ -168,7 +222,7 @@ def maybe_auto_prune_active_context(
     hub_root: Path,
     *,
     max_lines: int,
-) -> Optional[dict[str, Any]]:
+) -> Optional[ActiveContextState]:
     try:
         parsed_max_lines = int(max_lines)
     except Exception:
@@ -209,7 +263,7 @@ def maybe_auto_prune_active_context(
         _logger.warning("Could not write pruned active context: %s", exc)
         return None
 
-    state = {
+    state: ActiveContextState = {
         "version": 1,
         "last_auto_pruned_at": timestamp,
         "line_count_before": line_count,
@@ -972,7 +1026,7 @@ def build_ticket_flow_run_state(
     store: FlowStore,
     has_pending_dispatch: bool,
     dispatch_state_reason: Optional[str] = None,
-) -> dict[str, Any]:
+) -> TicketFlowRunState:
     run_id = str(record.id)
     quoted_repo = shlex.quote(str(repo_root))
     status_cmd = f"car flow ticket_flow status --repo {quoted_repo} --run-id {run_id}"
@@ -984,7 +1038,7 @@ def build_ticket_flow_run_state(
     failure_summary = (
         format_failure_summary(failure_payload) if failure_payload is not None else None
     )
-    state_payload = record.state if isinstance(record.state, dict) else {}
+    state_payload = record.state if isinstance(record.state, Mapping) else {}
     reason_summary = state_payload.get("reason_summary")
     if not isinstance(reason_summary, str):
         reason_summary = None
@@ -1132,7 +1186,7 @@ def build_ticket_flow_run_state(
 
 def get_latest_ticket_flow_run_state_with_record(
     repo_root: Path, repo_id: str
-) -> tuple[Optional[dict[str, Any]], Optional[FlowRunRecord]]:
+) -> tuple[Optional[TicketFlowRunState], Optional[FlowRunRecord]]:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     if not db_path.exists():
         return None, None
@@ -1331,7 +1385,7 @@ def _gather_inbox(
                         "canonical_state_v1": build_canonical_state_v1(
                             repo_root=repo_root,
                             repo_id=snap.id,
-                            run_state=run_state,
+                            run_state=cast(dict[str, Any], run_state),
                             record=record,
                             store=store,
                             preferred_run_id=newest_run_id,

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import yaml
@@ -9,6 +10,7 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.pma_context import (
+    PMA_ACTIVE_CONTEXT_MAX_LINES,
     build_hub_snapshot,
     format_pma_prompt,
     get_active_context_auto_prune_meta,
@@ -462,6 +464,33 @@ def test_format_pma_prompt_auto_prunes_active_context_when_over_budget(
 
     assert "<ACTIVE_CONTEXT_AUTO_PRUNE" in result
     assert "triggered_now='true'" in result
+
+
+def test_get_active_context_auto_prune_meta_normalizes_invalid_state_fields(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    state_path = (
+        tmp_path / ".codex-autorunner" / "pma" / "docs" / ".active_context_state.json"
+    )
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "last_auto_pruned_at": " 2026-03-02T00:00:00Z ",
+                "line_count_before": "invalid",
+                "line_budget": "invalid",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    meta = get_active_context_auto_prune_meta(tmp_path)
+
+    assert meta is not None
+    assert meta["last_auto_pruned_at"] == "2026-03-02T00:00:00Z"
+    assert meta["line_count_before"] == 0
+    assert meta["line_budget"] == PMA_ACTIVE_CONTEXT_MAX_LINES
 
 
 def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
