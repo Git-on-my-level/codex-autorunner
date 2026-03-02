@@ -450,6 +450,29 @@ async def coalesce_key(handlers: Any, message: TelegramMessage) -> str:
     return coalesce_key_for_topic(handlers, key, message.from_user_id)
 
 
+async def _ensure_key_lock(
+    handlers: Any,
+    *,
+    locks_attr: str,
+    guard_attr: str,
+    key: str,
+) -> asyncio.Lock:
+    locks: dict[str, asyncio.Lock] = getattr(handlers, locks_attr)
+    lock = locks.get(key)
+    if lock is not None:
+        return lock
+    guard = getattr(handlers, guard_attr, None)
+    if guard is None:
+        guard = asyncio.Lock()
+        setattr(handlers, guard_attr, guard)
+    async with guard:
+        lock = locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[key] = lock
+    return lock
+
+
 async def buffer_coalesced_message(
     handlers: Any,
     message: TelegramMessage,
@@ -459,7 +482,12 @@ async def buffer_coalesced_message(
 ) -> None:
     topic_key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     key = coalesce_key_for_topic(handlers, topic_key, message.from_user_id)
-    lock = handlers._coalesce_locks.setdefault(key, asyncio.Lock())
+    lock = await _ensure_key_lock(
+        handlers,
+        locks_attr="_coalesce_locks",
+        guard_attr="_coalesce_locks_guard",
+        key=key,
+    )
     drop_placeholder = False
     async with lock:
         now = time.monotonic()
@@ -673,7 +701,12 @@ async def buffer_media_batch(
         return
     topic_key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     key = await media_batch_key(handlers, message)
-    lock = handlers._media_batch_locks.setdefault(key, asyncio.Lock())
+    lock = await _ensure_key_lock(
+        handlers,
+        locks_attr="_media_batch_locks",
+        guard_attr="_media_batch_locks_guard",
+        key=key,
+    )
     drop_placeholder = False
     async with lock:
         buffer = handlers._media_batch_buffers.get(key)

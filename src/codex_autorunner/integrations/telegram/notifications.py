@@ -439,8 +439,27 @@ class TelegramNotificationHandlers:
         await self._emit_progress_edit(turn_key, force=True)
         self._clear_turn_progress(turn_key)
 
+    async def _ensure_turn_progress_lock(
+        self, turn_key: tuple[str, str]
+    ) -> asyncio.Lock:
+        lock = self._turn_progress_locks.get(turn_key)
+        if lock is not None:
+            return lock
+        guard: Optional[asyncio.Lock] = getattr(
+            self, "_turn_progress_locks_guard", None
+        )
+        if guard is None:
+            guard = asyncio.Lock()
+            self._turn_progress_locks_guard = guard
+        async with guard:
+            lock = self._turn_progress_locks.get(turn_key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._turn_progress_locks[turn_key] = lock
+        return lock
+
     async def _schedule_progress_edit(self, turn_key: tuple[str, str]) -> None:
-        lock = self._turn_progress_locks.setdefault(turn_key, asyncio.Lock())
+        lock = await self._ensure_turn_progress_lock(turn_key)
         async with lock:
             tracker = self._turn_progress_trackers.get(turn_key)
             ctx = self._turn_contexts.get(turn_key)

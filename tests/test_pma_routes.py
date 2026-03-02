@@ -94,6 +94,16 @@ def _install_fake_successful_chat_supervisor(
     app.state.app_server_supervisor = FakeSupervisor()
 
 
+def test_build_pma_routes_does_not_construct_async_primitives_on_route_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _lock_ctor() -> object:
+        raise AssertionError("async primitives must be lazily initialized")
+
+    monkeypatch.setattr(pma_routes.asyncio, "Lock", _lock_ctor)
+    pma_routes.build_pma_routes()
+
+
 @pytest.mark.parametrize(
     ("method", "endpoint", "body"),
     [
