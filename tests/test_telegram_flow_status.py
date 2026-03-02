@@ -292,6 +292,21 @@ async def test_progress_edit_does_not_construct_lock_when_turn_lock_exists(
     assert lock_ctor_calls == 0
 
 
+@pytest.mark.anyio
+async def test_ensure_turn_progress_lock_returns_same_instance_for_concurrent_callers() -> (
+    None
+):
+    harness = _ProgressCadenceHarness(min_interval=2.0)
+    key = ("turn-1", "thread-1")
+
+    locks = await asyncio.gather(
+        *[harness._ensure_turn_progress_lock(key) for _ in range(10)]
+    )
+    first = locks[0]
+    assert all(lock is first for lock in locks)
+    assert harness._turn_progress_locks[key] is first
+
+
 class _FlowStatusHandler(FlowCommands):
     def __init__(self) -> None:
         self.sent: list[str] = []

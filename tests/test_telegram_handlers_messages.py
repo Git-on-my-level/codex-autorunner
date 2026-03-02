@@ -1,8 +1,10 @@
+import asyncio
 import types
 from typing import Optional
 
 import pytest
 
+import codex_autorunner.integrations.telegram.handlers.messages as msg_module
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramAudio,
     TelegramDocument,
@@ -418,6 +420,36 @@ async def test_buffer_media_batch_does_not_construct_lock_when_key_exists(
     message = _message(photos=(TelegramPhotoSize("p1", None, 10, 10, 100),))
     await buffer_media_batch(handlers, message)
     assert lock_ctor_calls == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("locks_attr", "guard_attr"),
+    [
+        ("_coalesce_locks", "_coalesce_locks_guard"),
+        ("_media_batch_locks", "_media_batch_locks_guard"),
+    ],
+)
+async def test_ensure_key_lock_returns_same_instance_for_concurrent_callers(
+    locks_attr: str, guard_attr: str
+) -> None:
+    handlers = types.SimpleNamespace(**{locks_attr: {}})
+    key = "chat:3:thread:4:user:5"
+
+    locks = await asyncio.gather(
+        *[
+            msg_module._ensure_key_lock(
+                handlers,
+                locks_attr=locks_attr,
+                guard_attr=guard_attr,
+                key=key,
+            )
+            for _ in range(10)
+        ]
+    )
+    first = locks[0]
+    assert all(lock is first for lock in locks)
+    assert getattr(handlers, locks_attr)[key] is first
 
 
 @pytest.mark.anyio
