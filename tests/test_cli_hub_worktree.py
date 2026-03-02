@@ -259,6 +259,63 @@ def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> 
     assert calls["force"] is True
 
 
+def test_cli_hub_worktree_cleanup_prints_docker_cleanup_status(
+    tmp_path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    def _fake_cleanup(
+        self,
+        *,
+        worktree_repo_id,
+        delete_branch=False,
+        delete_remote=False,
+        archive=True,
+        force_archive=False,
+        archive_note=None,
+        force=False,
+    ):
+        _ = (
+            self,
+            worktree_repo_id,
+            delete_branch,
+            delete_remote,
+            archive,
+            force_archive,
+            archive_note,
+            force,
+        )
+        return {
+            "status": "ok",
+            "docker_cleanup": {
+                "status": "removed",
+                "container_name": "car-ws-abcd1234",
+                "message": "container stopped and removed",
+            },
+        }
+
+    monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "worktree",
+            "cleanup",
+            "wt-1",
+            "--path",
+            str(hub_root),
+            "--no-archive",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "docker_cleanup=removed" in result.output
+    assert "container=car-ws-abcd1234" in result.output
+
+
 def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
     tmp_path, monkeypatch
 ) -> None:

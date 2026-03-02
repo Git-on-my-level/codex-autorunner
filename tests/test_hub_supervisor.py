@@ -2,6 +2,7 @@ import concurrent.futures
 import json
 import shutil
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,7 @@ from codex_autorunner.core.config import (
     DEFAULT_HUB_CONFIG,
     load_hub_config,
 )
+from codex_autorunner.core.destinations import default_car_docker_container_name
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -930,6 +932,271 @@ def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
     assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_removes_car_managed_docker_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    base_entry = manifest.get("base")
+    assert base_entry is not None
+    base_entry.destination = {"kind": "docker", "image": "busybox:latest"}
+    save_manifest(manifest_path, manifest, hub_root)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/docker-cleanup-managed",
+        start_point="HEAD",
+    )
+
+    calls: list[list[str]] = []
+
+    def _fake_run_docker(self, args, *, timeout_seconds=None):
+        _ = self, timeout_seconds
+        args_list = [str(part) for part in args]
+        calls.append(args_list)
+        if args_list[0] == "inspect":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="true\n",
+                stderr="",
+            )
+        if args_list[0] == "stop":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="stopped\n",
+                stderr="",
+            )
+        if args_list[0] == "rm":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="removed\n",
+                stderr="",
+            )
+        raise AssertionError(f"unexpected docker call: {args_list}")
+
+    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _fake_run_docker)
+
+    result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    assert result["status"] == "ok"
+    docker_cleanup = result["docker_cleanup"]
+    assert isinstance(docker_cleanup, dict)
+    assert docker_cleanup["status"] == "removed"
+    expected_name = default_car_docker_container_name(worktree.path.resolve())
+    assert docker_cleanup["container_name"] == expected_name
+    assert calls == [
+        ["inspect", "--format", "{{.State.Running}}", expected_name],
+        ["stop", "-t", "10", expected_name],
+        ["rm", expected_name],
+    ]
+    assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_skips_explicit_docker_container_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    base_entry = manifest.get("base")
+    assert base_entry is not None
+    base_entry.destination = {
+        "kind": "docker",
+        "image": "busybox:latest",
+        "container_name": "shared-container",
+    }
+    save_manifest(manifest_path, manifest, hub_root)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/docker-cleanup-explicit",
+        start_point="HEAD",
+    )
+
+    def _unexpected_run_docker(self, args, *, timeout_seconds=None):
+        _ = self, args, timeout_seconds
+        raise AssertionError("explicit container_name should not be auto-cleaned")
+
+    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _unexpected_run_docker)
+
+    result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    assert result["status"] == "ok"
+    docker_cleanup = result["docker_cleanup"]
+    assert isinstance(docker_cleanup, dict)
+    assert docker_cleanup["status"] == "skipped_explicit"
+    assert docker_cleanup["container_name"] == "shared-container"
+    assert "explicit container_name" in str(docker_cleanup["message"])
+    assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_continues_when_docker_cleanup_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    base_entry = manifest.get("base")
+    assert base_entry is not None
+    base_entry.destination = {"kind": "docker", "image": "busybox:latest"}
+    save_manifest(manifest_path, manifest, hub_root)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/docker-cleanup-error",
+        start_point="HEAD",
+    )
+
+    def _fake_run_docker(self, args, *, timeout_seconds=None):
+        _ = self, timeout_seconds
+        args_list = [str(part) for part in args]
+        if args_list[0] == "inspect":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="true\n",
+                stderr="",
+            )
+        if args_list[0] == "stop":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="stopped\n",
+                stderr="",
+            )
+        if args_list[0] == "rm":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=1,
+                stdout="",
+                stderr="docker daemon unavailable",
+            )
+        raise AssertionError(f"unexpected docker call: {args_list}")
+
+    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _fake_run_docker)
+
+    result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    assert result["status"] == "ok"
+    docker_cleanup = result["docker_cleanup"]
+    assert isinstance(docker_cleanup, dict)
+    assert docker_cleanup["status"] == "error"
+    assert "docker rm failed" in str(docker_cleanup["message"])
+    assert not worktree.path.exists()
+
+
+def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    base_entry = manifest.get("base")
+    assert base_entry is not None
+    base_entry.destination = {"kind": "docker", "image": "busybox:latest"}
+    save_manifest(manifest_path, manifest, hub_root)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/docker-cleanup-api",
+        start_point="HEAD",
+    )
+
+    calls: list[list[str]] = []
+
+    def _fake_run_docker(self, args, *, timeout_seconds=None):
+        _ = self, timeout_seconds
+        args_list = [str(part) for part in args]
+        calls.append(args_list)
+        if args_list[0] == "inspect":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="true\n",
+                stderr="",
+            )
+        if args_list[0] == "stop":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="stopped\n",
+                stderr="",
+            )
+        if args_list[0] == "rm":
+            return subprocess.CompletedProcess(
+                args=args_list,
+                returncode=0,
+                stdout="removed\n",
+                stderr="",
+            )
+        raise AssertionError(f"unexpected docker call: {args_list}")
+
+    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _fake_run_docker)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/worktrees/cleanup",
+        json={"worktree_repo_id": worktree.id, "archive": False},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["docker_cleanup"]["status"] == "removed"
+    expected_name = default_car_docker_container_name(worktree.path.resolve())
+    assert payload["docker_cleanup"]["container_name"] == expected_name
+    assert calls == [
+        ["inspect", "--format", "{{.State.Running}}", expected_name],
+        ["stop", "-t", "10", expected_name],
+        ["rm", expected_name],
+    ]
 
 
 def test_cleanup_worktree_rejects_chat_bound_without_force(tmp_path: Path):

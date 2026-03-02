@@ -1613,7 +1613,7 @@ def build_hub_repo_routes(
             ),
         )
         try:
-            await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 context.supervisor.cleanup_worktree,
                 worktree_repo_id=str(worktree_repo_id),
                 delete_branch=delete_branch,
@@ -1625,12 +1625,14 @@ def build_hub_repo_routes(
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if isinstance(result, dict):
+            return result
         return {"status": "ok"}
 
     @router.post("/hub/jobs/worktrees/cleanup", response_model=HubJobResponse)
     async def cleanup_worktree_job(payload: HubCleanupWorktreeRequest):
         def _run_cleanup_worktree():
-            context.supervisor.cleanup_worktree(
+            result = context.supervisor.cleanup_worktree(
                 worktree_repo_id=str(payload.worktree_repo_id),
                 delete_branch=payload.delete_branch,
                 delete_remote=payload.delete_remote,
@@ -1639,6 +1641,8 @@ def build_hub_repo_routes(
                 force_archive=payload.force_archive,
                 archive_note=payload.archive_note,
             )
+            if isinstance(result, dict):
+                return result
             return {"status": "ok"}
 
         job = await context.job_manager.submit(

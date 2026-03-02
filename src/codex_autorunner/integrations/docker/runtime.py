@@ -591,6 +591,33 @@ class DockerRuntime:
             )
         return True
 
+    def remove_container(
+        self,
+        container_name: str,
+        *,
+        force: bool = False,
+    ) -> bool:
+        inspect_proc = self._run(
+            ["inspect", "--format", "{{.Id}}", container_name],
+            check=False,
+            timeout_seconds=15,
+        )
+        if inspect_proc.returncode != 0:
+            details = (inspect_proc.stderr or inspect_proc.stdout or "").lower()
+            if "no such object" in details or "no such container" in details:
+                return False
+            raise DockerRuntimeError(
+                f"Unable to inspect container {container_name}: "
+                f"{(inspect_proc.stderr or inspect_proc.stdout or '').strip()}"
+            )
+
+        cmd = ["rm"]
+        if force:
+            cmd.append("-f")
+        cmd.append(container_name)
+        self._run(cmd, timeout_seconds=30)
+        return True
+
     def reap_container_if_expired(
         self,
         container_name: str,

@@ -20,6 +20,24 @@ def _worktree_snapshot_payload(snapshot) -> dict:
     }
 
 
+def _emit_cleanup_status(result: object) -> None:
+    typer.echo("ok")
+    if not isinstance(result, dict):
+        return
+    docker_cleanup = result.get("docker_cleanup")
+    if not isinstance(docker_cleanup, dict):
+        return
+    status = str(docker_cleanup.get("status", "unknown")).strip() or "unknown"
+    parts = [f"docker_cleanup={status}"]
+    container_name = docker_cleanup.get("container_name")
+    if isinstance(container_name, str) and container_name.strip():
+        parts.append(f"container={container_name.strip()}")
+    message = docker_cleanup.get("message")
+    if isinstance(message, str) and message.strip():
+        parts.append(f"detail={message.strip()}")
+    typer.echo(" ".join(parts))
+
+
 def register_worktree_commands(
     worktree_app: typer.Typer,
     *,
@@ -144,7 +162,7 @@ def register_worktree_commands(
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         try:
-            supervisor.cleanup_worktree(
+            result = supervisor.cleanup_worktree(
                 worktree_repo_id=worktree_repo_id,
                 delete_branch=delete_branch,
                 delete_remote=delete_remote,
@@ -155,7 +173,7 @@ def register_worktree_commands(
             )
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
-        typer.echo("ok")
+        _emit_cleanup_status(result)
 
     @worktree_app.command("archive")
     def hub_worktree_archive(
@@ -184,7 +202,7 @@ def register_worktree_commands(
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         try:
-            supervisor.cleanup_worktree(
+            result = supervisor.cleanup_worktree(
                 worktree_repo_id=worktree_repo_id,
                 delete_branch=delete_branch,
                 delete_remote=delete_remote,
@@ -195,7 +213,7 @@ def register_worktree_commands(
             )
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
-        typer.echo("ok")
+        _emit_cleanup_status(result)
 
     @worktree_app.command("setup")
     def hub_worktree_setup(
