@@ -329,11 +329,12 @@ def build_pma_routes() -> APIRouter:
         if task.done():
             _consume_task_result(task, name=name)
             return
-        task.add_done_callback(
-            lambda done_task, task_name=name: _consume_task_result(
-                done_task, name=task_name
-            )
-        )
+
+        def _on_done(done_task: asyncio.Future[Any]) -> None:
+            if isinstance(done_task, asyncio.Task):
+                _consume_task_result(done_task, name=name)
+
+        task.add_done_callback(_on_done)
         task.cancel()
 
     def _truncate_text(value: Any, limit: int) -> str:
