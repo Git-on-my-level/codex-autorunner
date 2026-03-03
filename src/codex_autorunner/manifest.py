@@ -44,21 +44,32 @@ class ManifestValidationIssue:
     message: str
 
 
-def normalize_manifest_destination(value: Any) -> Optional[Dict[str, Any]]:
-    """Normalize destination payloads; return None for invalid shapes."""
+def preserve_manifest_destination(value: Any) -> Optional[Dict[str, Any]]:
+    """Keep destination payload mappings round-trippable, including invalid values."""
     if not isinstance(value, dict):
         return None
-    kind = value.get("kind")
-    if not isinstance(kind, str) or not kind.strip():
-        return None
-    normalized: Dict[str, Any] = {}
+    preserved: Dict[str, Any] = {}
     for raw_key, raw_value in value.items():
         if not isinstance(raw_key, str):
             continue
         key = raw_key.strip()
         if not key:
             continue
-        normalized[key] = raw_value
+        if key == "kind" and isinstance(raw_value, str):
+            preserved[key] = raw_value.strip()
+            continue
+        preserved[key] = raw_value
+    return preserved
+
+
+def normalize_manifest_destination(value: Any) -> Optional[Dict[str, Any]]:
+    """Normalize destination payloads; return None for invalid shapes."""
+    normalized = preserve_manifest_destination(value)
+    if normalized is None:
+        return None
+    kind = normalized.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        return None
     normalized["kind"] = kind.strip()
     return normalized
 
@@ -95,7 +106,7 @@ class ManifestRepo:
             payload["worktree_setup_commands"] = [
                 str(cmd) for cmd in self.worktree_setup_commands if str(cmd).strip()
             ]
-        destination = normalize_manifest_destination(self.destination)
+        destination = preserve_manifest_destination(self.destination)
         if destination is not None:
             payload["destination"] = destination
         return payload
@@ -105,6 +116,11 @@ class ManifestRepo:
 class Manifest:
     version: int
     repos: List[ManifestRepo]
+    issues: List[ManifestValidationIssue] = dataclasses.field(
+        default_factory=list,
+        repr=False,
+        compare=False,
+    )
 
     def get(self, repo_id: str) -> Optional[ManifestRepo]:
         for repo in self.repos:
@@ -118,6 +134,13 @@ class Manifest:
             if repo.path == normalized_path:
                 return repo
         return None
+
+    def issues_for_repo(self, repo_id: str) -> List[str]:
+        return [
+            issue.message
+            for issue in self.issues
+            if issue.repo_id in {repo_id, "manifest"}
+        ]
 
     def ensure_repo(
         self,
@@ -234,7 +257,11 @@ def _parse_manifest_repos_with_issues(
                 f"Invalid manifest repo kind for {repo_id}: {kind} (expected base|worktree)"
             )
 
-        destination: Optional[Dict[str, Any]] = None
+        destination = (
+            preserve_manifest_destination(entry.get("destination"))
+            if "destination" in entry
+            else None
+        )
         if "destination" in entry:
             parsed_destination = parse_destination_config(
                 entry.get("destination"),
@@ -304,7 +331,8 @@ def load_manifest_with_issues(
     repos, issues = _parse_manifest_repos_with_issues(
         repos_data=data.get("repos", []), hub_root=hub_root
     )
-    return Manifest(version=MANIFEST_VERSION, repos=repos), issues
+    manifest = Manifest(version=MANIFEST_VERSION, repos=repos, issues=list(issues))
+    return manifest, list(issues)
 
 
 def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:

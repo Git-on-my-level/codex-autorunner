@@ -62,7 +62,7 @@ def test_manifest_roundtrip_preserves_destination(tmp_path: Path):
     }
 
 
-def test_load_manifest_ignores_invalid_destination_shapes(tmp_path: Path):
+def test_load_manifest_preserves_invalid_destination_mappings(tmp_path: Path):
     hub_root = tmp_path / "hub"
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,7 +97,11 @@ def test_load_manifest_ignores_invalid_destination_shapes(tmp_path: Path):
     assert base is not None
     assert worktree is not None
     assert base.destination is None
-    assert worktree.destination is None
+    assert worktree.destination == {"image": "missing-kind"}
+    assert any(
+        issue == "repo 'wt' destination: expected a mapping with non-empty 'kind'"
+        for issue in manifest.issues_for_repo("wt")
+    )
 
 
 def test_load_manifest_with_issues_surfaces_invalid_destination_shapes(tmp_path: Path):
@@ -135,7 +139,7 @@ def test_load_manifest_with_issues_surfaces_invalid_destination_shapes(tmp_path:
     assert base is not None
     assert worktree is not None
     assert base.destination is None
-    assert worktree.destination is None
+    assert worktree.destination == {"image": "missing-kind"}
     assert any(
         issue.repo_id == "base"
         and "expected a mapping with non-empty 'kind'" in issue.message
@@ -146,6 +150,42 @@ def test_load_manifest_with_issues_surfaces_invalid_destination_shapes(tmp_path:
         and "expected a mapping with non-empty 'kind'" in issue.message
         for issue in issues
     )
+    assert manifest.issues == issues
+
+
+def test_manifest_roundtrip_preserves_invalid_destination_payload(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: base",
+                "    path: workspace/base",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+                "    destination:",
+                "      kind: docker",
+                "      image: ''",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = load_manifest(manifest_path, hub_root)
+    repo = manifest.get("base")
+    assert repo is not None
+    assert repo.destination == {"kind": "docker", "image": ""}
+    save_manifest(manifest_path, manifest, hub_root)
+
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert data["repos"][0]["destination"] == {"kind": "docker", "image": ""}
 
 
 def test_discovery_adds_repo_and_autoinits(tmp_path: Path):

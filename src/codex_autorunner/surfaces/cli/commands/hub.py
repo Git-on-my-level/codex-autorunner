@@ -11,7 +11,7 @@ from ....core.destinations import (
     validate_destination_write_payload,
 )
 from ....core.hub import HubSupervisor
-from ....manifest import load_manifest, save_manifest
+from ....manifest import Manifest, load_manifest, save_manifest
 from ...web.app import create_hub_app
 
 
@@ -36,6 +36,20 @@ def register_hub_commands(
         if repo is None:
             raise_exit(f"Repo id not found in hub manifest: {repo_id}")
         return manifest, repos_by_id, repo
+
+    def _destination_issues(
+        manifest: Manifest,
+        *,
+        repo_id: str,
+        resolution_issues: tuple[str, ...],
+    ) -> list[str]:
+        merged = [*manifest.issues_for_repo(repo_id), *resolution_issues]
+        deduped: list[str] = []
+        for message in merged:
+            if message in deduped:
+                continue
+            deduped.append(message)
+        return deduped
 
     def _parse_mount_ref(value: str) -> dict[str, str]:
         source, sep, target = value.partition(":")
@@ -71,8 +85,13 @@ def register_hub_commands(
           `docs/configuration/destinations.md`
         """
         config = require_hub_config(path)
-        _, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
+        manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
         resolution = resolve_effective_repo_destination(repo, repos_by_id)
+        issues = _destination_issues(
+            manifest,
+            repo_id=repo.id,
+            resolution_issues=resolution.issues,
+        )
         payload = {
             "repo_id": repo.id,
             "kind": repo.kind,
@@ -80,7 +99,7 @@ def register_hub_commands(
             "configured_destination": repo.destination,
             "effective_destination": resolution.to_dict(),
             "source": resolution.source,
-            "issues": list(resolution.issues),
+            "issues": issues,
         }
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
@@ -100,9 +119,9 @@ def register_hub_commands(
         typer.echo(
             json.dumps(payload["effective_destination"], indent=2, sort_keys=True)
         )
-        if resolution.issues:
+        if issues:
             typer.echo("Validation issues:")
-            for issue in resolution.issues:
+            for issue in issues:
                 typer.echo(f"- {issue}")
 
     @destination_app.command("set")
@@ -215,13 +234,19 @@ def register_hub_commands(
         repo.destination = normalized_destination
         save_manifest(config.manifest_path, manifest, config.root)
 
+        manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
         resolution = resolve_effective_repo_destination(repo, repos_by_id)
+        issues = _destination_issues(
+            manifest,
+            repo_id=repo.id,
+            resolution_issues=resolution.issues,
+        )
         payload = {
             "repo_id": repo.id,
             "configured_destination": repo.destination,
             "effective_destination": resolution.to_dict(),
             "source": resolution.source,
-            "issues": list(resolution.issues),
+            "issues": issues,
         }
         if output_json:
             typer.echo(json.dumps(payload, indent=2))

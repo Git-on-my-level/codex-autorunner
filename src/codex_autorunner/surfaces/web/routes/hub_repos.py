@@ -51,7 +51,7 @@ from ....integrations.chat.channel_directory import (
     channel_entry_key,
 )
 from ....integrations.telegram.state import topic_key
-from ....manifest import load_manifest, save_manifest
+from ....manifest import Manifest, load_manifest, save_manifest
 from ..app_state import HubAppContext
 from ..schemas import (
     HubArchiveWorktreeRequest,
@@ -377,8 +377,18 @@ def build_hub_repo_routes(
             raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
         return manifest, repos_by_id, repo
 
-    def _destination_payload(repo, repos_by_id: dict[str, Any]) -> dict[str, Any]:
+    def _destination_payload(
+        manifest: Manifest,
+        repo,
+        repos_by_id: dict[str, Any],
+    ) -> dict[str, Any]:
         resolution = resolve_effective_repo_destination(repo, repos_by_id)
+        merged_issues = [*manifest.issues_for_repo(repo.id), *resolution.issues]
+        deduped_issues: list[str] = []
+        for message in merged_issues:
+            if message in deduped_issues:
+                continue
+            deduped_issues.append(message)
         return {
             "repo_id": repo.id,
             "kind": repo.kind,
@@ -386,7 +396,7 @@ def build_hub_repo_routes(
             "configured_destination": repo.destination,
             "effective_destination": resolution.to_dict(),
             "source": resolution.source,
-            "issues": list(resolution.issues),
+            "issues": deduped_issues,
         }
 
     def _normalize_agent(value: Any) -> str:
@@ -1221,7 +1231,7 @@ def build_hub_repo_routes(
         manifest, repos_by_id, repo = await asyncio.to_thread(
             _resolve_manifest_repo, repo_id
         )
-        return _destination_payload(repo, repos_by_id)
+        return _destination_payload(manifest, repo, repos_by_id)
 
     @router.post("/hub/repos/{repo_id}/destination")
     async def set_repo_destination(repo_id: str, payload: HubDestinationSetRequest):
@@ -1291,12 +1301,15 @@ def build_hub_repo_routes(
             manifest,
             context.config.root,
         )
+        manifest, repos_by_id, repo = await asyncio.to_thread(
+            _resolve_manifest_repo, repo_id
+        )
 
         snapshots = await asyncio.to_thread(
             context.supervisor.list_repos, use_cache=False
         )
         await mount_manager.refresh_mounts(snapshots)
-        return _destination_payload(repo, repos_by_id)
+        return _destination_payload(manifest, repo, repos_by_id)
 
     @router.get("/hub/chat/channels")
     async def list_chat_channels(query: Optional[str] = None, limit: int = 100):

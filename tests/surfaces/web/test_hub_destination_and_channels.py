@@ -28,7 +28,7 @@ from codex_autorunner.integrations.agents.wiring import (
 )
 from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.integrations.telegram.state import topic_key as telegram_topic_key
-from codex_autorunner.manifest import load_manifest
+from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
 
 
@@ -316,6 +316,27 @@ def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     base = manifest.get("base")
     assert base is not None
     assert base.destination == {"kind": "local"}
+
+
+def test_hub_destination_show_route_includes_manifest_parse_issues(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    supervisor.create_repo("base")
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    base = manifest.get("base")
+    assert base is not None
+    base.destination = {"kind": "docker", "image": ""}
+    save_manifest(manifest_path, manifest, hub_root)
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/repos/base/destination")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["effective_destination"] == {"kind": "local"}
+    assert any("requires non-empty 'image'" in issue for issue in payload["issues"])
 
 
 def test_hub_destination_set_route_supports_extended_docker_fields(

@@ -61,6 +61,28 @@ def test_hub_destination_show_reports_inherited_effective_destination(
     }
 
 
+def test_hub_destination_show_includes_manifest_parse_issues(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path, base_id, _ = _seed_hub_with_base_and_worktree(hub_root)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    repos = manifest.get("repos") or []
+    base_entry = next(item for item in repos if item["id"] == base_id)
+    base_entry["destination"] = {"kind": "docker", "image": ""}
+    manifest_path.write_text(
+        MANIFEST_HEADER + yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["hub", "destination", "show", base_id, "--json", "--path", str(hub_root)],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["effective_destination"] == {"kind": "local"}
+    assert any("requires non-empty 'image'" in issue for issue in payload["issues"])
+
+
 def test_hub_destination_set_docker_updates_manifest_and_preserves_header(
     tmp_path: Path,
 ) -> None:
