@@ -834,9 +834,6 @@ def build_flow_routes() -> APIRouter:
         if flow_type == "ticket_flow" and validate_tickets:
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
             ticket_policy = evaluate_ticket_start_policy(ticket_dir)
-            if not ticket_policy.has_tickets:
-                raise HTTPException(status_code=400, detail=NO_TICKETS_START_ERROR)
-
             lint_errors = list(ticket_policy.lint_errors)
             if lint_errors:
                 raise HTTPException(
@@ -846,6 +843,8 @@ def build_flow_routes() -> APIRouter:
                         "errors": lint_errors,
                     },
                 )
+            if not ticket_policy.has_tickets:
+                raise HTTPException(status_code=400, detail=NO_TICKETS_START_ERROR)
 
         # Reuse an active/paused run unless force_new is requested.
         if not force_new:

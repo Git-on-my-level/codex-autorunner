@@ -42,6 +42,14 @@ def evaluate_ticket_start_policy(ticket_dir: Path) -> TicketStartPolicy:
             frontmatter=(),
         )
 
+    if not ticket_dir.is_dir():
+        return TicketStartPolicy(
+            ticket_paths=(),
+            invalid_filenames=(f"{ticket_dir}: Ticket path must be a directory.",),
+            duplicate_indices=(),
+            frontmatter=(),
+        )
+
     ticket_root = ticket_dir.parent
     invalid_filenames: list[str] = []
     for path in sorted(ticket_dir.iterdir()):

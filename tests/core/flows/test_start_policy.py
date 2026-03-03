@@ -37,3 +37,20 @@ def test_evaluate_ticket_start_policy_collects_ticket_validation_issues(
         "duplicate ticket index" in err.lower() for err in details.duplicate_indices
     )
     assert any("agent is required" in err.lower() for err in details.frontmatter)
+
+
+def test_evaluate_ticket_start_policy_rejects_non_directory_ticket_path(
+    tmp_path: Path,
+) -> None:
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.parent.mkdir(parents=True, exist_ok=True)
+    ticket_dir.write_text("not-a-directory", encoding="utf-8")
+
+    details = evaluate_ticket_start_policy(ticket_dir)
+    assert details.has_tickets is False
+    assert details.duplicate_indices == ()
+    assert details.frontmatter == ()
+    assert any(
+        "ticket path must be a directory" in err.lower()
+        for err in details.invalid_filenames
+    )
