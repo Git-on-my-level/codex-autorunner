@@ -399,6 +399,9 @@ class _SqliteLifecycleEventStore:
 
     def append_with_result(self, event: LifecycleEvent) -> LifecycleEventAppendResult:
         with self._connect() as conn:
+            # Serialize duplicate detection + write to avoid concurrent
+            # writers inserting semantically identical terminal events.
+            conn.execute("BEGIN IMMEDIATE")
             duplicate = self._find_duplicate_terminal_event(conn, event)
             if duplicate is not None:
                 seen_at = event.timestamp

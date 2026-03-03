@@ -3,6 +3,8 @@
 import asyncio
 import json
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from codex_autorunner.core.flows import (
@@ -16,6 +18,7 @@ from codex_autorunner.core.lifecycle_events import (
     LifecycleEventEmitter,
     LifecycleEventStore,
     LifecycleEventType,
+    _SqliteLifecycleEventStore,
     default_lifecycle_events_path,
 )
 
@@ -347,6 +350,48 @@ def test_non_duplicate_events_still_append():
             LifecycleEventType.DISPATCH_CREATED,
             LifecycleEventType.DISPATCH_CREATED,
         ]
+
+
+def test_terminal_duplicate_dedupes_under_concurrent_writers(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        store = LifecycleEventStore(tmp_path)
+
+        original_find_duplicate = (
+            _SqliteLifecycleEventStore._find_duplicate_terminal_event
+        )
+
+        def _sleepy_find_duplicate(self, conn, candidate):
+            duplicate = original_find_duplicate(self, conn, candidate)
+            if duplicate is None:
+                time.sleep(0.05)
+            return duplicate
+
+        monkeypatch.setattr(
+            _SqliteLifecycleEventStore,
+            "_find_duplicate_terminal_event",
+            _sleepy_find_duplicate,
+        )
+
+        def _append_once() -> None:
+            store.append(
+                LifecycleEvent(
+                    event_type=LifecycleEventType.FLOW_COMPLETED,
+                    repo_id="repo-1",
+                    run_id="run-1",
+                    data={"transition_token": "completed:concurrent"},
+                )
+            )
+
+        workers = [threading.Thread(target=_append_once) for _ in range(8)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
+        events = store.load()
+        assert len(events) == 1
+        assert events[0].data.get("duplicate_count") == 7
 
 
 def test_runtime_terminal_events_include_transition_metadata():
