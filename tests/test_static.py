@@ -19,7 +19,7 @@ def test_static_mobile_terminal_compose_view_assets():
     static_dir, stack = resolve_static_dir()
     try:
         styles = (static_dir / "styles.css").read_text(encoding="utf-8")
-        terminal_manager = (static_dir / "terminalManager.js").read_text(
+        terminal_manager = (static_dir / "generated" / "terminalManager.js").read_text(
             encoding="utf-8"
         )
         assert "mobile-terminal-view" in styles

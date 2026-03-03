@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const INDEX_PATH = resolve("src/codex_autorunner/static/index.html");
-const CONTEXTSPACE_JS_PATH = resolve("src/codex_autorunner/static/contextspace.js");
+const CONTEXTSPACE_JS_PATH = resolve("src/codex_autorunner/static/generated/contextspace.js");
 
 function fail(message) {
   console.error(message);

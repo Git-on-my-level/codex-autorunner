@@ -15,7 +15,7 @@ def test_static_assets_served_with_base_path(tmp_path: Path) -> None:
     res = client.get("/car/static/styles.css")
     assert res.status_code == 200
     assert "body" in res.text
-    js_res = client.get("/car/static/app.js")
+    js_res = client.get("/car/static/generated/app.js")
     assert js_res.status_code == 200
 
 
@@ -31,16 +31,16 @@ def test_static_redirects_to_base_path(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
     app = create_hub_app(tmp_path, base_path="/car")
     client = TestClient(app, follow_redirects=False)
-    res = client.get("/static/app.js")
+    res = client.get("/static/generated/app.js")
     assert res.status_code == 308
-    assert res.headers.get("location") == "/car/static/app.js"
+    assert res.headers.get("location") == "/car/static/generated/app.js"
 
 
 def test_root_path_proxy_serves_static(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
     app = create_hub_app(tmp_path, base_path="/car")
     client = TestClient(app, root_path="/car", follow_redirects=False)
-    res = client.get("/static/app.js")
+    res = client.get("/static/generated/app.js")
     assert res.status_code == 200
 
 
@@ -57,4 +57,4 @@ def test_hub_routes_under_base_path(tmp_path: Path) -> None:
     client = TestClient(app)
     assert client.get("/car/hub/version").status_code == 200
     assert client.get("/car/repos/demo/api/version").status_code == 200
-    assert client.get("/car/repos/demo/static/app.js").status_code == 200
+    assert client.get("/car/repos/demo/static/generated/app.js").status_code == 200

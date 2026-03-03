@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_voice_ui_transcribe_flow_without_opt_in():
-    voice_js = Path("src/codex_autorunner/static/voice.js").resolve()
+    voice_js = Path("src/codex_autorunner/static/generated/voice.js").resolve()
     script = textwrap.dedent(
         """
         import assert from "node:assert";

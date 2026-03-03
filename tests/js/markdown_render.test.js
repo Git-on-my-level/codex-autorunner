@@ -8,7 +8,7 @@ globalThis.document = dom.window.document;
 globalThis.navigator = dom.window.navigator;
 globalThis.HTMLElement = dom.window.HTMLElement;
 
-const { renderMarkdown } = await import("../../src/codex_autorunner/static/messages.js");
+const { renderMarkdown } = await import("../../src/codex_autorunner/static/generated/messages.js");
 
 test("renders relative markdown links", () => {
   const html = renderMarkdown("See [file](/car/hub/filebox/foo.zip)");

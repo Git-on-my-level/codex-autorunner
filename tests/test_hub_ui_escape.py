@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_hub_ui_escapes_repo_fields():
-    hub_js = Path("src/codex_autorunner/static/hub.js").resolve()
+    hub_js = Path("src/codex_autorunner/static/generated/hub.js").resolve()
     script = textwrap.dedent(
         f"""
         import assert from "node:assert";
