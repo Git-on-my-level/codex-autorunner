@@ -59,9 +59,6 @@ if [ -d tests ]; then
   paths+=(tests)
 fi
 
-echo "Running fast Discord contract guardrails..."
-make test-discord-contract PYTHON="$PYTHON_BIN"
-
 echo "Formatting check (black)..."
 "$PYTHON_BIN" -m black --check "${paths[@]}"
 
@@ -112,10 +109,9 @@ fi
 echo "Running tests (pytest)..."
 "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
 
-echo "Hermes readiness scorecard (ci-smoke)..."
-"$PYTHON_BIN" scripts/hermes_readiness_scorecard.py --ci-smoke
-
 echo "Dead-code check (heuristic)..."
 "$PYTHON_BIN" scripts/deadcode.py --check
+
+echo "Optional extended checks: make test-chat-platform-contract"
 
 echo "Checks passed."

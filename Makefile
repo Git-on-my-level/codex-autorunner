@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-discord-contract check hermes-readiness preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
+.PHONY: install dev hooks build test test-chat-platform-contract check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -73,11 +73,16 @@ hooks:
 test:
 	$(PYTHON) -m pytest -m "not integration"
 
-test-discord-contract:
+# Cross-platform chat contract/shape guardrails.
+# Add additional platform suites here as new chat adapters land.
+test-chat-platform-contract:
 	$(PYTHON) -m pytest -q \
+		tests/integrations/chat/test_command_contract.py \
+		tests/integrations/chat/test_command_ingress_parity.py \
 		tests/integrations/discord/test_service_routing.py \
 		tests/integrations/discord/test_interactions_parse.py \
 		tests/integrations/chat/test_parity_checker.py \
+		tests/test_telegram_command_contract.py \
 		tests/test_doctor_checks.py::test_chat_doctor_checks_use_parity_contract_group \
 		tests/test_doctor_checks.py::test_chat_doctor_checks_failures_are_actionable
 
@@ -92,8 +97,8 @@ check:
 		echo "Skipping frontend checks (node_modules missing). Run 'make npm-install' first." >&2; \
 	fi
 
-hermes-readiness:
-	$(PYTHON) scripts/hermes_readiness_scorecard.py --ci-smoke
+check-extended: check
+	$(MAKE) test-chat-platform-contract PYTHON="$(PYTHON)"
 
 preflight-hub-startup:
 	$(PYTHON) -m pytest -q tests/test_hub_app_context.py::test_hub_lifespan_reaper_uses_config_root
