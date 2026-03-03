@@ -5,7 +5,6 @@ Hub-level PMA routes (chat + models + events).
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import importlib
 import json
 import logging
