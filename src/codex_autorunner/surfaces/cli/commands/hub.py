@@ -1,4 +1,5 @@
 import json
+import shlex
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -69,6 +70,9 @@ def register_hub_commands(
         if sep != "=" or not key:
             raise_exit(f"Invalid --env-map value: {value!r}. Expected format KEY=VALUE")
         return key, raw_value
+
+    def _with_hub_path(command: str, hub_root: Path) -> str:
+        return f"{command} --path {shlex.quote(str(hub_root))}"
 
     @destination_app.command("show")
     def hub_destination_show(
@@ -356,9 +360,9 @@ def register_hub_commands(
         typer.echo(f"Scanned hub at {config.root} (repos_root={config.repos_root})")
         for snap in snapshots:
             hint = (
-                f"car hub worktree archive {snap.id}"
+                _with_hub_path(f"car hub worktree archive {snap.id}", config.root)
                 if snap.kind == "worktree"
-                else f"car hub destination show {snap.id}"
+                else _with_hub_path(f"car hub destination show {snap.id}", config.root)
             )
             typer.echo(
                 f"- {snap.id}: {snap.status.value}, initialized={snap.initialized}, exists={snap.exists_on_disk}, recommended={hint}"

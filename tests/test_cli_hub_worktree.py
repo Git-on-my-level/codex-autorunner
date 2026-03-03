@@ -1,4 +1,5 @@
 import json
+import shlex
 from pathlib import Path
 from typing import Optional
 
@@ -70,7 +71,10 @@ def test_cli_hub_worktree_list_filters_worktrees(tmp_path, monkeypatch) -> None:
     ]
     assert len(lines) == 1
     assert "base--feature" in lines[0]
-    assert "recommended: car hub worktree archive base--feature" in result.output
+    assert (
+        "recommended: car hub worktree archive base--feature --path "
+        f"{shlex.quote(str(hub_root))}" in result.output
+    )
 
 
 def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> None:
@@ -97,12 +101,12 @@ def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> 
     assert [item["id"] for item in payload["worktrees"]] == ["base--feature"]
     assert (
         payload["worktrees"][0]["recommended_command"]
-        == "car hub worktree archive base--feature"
+        == f"car hub worktree archive base--feature --path {shlex.quote(str(hub_root))}"
     )
     assert payload["worktrees"][0]["recommended_actions"] == [
-        "car hub worktree archive base--feature",
-        "car hub worktree cleanup base--feature",
-        "car hub destination show base--feature",
+        f"car hub worktree archive base--feature --path {shlex.quote(str(hub_root))}",
+        f"car hub worktree cleanup base--feature --path {shlex.quote(str(hub_root))}",
+        f"car hub destination show base--feature --path {shlex.quote(str(hub_root))}",
     ]
 
 
@@ -157,8 +161,15 @@ def test_cli_hub_scan_includes_recommended_commands(tmp_path, monkeypatch) -> No
     runner = CliRunner()
     result = runner.invoke(app, ["hub", "scan", "--path", str(hub_root)])
     assert result.exit_code == 0
-    assert "recommended=car hub destination show base" in result.output
-    assert "recommended=car hub worktree archive base--feature" in result.output
+    quoted_hub = shlex.quote(str(hub_root))
+    assert (
+        f"recommended=car hub destination show base --path {quoted_hub}"
+        in result.output
+    )
+    assert (
+        f"recommended=car hub worktree archive base--feature --path {quoted_hub}"
+        in result.output
+    )
 
 
 def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> None:

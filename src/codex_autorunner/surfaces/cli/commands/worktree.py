@@ -1,4 +1,5 @@
 import json
+import shlex
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -8,16 +9,21 @@ from ....core.config import HubConfig
 from ....core.hub import HubSupervisor
 
 
-def _worktree_recommended_actions(worktree_repo_id: str) -> list[str]:
+def _worktree_recommended_actions(
+    worktree_repo_id: str, *, hub_path: Optional[Path] = None
+) -> list[str]:
+    hub_suffix = ""
+    if hub_path is not None:
+        hub_suffix = f" --path {shlex.quote(str(hub_path))}"
     return [
-        f"car hub worktree archive {worktree_repo_id}",
-        f"car hub worktree cleanup {worktree_repo_id}",
-        f"car hub destination show {worktree_repo_id}",
+        f"car hub worktree archive {worktree_repo_id}{hub_suffix}",
+        f"car hub worktree cleanup {worktree_repo_id}{hub_suffix}",
+        f"car hub destination show {worktree_repo_id}{hub_suffix}",
     ]
 
 
-def _worktree_snapshot_payload(snapshot) -> dict:
-    recommended_actions = _worktree_recommended_actions(snapshot.id)
+def _worktree_snapshot_payload(snapshot, *, hub_path: Optional[Path] = None) -> dict:
+    recommended_actions = _worktree_recommended_actions(snapshot.id, hub_path=hub_path)
     return {
         "id": snapshot.id,
         "worktree_of": snapshot.worktree_of,
@@ -103,7 +109,10 @@ def register_worktree_commands(
             for snapshot in supervisor.list_repos(use_cache=False)
             if snapshot.kind == "worktree"
         ]
-        payload = [_worktree_snapshot_payload(snapshot) for snapshot in snapshots]
+        payload = [
+            _worktree_snapshot_payload(snapshot, hub_path=config.root)
+            for snapshot in snapshots
+        ]
         if output_json:
             typer.echo(json.dumps({"worktrees": payload}, indent=2))
             return
@@ -130,7 +139,10 @@ def register_worktree_commands(
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         snapshots = [snap for snap in supervisor.scan() if snap.kind == "worktree"]
-        payload = [_worktree_snapshot_payload(snapshot) for snapshot in snapshots]
+        payload = [
+            _worktree_snapshot_payload(snapshot, hub_path=config.root)
+            for snapshot in snapshots
+        ]
         if output_json:
             typer.echo(json.dumps({"worktrees": payload}, indent=2))
             return
