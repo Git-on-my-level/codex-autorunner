@@ -17,6 +17,14 @@ from ..services.validation import normalize_agent_id
 from .shared import SSE_HEADERS
 
 
+def _normalize_path_agent_id(agent: str) -> str:
+    # Path segments that decode to blank/whitespace are malformed and should
+    # not silently fall back to the default agent.
+    if not isinstance(agent, str) or not agent.strip():
+        raise HTTPException(status_code=404, detail="Unknown agent")
+    return normalize_agent_id(agent)
+
+
 def _available_agents(request: Request) -> tuple[list[dict[str, str]], str]:
     agents: list[dict[str, str]] = []
     default_agent: Optional[str] = None
@@ -73,7 +81,7 @@ def build_agents_routes() -> APIRouter:
 
     @router.get("/api/agents/{agent}/models")
     async def list_agent_models(agent: str, request: Request):
-        agent_id = normalize_agent_id(agent)
+        agent_id = _normalize_path_agent_id(agent)
         engine = request.app.state.engine
         if agent_id == "codex":
             supervisor = request.app.state.app_server_supervisor
@@ -103,7 +111,7 @@ def build_agents_routes() -> APIRouter:
     async def stream_agent_turn_events(
         agent: str, turn_id: str, request: Request, thread_id: Optional[str] = None
     ):
-        agent_id = normalize_agent_id(agent)
+        agent_id = _normalize_path_agent_id(agent)
         if agent_id == "codex":
             events = getattr(request.app.state, "app_server_events", None)
             if events is None:
