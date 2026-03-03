@@ -1219,6 +1219,7 @@ def test_pma_context_snapshot_writes_via_to_thread(
 
     resp = client.post("/hub/pma/context/snapshot", json={"reset": True})
     assert resp.status_code == 200
+    assert any(func is pma_routes.ensure_pma_docs for func, _, _ in to_thread_calls)
     assert any(func is pma_routes.atomic_write for func, _, _ in to_thread_calls)
 
 

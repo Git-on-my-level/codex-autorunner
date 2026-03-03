@@ -2317,7 +2317,7 @@ def build_pma_routes() -> APIRouter:
     ):
         hub_root = request.app.state.config.root
         try:
-            ensure_pma_docs(hub_root)
+            await asyncio.to_thread(ensure_pma_docs, hub_root)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
@@ -2328,9 +2328,14 @@ def build_pma_routes() -> APIRouter:
             reset = bool(body.get("reset", False))
 
         docs_dir = _pma_docs_dir(hub_root)
-        docs_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            await asyncio.to_thread(docs_dir.mkdir, parents=True, exist_ok=True)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to prepare PMA docs directory: {exc}"
+            ) from exc
         active_context_path = docs_dir / "active_context.md"
-        if not active_context_path.exists():
+        if not await asyncio.to_thread(active_context_path.exists):
             raise HTTPException(
                 status_code=404, detail="Doc not found: active_context.md"
             )
