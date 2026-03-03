@@ -5,7 +5,7 @@ Hub-level PMA routes (chat + models + events).
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import importlib
 import json
 import logging
 import re
@@ -65,10 +65,23 @@ from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....integrations.github.context_injection import maybe_inject_github_context
 from ..schemas import (
+    PmaAutomationSubscriptionCreateRequest,
+    PmaAutomationTimerCancelRequest,
+    PmaAutomationTimerCreateRequest,
+    PmaAutomationTimerTouchRequest,
     PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
     PmaManagedThreadMessageRequest,
     PmaManagedThreadResumeRequest,
+)
+from ..services.pma.common import (
+    build_idempotency_key as service_build_idempotency_key,
+)
+from ..services.pma.common import (
+    normalize_optional_text as service_normalize_optional_text,
+)
+from ..services.pma.common import (
+    pma_config_from_raw,
 )
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
@@ -91,8 +104,10 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="PMA is disabled")
 
     router = APIRouter(prefix="/hub/pma", dependencies=[Depends(_require_pma_enabled)])
-    pma_lock = asyncio.Lock()
+    pma_lock: Optional[asyncio.Lock] = None
+    pma_lock_loop: Optional[asyncio.AbstractEventLoop] = None
     pma_event: Optional[asyncio.Event] = None
+    pma_event_loop: Optional[asyncio.AbstractEventLoop] = None
     pma_active = False
     pma_current: Optional[dict[str, Any]] = None
     pma_last_result: Optional[dict[str, Any]] = None
@@ -103,30 +118,17 @@ def build_pma_routes() -> APIRouter:
     pma_audit_log: Optional[PmaAuditLog] = None
     pma_queue: Optional[PmaQueue] = None
     pma_queue_root: Optional[Path] = None
+    pma_automation_store: Optional[Any] = None
+    pma_automation_root: Optional[Path] = None
     lane_workers: dict[str, PmaLaneWorker] = {}
     item_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     def _normalize_optional_text(value: Any) -> Optional[str]:
-        if not isinstance(value, str):
-            return None
-        value = value.strip()
-        return value or None
+        return service_normalize_optional_text(value)
 
     def _get_pma_config(request: Request) -> dict[str, Any]:
         raw = getattr(request.app.state.config, "raw", {})
-        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
-        if not isinstance(pma_config, dict):
-            pma_config = {}
-        return {
-            "enabled": bool(pma_config.get("enabled", True)),
-            "default_agent": _normalize_optional_text(pma_config.get("default_agent")),
-            "model": _normalize_optional_text(pma_config.get("model")),
-            "reasoning": _normalize_optional_text(pma_config.get("reasoning")),
-            "active_context_max_lines": int(
-                pma_config.get("active_context_max_lines", 200)
-            ),
-            "max_text_chars": int(pma_config.get("max_text_chars", 800)),
-        }
+        return pma_config_from_raw(raw)
 
     def _build_idempotency_key(
         *,
@@ -137,17 +139,14 @@ def build_pma_routes() -> APIRouter:
         client_turn_id: Optional[str],
         message: str,
     ) -> str:
-        payload = {
-            "lane_id": lane_id,
-            "agent": agent,
-            "model": model,
-            "reasoning": reasoning,
-            "client_turn_id": client_turn_id,
-            "message": message,
-        }
-        raw = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
-        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-        return f"pma:{digest}"
+        return service_build_idempotency_key(
+            lane_id=lane_id,
+            agent=agent,
+            model=model,
+            reasoning=reasoning,
+            client_turn_id=client_turn_id,
+            message=message,
+        )
 
     def _get_state_store(request: Request) -> PmaStateStore:
         nonlocal pma_state_store, pma_state_root
@@ -200,6 +199,269 @@ def build_pma_routes() -> APIRouter:
             pma_queue = PmaQueue(hub_root)
             pma_queue_root = hub_root
         return pma_queue
+
+    async def _await_if_needed(value: Any) -> Any:
+        if asyncio.iscoroutine(value):
+            return await value
+        return value
+
+    async def _call_with_fallbacks(
+        method: Any, attempts: list[tuple[tuple[Any, ...], dict[str, Any]]]
+    ) -> Any:
+        last_type_error: Optional[TypeError] = None
+        for args, kwargs in attempts:
+            try:
+                return await _await_if_needed(method(*args, **kwargs))
+            except TypeError as exc:
+                last_type_error = exc
+                continue
+        if last_type_error is not None:
+            raise last_type_error
+        raise RuntimeError("No automation method call attempts were provided")
+
+    def _first_callable(target: Any, names: tuple[str, ...]) -> Optional[Any]:
+        for name in names:
+            candidate = getattr(target, name, None)
+            if callable(candidate):
+                return candidate
+        return None
+
+    def _discover_automation_store_class() -> Optional[type[Any]]:
+        candidates: tuple[tuple[str, str], ...] = (
+            ("codex_autorunner.core.pma_automation_store", "PmaAutomationStore"),
+            ("codex_autorunner.core.pma_automation", "PmaAutomationStore"),
+            ("codex_autorunner.core.automation_store", "AutomationStore"),
+            ("codex_autorunner.core.automation", "AutomationStore"),
+            ("codex_autorunner.core.hub_automation", "HubAutomationStore"),
+        )
+        for module_name, class_name in candidates:
+            try:
+                module = importlib.import_module(module_name)
+            except Exception:
+                continue
+            klass = getattr(module, class_name, None)
+            if isinstance(klass, type):
+                return klass
+        return None
+
+    async def _call_store_create_with_payload(
+        store: Any, method_names: tuple[str, ...], payload: dict[str, Any]
+    ) -> Any:
+        method = _first_callable(store, method_names)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Automation action unavailable")
+        return await _call_with_fallbacks(
+            method,
+            [
+                ((payload,), {}),
+                ((), {"payload": payload}),
+                ((), dict(payload)),
+            ],
+        )
+
+    async def _call_store_list(
+        store: Any, method_names: tuple[str, ...], filters: dict[str, Any]
+    ) -> Any:
+        method = _first_callable(store, method_names)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Automation action unavailable")
+        return await _call_with_fallbacks(
+            method,
+            [
+                ((), dict(filters)),
+                ((dict(filters),), {}),
+                ((), {}),
+            ],
+        )
+
+    async def _call_store_action_with_id(
+        store: Any,
+        method_names: tuple[str, ...],
+        item_id: str,
+        payload: dict[str, Any],
+        *,
+        id_aliases: tuple[str, ...],
+    ) -> Any:
+        method = _first_callable(store, method_names)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Automation action unavailable")
+        item_kwargs: dict[str, Any] = {}
+        for alias in id_aliases:
+            item_kwargs[alias] = item_id
+        merged_with_id = dict(payload)
+        if id_aliases:
+            merged_with_id[id_aliases[0]] = item_id
+        return await _call_with_fallbacks(
+            method,
+            [
+                ((item_id, dict(payload)), {}),
+                ((item_id,), dict(payload)),
+                ((item_id,), {"payload": dict(payload)}),
+                ((), item_kwargs),
+                ((), merged_with_id),
+                ((item_id,), {}),
+            ],
+        )
+
+    async def _get_automation_store(
+        request: Request, *, required: bool = True
+    ) -> Optional[Any]:
+        nonlocal pma_automation_store, pma_automation_root
+
+        hub_root = request.app.state.config.root
+        supervisor = getattr(request.app.state, "hub_supervisor", None)
+        if supervisor is not None:
+            for name in ("get_pma_automation_store", "get_automation_store"):
+                accessor = getattr(supervisor, name, None)
+                if not callable(accessor):
+                    continue
+                for args in ((), (hub_root,)):
+                    try:
+                        store = await _await_if_needed(accessor(*args))
+                    except TypeError:
+                        continue
+                    except Exception:
+                        logger.exception(
+                            "Failed to resolve automation store from %s", name
+                        )
+                        break
+                    if store is not None:
+                        return store
+                    break
+            for name in ("pma_automation_store", "automation_store"):
+                store = getattr(supervisor, name, None)
+                if store is not None:
+                    return store
+
+        if pma_automation_store is not None and pma_automation_root == hub_root:
+            return pma_automation_store
+
+        klass = _discover_automation_store_class()
+        if klass is not None:
+            for args in ((hub_root,), ()):
+                try:
+                    store = klass(*args)
+                except TypeError:
+                    continue
+                except Exception:
+                    logger.exception("Failed to initialize automation store")
+                    break
+                pma_automation_store = store
+                pma_automation_root = hub_root
+                return store
+
+        if required:
+            raise HTTPException(
+                status_code=503, detail="Hub automation store unavailable"
+            )
+        return None
+
+    async def _notify_hub_automation_transition(
+        request: Request,
+        *,
+        repo_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        from_state: str,
+        to_state: str,
+        reason: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "from_state": (from_state or "").strip(),
+            "to_state": (to_state or "").strip(),
+            "reason": _normalize_optional_text(reason) or "",
+            "timestamp": _normalize_optional_text(timestamp) or now_iso(),
+        }
+        normalized_repo_id = _normalize_optional_text(repo_id)
+        normalized_run_id = _normalize_optional_text(run_id)
+        normalized_thread_id = _normalize_optional_text(thread_id)
+        if normalized_repo_id:
+            payload["repo_id"] = normalized_repo_id
+        if normalized_run_id:
+            payload["run_id"] = normalized_run_id
+        if normalized_thread_id:
+            payload["thread_id"] = normalized_thread_id
+        if isinstance(extra, dict):
+            payload.update(extra)
+
+        supervisor = getattr(request.app.state, "hub_supervisor", None)
+        store = await _get_automation_store(request, required=False)
+        if store is None:
+            return
+
+        method = _first_callable(
+            store,
+            (
+                "notify_transition",
+                "record_transition",
+                "handle_transition",
+                "on_transition",
+                "process_transition",
+            ),
+        )
+        if method is None:
+            return
+        try:
+            await _call_with_fallbacks(
+                method,
+                [
+                    ((dict(payload),), {}),
+                    ((), {"payload": dict(payload)}),
+                    ((), dict(payload)),
+                ],
+            )
+        except Exception:
+            logger.exception("Failed to notify hub automation transition")
+            return
+
+        process_now = (
+            getattr(supervisor, "process_pma_automation_now", None)
+            if supervisor is not None
+            else None
+        )
+        if not callable(process_now):
+            return
+        try:
+            await _await_if_needed(process_now(include_timers=False))
+        except TypeError:
+            try:
+                await _await_if_needed(process_now())
+            except Exception:
+                logger.exception("Failed immediate PMA automation processing")
+        except Exception:
+            logger.exception("Failed immediate PMA automation processing")
+
+    async def _notify_managed_thread_terminal_transition(
+        request: Request,
+        *,
+        thread: dict[str, Any],
+        managed_thread_id: str,
+        managed_turn_id: str,
+        to_state: str,
+        reason: str,
+    ) -> None:
+        normalized_to_state = (to_state or "").strip().lower() or "failed"
+        await _notify_hub_automation_transition(
+            request,
+            repo_id=_normalize_optional_text(thread.get("repo_id")),
+            run_id=None,
+            thread_id=managed_thread_id,
+            from_state="running",
+            to_state=normalized_to_state,
+            reason=reason,
+            extra={
+                "event_type": f"managed_thread_{normalized_to_state}",
+                "transition_id": f"managed_turn:{managed_turn_id}:{normalized_to_state}",
+                "idempotency_key": (
+                    f"managed_turn:{managed_turn_id}:{normalized_to_state}"
+                ),
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": managed_turn_id,
+                "agent": _normalize_optional_text(thread.get("agent")) or "",
+            },
+        )
 
     def _is_within_root(path: Path, root: Path) -> bool:
         return is_within_allowed_root(path, allowed_roots=[root], resolve=True)
@@ -272,10 +534,27 @@ def build_pma_routes() -> APIRouter:
             f"{message}"
         )
 
+    async def _get_pma_lock() -> asyncio.Lock:
+        nonlocal pma_lock, pma_lock_loop, pma_event, pma_event_loop
+        loop = asyncio.get_running_loop()
+        lock = pma_lock
+        if (
+            lock is None
+            or pma_lock_loop is None
+            or pma_lock_loop is not loop
+            or pma_lock_loop.is_closed()
+        ):
+            lock = asyncio.Lock()
+            pma_lock = lock
+            pma_lock_loop = loop
+            pma_event = None
+            pma_event_loop = None
+        return lock
+
     async def _persist_state(store: Optional[PmaStateStore]) -> None:
         if store is None:
             return
-        async with pma_lock:
+        async with await _get_pma_lock():
             state = {
                 "version": 1,
                 "active": bool(pma_active),
@@ -287,6 +566,36 @@ def build_pma_routes() -> APIRouter:
             store.save(state)
         except Exception:
             logger.exception("Failed to persist PMA state")
+
+    async def _append_text_file(path: Path, content: str) -> None:
+        def _append() -> None:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(content)
+
+        await asyncio.to_thread(_append)
+
+    async def _atomic_write_async(path: Path, content: str) -> None:
+        await asyncio.to_thread(atomic_write, path, content)
+
+    def _consume_task_result(task: asyncio.Task[Any], *, name: str) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("PMA task failed: %s", name)
+
+    def _cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
+        if task.done():
+            _consume_task_result(task, name=name)
+            return
+
+        def _on_done(done_task: asyncio.Future[Any]) -> None:
+            if isinstance(done_task, asyncio.Task):
+                _consume_task_result(done_task, name=name)
+
+        task.add_done_callback(_on_done)
+        task.cancel()
 
     def _truncate_text(value: Any, limit: int) -> str:
         if not isinstance(value, str):
@@ -421,17 +730,25 @@ def build_pma_routes() -> APIRouter:
         }
 
     async def _get_interrupt_event() -> asyncio.Event:
-        nonlocal pma_event
-        async with pma_lock:
-            if pma_event is None or pma_event.is_set():
+        nonlocal pma_event, pma_event_loop
+        async with await _get_pma_lock():
+            loop = asyncio.get_running_loop()
+            if (
+                pma_event is None
+                or pma_event.is_set()
+                or pma_event_loop is None
+                or pma_event_loop is not loop
+                or pma_event_loop.is_closed()
+            ):
                 pma_event = asyncio.Event()
+                pma_event_loop = loop
             return pma_event
 
     async def _set_active(
         active: bool, *, store: Optional[PmaStateStore] = None
     ) -> None:
         nonlocal pma_active
-        async with pma_lock:
+        async with await _get_pma_lock():
             pma_active = active
         await _persist_state(store)
 
@@ -442,7 +759,7 @@ def build_pma_routes() -> APIRouter:
         lane_id: Optional[str] = None,
     ) -> bool:
         nonlocal pma_active, pma_current
-        async with pma_lock:
+        async with await _get_pma_lock():
             if pma_active:
                 return False
             pma_active = True
@@ -459,15 +776,16 @@ def build_pma_routes() -> APIRouter:
         return True
 
     async def _clear_interrupt_event() -> None:
-        nonlocal pma_event
-        async with pma_lock:
+        nonlocal pma_event, pma_event_loop
+        async with await _get_pma_lock():
             pma_event = None
+            pma_event_loop = None
 
     async def _update_current(
         *, store: Optional[PmaStateStore] = None, **updates: Any
     ) -> None:
         nonlocal pma_current
-        async with pma_lock:
+        async with await _get_pma_lock():
             if pma_current is None:
                 pma_current = {}
             pma_current.update(updates)
@@ -483,13 +801,14 @@ def build_pma_routes() -> APIRouter:
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
     ) -> None:
-        nonlocal pma_current, pma_last_result, pma_active, pma_event
-        async with pma_lock:
+        nonlocal pma_current, pma_last_result, pma_active, pma_event, pma_event_loop
+        async with await _get_pma_lock():
             current_snapshot = dict(pma_current or {})
             pma_last_result = _format_last_result(result or {}, current_snapshot)
             pma_current = None
             pma_active = False
             pma_event = None
+            pma_event_loop = None
 
         status = result.get("status") or "error"
         started_at = current_snapshot.get("started_at")
@@ -566,7 +885,7 @@ def build_pma_routes() -> APIRouter:
         await _persist_state(store)
 
     async def _get_current_snapshot() -> dict[str, Any]:
-        async with pma_lock:
+        async with await _get_pma_lock():
             return dict(pma_current or {})
 
     async def _interrupt_active(
@@ -656,6 +975,11 @@ def build_pma_routes() -> APIRouter:
     async def _stop_lane_worker_for_app(app: Any, lane_id: str) -> None:
         _ = app
         await _stop_lane_worker(lane_id)
+
+    async def _stop_all_lane_workers_for_app(app: Any) -> None:
+        _ = app
+        for lane_id in list(lane_workers.keys()):
+            await _stop_lane_worker(lane_id)
 
     async def _execute_queue_item(item: Any, request: Request) -> dict[str, Any]:
         hub_root = request.app.state.config.root
@@ -895,7 +1219,7 @@ def build_pma_routes() -> APIRouter:
     async def pma_active_status(
         request: Request, client_turn_id: Optional[str] = None
     ) -> dict[str, Any]:
-        async with pma_lock:
+        async with await _get_pma_lock():
             current = dict(pma_current or {})
             last_result = dict(pma_last_result or {})
             active = bool(pma_active)
@@ -1009,6 +1333,213 @@ def build_pma_routes() -> APIRouter:
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         return {"thread": thread}
+
+    @router.post("/automation/subscriptions")
+    @router.post("/subscriptions")
+    async def create_automation_subscription(
+        request: Request, payload: PmaAutomationSubscriptionCreateRequest
+    ) -> dict[str, Any]:
+        store = await _get_automation_store(request)
+        created = await _call_store_create_with_payload(
+            store,
+            (
+                "create_subscription",
+                "add_subscription",
+                "upsert_subscription",
+            ),
+            payload.model_dump(exclude_none=True),
+        )
+        if isinstance(created, dict) and "subscription" in created:
+            return created
+        return {"subscription": created}
+
+    @router.get("/automation/subscriptions")
+    @router.get("/subscriptions")
+    async def list_automation_subscriptions(
+        request: Request,
+        repo_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        lane_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        store = await _get_automation_store(request)
+        filters = {
+            "repo_id": _normalize_optional_text(repo_id),
+            "run_id": _normalize_optional_text(run_id),
+            "thread_id": _normalize_optional_text(thread_id),
+            "lane_id": _normalize_optional_text(lane_id),
+            "limit": limit,
+        }
+        subscriptions = await _call_store_list(
+            store,
+            (
+                "list_subscriptions",
+                "get_subscriptions",
+            ),
+            {k: v for k, v in filters.items() if v is not None},
+        )
+        if isinstance(subscriptions, dict) and "subscriptions" in subscriptions:
+            return subscriptions
+        if subscriptions is None:
+            subscriptions = []
+        return {"subscriptions": list(subscriptions)}
+
+    @router.delete("/automation/subscriptions/{subscription_id}")
+    @router.delete("/subscriptions/{subscription_id}")
+    async def delete_automation_subscription(
+        subscription_id: str, request: Request
+    ) -> dict[str, Any]:
+        normalized_id = (subscription_id or "").strip()
+        if not normalized_id:
+            raise HTTPException(status_code=400, detail="subscription_id is required")
+        store = await _get_automation_store(request)
+        deleted = await _call_store_action_with_id(
+            store,
+            (
+                "delete_subscription",
+                "remove_subscription",
+                "cancel_subscription",
+            ),
+            normalized_id,
+            payload={},
+            id_aliases=("subscription_id", "id"),
+        )
+        if isinstance(deleted, dict):
+            payload = dict(deleted)
+            payload.setdefault("status", "ok")
+            payload.setdefault("subscription_id", normalized_id)
+            return payload
+        return {
+            "status": "ok",
+            "subscription_id": normalized_id,
+            "deleted": True if deleted is None else bool(deleted),
+        }
+
+    @router.post("/automation/timers")
+    @router.post("/timers")
+    async def create_automation_timer(
+        request: Request, payload: PmaAutomationTimerCreateRequest
+    ) -> dict[str, Any]:
+        store = await _get_automation_store(request)
+        created = await _call_store_create_with_payload(
+            store,
+            (
+                "create_timer",
+                "add_timer",
+                "upsert_timer",
+            ),
+            payload.model_dump(exclude_none=True),
+        )
+        if isinstance(created, dict) and "timer" in created:
+            return created
+        return {"timer": created}
+
+    @router.get("/automation/timers")
+    @router.get("/timers")
+    async def list_automation_timers(
+        request: Request,
+        timer_type: Optional[str] = None,
+        subscription_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        lane_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        store = await _get_automation_store(request)
+        filters = {
+            "timer_type": _normalize_optional_text(timer_type),
+            "subscription_id": _normalize_optional_text(subscription_id),
+            "repo_id": _normalize_optional_text(repo_id),
+            "run_id": _normalize_optional_text(run_id),
+            "thread_id": _normalize_optional_text(thread_id),
+            "lane_id": _normalize_optional_text(lane_id),
+            "limit": limit,
+        }
+        timers = await _call_store_list(
+            store,
+            (
+                "list_timers",
+                "get_timers",
+            ),
+            {k: v for k, v in filters.items() if v is not None},
+        )
+        if isinstance(timers, dict) and "timers" in timers:
+            return timers
+        if timers is None:
+            timers = []
+        return {"timers": list(timers)}
+
+    @router.post("/automation/timers/{timer_id}/touch")
+    @router.post("/timers/{timer_id}/touch")
+    async def touch_automation_timer(
+        timer_id: str,
+        request: Request,
+        payload: Optional[PmaAutomationTimerTouchRequest] = None,
+    ) -> dict[str, Any]:
+        normalized_id = (timer_id or "").strip()
+        if not normalized_id:
+            raise HTTPException(status_code=400, detail="timer_id is required")
+        store = await _get_automation_store(request)
+        resolved_payload = (
+            payload.model_dump(exclude_none=True) if payload is not None else {}
+        )
+        touched = await _call_store_action_with_id(
+            store,
+            (
+                "touch_timer",
+                "refresh_timer",
+                "renew_timer",
+            ),
+            normalized_id,
+            payload=resolved_payload,
+            id_aliases=("timer_id", "id"),
+        )
+        if isinstance(touched, dict):
+            out = dict(touched)
+            out.setdefault("status", "ok")
+            out.setdefault("timer_id", normalized_id)
+            return out
+        return {"status": "ok", "timer_id": normalized_id}
+
+    @router.post("/automation/timers/{timer_id}/cancel")
+    @router.post("/timers/{timer_id}/cancel")
+    @router.delete("/automation/timers/{timer_id}")
+    @router.delete("/timers/{timer_id}")
+    async def cancel_automation_timer(
+        timer_id: str,
+        request: Request,
+        payload: Optional[PmaAutomationTimerCancelRequest] = None,
+    ) -> dict[str, Any]:
+        normalized_id = (timer_id or "").strip()
+        if not normalized_id:
+            raise HTTPException(status_code=400, detail="timer_id is required")
+        store = await _get_automation_store(request)
+        resolved_payload = (
+            payload.model_dump(exclude_none=True) if payload is not None else {}
+        )
+        cancelled = await _call_store_action_with_id(
+            store,
+            (
+                "cancel_timer",
+                "delete_timer",
+                "remove_timer",
+            ),
+            normalized_id,
+            payload=resolved_payload,
+            id_aliases=("timer_id", "id"),
+        )
+        if isinstance(cancelled, dict):
+            out = dict(cancelled)
+            out.setdefault("status", "ok")
+            out.setdefault("timer_id", normalized_id)
+            return out
+        return {"status": "ok", "timer_id": normalized_id}
 
     @router.post("/threads/{managed_thread_id}/compact")
     def compact_managed_thread(
@@ -1245,7 +1776,7 @@ def build_pma_routes() -> APIRouter:
         agent = str(thread.get("agent") or "").strip().lower()
         interrupt_event = asyncio.Event()
 
-        def _finalize_error(
+        async def _finalize_error(
             detail: str, *, backend_turn_id: Optional[str] = None
         ) -> dict[str, Any]:
             thread_store.mark_turn_finished(
@@ -1255,6 +1786,14 @@ def build_pma_routes() -> APIRouter:
                 error=detail,
                 backend_turn_id=backend_turn_id,
                 transcript_turn_id=None,
+            )
+            await _notify_managed_thread_terminal_transition(
+                request,
+                thread=thread,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                to_state="failed",
+                reason=detail,
             )
             return {
                 "status": "error",
@@ -1286,7 +1825,7 @@ def build_pma_routes() -> APIRouter:
             if agent == "opencode":
                 supervisor = getattr(request.app.state, "opencode_supervisor", None)
                 if supervisor is None:
-                    return _finalize_error("OpenCode unavailable")
+                    return await _finalize_error("OpenCode unavailable")
                 stall_timeout_seconds = None
                 try:
                     stall_timeout_seconds = (
@@ -1309,7 +1848,7 @@ def build_pma_routes() -> APIRouter:
                 supervisor = getattr(request.app.state, "app_server_supervisor", None)
                 events = getattr(request.app.state, "app_server_events", None)
                 if supervisor is None or events is None:
-                    return _finalize_error("App-server unavailable")
+                    return await _finalize_error("App-server unavailable")
                 result = await _execute_app_server(
                     supervisor,
                     events,
@@ -1322,27 +1861,27 @@ def build_pma_routes() -> APIRouter:
                     on_meta=_on_managed_turn_meta,
                 )
             else:
-                return _finalize_error(f"Unknown managed thread agent: {agent}")
+                return await _finalize_error(f"Unknown managed thread agent: {agent}")
         except HTTPException:
             logger.exception(
                 "Managed thread execution failed (managed_thread_id=%s, managed_turn_id=%s)",
                 managed_thread_id,
                 managed_turn_id,
             )
-            return _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
+            return await _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
         except Exception:
             logger.exception(
                 "Managed thread execution raised unexpected error (managed_thread_id=%s, managed_turn_id=%s)",
                 managed_thread_id,
                 managed_turn_id,
             )
-            return _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
+            return await _finalize_error(MANAGED_THREAD_PUBLIC_EXECUTION_ERROR)
 
         result = dict(result or {})
         if str(result.get("status") or "") != "ok":
             detail = _sanitize_managed_thread_result_error(result.get("detail"))
             backend_turn_id = _normalize_optional_text(result.get("turn_id"))
-            return _finalize_error(detail, backend_turn_id=backend_turn_id)
+            return await _finalize_error(detail, backend_turn_id=backend_turn_id)
 
         assistant_text = str(result.get("message") or "")
         backend_turn_id = _normalize_optional_text(result.get("turn_id"))
@@ -1400,6 +1939,14 @@ def build_pma_routes() -> APIRouter:
                 detail = _sanitize_managed_thread_result_error(
                     (finalized_turn or {}).get("error")
                 )
+            await _notify_managed_thread_terminal_transition(
+                request,
+                thread=thread,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                to_state="failed",
+                reason=detail,
+            )
             return {
                 "status": response_status,
                 "managed_thread_id": managed_thread_id,
@@ -1412,6 +1959,14 @@ def build_pma_routes() -> APIRouter:
             managed_thread_id,
             last_turn_id=managed_turn_id,
             last_message_preview=preview,
+        )
+        await _notify_managed_thread_terminal_transition(
+            request,
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            to_state="completed",
+            reason="managed_turn_completed",
         )
         return {
             "status": "ok",
@@ -1492,6 +2047,14 @@ def build_pma_routes() -> APIRouter:
             backend_error = f"Unknown managed thread agent: {agent}"
 
         store.mark_turn_interrupted(managed_turn_id)
+        await _notify_managed_thread_terminal_transition(
+            request,
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            to_state="failed",
+            reason=backend_error or "managed_turn_interrupted",
+        )
         store.append_action(
             "managed_thread_interrupt",
             managed_thread_id=managed_thread_id,
@@ -1673,19 +2236,21 @@ def build_pma_routes() -> APIRouter:
                     await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
                 except Exception:
                     logger.exception("Failed to interrupt Codex turn")
-                turn_task.cancel()
+                _cancel_background_task(turn_task, name="pma.app_server.turn.wait")
                 return {"status": "error", "detail": "PMA chat timed out"}
             if interrupt_task in done:
                 try:
                     await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
                 except Exception:
                     logger.exception("Failed to interrupt Codex turn")
-                turn_task.cancel()
+                _cancel_background_task(turn_task, name="pma.app_server.turn.wait")
                 return {"status": "interrupted", "detail": "PMA chat interrupted"}
             turn_result = await turn_task
         finally:
-            timeout_task.cancel()
-            interrupt_task.cancel()
+            _cancel_background_task(timeout_task, name="pma.app_server.timeout.wait")
+            _cancel_background_task(
+                interrupt_task, name="pma.app_server.interrupt.wait"
+            )
 
         if getattr(turn_result, "errors", None):
             errors = turn_result.errors
@@ -1791,7 +2356,7 @@ def build_pma_routes() -> APIRouter:
                 prompt_response = await prompt_task
             except Exception as exc:
                 interrupt_event.set()
-                output_task.cancel()
+                _cancel_background_task(output_task, name="pma.opencode.output.collect")
                 await opencode_harness.interrupt(hub_root, session_id, None)
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1800,11 +2365,11 @@ def build_pma_routes() -> APIRouter:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if timeout_task in done:
-                output_task.cancel()
+                _cancel_background_task(output_task, name="pma.opencode.output.collect")
                 await opencode_harness.interrupt(hub_root, session_id, None)
                 return {"status": "error", "detail": "PMA chat timed out"}
             if interrupt_task in done:
-                output_task.cancel()
+                _cancel_background_task(output_task, name="pma.opencode.output.collect")
                 await opencode_harness.interrupt(hub_root, session_id, None)
                 return {"status": "interrupted", "detail": "PMA chat interrupted"}
             output_result = await output_task
@@ -1815,8 +2380,8 @@ def build_pma_routes() -> APIRouter:
                         text=fallback.text, error=fallback.error
                     )
         finally:
-            timeout_task.cancel()
-            interrupt_task.cancel()
+            _cancel_background_task(timeout_task, name="pma.opencode.timeout.wait")
+            _cancel_background_task(interrupt_task, name="pma.opencode.interrupt.wait")
             await supervisor.mark_turn_finished(hub_root)
 
         if output_result.error:
@@ -2251,10 +2816,12 @@ def build_pma_routes() -> APIRouter:
         return {"status": "ok"}
 
     @router.post("/context/snapshot")
-    def snapshot_pma_context(request: Request, body: Optional[dict[str, Any]] = None):
+    async def snapshot_pma_context(
+        request: Request, body: Optional[dict[str, Any]] = None
+    ):
         hub_root = request.app.state.config.root
         try:
-            ensure_pma_docs(hub_root)
+            await asyncio.to_thread(ensure_pma_docs, hub_root)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
@@ -2265,16 +2832,23 @@ def build_pma_routes() -> APIRouter:
             reset = bool(body.get("reset", False))
 
         docs_dir = _pma_docs_dir(hub_root)
-        docs_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            await asyncio.to_thread(docs_dir.mkdir, parents=True, exist_ok=True)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to prepare PMA docs directory: {exc}"
+            ) from exc
         active_context_path = docs_dir / "active_context.md"
-        if not active_context_path.exists():
+        if not await asyncio.to_thread(active_context_path.exists):
             raise HTTPException(
                 status_code=404, detail="Doc not found: active_context.md"
             )
         context_log_path = docs_dir / "context_log.md"
 
         try:
-            active_content = active_context_path.read_text(encoding="utf-8")
+            active_content = await asyncio.to_thread(
+                active_context_path.read_text, encoding="utf-8"
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to read active_context.md: {exc}"
@@ -2293,8 +2867,7 @@ def build_pma_routes() -> APIRouter:
             )
 
         try:
-            with context_log_path.open("a", encoding="utf-8") as f:
-                f.write(snapshot_content)
+            await _append_text_file(context_log_path, snapshot_content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to append context_log.md: {exc}"
@@ -2302,7 +2875,9 @@ def build_pma_routes() -> APIRouter:
 
         if reset:
             try:
-                atomic_write(active_context_path, pma_active_context_content())
+                await _atomic_write_async(
+                    active_context_path, pma_active_context_content()
+                )
             except Exception as exc:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to reset active_context.md: {exc}"
@@ -2316,7 +2891,7 @@ def build_pma_routes() -> APIRouter:
             "reset": reset,
         }
         try:
-            context_log_bytes = context_log_path.stat().st_size
+            context_log_bytes = (await asyncio.to_thread(context_log_path.stat)).st_size
             response["context_log_bytes"] = context_log_bytes
             if context_log_bytes > PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES:
                 response["warning"] = (
@@ -2375,17 +2950,21 @@ def build_pma_routes() -> APIRouter:
         ordered.extend(remaining)
         return ordered
 
-    def _write_doc_history(
+    async def _write_doc_history(
         hub_root: Path, doc_name: str, content: str
     ) -> Optional[Path]:
         docs_dir = _pma_docs_dir(hub_root)
         history_root = docs_dir / "_history" / doc_name
-        try:
+
+        def _write() -> Path:
             history_root.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             history_path = history_root / f"{timestamp}.md"
             atomic_write(history_path, content)
             return history_path
+
+        try:
+            return await asyncio.to_thread(_write)
         except Exception:
             logger.exception("Failed to write PMA doc history for %s", doc_name)
             return None
@@ -2455,7 +3034,7 @@ def build_pma_routes() -> APIRouter:
         return {"name": name, "content": content}
 
     @router.put("/docs/{name}")
-    def update_pma_doc(
+    async def update_pma_doc(
         name: str, request: Request, body: dict[str, str]
     ) -> dict[str, str]:
         name = _normalize_doc_name(name)
@@ -2474,12 +3053,12 @@ def build_pma_routes() -> APIRouter:
         docs_dir.mkdir(parents=True, exist_ok=True)
         doc_path = docs_dir / name
         try:
-            atomic_write(doc_path, content)
+            await _atomic_write_async(doc_path, content)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
-        _write_doc_history(hub_root, name, content)
+        await _write_doc_history(hub_root, name, content)
         details = {
             "name": name,
             "size": len(content.encode("utf-8")),
@@ -2624,6 +3203,7 @@ def build_pma_routes() -> APIRouter:
 
     router._pma_start_lane_worker = _ensure_lane_worker_for_app  # type: ignore[attr-defined]
     router._pma_stop_lane_worker = _stop_lane_worker_for_app  # type: ignore[attr-defined]
+    router._pma_stop_all_lane_workers = _stop_all_lane_workers_for_app  # type: ignore[attr-defined]
     return router
 
 

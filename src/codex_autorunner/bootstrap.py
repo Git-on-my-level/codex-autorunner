@@ -334,6 +334,25 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
   - `car pma thread compact --id <id> --summary "..."`
   - `car pma thread archive --id <id>`
 
+## Automation primitives (event-driven continuity)
+
+- Use automation when a lane should continue without manual polling.
+- Subscriptions: run/thread transition triggers enqueue PMA wake-up turns.
+  - `POST /hub/pma/subscriptions`
+  - `GET /hub/pma/subscriptions`
+  - `DELETE /hub/pma/subscriptions/{subscription_id}`
+- Timers:
+  - one-shot (`timer_type=one_shot`, `delay_seconds`)
+  - watchdog (`timer_type=watchdog`, `idle_seconds`, optional `touch`)
+  - `POST /hub/pma/timers`, `GET /hub/pma/timers`
+  - `POST /hub/pma/timers/{timer_id}/touch`
+  - `POST /hub/pma/timers/{timer_id}/cancel`
+- Typical event_types:
+  - ticket flow: `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
+  - managed thread: `managed_thread_completed`, `managed_thread_failed`
+- Durable state is stored at `.codex-autorunner/pma/automation_store.json`.
+- Practical recipes are in `.codex-autorunner/pma/docs/ABOUT_CAR.md` under “PMA automation wake-ups”.
+
 ## Destinations (execution runtime)
 
 - Repos/worktrees can run in `local` or `docker` destinations.
@@ -483,6 +502,59 @@ Do NOT copy `.codex-autorunner/` between worktrees:
   - `links`: optional list of `{label, href}` objects
   - `resolved_at`: leave empty/omit until resolved
 - The web UI lists unresolved dispatches; resolve via UI or set `resolved_at`.
+
+## PMA automation wake-ups (subscriptions + timers)
+
+Use automation to keep multi-lane work moving without explicit polling.
+
+What to configure:
+- Subscriptions:
+  - trigger on lifecycle transitions and enqueue PMA wake-up turns.
+  - create/list/delete:
+    - `POST /hub/pma/subscriptions`
+    - `GET /hub/pma/subscriptions`
+    - `DELETE /hub/pma/subscriptions/{subscription_id}`
+  - common `event_types`:
+    - `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
+    - `managed_thread_completed`, `managed_thread_failed`
+- Timers:
+  - one-shot (`timer_type=one_shot`, `delay_seconds`)
+  - watchdog (`timer_type=watchdog`, `idle_seconds`)
+  - create/list/touch/cancel:
+    - `POST /hub/pma/timers`
+    - `GET /hub/pma/timers`
+    - `POST /hub/pma/timers/{timer_id}/touch`
+    - `POST /hub/pma/timers/{timer_id}/cancel`
+
+Example payloads:
+```json
+{
+  "event_types": ["flow_completed"],
+  "repo_id": "repo-1",
+  "run_id": "run-1",
+  "from_state": "running",
+  "to_state": "completed",
+  "lane_id": "pma:lane-next",
+  "idempotency_key": "sub:repo-1:run-1:completed"
+}
+```
+
+```json
+{
+  "timer_type": "watchdog",
+  "idle_seconds": 300,
+  "repo_id": "repo-1",
+  "run_id": "run-1",
+  "lane_id": "pma:default",
+  "reason": "watchdog_stalled",
+  "idempotency_key": "watchdog:repo-1:run-1"
+}
+```
+
+Notes:
+- Wake-up payloads include `repo_id`, `run_id`/`thread_id`, `from_state`, `to_state`, `reason`, `timestamp`, and `lane_id`.
+- Handlers should be idempotent; duplicate events can occur by design.
+- Durable storage path: `.codex-autorunner/pma/automation_store.json`.
 """
     )
 

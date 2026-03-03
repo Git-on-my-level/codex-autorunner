@@ -27,6 +27,10 @@ from ....core.flows import (
     FlowStore,
 )
 from ....core.flows.reconciler import reconcile_flow_run
+from ....core.flows.start_policy import (
+    NO_TICKETS_START_ERROR,
+    evaluate_ticket_start_policy,
+)
 from ....core.flows.ux_helpers import (
     bootstrap_check as ux_bootstrap_check,
 )
@@ -56,7 +60,7 @@ from ....tickets.files import (
     safe_relpath,
 )
 from ....tickets.frontmatter import parse_markdown_frontmatter
-from ....tickets.lint import lint_ticket_directory, lint_ticket_frontmatter
+from ....tickets.lint import lint_ticket_frontmatter
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
     TicketBulkClearModelRequest,
@@ -69,6 +73,7 @@ from ..schemas import (
     TicketResponse,
     TicketUpdateRequest,
 )
+from ..services import flow_store as flow_store_service
 
 _logger = logging.getLogger(__name__)
 
@@ -198,10 +203,7 @@ def _recover_flow_store_if_possible(
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
-    repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
-    return db_path, artifacts_root
+    return flow_store_service.flow_paths(repo_root)
 
 
 def _ticket_dir(repo_root: Path) -> Path:
@@ -268,88 +270,28 @@ def _rename_ticket_order(order: list[Path]) -> None:
 def _sync_active_run_current_ticket_paths_after_reorder(
     repo_root: Path, renamed_paths: list[tuple[Path, Path]]
 ) -> None:
-    if not renamed_paths:
-        return
-    store = _require_flow_store(repo_root)
-    if store is None:
-        return
-    try:
-        records = store.list_flow_runs(flow_type="ticket_flow")
-        active = _active_or_paused_run(records)
-        if active is None or not isinstance(active.state, dict):
-            return
-        rel_map: dict[str, str] = {}
-        for old_path, new_path in renamed_paths:
-            rel_map[safe_relpath(old_path, repo_root)] = safe_relpath(
-                new_path, repo_root
-            )
-        next_state = dict(active.state)
-        changed = False
-
-        current_ticket = next_state.get("current_ticket")
-        if isinstance(current_ticket, str):
-            updated = rel_map.get(current_ticket)
-            if isinstance(updated, str) and updated != current_ticket:
-                next_state["current_ticket"] = updated
-                changed = True
-
-        ticket_engine = next_state.get("ticket_engine")
-        if isinstance(ticket_engine, dict):
-            next_ticket_engine = dict(ticket_engine)
-            current_ticket = next_ticket_engine.get("current_ticket")
-            if isinstance(current_ticket, str):
-                updated = rel_map.get(current_ticket)
-                if isinstance(updated, str) and updated != current_ticket:
-                    next_ticket_engine["current_ticket"] = updated
-                    next_state["ticket_engine"] = next_ticket_engine
-                    changed = True
-
-        if not changed:
-            return
-        store.update_flow_run_status(active.id, active.status, state=next_state)
-    except Exception as exc:
-        _logger.warning("Failed to sync current_ticket after reorder: %s", exc)
-    finally:
-        try:
-            store.close()
-        except Exception:
-            pass
+    flow_store_service.sync_active_run_current_ticket_paths_after_reorder(
+        repo_root,
+        renamed_paths,
+        require_store=_require_flow_store,
+        active_or_paused_run_selector=_active_or_paused_run,
+        logger=_logger,
+    )
 
 
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
-    db_path, _ = _flow_paths(repo_root)
-    store = FlowStore(db_path)
-    try:
-        store.initialize()
-        return store
-    except Exception as exc:
-        _logger.warning("Flows database unavailable at %s: %s", db_path, exc)
-        return None
+    return flow_store_service.require_flow_store(repo_root, logger=_logger)
 
 
 def _safe_list_flow_runs(
     repo_root: Path, flow_type: Optional[str] = None, *, recover_stuck: bool = False
 ) -> list[FlowRunRecord]:
-    db_path, _ = _flow_paths(repo_root)
-    store = FlowStore(db_path)
-    try:
-        store.initialize()
-        records = store.list_flow_runs(flow_type=flow_type)
-        if recover_stuck:
-            # Recover any flows stuck in active states with dead workers
-            records = [
-                reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
-                for rec in records
-            ]
-        return records
-    except Exception as exc:
-        _logger.debug("FlowStore list runs failed: %s", exc)
-        return []
-    finally:
-        try:
-            store.close()
-        except Exception:
-            pass
+    return flow_store_service.safe_list_flow_runs(
+        repo_root,
+        flow_type=flow_type,
+        recover_stuck=recover_stuck,
+        logger=_logger,
+    )
 
 
 def _build_flow_definition(
@@ -435,23 +377,9 @@ def _get_flow_controller(
 
 
 def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
-    store = _require_flow_store(repo_root)
-    if store is None:
-        raise HTTPException(status_code=503, detail="Flows database unavailable")
-    try:
-        record = store.get_flow_run(run_id)
-    except sqlite3.Error as exc:
-        raise HTTPException(
-            status_code=503, detail="Flows database unavailable"
-        ) from exc
-    finally:
-        try:
-            store.close()
-        except Exception:
-            pass
-    if not record:
-        raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
-    return record
+    return flow_store_service.get_flow_record(
+        repo_root, run_id, require_store=_require_flow_store
+    )
 
 
 def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
@@ -475,24 +403,8 @@ def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
 
 
 def _validate_tickets(ticket_dir: Path) -> list[str]:
-    """Validate all tickets in the directory and return a list of error messages."""
-    errors: list[str] = []
-
-    if not ticket_dir.exists():
-        return errors
-
-    # Check for directory-level errors (duplicate indices)
-    dir_errors = lint_ticket_directory(ticket_dir)
-    errors.extend(dir_errors)
-
-    # Check each ticket file for frontmatter errors
-    ticket_paths = list_ticket_paths(ticket_dir)
-    for path in ticket_paths:
-        _, ticket_errors = read_ticket(path)
-        for err in ticket_errors:
-            errors.append(f"{path.relative_to(path.parent.parent)}: {err}")
-
-    return errors
+    """Validate all tickets in the directory and return linting/frontmatter errors."""
+    return list(evaluate_ticket_start_policy(ticket_dir).lint_errors)
 
 
 def _lint_after_ticket_update(ticket_dir: Path) -> list[str]:
@@ -845,16 +757,8 @@ def build_flow_routes() -> APIRouter:
 
         if flow_type == "ticket_flow" and validate_tickets:
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-            if force_new and not list_ticket_paths(ticket_dir):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "No tickets found under .codex-autorunner/tickets. "
-                        "Use /api/flows/ticket_flow/bootstrap to seed tickets."
-                    ),
-                )
-
-            lint_errors = _validate_tickets(ticket_dir)
+            ticket_policy = evaluate_ticket_start_policy(ticket_dir)
+            lint_errors = list(ticket_policy.lint_errors)
             if lint_errors:
                 raise HTTPException(
                     status_code=400,
@@ -863,6 +767,8 @@ def build_flow_routes() -> APIRouter:
                         "errors": lint_errors,
                     },
                 )
+            if not ticket_policy.has_tickets:
+                raise HTTPException(status_code=400, detail=NO_TICKETS_START_ERROR)
 
         # Reuse an active/paused run unless force_new is requested.
         if not force_new:

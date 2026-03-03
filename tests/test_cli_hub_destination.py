@@ -234,6 +234,36 @@ def test_hub_destination_set_docker_supports_extended_payload_fields(
     assert repo_data["destination"] == payload["effective_destination"]
 
 
+def test_hub_destination_set_rejects_invalid_profile(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path, base_id, _ = _seed_hub_with_base_and_worktree(hub_root)
+
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "destination",
+            "set",
+            base_id,
+            "docker",
+            "--image",
+            "busybox:latest",
+            "--profile",
+            "full_deev",
+            "--json",
+            "--path",
+            str(hub_root),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "unsupported docker profile 'full_deev'" in result.output
+
+    manifest = load_manifest(manifest_path, hub_root)
+    base = manifest.get(base_id)
+    assert base is not None
+    assert base.destination is None
+
+
 def test_hub_destination_set_help_mentions_custom_image_and_docs() -> None:
     result = runner.invoke(app, ["hub", "destination", "set", "--help"])
     assert result.exit_code == 0

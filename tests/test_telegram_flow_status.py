@@ -216,6 +216,15 @@ class _ProgressCadenceHarness(TelegramNotificationHandlers):
         return asyncio.create_task(coro)
 
 
+class _AsyncNoopLock:
+    async def __aenter__(self) -> "_AsyncNoopLock":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _ = (exc_type, exc, tb)
+        return False
+
+
 @pytest.mark.anyio
 async def test_progress_edit_cadence_emits_when_interval_elapsed(
     monkeypatch: pytest.MonkeyPatch,
@@ -253,6 +262,49 @@ async def test_progress_edit_cadence_schedules_when_interval_not_elapsed(
     assert not harness.emitted
     assert key in harness._turn_progress_tasks
     assert harness.delayed == [(key, 1.5)]
+
+
+@pytest.mark.anyio
+async def test_progress_edit_does_not_construct_lock_when_turn_lock_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _ProgressCadenceHarness(min_interval=2.0)
+    key = ("turn-1", "thread-1")
+    harness._turn_progress_locks[key] = _AsyncNoopLock()
+    harness._turn_progress_updated_at[key] = 10.0
+    lock_ctor_calls = 0
+
+    def _counting_lock() -> _AsyncNoopLock:
+        nonlocal lock_ctor_calls
+        lock_ctor_calls += 1
+        return _AsyncNoopLock()
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.asyncio.Lock",
+        _counting_lock,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        lambda: 12.2,
+    )
+
+    await harness._schedule_progress_edit(key)
+    assert lock_ctor_calls == 0
+
+
+@pytest.mark.anyio
+async def test_ensure_turn_progress_lock_returns_same_instance_for_concurrent_callers() -> (
+    None
+):
+    harness = _ProgressCadenceHarness(min_interval=2.0)
+    key = ("turn-1", "thread-1")
+
+    locks = await asyncio.gather(
+        *[harness._ensure_turn_progress_lock(key) for _ in range(10)]
+    )
+    first = locks[0]
+    assert all(lock is first for lock in locks)
+    assert harness._turn_progress_locks[key] is first
 
 
 class _FlowStatusHandler(FlowCommands):

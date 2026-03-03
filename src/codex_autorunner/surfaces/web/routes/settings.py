@@ -2,24 +2,14 @@
 Session settings routes for autorunner overrides.
 """
 
-from typing import Optional
-
 from fastapi import APIRouter, HTTPException, Request
 
 from ....core.state import RunnerState, load_state, save_state, state_lock
 from ..schemas import SessionSettingsRequest, SessionSettingsResponse
+from ..services.validation import normalize_optional_string
 
 ALLOWED_APPROVAL_POLICIES = {"never", "unlessTrusted"}
 ALLOWED_SANDBOX_MODES = {"dangerFullAccess", "workspaceWrite"}
-
-
-def _normalize_optional_string(value: object, field: str) -> Optional[str]:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise HTTPException(status_code=400, detail=f"{field} must be a string")
-    cleaned = value.strip()
-    return cleaned or None
 
 
 def build_settings_routes() -> APIRouter:
@@ -46,25 +36,28 @@ def build_settings_routes() -> APIRouter:
         with state_lock(engine.state_path):
             state = load_state(engine.state_path)
             model_override = (
-                _normalize_optional_string(
+                normalize_optional_string(
                     updates.get("autorunner_model_override"),
                     "autorunner_model_override",
+                    allow_blank=True,
                 )
                 if "autorunner_model_override" in updates
                 else state.autorunner_model_override
             )
             effort_override = (
-                _normalize_optional_string(
+                normalize_optional_string(
                     updates.get("autorunner_effort_override"),
                     "autorunner_effort_override",
+                    allow_blank=True,
                 )
                 if "autorunner_effort_override" in updates
                 else state.autorunner_effort_override
             )
             approval_policy = (
-                _normalize_optional_string(
+                normalize_optional_string(
                     updates.get("autorunner_approval_policy"),
                     "autorunner_approval_policy",
+                    allow_blank=True,
                 )
                 if "autorunner_approval_policy" in updates
                 else state.autorunner_approval_policy
@@ -75,9 +68,10 @@ def build_settings_routes() -> APIRouter:
                     detail="approval policy must be never or unlessTrusted",
                 )
             sandbox_mode = (
-                _normalize_optional_string(
+                normalize_optional_string(
                     updates.get("autorunner_sandbox_mode"),
                     "autorunner_sandbox_mode",
+                    allow_blank=True,
                 )
                 if "autorunner_sandbox_mode" in updates
                 else state.autorunner_sandbox_mode

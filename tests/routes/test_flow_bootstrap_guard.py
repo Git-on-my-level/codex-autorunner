@@ -117,6 +117,12 @@ def test_start_reuses_active_run_when_latest_is_terminal(tmp_path, monkeypatch):
     store.update_flow_run_status(latest_terminal_run_id, FlowRunStatus.STOPPED)
     store.close()
 
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---\n", encoding="utf-8"
+    )
+
     artifacts_dir = tmp_path / ".codex-autorunner" / "flows" / active_run_id
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     health = FlowWorkerHealth(
@@ -321,7 +327,49 @@ def test_start_flow_worker_skips_when_process_alive(tmp_path, monkeypatch):
 
 
 def test_ticket_flow_start_rejects_no_tickets(tmp_path, monkeypatch):
-    """Starting ticket_flow with force_new should fail when no tickets exist."""
+    """Starting ticket_flow should fail when no tickets exist."""
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+
+    class StubController:
+        def __init__(self, backing_store: FlowStore):
+            self.store = backing_store
+
+        async def start_flow(self, input_data, run_id, metadata=None):
+            return self.store.create_flow_run(
+                run_id=run_id,
+                flow_type="ticket_flow",
+                input_data=input_data or {},
+                metadata=metadata or {},
+                state={},
+                current_step="ticket_turn",
+            )
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_get_flow_controller",
+        lambda _repo_root, _flow_type, _state: StubController(store),
+    )
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/start", json={})
+
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert "detail" in payload
+    assert "No tickets found" in payload["detail"]
+    assert ".codex-autorunner/tickets" in payload["detail"]
+    assert "/api/flows/ticket_flow/bootstrap" in payload["detail"]
+
+
+def test_ticket_flow_start_rejects_no_tickets_with_force_new(tmp_path, monkeypatch):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
@@ -364,6 +412,53 @@ def test_ticket_flow_start_rejects_no_tickets(tmp_path, monkeypatch):
     assert "No tickets found" in payload["detail"]
     assert ".codex-autorunner/tickets" in payload["detail"]
     assert "/api/flows/ticket_flow/bootstrap" in payload["detail"]
+
+
+def test_ticket_flow_start_rejects_when_ticket_path_is_file(tmp_path, monkeypatch):
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.parent.mkdir(parents=True, exist_ok=True)
+    ticket_dir.write_text("not-a-directory", encoding="utf-8")
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+
+    class StubController:
+        def __init__(self, backing_store: FlowStore):
+            self.store = backing_store
+
+        async def start_flow(self, input_data, run_id, metadata=None):
+            return self.store.create_flow_run(
+                run_id=run_id,
+                flow_type="ticket_flow",
+                input_data=input_data or {},
+                metadata=metadata or {},
+                state={},
+                current_step="ticket_turn",
+            )
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_get_flow_controller",
+        lambda _repo_root, _flow_type, _state: StubController(store),
+    )
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/start", json={})
+
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert payload["detail"]["message"] == "Ticket validation failed"
+    assert any(
+        "ticket path must be a directory" in err.lower()
+        for err in payload["detail"]["errors"]
+    )
 
 
 def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch):

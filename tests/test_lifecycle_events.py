@@ -1,7 +1,10 @@
 """Test lifecycle events system."""
 
 import asyncio
+import json
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from codex_autorunner.core.flows import (
@@ -15,6 +18,8 @@ from codex_autorunner.core.lifecycle_events import (
     LifecycleEventEmitter,
     LifecycleEventStore,
     LifecycleEventType,
+    _SqliteLifecycleEventStore,
+    default_lifecycle_events_path,
 )
 
 
@@ -90,6 +95,34 @@ def test_lifecycle_event_store_get_unprocessed():
         assert unprocessed[1].event_id == event3.event_id
 
 
+def test_lifecycle_event_store_update_event_data_and_processed() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        store = LifecycleEventStore(tmp_path)
+
+        event = LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_FAILED,
+            repo_id="test-repo",
+            run_id="run-1",
+        )
+        store.append(event)
+
+        updated = store.update_event(
+            event.event_id,
+            data={"lifecycle_retry": {"attempts": 1, "status": "retry_scheduled"}},
+            processed=True,
+        )
+
+        assert updated is not None
+        assert updated.processed is True
+        assert updated.data["lifecycle_retry"]["attempts"] == 1
+
+        loaded = store.load()
+        assert len(loaded) == 1
+        assert loaded[0].processed is True
+        assert loaded[0].data["lifecycle_retry"]["status"] == "retry_scheduled"
+
+
 def test_lifecycle_event_emitter():
     """Test that lifecycle event emitter stores events."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -132,6 +165,100 @@ def test_lifecycle_event_store_prune():
 
         pruned = store.load()
         assert len(pruned) == 5
+
+
+def test_lifecycle_event_store_append_rewrites_malformed_file() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        legacy_path = default_lifecycle_events_path(tmp_path)
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_path.write_text("{ not-valid-json", encoding="utf-8")
+
+        store = LifecycleEventStore(tmp_path)
+        assert store.load() == []
+        assert not legacy_path.exists()
+        malformed_files = list(
+            legacy_path.parent.glob("lifecycle_events.malformed.*.json")
+        )
+        assert malformed_files
+        store.append(
+            LifecycleEvent(
+                event_type=LifecycleEventType.FLOW_PAUSED,
+                repo_id="test-repo",
+                run_id="run-1",
+            )
+        )
+
+        loaded = store.load()
+        assert len(loaded) == 1
+        assert loaded[0].event_type == LifecycleEventType.FLOW_PAUSED
+        assert loaded[0].repo_id == "test-repo"
+        assert loaded[0].run_id == "run-1"
+
+
+def test_lifecycle_event_store_migrates_legacy_json_list() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        legacy_path = default_lifecycle_events_path(tmp_path)
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "event_id": "legacy-1",
+                        "event_type": "flow_failed",
+                        "repo_id": "repo-1",
+                        "run_id": "run-1",
+                        "data": {"error": "boom"},
+                        "origin": "system",
+                        "timestamp": "2026-03-01T00:00:00+00:00",
+                        "processed": False,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        store = LifecycleEventStore(tmp_path)
+        loaded = store.load()
+        assert len(loaded) == 1
+        assert loaded[0].event_id == "legacy-1"
+        assert loaded[0].event_type == LifecycleEventType.FLOW_FAILED
+        assert loaded[0].data == {"error": "boom"}
+        assert store.path.name == "lifecycle_events.sqlite3"
+
+
+def test_lifecycle_event_store_migrates_legacy_json_dict_shape() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        legacy_path = default_lifecycle_events_path(tmp_path)
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "event_id": "legacy-2",
+                            "event_type": "flow_completed",
+                            "repo_id": "repo-1",
+                            "run_id": "run-1",
+                            "data": {"ok": True},
+                            "origin": "runner",
+                            "timestamp": "2026-03-01T00:00:00+00:00",
+                            "processed": True,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        store = LifecycleEventStore(tmp_path)
+        loaded = store.load()
+        assert len(loaded) == 1
+        assert loaded[0].event_id == "legacy-2"
+        assert loaded[0].event_type == LifecycleEventType.FLOW_COMPLETED
+        assert loaded[0].processed is True
 
 
 def test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id():
@@ -225,6 +352,48 @@ def test_non_duplicate_events_still_append():
         ]
 
 
+def test_terminal_duplicate_dedupes_under_concurrent_writers(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        store = LifecycleEventStore(tmp_path)
+
+        original_find_duplicate = (
+            _SqliteLifecycleEventStore._find_duplicate_terminal_event
+        )
+
+        def _sleepy_find_duplicate(self, conn, candidate):
+            duplicate = original_find_duplicate(self, conn, candidate)
+            if duplicate is None:
+                time.sleep(0.05)
+            return duplicate
+
+        monkeypatch.setattr(
+            _SqliteLifecycleEventStore,
+            "_find_duplicate_terminal_event",
+            _sleepy_find_duplicate,
+        )
+
+        def _append_once() -> None:
+            store.append(
+                LifecycleEvent(
+                    event_type=LifecycleEventType.FLOW_COMPLETED,
+                    repo_id="repo-1",
+                    run_id="run-1",
+                    data={"transition_token": "completed:concurrent"},
+                )
+            )
+
+        workers = [threading.Thread(target=_append_once) for _ in range(8)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
+        events = store.load()
+        assert len(events) == 1
+        assert events[0].data.get("duplicate_count") == 7
+
+
 def test_runtime_terminal_events_include_transition_metadata():
     async def _run() -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -280,8 +449,12 @@ def test_runtime_terminal_events_include_transition_metadata():
 if __name__ == "__main__":
     test_lifecycle_event_store_load_save()
     test_lifecycle_event_store_get_unprocessed()
+    test_lifecycle_event_store_update_event_data_and_processed()
     test_lifecycle_event_emitter()
     test_lifecycle_event_store_prune()
+    test_lifecycle_event_store_append_rewrites_malformed_file()
+    test_lifecycle_event_store_migrates_legacy_json_list()
+    test_lifecycle_event_store_migrates_legacy_json_dict_shape()
     test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id()
     test_non_duplicate_events_still_append()
     test_runtime_terminal_events_include_transition_metadata()

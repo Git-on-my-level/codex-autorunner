@@ -14,6 +14,7 @@ from ..schemas import (
     SessionStopRequest,
     SessionStopResponse,
 )
+from ..services.validation import normalize_string_lower
 
 logger = logging.getLogger("codex_autorunner.routes.sessions")
 
@@ -42,7 +43,7 @@ def _relative_repo_key(repo_key: str, repo_root: Path) -> str:
         return _relative_repo_path(repo_key, repo_root)
     repo_path, agent = repo_key.split(":", 1)
     rel = _relative_repo_path(repo_path, repo_root)
-    agent = agent.strip().lower()
+    agent = normalize_string_lower(agent) or ""
     if not agent or agent == "codex":
         return rel
     return f"{rel}:{agent}"

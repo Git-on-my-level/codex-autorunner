@@ -17,6 +17,7 @@ import typer
 from ....core.config import ConfigError
 from ....core.flows import FlowController, FlowStore
 from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
+from ....core.flows.start_policy import evaluate_ticket_start_policy
 from ....core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ....core.flows.worker_process import (
     check_worker_health,
@@ -29,14 +30,7 @@ from ....core.managed_processes import reap_managed_processes
 from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
 from ....tickets import AgentPool
-from ....tickets.files import (
-    list_ticket_paths,
-    read_ticket,
-    safe_relpath,
-    ticket_is_done,
-)
-from ....tickets.ingest_state import INGEST_STATE_FILENAME
-from ....tickets.lint import lint_ticket_directory, parse_ticket_index
+from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
 
 
 def _stale_terminal_runs(records: list[FlowRunRecord]) -> list[FlowRunRecord]:
@@ -121,37 +115,12 @@ def register_flow_commands(
                 typer.echo(f"    Fix: {check.fix}")
 
     def _ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
-        details: dict[str, list[str]] = {
-            "invalid_filenames": [],
-            "duplicate_indices": [],
-            "frontmatter": [],
+        policy = evaluate_ticket_start_policy(ticket_dir)
+        return {
+            "invalid_filenames": list(policy.invalid_filenames),
+            "duplicate_indices": list(policy.duplicate_indices),
+            "frontmatter": list(policy.frontmatter),
         }
-        if not ticket_dir.exists():
-            return details
-
-        ticket_root = ticket_dir.parent
-        for path in sorted(ticket_dir.iterdir()):
-            if not path.is_file():
-                continue
-            if path.name in {"AGENTS.md", INGEST_STATE_FILENAME}:
-                continue
-            if parse_ticket_index(path.name) is None:
-                rel_path = safe_relpath(path, ticket_root)
-                details["invalid_filenames"].append(
-                    f"{rel_path}: Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)"
-                )
-
-        details["duplicate_indices"].extend(lint_ticket_directory(ticket_dir))
-
-        ticket_paths = list_ticket_paths(ticket_dir)
-        for path in ticket_paths:
-            _, ticket_errors = read_ticket(path)
-            for err in ticket_errors:
-                details["frontmatter"].append(
-                    f"{path.relative_to(path.parent.parent)}: {err}"
-                )
-
-        return details
 
     def _ticket_flow_preflight(
         engine: RuntimeContext, ticket_dir: Path

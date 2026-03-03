@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
 from ...manifest import ManifestError, load_manifest
 from ..git_utils import run_git
-from ..lifecycle_events import LifecycleEventEmitter
+from ..lifecycle_events import LifecycleEventEmitter, LifecycleEventType
 from ..utils import find_repo_root
 from .definition import FlowDefinition
 from .models import FlowEvent, FlowRunRecord, FlowRunStatus
@@ -50,7 +50,7 @@ class FlowController:
         self.store = FlowStore(db_path, durable=durable)
         self._event_listeners: Set[Callable[[FlowEvent], None]] = set()
         self._lifecycle_event_listeners: Set[
-            Callable[[str, str, str, dict, str], None]
+            Callable[[LifecycleEventType, str, str, dict, str], None]
         ] = set()
         self._lock = asyncio.Lock()
         self._lifecycle_emitter: Optional[LifecycleEventEmitter] = None
@@ -367,18 +367,20 @@ class FlowController:
         self._event_listeners.discard(listener)
 
     def add_lifecycle_event_listener(
-        self, listener: Callable[[str, str, str, dict, str], None]
+        self,
+        listener: Callable[[LifecycleEventType, str, str, dict, str], None],
     ) -> None:
         self._lifecycle_event_listeners.add(listener)
 
     def remove_lifecycle_event_listener(
-        self, listener: Callable[[str, str, str, dict, str], None]
+        self,
+        listener: Callable[[LifecycleEventType, str, str, dict, str], None],
     ) -> None:
         self._lifecycle_event_listeners.discard(listener)
 
     def _emit_lifecycle(
         self,
-        event_type: str,
+        event_type: LifecycleEventType,
         repo_id: str,
         run_id: str,
         data: Dict[str, Any],
@@ -397,7 +399,7 @@ class FlowController:
 
     def _emit_to_lifecycle_store(
         self,
-        event_type: str,
+        event_type: LifecycleEventType,
         repo_id: str,
         run_id: str,
         data: Dict[str, Any],
@@ -406,19 +408,19 @@ class FlowController:
         if self._lifecycle_emitter is None:
             return
         try:
-            if event_type == "flow_paused":
+            if event_type == LifecycleEventType.FLOW_PAUSED:
                 self._lifecycle_emitter.emit_flow_paused(
                     repo_id, run_id, data=data, origin=origin
                 )
-            elif event_type == "flow_completed":
+            elif event_type == LifecycleEventType.FLOW_COMPLETED:
                 self._lifecycle_emitter.emit_flow_completed(
                     repo_id, run_id, data=data, origin=origin
                 )
-            elif event_type == "flow_failed":
+            elif event_type == LifecycleEventType.FLOW_FAILED:
                 self._lifecycle_emitter.emit_flow_failed(
                     repo_id, run_id, data=data, origin=origin
                 )
-            elif event_type == "flow_stopped":
+            elif event_type == LifecycleEventType.FLOW_STOPPED:
                 self._lifecycle_emitter.emit_flow_stopped(
                     repo_id, run_id, data=data, origin=origin
                 )

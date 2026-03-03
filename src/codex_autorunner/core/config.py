@@ -5,7 +5,18 @@ import os
 import shlex
 from os import PathLike
 from pathlib import Path
-from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
+from typing import (
+    IO,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 
 import yaml
 
@@ -900,13 +911,56 @@ class TicketFlowConfig:
     auto_resume: bool = False
 
 
+class SecurityConfigSection(TypedDict, total=False):
+    redact_run_logs: bool
+    redact_patterns: List[str]
+
+
+class NotificationTargetSection(TypedDict, total=False):
+    enabled: bool
+    webhook_url_env: str
+    bot_token_env: str
+    chat_id_env: str
+
+
+class NotificationsConfigSection(TypedDict, total=False):
+    enabled: Union[bool, Literal["auto"]]
+    events: List[str]
+    tui_idle_seconds: int
+    timeout_seconds: float
+    discord: NotificationTargetSection
+    telegram: NotificationTargetSection
+
+
+class VoiceConfigSection(TypedDict, total=False):
+    enabled: bool
+    provider: str
+    latency_mode: str
+    chunk_ms: int
+    sample_rate: int
+    warn_on_remote_api: bool
+    push_to_talk: dict[str, object]
+    providers: dict[str, dict[str, object]]
+
+
+class DestinationConfigSection(TypedDict, total=False):
+    kind: str
+    image: str
+    container_name: str
+    mounts: List[dict[str, object]]
+    env_passthrough: List[str]
+    workdir: str
+    profile: str
+    env: dict[str, str]
+
+
 @dataclasses.dataclass
 class RepoConfig:
     raw: Dict[str, Any]
     root: Path
     version: int
     mode: str
-    security: Dict[str, Any]
+    security: SecurityConfigSection
     docs: Dict[str, Path]
     codex_binary: str
     codex_args: List[str]
@@ -937,17 +991,19 @@ class RepoConfig:
     server_auth_token_env: str
     server_allowed_hosts: List[str]
     server_allowed_origins: List[str]
-    notifications: Dict[str, Any]
+    notifications: NotificationsConfigSection
     terminal_idle_timeout_seconds: Optional[int]
     log: LogConfig
     server_log: LogConfig
-    voice: Dict[str, Any]
+    voice: VoiceConfigSection
     static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
     durable_writes: bool
     templates: TemplatesConfig
-    effective_destination: Dict[str, Any] = dataclasses.field(
-        default_factory=default_local_destination
+    effective_destination: DestinationConfigSection = dataclasses.field(
+        default_factory=lambda: _parse_destination_config_section(
+            default_local_destination()
+        )
     )
 
     def doc_path(self, key: str) -> Path:
@@ -1019,6 +1075,157 @@ class HubConfig:
 
 # Alias used by existing code paths that only support repo mode
 Config = RepoConfig
+
+
+def _parse_security_config_section(raw: object) -> SecurityConfigSection:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, object] = dict(raw)
+    redact_run_logs = raw.get("redact_run_logs")
+    if isinstance(redact_run_logs, bool):
+        normalized["redact_run_logs"] = redact_run_logs
+    else:
+        normalized.pop("redact_run_logs", None)
+
+    redact_patterns = raw.get("redact_patterns")
+    if isinstance(redact_patterns, list):
+        normalized["redact_patterns"] = [
+            value.strip()
+            for value in redact_patterns
+            if isinstance(value, str) and value.strip()
+        ]
+    else:
+        normalized.pop("redact_patterns", None)
+    return cast(SecurityConfigSection, normalized)
+
+
+def _parse_notification_target_section(raw: object) -> NotificationTargetSection:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, object] = dict(raw)
+    enabled = raw.get("enabled")
+    if isinstance(enabled, bool):
+        normalized["enabled"] = enabled
+    else:
+        normalized.pop("enabled", None)
+
+    for key in ("webhook_url_env", "bot_token_env", "chat_id_env"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            normalized[key] = value.strip()
+        else:
+            normalized.pop(key, None)
+    return cast(NotificationTargetSection, normalized)
+
+
+def _parse_notifications_config_section(raw: object) -> NotificationsConfigSection:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, object] = dict(raw)
+
+    enabled = raw.get("enabled")
+    if isinstance(enabled, bool):
+        normalized["enabled"] = enabled
+    elif isinstance(enabled, str) and enabled.strip().lower() == "auto":
+        normalized["enabled"] = "auto"
+    else:
+        normalized.pop("enabled", None)
+
+    events = raw.get("events")
+    if isinstance(events, list):
+        normalized["events"] = [
+            value.strip()
+            for value in events
+            if isinstance(value, str) and value.strip()
+        ]
+    else:
+        normalized.pop("events", None)
+
+    tui_idle_seconds = raw.get("tui_idle_seconds")
+    if isinstance(tui_idle_seconds, (int, float)) and int(tui_idle_seconds) > 0:
+        normalized["tui_idle_seconds"] = int(tui_idle_seconds)
+    else:
+        normalized.pop("tui_idle_seconds", None)
+
+    timeout_seconds = raw.get("timeout_seconds")
+    if isinstance(timeout_seconds, (int, float)) and float(timeout_seconds) > 0:
+        normalized["timeout_seconds"] = float(timeout_seconds)
+    else:
+        normalized.pop("timeout_seconds", None)
+
+    discord = _parse_notification_target_section(raw.get("discord"))
+    if discord:
+        normalized["discord"] = discord
+    else:
+        normalized.pop("discord", None)
+
+    telegram = _parse_notification_target_section(raw.get("telegram"))
+    if telegram:
+        normalized["telegram"] = telegram
+    else:
+        normalized.pop("telegram", None)
+    return cast(NotificationsConfigSection, normalized)
+
+
+def _parse_voice_config_section(raw: object) -> VoiceConfigSection:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, object] = dict(raw)
+    bool_keys = ("enabled", "warn_on_remote_api")
+    for key in bool_keys:
+        value = raw.get(key)
+        if isinstance(value, bool):
+            normalized[key] = value
+        else:
+            normalized.pop(key, None)
+
+    for key in ("provider", "latency_mode"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            normalized[key] = value.strip()
+        else:
+            normalized.pop(key, None)
+
+    for key in ("chunk_ms", "sample_rate"):
+        value = raw.get(key)
+        if isinstance(value, (int, float)):
+            normalized[key] = int(value)
+        else:
+            normalized.pop(key, None)
+
+    push_to_talk = raw.get("push_to_talk")
+    if isinstance(push_to_talk, dict):
+        normalized["push_to_talk"] = {
+            str(key): value
+            for key, value in push_to_talk.items()
+            if isinstance(key, str)
+        }
+    else:
+        normalized.pop("push_to_talk", None)
+
+    providers_raw = raw.get("providers")
+    if isinstance(providers_raw, dict):
+        providers: dict[str, dict[str, object]] = {}
+        for provider_name, provider_cfg in providers_raw.items():
+            if not isinstance(provider_name, str) or not provider_name.strip():
+                continue
+            if not isinstance(provider_cfg, dict):
+                continue
+            providers[provider_name.strip()] = {
+                str(key): value
+                for key, value in provider_cfg.items()
+                if isinstance(key, str)
+            }
+        normalized["providers"] = providers
+    else:
+        normalized.pop("providers", None)
+    return cast(VoiceConfigSection, normalized)
+
+
+def _parse_destination_config_section(raw: object) -> DestinationConfigSection:
+    if not isinstance(raw, dict):
+        return cast(DestinationConfigSection, default_local_destination())
+    return cast(DestinationConfigSection, dict(raw))
 
 
 def _parse_ticket_flow_config(
@@ -1922,7 +2129,7 @@ def derive_repo_config(
 
 def _resolve_repo_effective_destination(
     hub: HubConfig, repo_root: Path
-) -> Dict[str, Any]:
+) -> DestinationConfigSection:
     try:
         manifest = load_manifest(hub.manifest_path, hub.root)
     except ManifestError as exc:
@@ -1937,10 +2144,10 @@ def _resolve_repo_effective_destination(
         ) from exc
     repo = manifest.get_by_path(hub.root, repo_root)
     if repo is None:
-        return default_local_destination()
+        return _parse_destination_config_section(default_local_destination())
     repos_by_id = {entry.id: entry for entry in manifest.repos}
     resolution = resolve_effective_repo_destination(repo, repos_by_id)
-    return resolution.to_dict()
+    return _parse_destination_config_section(resolution.to_dict())
 
 
 def _resolve_repo_root(start: Path) -> Path:
@@ -1970,8 +2177,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         "decisions": Path(cfg["docs"]["decisions"]),
         "spec": Path(cfg["docs"]["spec"]),
     }
-    voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
-    voice_cfg = cast(Dict[str, Any], voice_cfg)
+    voice_cfg = _parse_voice_config_section(cfg.get("voice"))
     template_val = cfg["prompt"].get("template")
     template = root / template_val if template_val else None
     term_args = cfg["codex"].get("terminal_args") or []
@@ -1985,12 +2191,8 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         idle_timeout_seconds = int(idle_timeout_value)
         if idle_timeout_seconds <= 0:
             idle_timeout_seconds = None
-    notifications_cfg = (
-        cfg.get("notifications") if isinstance(cfg.get("notifications"), dict) else {}
-    )
-    notifications_cfg = cast(Dict[str, Any], notifications_cfg)
-    security_cfg = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
-    security_cfg = cast(Dict[str, Any], security_cfg)
+    notifications_cfg = _parse_notifications_config_section(cfg.get("notifications"))
+    security_cfg = _parse_security_config_section(cfg.get("security"))
     log_cfg = cfg.get("log", {})
     log_cfg = cast(Dict[str, Any], log_cfg if isinstance(log_cfg, dict) else {})
     server_log_cfg = cfg.get("server_log", {}) or {}

@@ -1,8 +1,10 @@
+import asyncio
 import types
 from typing import Optional
 
 import pytest
 
+import codex_autorunner.integrations.telegram.handlers.messages as msg_module
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramAudio,
     TelegramDocument,
@@ -13,6 +15,8 @@ from codex_autorunner.integrations.telegram.adapter import (
 from codex_autorunner.integrations.telegram.handlers.messages import (
     _CoalescedBuffer,
     _MediaBatchBuffer,
+    buffer_coalesced_message,
+    buffer_media_batch,
     build_coalesced_message,
     document_is_image,
     handle_media_message,
@@ -49,6 +53,15 @@ def _message(**kwargs: object) -> TelegramMessage:
         is_topic_message=False,
         **kwargs,
     )
+
+
+class _AsyncNoopLock:
+    async def __aenter__(self) -> "_AsyncNoopLock":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _ = (exc_type, exc, tb)
+        return False
 
 
 def test_build_coalesced_message_replaces_text() -> None:
@@ -330,6 +343,113 @@ async def test_media_batch_key_without_media_group() -> None:
     )
     key = await media_batch_key(handlers, message)
     assert key == "chat:3:thread:4:user:5:burst"
+
+
+@pytest.mark.anyio
+async def test_buffer_coalesced_message_does_not_construct_lock_when_key_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_ctor_calls = 0
+
+    def _counting_lock() -> _AsyncNoopLock:
+        nonlocal lock_ctor_calls
+        lock_ctor_calls += 1
+        return _AsyncNoopLock()
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.handlers.messages.asyncio.Lock",
+        _counting_lock,
+    )
+
+    async def _resolve_topic_key(chat_id: int, thread_id: int) -> str:
+        return f"chat:{chat_id}:thread:{thread_id}"
+
+    def _spawn_task(coro: object) -> None:
+        coro.close()
+        return None
+
+    key = "chat:3:thread:4:user:5"
+    handlers = types.SimpleNamespace(
+        _resolve_topic_key=_resolve_topic_key,
+        _coalesce_locks={key: _AsyncNoopLock()},
+        _coalesced_buffers={},
+        _touch_cache_timestamp=lambda *_args, **_kwargs: None,
+        _spawn_task=_spawn_task,
+        _config=types.SimpleNamespace(coalesce_window_seconds=0.5),
+    )
+
+    await buffer_coalesced_message(handlers, _message(text="hello"), "hello")
+    assert lock_ctor_calls == 0
+
+
+@pytest.mark.anyio
+async def test_buffer_media_batch_does_not_construct_lock_when_key_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_ctor_calls = 0
+
+    def _counting_lock() -> _AsyncNoopLock:
+        nonlocal lock_ctor_calls
+        lock_ctor_calls += 1
+        return _AsyncNoopLock()
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.handlers.messages.asyncio.Lock",
+        _counting_lock,
+    )
+
+    async def _resolve_topic_key(chat_id: int, thread_id: int) -> str:
+        return f"chat:{chat_id}:thread:{thread_id}"
+
+    def _spawn_task(coro: object) -> None:
+        coro.close()
+        return None
+
+    key = "chat:3:thread:4:user:5:burst"
+    handlers = types.SimpleNamespace(
+        _resolve_topic_key=_resolve_topic_key,
+        _media_batch_locks={key: _AsyncNoopLock()},
+        _media_batch_buffers={},
+        _touch_cache_timestamp=lambda *_args, **_kwargs: None,
+        _spawn_task=_spawn_task,
+        _config=types.SimpleNamespace(
+            media=types.SimpleNamespace(batch_window_seconds=0.5)
+        ),
+    )
+
+    message = _message(photos=(TelegramPhotoSize("p1", None, 10, 10, 100),))
+    await buffer_media_batch(handlers, message)
+    assert lock_ctor_calls == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("locks_attr", "guard_attr"),
+    [
+        ("_coalesce_locks", "_coalesce_locks_guard"),
+        ("_media_batch_locks", "_media_batch_locks_guard"),
+    ],
+)
+async def test_ensure_key_lock_returns_same_instance_for_concurrent_callers(
+    locks_attr: str, guard_attr: str
+) -> None:
+    handlers = types.SimpleNamespace(**{locks_attr: {}})
+    key = "chat:3:thread:4:user:5"
+
+    locks = await asyncio.gather(
+        *[
+            msg_module._ensure_key_lock(
+                handlers,
+                locks_attr=locks_attr,
+                guard_attr=guard_attr,
+                key=key,
+            )
+            for _ in range(10)
+        ]
+    )
+    first = locks[0]
+    assert all(lock is first for lock in locks)
+    assert getattr(handlers, locks_attr)[key] is first
 
 
 @pytest.mark.anyio

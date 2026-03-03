@@ -191,7 +191,7 @@ def register_hub_commands(
             destination = {"kind": "local"}
         elif normalized_kind == "docker":
             if not isinstance(image, str) or not image.strip():
-                raise_exit("--image is required for docker destination")
+                raise_exit("image is required for docker destination")
             destination = {"kind": "docker", "image": image.strip()}
             if isinstance(name, str) and name.strip():
                 destination["container_name"] = name.strip()

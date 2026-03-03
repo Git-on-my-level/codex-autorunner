@@ -4,12 +4,13 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from ...core.config import RepoConfig
 from ...core.destinations import DockerDestination
 from ...core.ports.agent_backend import AgentBackend
 from ...core.state import RunnerState
+from ...core.types import AppServerSupervisorFactory, BackendFactory
 from ..app_server.env import build_app_server_env
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from .codex_backend import CodexAppServerBackend
@@ -20,11 +21,7 @@ from .destination_wrapping import (
 from .opencode_backend import OpenCodeBackend
 from .opencode_supervisor_factory import build_opencode_supervisor_from_repo_config
 
-NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
-BackendFactory = Callable[
-    [str, RunnerState, Optional[NotificationHandler]], AgentBackend
-]
-SupervisorFactory = Callable[[str, Optional[NotificationHandler]], Any]
+NotificationHandler = Callable[[Mapping[str, object]], Awaitable[None]]
 
 
 class AgentBackendFactory:
@@ -278,7 +275,7 @@ def build_app_server_supervisor_factory(
     config: RepoConfig,
     *,
     logger: Optional[logging.Logger] = None,
-) -> SupervisorFactory:
+) -> AppServerSupervisorFactory:
     app_logger = logger or logging.getLogger("codex_autorunner.app_server")
     destination = resolve_destination_from_config(
         getattr(config, "effective_destination", {"kind": "local"})

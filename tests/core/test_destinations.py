@@ -4,6 +4,7 @@ from pathlib import Path
 
 from codex_autorunner.core.destinations import (
     DockerDestination,
+    DockerMount,
     LocalDestination,
     parse_destination_config,
     resolve_effective_repo_destination,
@@ -33,6 +34,10 @@ def test_parse_destination_config_docker() -> None:
     )
     assert parsed.valid is True
     assert isinstance(parsed.destination, DockerDestination)
+    assert parsed.destination.mounts == (
+        DockerMount(source="/tmp/src", target="/src", read_only=True),
+    )
+    assert parsed.destination.env == {"OPENAI_API_KEY": "sk-test"}
     assert parsed.destination.to_dict() == {
         "kind": "docker",
         "image": "ghcr.io/acme/car:latest",
@@ -93,6 +98,21 @@ def test_parse_destination_config_invalid_mount_read_only_type() -> None:
     assert parsed.valid is False
     assert isinstance(parsed.destination, LocalDestination)
     assert "mounts[0].read_only must be a boolean" in parsed.errors[0]
+
+
+def test_parse_destination_config_supports_readonly_alias() -> None:
+    parsed = parse_destination_config(
+        {
+            "kind": "docker",
+            "image": "ghcr.io/acme/car:latest",
+            "mounts": [{"source": "/tmp/src", "target": "/src", "readonly": True}],
+        }
+    )
+    assert parsed.valid is True
+    assert isinstance(parsed.destination, DockerDestination)
+    assert parsed.destination.mounts == (
+        DockerMount(source="/tmp/src", target="/src", read_only=True),
+    )
 
 
 def test_parse_destination_config_invalid_explicit_env_map() -> None:

@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, cast
 
 logger = logging.getLogger("codex_autorunner.core.usage")
 
@@ -72,7 +72,7 @@ class TokenEvent:
     model: Optional[str]
     totals: TokenTotals
     delta: TokenTotals
-    rate_limits: Optional[Dict[str, Any]]
+    rate_limits: Optional[dict[str, object]]
     agent: str
 
 
@@ -80,8 +80,8 @@ class TokenEvent:
 class UsageSummary:
     totals: TokenTotals
     events: int
-    latest_rate_limits: Optional[Dict[str, Any]]
-    source_confidence: Optional[Dict[str, Any]] = None
+    latest_rate_limits: Optional[dict[str, object]]
+    source_confidence: Optional[dict[str, object]] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -92,14 +92,14 @@ class UsageSummary:
         }
 
 
-def _coerce_totals(payload: Optional[Dict[str, Any]]) -> TokenTotals:
+def _coerce_totals(payload: Optional[Mapping[str, object]]) -> TokenTotals:
     payload = payload or {}
     return TokenTotals(
-        input_tokens=int(payload.get("input_tokens", 0) or 0),
-        cached_input_tokens=int(payload.get("cached_input_tokens", 0) or 0),
-        output_tokens=int(payload.get("output_tokens", 0) or 0),
-        reasoning_output_tokens=int(payload.get("reasoning_output_tokens", 0) or 0),
-        total_tokens=int(payload.get("total_tokens", 0) or 0),
+        input_tokens=_coerce_int(payload.get("input_tokens")),
+        cached_input_tokens=_coerce_int(payload.get("cached_input_tokens")),
+        output_tokens=_coerce_int(payload.get("output_tokens")),
+        reasoning_output_tokens=_coerce_int(payload.get("reasoning_output_tokens")),
+        total_tokens=_coerce_int(payload.get("total_tokens")),
     )
 
 
@@ -129,14 +129,14 @@ class _OpenCodeAggregationStats:
     aggregation_ms: int = 0
 
 
-def _build_codex_confidence(events: int) -> Dict[str, Any]:
+def _build_codex_confidence(events: int) -> dict[str, object]:
     confidence = "high" if events > 0 else "none"
     return {"source": "codex_cache", "confidence": confidence, "events": events}
 
 
 def _build_opencode_confidence(
     source: str, stats: _OpenCodeAggregationStats
-) -> Dict[str, Any]:
+) -> dict[str, object]:
     confidence = "none"
     if source == OPENCODE_USAGE_SOURCE_PERSISTED:
         confidence = "high"
@@ -164,10 +164,10 @@ def _build_opencode_confidence(
     }
 
 
-def _merge_confidence(*maps: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    merged: Dict[str, Any] = {}
+def _merge_confidence(*maps: Optional[Mapping[str, object]]) -> dict[str, object]:
+    merged: dict[str, object] = {}
     for item in maps:
-        if isinstance(item, dict):
+        if isinstance(item, Mapping):
             merged.update(item)
     return merged
 
@@ -206,22 +206,38 @@ _OPENCODE_USAGE_KEYS = {
 }
 
 
-def _coerce_opencode_int(value: Any) -> int:
-    try:
+def _coerce_opencode_int(value: object) -> int:
+    return _coerce_int(value)
+
+
+def _coerce_int(value: object) -> int:
+    if isinstance(value, bool):
         return int(value)
-    except (TypeError, ValueError) as exc:
-        logger.debug("Failed to coerce int from %r: %s", value, exc)
-        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return 0
+        try:
+            return int(stripped)
+        except ValueError as exc:
+            logger.debug("Failed to coerce int from %r: %s", value, exc)
+            return 0
+    logger.debug("Failed to coerce int from unsupported type: %s", type(value).__name__)
+    return 0
 
 
-def _coerce_opencode_field(payload: Dict[str, Any], keys: List[str]) -> int:
+def _coerce_opencode_field(payload: Mapping[str, object], keys: List[str]) -> int:
     for key in keys:
         if key in payload and payload.get(key) is not None:
             return _coerce_opencode_int(payload.get(key))
     return 0
 
 
-def _coerce_opencode_totals(payload: Optional[Dict[str, Any]]) -> TokenTotals:
+def _coerce_opencode_totals(payload: Optional[Mapping[str, object]]) -> TokenTotals:
     payload = payload or {}
     input_tokens = _coerce_opencode_field(payload, _OPENCODE_USAGE_KEYS["input_tokens"])
     cached_tokens = _coerce_opencode_field(
@@ -280,7 +296,7 @@ def persist_opencode_usage_snapshot(
     *,
     session_id: Optional[str],
     turn_id: Optional[str],
-    usage: Optional[Dict[str, Any]],
+    usage: Optional[Mapping[str, object]],
     source: str = "live_stream",
 ) -> bool:
     if not isinstance(usage, dict):
@@ -288,7 +304,7 @@ def persist_opencode_usage_snapshot(
     totals = _coerce_opencode_totals(usage)
     if not _token_totals_has_values(totals):
         return False
-    payload: Dict[str, Any] = {
+    payload: dict[str, object] = {
         "version": 1,
         "timestamp": _iso_now(),
         "session_id": session_id or "",
@@ -316,8 +332,8 @@ def persist_opencode_usage_snapshot(
         return False
 
 
-def _looks_like_opencode_usage(payload: Any) -> bool:
-    if not isinstance(payload, dict):
+def _looks_like_opencode_usage(payload: object) -> bool:
+    if not isinstance(payload, Mapping):
         return False
     for keys in _OPENCODE_USAGE_KEYS.values():
         for key in keys:
@@ -327,8 +343,8 @@ def _looks_like_opencode_usage(payload: Any) -> bool:
 
 
 def _extract_opencode_usage_payload(
-    payload: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+    payload: Mapping[str, object],
+) -> Optional[dict[str, object]]:
     for key in (
         "usage",
         "token_usage",
@@ -339,40 +355,40 @@ def _extract_opencode_usage_payload(
     ):
         usage = payload.get(key)
         if _looks_like_opencode_usage(usage):
-            return cast(Dict[str, Any], usage)
+            return cast(dict[str, object], usage)
     response = payload.get("response")
-    if isinstance(response, dict):
+    if isinstance(response, Mapping):
         usage = response.get("usage")
         if _looks_like_opencode_usage(usage):
-            return cast(Dict[str, Any], usage)
+            return cast(dict[str, object], usage)
     return None
 
 
 def _extract_opencode_entries(
-    payload: Dict[str, Any],
-) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
-    entries: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    payload: Mapping[str, object],
+) -> List[Tuple[dict[str, object], dict[str, object]]]:
+    entries: List[Tuple[dict[str, object], dict[str, object]]] = []
     detail_found = False
     for list_key in ("messages", "events", "turns", "responses", "steps"):
         items = payload.get(list_key)
         if not isinstance(items, list):
             continue
         for item in items:
-            if not isinstance(item, dict):
+            if not isinstance(item, Mapping):
                 continue
             usage = _extract_opencode_usage_payload(item)
             if usage:
-                entries.append((item, usage))
+                entries.append((dict(item), usage))
                 detail_found = True
     if detail_found:
         return entries
     usage = _extract_opencode_usage_payload(payload)
     if usage:
-        entries.append((payload, usage))
+        entries.append((dict(payload), usage))
     return entries
 
 
-def _parse_opencode_timestamp(value: Any, fallback: datetime) -> datetime:
+def _parse_opencode_timestamp(value: object, fallback: datetime) -> datetime:
     if value is None:
         return fallback
     if isinstance(value, (int, float)):
@@ -391,7 +407,7 @@ def _parse_opencode_timestamp(value: Any, fallback: datetime) -> datetime:
 
 
 def _extract_opencode_timestamp(
-    container: Dict[str, Any], fallback: datetime
+    container: Mapping[str, object], fallback: datetime
 ) -> datetime:
     for key in (
         "timestamp",
@@ -416,7 +432,7 @@ def _format_opencode_model(
 
 
 def _extract_opencode_model(
-    container: Dict[str, Any],
+    container: Mapping[str, object],
     fallback_model: Optional[str],
     fallback_provider: Optional[str],
 ) -> Optional[str]:
@@ -432,7 +448,10 @@ def _extract_opencode_model(
         or container.get("modelProvider")
         or fallback_provider
     )
-    return _format_opencode_model(model, provider)
+    return _format_opencode_model(
+        model if isinstance(model, str) else fallback_model,
+        provider if isinstance(provider, str) else fallback_provider,
+    )
 
 
 def _iter_opencode_session_files(repo_root: Path) -> Iterable[Path]:

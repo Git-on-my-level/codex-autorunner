@@ -71,6 +71,41 @@ def test_load_repo_config_inherits_hub_shared_settings(tmp_path: Path) -> None:
     assert config.agent_binary("opencode") == "/opt/opencode"
 
 
+def test_load_repo_config_parses_typed_core_sections(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {
+                "security": {"redact_run_logs": False},
+                "notifications": {
+                    "enabled": "auto",
+                    "tui_idle_seconds": 45.0,
+                },
+                "voice": {
+                    "enabled": True,
+                    "provider": "local_whisper",
+                    "latency_mode": "low",
+                },
+            },
+        },
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    assert config.security["redact_run_logs"] is False
+    assert config.notifications["enabled"] == "auto"
+    assert config.notifications["tui_idle_seconds"] == 45
+    assert config.voice["enabled"] is True
+    assert config.voice["provider"] == "local_whisper"
+    assert config.voice["latency_mode"] == "low"
+    assert config.effective_destination["kind"] == "local"
+
+
 def test_update_backend_null_defaults_to_auto(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
