@@ -265,6 +265,15 @@ def register_root_commands(app: typer.Typer) -> None:
         opencode_record = (
             state.sessions.get(opencode_session_id) if opencode_session_id else None
         )
+        quoted_repo = shlex.quote(str(engine.repo_root))
+        recommended_actions = [
+            f"car ticket-flow status --repo {quoted_repo}",
+            f"car sessions --repo {quoted_repo}",
+        ]
+        if session_id or opencode_session_id:
+            recommended_actions.append(f"car stop-session --repo {quoted_repo}")
+        if state.runner_pid:
+            recommended_actions.append(f"car kill --repo {quoted_repo}")
 
         if output_json:
             hub_config_path = _resolve_hub_config_path_for_cli(engine.repo_root, hub)
@@ -305,6 +314,7 @@ def register_root_commands(app: typer.Typer) -> None:
                     if opencode_record
                     else None
                 ),
+                "recommended_actions": recommended_actions,
             }
             typer.echo(json.dumps(payload, indent=2))
             return
@@ -328,6 +338,9 @@ def register_root_commands(app: typer.Typer) -> None:
             if opencode_record:
                 detail = f" (status={opencode_record.status}, last_seen={opencode_record.last_seen_at})"
             typer.echo(f"Terminal session (opencode): {opencode_session_id}{detail}")
+        typer.echo("Recommended actions:")
+        for action in recommended_actions:
+            typer.echo(f"- {action}")
 
     @app.command()
     def sessions(
@@ -586,7 +599,11 @@ def register_root_commands(app: typer.Typer) -> None:
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
-        """Force-kill a running autorunner and clear stale lock/state."""
+        """Force-kill a running autorunner and clear stale lock/state.
+
+        Safety:
+        This interrupts active automation immediately and marks state as error.
+        """
         engine = _require_repo_config(repo, hub)
         pid = engine.kill_running_process()
         with state_lock(engine.state_path):

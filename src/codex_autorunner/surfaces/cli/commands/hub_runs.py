@@ -202,7 +202,12 @@ def register_hub_runs_commands(
         ),
         pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
     ):
-        """Archive stale run artifacts across hub repos and optionally delete run records."""
+        """Archive stale run artifacts across hub repos and optionally delete run records.
+
+        Safety:
+        This can delete flow run records when `--delete-run true` (default). Run
+        with `--dry-run` first to inspect selected runs.
+        """
         if not stale:
             typer.echo("Pass --stale to confirm batch cleanup intent.", err=True)
             raise typer.Exit(code=1)

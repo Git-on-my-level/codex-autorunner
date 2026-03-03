@@ -70,6 +70,7 @@ def test_cli_hub_worktree_list_filters_worktrees(tmp_path, monkeypatch) -> None:
     ]
     assert len(lines) == 1
     assert "base--feature" in lines[0]
+    assert "recommended: car hub worktree archive base--feature" in result.output
 
 
 def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> None:
@@ -94,6 +95,15 @@ def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> 
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert [item["id"] for item in payload["worktrees"]] == ["base--feature"]
+    assert (
+        payload["worktrees"][0]["recommended_command"]
+        == "car hub worktree archive base--feature"
+    )
+    assert payload["worktrees"][0]["recommended_actions"] == [
+        "car hub worktree archive base--feature",
+        "car hub worktree cleanup base--feature",
+        "car hub destination show base--feature",
+    ]
 
 
 def test_cli_hub_worktree_create_prints_details(tmp_path, monkeypatch) -> None:
@@ -127,6 +137,28 @@ def test_cli_hub_worktree_create_prints_details(tmp_path, monkeypatch) -> None:
     assert "base--feature" in result.output
     assert "feature" in result.output
     assert str(worktree.path) in result.output
+
+
+def test_cli_hub_scan_includes_recommended_commands(tmp_path, monkeypatch) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    base = _snapshot(tmp_path, "base", kind="base")
+    worktree = _snapshot(
+        tmp_path, "base--feature", kind="worktree", worktree_of="base", branch="feature"
+    )
+
+    def _fake_scan(self):
+        return [base, worktree]
+
+    monkeypatch.setattr(HubSupervisor, "scan", _fake_scan)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["hub", "scan", "--path", str(hub_root)])
+    assert result.exit_code == 0
+    assert "recommended=car hub destination show base" in result.output
+    assert "recommended=car hub worktree archive base--feature" in result.output
 
 
 def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> None:

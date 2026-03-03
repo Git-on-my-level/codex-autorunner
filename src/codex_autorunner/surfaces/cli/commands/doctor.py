@@ -276,6 +276,7 @@ def register_doctor_commands(
             help="Include developer-focused parity checks",
         ),
     ):
+        """Run default doctor checks (or subcommands when provided)."""
         if ctx.invoked_subcommand:
             return
         try:
@@ -330,6 +331,7 @@ def register_doctor_commands(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
         json_output: bool = typer.Option(False, "--json", help="Output JSON"),
     ):
+        """Print build/runtime version diagnostics for CLI, Python, and hub server."""
         payload = _doctor_versions_payload(repo or Path.cwd())
         if json_output:
             typer.echo(json.dumps(payload, indent=2))

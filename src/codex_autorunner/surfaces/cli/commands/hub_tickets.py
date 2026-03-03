@@ -229,6 +229,7 @@ def register_hub_tickets_commands(
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Import a zipped ticket pack into a hub repo ticket directory."""
         config = require_hub_config_func(hub)
         repo_root = resolve_hub_repo_root(config, repo_id)
 
@@ -291,6 +292,7 @@ def register_hub_tickets_commands(
         ),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Set `frontmatter.agent` for a ticket range."""
         config = require_hub_config_func(hub)
         repo_root = resolve_hub_repo_root(config, repo_id)
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -333,6 +335,7 @@ def register_hub_tickets_commands(
         ),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Clear model/reasoning pins from ticket frontmatter for a range."""
         config = require_hub_config_func(hub)
         repo_root = resolve_hub_repo_root(config, repo_id)
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -372,6 +375,7 @@ def register_hub_tickets_commands(
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Format ticket frontmatter and report lint drift."""
         config = require_hub_config_func(hub)
         repo_root = resolve_hub_repo_root(config, repo_id)
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -406,6 +410,7 @@ def register_hub_tickets_commands(
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Check or auto-fix ticket frontmatter consistency issues."""
         config = require_hub_config_func(hub)
         repo_root = resolve_hub_repo_root(config, repo_id)
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"

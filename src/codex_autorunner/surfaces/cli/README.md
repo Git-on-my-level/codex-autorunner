@@ -9,6 +9,11 @@ Command-line interface for codex-autorunner.
 - Execute commands and display results
 - Handle CLI-specific error messaging
 
+## Operator Habit
+
+- In unfamiliar command areas, run `car <command-group> --help` first.
+- Use command help examples as canonical usage before scripting.
+
 ## Allowed Dependencies
 
 - `core.*` (engine, config, state, etc.)

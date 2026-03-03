@@ -91,22 +91,49 @@ HubSupervisor = _HubSupervisor
 
 logger = logging.getLogger("codex_autorunner.cli")
 
-app = typer.Typer(add_completion=False)
-hub_app = typer.Typer(add_completion=False)
-dispatch_app = typer.Typer(add_completion=False)
-inbox_app = typer.Typer(add_completion=False)
-hub_runs_app = typer.Typer(add_completion=False)
-telegram_app = typer.Typer(add_completion=False)
-discord_app = typer.Typer(add_completion=False)
-templates_app = typer.Typer(add_completion=False)
-repos_app = typer.Typer(add_completion=False)
-cleanup_app = typer.Typer(add_completion=False)
-chat_app = typer.Typer(add_completion=False)
-worktree_app = typer.Typer(add_completion=False)
-hub_tickets_app = typer.Typer(add_completion=False)
-doctor_app = typer.Typer(add_completion=False, invoke_without_command=True)
-flow_app = typer.Typer(add_completion=False)
-ticket_flow_app = typer.Typer(add_completion=False)
+app = typer.Typer(
+    add_completion=False,
+    help="Codex Autorunner CLI for repo and hub lifecycle workflows.",
+)
+hub_app = typer.Typer(
+    add_completion=False, help="Hub repo/worktree lifecycle commands."
+)
+dispatch_app = typer.Typer(
+    add_completion=False, help="Reply to and resolve hub dispatch handoffs."
+)
+inbox_app = typer.Typer(add_completion=False, help="Resolve and clear hub inbox items.")
+hub_runs_app = typer.Typer(
+    add_completion=False, help="Archive and prune stale flow runs."
+)
+telegram_app = typer.Typer(add_completion=False, help="Manage Telegram bot operations.")
+discord_app = typer.Typer(add_completion=False, help="Manage Discord bot operations.")
+templates_app = typer.Typer(
+    add_completion=False, help="Fetch, apply, and discover ticket templates."
+)
+repos_app = typer.Typer(
+    add_completion=False, help="Manage trusted/untrusted template repositories."
+)
+cleanup_app = typer.Typer(
+    add_completion=False, help="Cleanup managed processes and report artifacts."
+)
+chat_app = typer.Typer(add_completion=False, help="Inspect shared chat metadata.")
+worktree_app = typer.Typer(
+    add_completion=False, help="Create, list, archive, and cleanup hub worktrees."
+)
+hub_tickets_app = typer.Typer(
+    add_completion=False, help="Import and maintain ticket packs in hub repos."
+)
+doctor_app = typer.Typer(
+    add_completion=False,
+    invoke_without_command=True,
+    help="Run health checks for repo, hub, and integrations.",
+)
+flow_app = typer.Typer(
+    add_completion=False, help="Flow lifecycle commands (worker + ticket_flow)."
+)
+ticket_flow_app = typer.Typer(
+    add_completion=False, help="Canonical ticket_flow workflow commands."
+)
 
 
 def _version_callback(value: bool) -> None:
@@ -189,7 +216,11 @@ register_discord_commands(
 )
 app.add_typer(templates_app, name="templates")
 # UX alias: allow singular form (`car template ...`) in addition to `car templates ...`.
-app.add_typer(templates_app, name="template")
+app.add_typer(
+    templates_app,
+    name="template",
+    help="Alias of `templates` (canonical form: `car templates ...`).",
+)
 app.add_typer(cleanup_app, name="cleanup")
 app.add_typer(chat_app, name="chat")
 register_templates_commands(
@@ -229,12 +260,22 @@ register_chat_commands(
 )
 app.add_typer(doctor_app, name="doctor")
 register_doctor_commands(doctor_app)
-protocol_app = typer.Typer(add_completion=False)
+protocol_app = typer.Typer(
+    add_completion=False, help="Refresh and inspect protocol schema snapshots."
+)
 app.add_typer(protocol_app, name="protocol")
 register_protocol_commands(protocol_app)
 app.add_typer(flow_app, name="flow")
-app.add_typer(ticket_flow_app, name="ticket-flow")
-flow_app.add_typer(ticket_flow_app, name="ticket_flow")
+app.add_typer(
+    ticket_flow_app,
+    name="ticket-flow",
+    help="Canonical ticket_flow command group.",
+)
+flow_app.add_typer(
+    ticket_flow_app,
+    name="ticket_flow",
+    help="Legacy alias of `ticket-flow` (canonical: `car ticket-flow ...`).",
+)
 app.add_typer(pma_cli_app, name="pma")
 register_root_commands(app)
 register_describe_commands(

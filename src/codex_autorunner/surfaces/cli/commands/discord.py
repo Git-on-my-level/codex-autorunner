@@ -67,6 +67,7 @@ def register_discord_commands(
             None, "--path", help="Repo or hub root path"
         ),
     ) -> None:
+        """Start the Discord bot service."""
         _require_discord_feature(require_optional_feature)
         try:
             config = load_hub_config(path or Path.cwd())
@@ -111,6 +112,7 @@ def register_discord_commands(
             None, "--path", help="Repo or hub root path"
         ),
     ) -> None:
+        """Run Discord health checks (placeholder; not implemented)."""
         _require_discord_feature(require_optional_feature)
         raise NotImplementedError("Discord health check is not implemented yet.")
 
@@ -120,6 +122,7 @@ def register_discord_commands(
             None, "--path", help="Repo or hub root path"
         ),
     ) -> None:
+        """Register/sync Discord application commands with Discord API."""
         _require_discord_feature(require_optional_feature)
         try:
             config = load_hub_config(path or Path.cwd())

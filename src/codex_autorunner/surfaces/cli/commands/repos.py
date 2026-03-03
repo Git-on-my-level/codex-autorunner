@@ -17,6 +17,7 @@ def register_repos_commands(
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
+        """List configured template repositories."""
         manager = load_template_repos_manager(hub)
         repos = manager.list_repos()
 
@@ -54,6 +55,7 @@ def register_repos_commands(
         ),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Add a template repository to hub config."""
         manager = load_template_repos_manager(hub)
         try:
             manager.add_repo(repo_id, url, trusted, default_ref)
@@ -74,6 +76,7 @@ def register_repos_commands(
         repo_id: str = typer.Argument(..., help="Repo ID to remove"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Remove a template repository from hub config."""
         manager = load_template_repos_manager(hub)
         try:
             manager.remove_repo(repo_id)
@@ -94,6 +97,7 @@ def register_repos_commands(
         repo_id: str = typer.Argument(..., help="Repo ID to trust"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Mark a template repository as trusted."""
         manager = load_template_repos_manager(hub)
         try:
             manager.set_trusted(repo_id, True)
@@ -114,6 +118,7 @@ def register_repos_commands(
         repo_id: str = typer.Argument(..., help="Repo ID to untrust"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Mark a template repository as untrusted (scan required on fetch)."""
         manager = load_template_repos_manager(hub)
         try:
             manager.set_trusted(repo_id, False)

@@ -35,6 +35,7 @@ def register_telegram_commands(
             None, "--path", help="Repo or hub root path"
         ),
     ):
+        """Start the Telegram bot polling service."""
         require_optional_feature(
             feature="telegram",
             deps=[("httpx", "httpx")],
@@ -103,6 +104,7 @@ def register_telegram_commands(
         ),
         timeout: float = typer.Option(5.0, "--timeout", help="Timeout (seconds)"),
     ):
+        """Run a Telegram API health check (`getMe`) using current bot config."""
         require_optional_feature(
             feature="telegram",
             deps=[("httpx", "httpx")],
@@ -141,6 +143,7 @@ def register_telegram_commands(
             None, "--path", help="Repo or hub root path"
         ),
     ):
+        """Validate Telegram state store connectivity and schema access."""
         try:
             config = load_hub_config(path or Path.cwd())
         except ConfigError as exc:

@@ -39,6 +39,7 @@ def register_inbox_commands(
         ),
         pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
     ):
+        """Resolve a single hub inbox item (currently dismiss only)."""
         config = require_hub_config(path)
         if action != "dismiss":
             raise_exit("Only --action dismiss is currently supported.")
@@ -107,6 +108,12 @@ def register_inbox_commands(
         ),
         pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
     ):
+        """Batch-clear stale or targeted hub inbox items.
+
+        Safety:
+        This operation dismisses items from the inbox and cannot be undone.
+        Use `--dry-run` first when clearing in bulk.
+        """
         if not stale and not (repo_id and run_id):
             raise_exit("Pass either --stale or both --repo-id and --run-id.")
 

@@ -44,6 +44,11 @@ def register_dispatch_commands(
         ),
         pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
     ):
+        """Post a reply to a paused dispatch and optionally resume the run.
+
+        Example:
+        `car hub dispatch reply --repo-id my-repo --run-id <uuid> --message \"continue\"`
+        """
         config = require_hub_config_func(path)
 
         if bool(message) == bool(message_file):

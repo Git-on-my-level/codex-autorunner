@@ -17,7 +17,10 @@ def register_chat_commands(
     *,
     resolve_hub_path: Callable[[Optional[Path]], Path],
 ) -> None:
-    channels_app = typer.Typer(add_completion=False)
+    channels_app = typer.Typer(
+        add_completion=False,
+        help="Inspect cached chat channel/topic directory entries.",
+    )
     app.add_typer(channels_app, name="channels")
 
     @channels_app.command("list")

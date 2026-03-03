@@ -54,6 +54,11 @@ def register_templates_commands(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Fetch template content from configured template repos.
+
+        Example:
+        `car templates fetch team:ticket.md@main --repo .`
+        """
         ctx = require_repo_config(repo, hub)
         require_templates_enabled(ctx.config)
         fetched, scan_record, _hub_root = _fetch_template_with_scan(
@@ -111,6 +116,11 @@ def register_templates_commands(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     ):
+        """Apply a template to create a ticket file in `.codex-autorunner/tickets`.
+
+        Example:
+        `car templates apply team:ticket.md@main --repo . --next`
+        """
         ctx = require_repo_config(repo, hub)
         require_templates_enabled(ctx.config)
 

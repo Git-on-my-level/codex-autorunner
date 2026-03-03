@@ -1041,7 +1041,12 @@ You are the first ticket in a new ticket_flow run.
         dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
-        """Archive run artifacts and optionally delete the flow run record."""
+        """Archive run artifacts and optionally delete the flow run record.
+
+        Safety:
+        Use `--dry-run` before archiving paused/stopping runs with `--force` or
+        deleting run records with `--delete-run true`.
+        """
         engine = require_repo_config(repo, hub)
         normalized_run_id = _normalize_flow_run_id(run_id)
         if not normalized_run_id:

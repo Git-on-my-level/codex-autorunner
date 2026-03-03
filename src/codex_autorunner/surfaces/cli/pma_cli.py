@@ -14,10 +14,29 @@ from ...core.config import load_hub_config
 
 logger = logging.getLogger(__name__)
 
-pma_app = typer.Typer(add_completion=False, rich_markup_mode=None)
-docs_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="docs")
-context_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="context")
-thread_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="thread")
+pma_app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode=None,
+    help="Project Management Assistant commands for chat, docs, and managed threads.",
+)
+docs_app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode=None,
+    name="docs",
+    help="Read and edit PMA durable docs.",
+)
+context_app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode=None,
+    name="context",
+    help="Snapshot and compact PMA active context.",
+)
+thread_app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode=None,
+    name="thread",
+    help="Manage PMA managed threads and turns.",
+)
 pma_app.add_typer(docs_app)
 pma_app.add_typer(context_app)
 pma_app.add_typer(thread_app, name="thread")

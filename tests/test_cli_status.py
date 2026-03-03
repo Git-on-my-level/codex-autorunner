@@ -1,7 +1,9 @@
 import json
+import shlex
 
 from typer.testing import CliRunner
 
+from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.cli import app
 
 runner = CliRunner()
@@ -27,6 +29,10 @@ def test_status_emits_valid_json(repo) -> None:
     assert "session_record" in parsed
     assert "opencode_session_id" in parsed
     assert "opencode_record" in parsed
+    assert "recommended_actions" in parsed
+    assert isinstance(parsed["recommended_actions"], list)
+    assert parsed["recommended_actions"][0].startswith("car ticket-flow status --repo ")
+    assert parsed["recommended_actions"][1].startswith("car sessions --repo ")
 
     assert parsed["repo"] == str(repo)
 
@@ -46,5 +52,23 @@ def test_status_without_json_outputs_human_readable(repo) -> None:
     assert "Last start:" in output
     assert "Last finish:" in output
     assert "Runner pid:" in output
+    assert "Recommended actions:" in output
 
     assert str(repo) in output
+
+
+def test_status_recommendations_quote_repo_paths_with_spaces(tmp_path) -> None:
+    repo = tmp_path / "repo with space"
+    repo.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    seed_repo_files(repo, git_required=False)
+
+    result = runner.invoke(app, ["status", "--repo", str(repo), "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+
+    quoted_repo = shlex.quote(str(repo))
+    assert parsed["recommended_actions"][0] == (
+        f"car ticket-flow status --repo {quoted_repo}"
+    )
+    assert parsed["recommended_actions"][1] == f"car sessions --repo {quoted_repo}"

@@ -583,6 +583,11 @@ This document is jointly maintained by the user and PMA.
 
 - Add references to frequently used ticket templates here (repo/path/ref) and when to apply them.
 
+## CLI help-first rule
+
+- Before using unfamiliar CAR CLI areas, run `car <group> --help`.
+- Prefer the canonical commands shown in help/examples instead of ad-hoc shell flows.
+
 ## Defaults (examples)
 
 - After implementation work, add a final review ticket, then a ticket to open a PR.
