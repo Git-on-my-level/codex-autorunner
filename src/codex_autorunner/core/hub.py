@@ -42,6 +42,11 @@ from .git_utils import (
     git_upstream_status,
     run_git,
 )
+from .hub_lifecycle import (
+    HubLifecycleWorker,
+    LifecycleEventProcessor,
+    LifecycleRetryPolicy,
+)
 from .lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
@@ -360,9 +365,19 @@ class HubSupervisor:
         self._list_cache: Optional[List[RepoSnapshot]] = None
         self._list_lock = threading.Lock()
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
-        self._lifecycle_task_lock = threading.Lock()
-        self._lifecycle_stop_event = threading.Event()
-        self._lifecycle_thread: Optional[threading.Thread] = None
+        self._lifecycle_event_processor = LifecycleEventProcessor(
+            store=self.lifecycle_store,
+            process_event=lambda event: self._process_lifecycle_event(event),
+            retry_policy=self._build_lifecycle_retry_policy(),
+            logger=logger,
+        )
+        self._lifecycle_worker = HubLifecycleWorker(
+            process_once=self._process_lifecycle_event_cycle,
+            poll_interval_seconds=5.0,
+            join_timeout_seconds=2.0,
+            thread_name="lifecycle-event-processor",
+            logger=logger,
+        )
         self._dispatch_interceptor: Optional[PmaDispatchInterceptor] = None
         self._pma_safety_checker: Optional[PmaSafetyChecker] = None
         self._pma_automation_store: Optional[PmaAutomationStore] = None
@@ -1620,44 +1635,23 @@ class HubSupervisor:
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
         self._process_lifecycle_event(event)
 
+    def _process_lifecycle_event_cycle(self) -> None:
+        self.process_lifecycle_events()
+        self.process_pma_automation_timers()
+        self.drain_pma_automation_wakeups()
+
     def process_lifecycle_events(self) -> None:
-        events = self.lifecycle_store.get_unprocessed(limit=100)
-        for event in events:
-            try:
-                self._process_lifecycle_event(event)
-            except Exception as exc:
-                logger.exception(
-                    "Failed to process lifecycle event %s: %s", event.event_id, exc
-                )
+        self._lifecycle_event_processor.process_events(limit=100)
         try:
             self.drain_pma_automation_wakeups()
         except Exception:
             logger.exception("Failed draining PMA automation wake-ups")
 
     def _start_lifecycle_event_processor(self) -> None:
-        if self._lifecycle_thread is not None:
-            return
-
-        def _process_loop():
-            while not self._lifecycle_stop_event.wait(5.0):
-                try:
-                    self.process_lifecycle_events()
-                    self.process_pma_automation_timers()
-                    self.drain_pma_automation_wakeups()
-                except Exception:
-                    logger.exception("Error in lifecycle event processor")
-
-        self._lifecycle_thread = threading.Thread(
-            target=_process_loop, daemon=True, name="lifecycle-event-processor"
-        )
-        self._lifecycle_thread.start()
+        self._lifecycle_worker.start()
 
     def _stop_lifecycle_event_processor(self) -> None:
-        if self._lifecycle_thread is None:
-            return
-        self._lifecycle_stop_event.set()
-        self._lifecycle_thread.join(timeout=2.0)
-        self._lifecycle_thread = None
+        self._lifecycle_worker.stop()
 
     def shutdown(self) -> None:
         self._stop_lifecycle_event_processor()
@@ -2110,6 +2104,48 @@ class HubSupervisor:
         if event.event_type == LifecycleEventType.DISPATCH_CREATED:
             lines.append("Dispatch requires attention; check the repo inbox.")
         return "\n".join(lines)
+
+    def _build_lifecycle_retry_policy(self) -> LifecycleRetryPolicy:
+        raw = getattr(self.hub_config, "raw", {})
+        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
+        if not isinstance(pma_config, dict):
+            pma_config = {}
+
+        def _read_int(key: str, fallback: int, *, minimum: int = 0) -> int:
+            raw_value = pma_config.get(key, fallback)
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            return value if value >= minimum else fallback
+
+        def _read_float(key: str, fallback: float, *, minimum: float = 0.0) -> float:
+            raw_value = pma_config.get(key, fallback)
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            return value if value >= minimum else fallback
+
+        max_attempts = _read_int("lifecycle_retry_max_attempts", 3, minimum=1)
+        initial_backoff_seconds = _read_float(
+            "lifecycle_retry_initial_backoff_seconds",
+            5.0,
+            minimum=0.0,
+        )
+        max_backoff_seconds = _read_float(
+            "lifecycle_retry_max_backoff_seconds",
+            300.0,
+            minimum=0.0,
+        )
+        if max_backoff_seconds < initial_backoff_seconds:
+            max_backoff_seconds = initial_backoff_seconds
+
+        return LifecycleRetryPolicy(
+            max_attempts=max_attempts,
+            initial_backoff_seconds=initial_backoff_seconds,
+            max_backoff_seconds=max_backoff_seconds,
+        )
 
     def get_pma_safety_checker(self) -> PmaSafetyChecker:
         if self._pma_safety_checker is not None:

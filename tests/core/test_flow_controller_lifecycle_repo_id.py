@@ -96,10 +96,14 @@ async def test_flow_controller_keeps_empty_repo_id_without_hub(
     )
     controller.initialize()
 
-    captured: list[tuple[str, str, dict, str]] = []
+    captured: list[tuple[LifecycleEventType, str, dict, str]] = []
 
     def _capture(
-        event_type: str, repo_id: str, run_id: str, data: dict, origin: str
+        event_type: LifecycleEventType,
+        repo_id: str,
+        run_id: str,
+        data: dict,
+        origin: str,
     ) -> None:
         captured.append((event_type, repo_id, data, origin))
 
@@ -109,7 +113,9 @@ async def test_flow_controller_keeps_empty_repo_id_without_hub(
     await controller.run_flow(record.id)
     controller.shutdown()
 
-    completed = [entry for entry in captured if entry[0] == "flow_completed"]
+    completed = [
+        entry for entry in captured if entry[0] == LifecycleEventType.FLOW_COMPLETED
+    ]
     assert completed
     _, repo_id, data, origin = completed[-1]
     assert repo_id == ""
