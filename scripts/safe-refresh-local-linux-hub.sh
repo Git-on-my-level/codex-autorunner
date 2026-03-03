@@ -19,7 +19,7 @@ set -euo pipefail
 #   HEALTH_TIMEOUT_SECONDS       web health timeout (default: 30)
 #   HEALTH_INTERVAL_SECONDS      web health poll interval (default: 0.5)
 #   HELPER_PYTHON                python binary used for install/status writes
-#   LOCAL_BIN                    User-local bin path to ensure in login shells (default: ~/.local/bin)
+#   LOCAL_BIN                    User-local bin path to ensure in login shells and zsh -c commands (default: ~/.local/bin)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -74,10 +74,10 @@ ensure_login_shell_path() {
   marker_start="# >>> codex-autorunner local-bin >>>"
   marker_end="# <<< codex-autorunner local-bin <<<"
   if [[ -z "${HOME:-}" || ! -d "${HOME}" ]]; then
-    echo "Skipping login-shell PATH bootstrap; HOME is unavailable." >&2
+    echo "Skipping shell PATH bootstrap; HOME is unavailable." >&2
     return 0
   fi
-  for profile in "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
+  for profile in "${HOME}/.zshenv" "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
     if ! mkdir -p "$(dirname "${profile}")"; then
       echo "Warning: could not create directory for ${profile}; skipping." >&2
       continue
@@ -96,7 +96,7 @@ ensure_login_shell_path() {
     if ! {
       echo ""
       echo "${marker_start}"
-      echo "# Ensure user-local CAR binaries are available in login/non-interactive shells."
+      echo "# Ensure user-local CAR binaries are available in login shells and zsh -c commands."
       printf 'export PATH="%s:$PATH"\n' "${path_entry}"
       echo "${marker_end}"
     } >> "${profile}"; then

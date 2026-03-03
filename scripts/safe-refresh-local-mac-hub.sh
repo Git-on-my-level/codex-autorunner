@@ -119,10 +119,10 @@ ensure_login_shell_path() {
   marker_start="# >>> codex-autorunner local-bin >>>"
   marker_end="# <<< codex-autorunner local-bin <<<"
   if [[ -z "${HOME:-}" || ! -d "${HOME}" ]]; then
-    echo "Skipping login-shell PATH bootstrap; HOME is unavailable." >&2
+    echo "Skipping shell PATH bootstrap; HOME is unavailable." >&2
     return 0
   fi
-  for profile in "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
+  for profile in "${HOME}/.zshenv" "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
     if ! mkdir -p "$(dirname "${profile}")"; then
       echo "Warning: could not create directory for ${profile}; skipping." >&2
       continue
@@ -141,7 +141,7 @@ ensure_login_shell_path() {
     if ! {
       echo ""
       echo "${marker_start}"
-      echo "# Ensure pipx-installed CAR is available in login/non-interactive shells."
+      echo "# Ensure pipx-installed CAR is available in login shells and zsh -c commands."
       printf 'export PATH="%s:$PATH"\n' "${path_entry}"
       echo "${marker_end}"
     } >> "${profile}"; then
