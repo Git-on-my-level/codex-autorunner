@@ -28,7 +28,7 @@ async function main() {
   const manifestPath = path.join(staticDir, 'assets.json');
 
   const manifest = {
-    version: Date.now().toString(36),
+    version: "1",
     generated: [],
     manual: []
   };
@@ -40,10 +40,7 @@ async function main() {
     const stat = fs.statSync(file);
     if (!stat.isFile()) continue;
     const relPath = path.relative(staticDir, file).replace(/\\/g, '/');
-    const hash = computeFileHash(file);
-    if (hash) {
-      manifest.generated.push({ path: relPath, hash });
-    }
+    manifest.generated.push({ path: relPath });
   }
 
   const manualPatterns = [
@@ -60,10 +57,7 @@ async function main() {
       if (!stat.isFile()) continue;
       const relPath = path.relative(staticDir, file).replace(/\\/g, '/');
       if (!relPath.includes('generated')) {
-        const hash = computeFileHash(file);
-        if (hash) {
-          manifest.manual.push({ path: relPath, hash });
-        }
+        manifest.manual.push({ path: relPath });
       }
     }
   }

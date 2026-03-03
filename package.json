@@ -13,8 +13,8 @@
     "lint:html": "html-validate \"src/codex_autorunner/static/index.html\"",
     "lint": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.json && node scripts/generate-asset-manifest.mjs",
-    "postbuild": "node scripts/add-static-banner.js",
+    "build": "tsc -p tsconfig.json",
+    "postbuild": "node scripts/add-static-banner.js && node scripts/generate-asset-manifest.mjs",
     "test:dom": "node scripts/check_dom_structure.mjs",
     "test:markdown": "node --test tests/js/markdown_render.test.js"
   },
