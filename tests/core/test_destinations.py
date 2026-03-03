@@ -8,7 +8,7 @@ from codex_autorunner.core.destinations import (
     LocalDestination,
     parse_destination_config,
     resolve_effective_repo_destination,
-    validate_manifest_destinations,
+    validate_destination_write_payload,
 )
 from codex_autorunner.manifest import ManifestRepo
 
@@ -128,6 +128,36 @@ def test_parse_destination_config_invalid_explicit_env_map() -> None:
     assert "env['OPENAI_API_KEY'] must be a string value" in parsed.errors[0]
 
 
+def test_validate_destination_write_payload_returns_canonical_docker_dict() -> None:
+    result = validate_destination_write_payload(
+        {
+            "kind": "docker",
+            "image": "ghcr.io/acme/car:latest",
+            "mounts": [{"source": "/tmp/src", "target": "/src", "readOnly": True}],
+            "profile": "FULL-DEV",
+        },
+        context="destination",
+    )
+    assert result.valid is True
+    assert result.normalized_destination == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/car:latest",
+        "mounts": [{"source": "/tmp/src", "target": "/src", "read_only": True}],
+        "profile": "full-dev",
+    }
+
+
+def test_validate_destination_write_payload_surfaces_parser_errors() -> None:
+    result = validate_destination_write_payload(
+        {"kind": "docker", "image": "", "profile": "bad"},
+        context="destination",
+    )
+    assert result.valid is False
+    assert result.normalized_destination is None
+    assert "docker destination requires non-empty 'image'" in result.errors[0]
+    assert "unsupported docker profile 'bad'" in result.errors[1]
+
+
 def test_resolve_effective_repo_destination_defaults_to_local() -> None:
     repo = ManifestRepo(id="base", path=Path("workspace/base"), kind="base")
     resolution = resolve_effective_repo_destination(repo, {"base": repo})
@@ -178,39 +208,3 @@ def test_resolve_effective_repo_destination_reports_invalid_own_destination() ->
         "image": "ghcr.io/acme/base:latest",
     }
     assert any("requires non-empty 'image'" in message for message in resolution.issues)
-
-
-def test_validate_manifest_destinations_reports_bad_shapes(tmp_path: Path) -> None:
-    manifest_path = tmp_path / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 2",
-                "repos:",
-                "  - id: good",
-                "    path: workspace/good",
-                "    kind: base",
-                "    destination:",
-                "      kind: local",
-                "  - id: bad-shape",
-                "    path: workspace/bad-shape",
-                "    kind: base",
-                "    destination: not-a-dict",
-                "  - id: bad-docker",
-                "    path: workspace/bad-docker",
-                "    kind: base",
-                "    destination:",
-                "      kind: docker",
-                "      image: 123",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    issues = validate_manifest_destinations(manifest_path)
-    assert any(issue.repo_id == "bad-shape" for issue in issues)
-    assert any(
-        issue.repo_id == "bad-docker" and "requires non-empty 'image'" in issue.message
-        for issue in issues
-    )

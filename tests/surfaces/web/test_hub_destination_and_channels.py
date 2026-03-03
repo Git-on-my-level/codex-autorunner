@@ -29,7 +29,7 @@ from codex_autorunner.integrations.agents.wiring import (
 )
 from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.integrations.telegram.state import topic_key as telegram_topic_key
-from codex_autorunner.manifest import load_manifest
+from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
 
 
@@ -319,6 +319,27 @@ def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     assert base.destination == {"kind": "local"}
 
 
+def test_hub_destination_show_route_includes_manifest_parse_issues(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    supervisor.create_repo("base")
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    base = manifest.get("base")
+    assert base is not None
+    base.destination = {"kind": "docker", "image": ""}
+    save_manifest(manifest_path, manifest, hub_root)
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/repos/base/destination")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["effective_destination"] == {"kind": "local"}
+    assert any("requires non-empty 'image'" in issue for issue in payload["issues"])
+
+
 def test_hub_destination_set_route_supports_extended_docker_fields(
     tmp_path: Path,
 ) -> None:
@@ -441,7 +462,7 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
 
     missing_image = client.post("/hub/repos/base/destination", json={"kind": "docker"})
     assert missing_image.status_code == 400
-    assert "image is required for docker destination" in missing_image.json()["detail"]
+    assert "requires non-empty 'image'" in missing_image.json()["detail"]
 
     bad_kind = client.post("/hub/repos/base/destination", json={"kind": "ssh"})
     assert bad_kind.status_code == 400
@@ -456,9 +477,7 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
         },
     )
     assert bad_mount.status_code == 400
-    assert (
-        "Each mount requires non-empty source and target" in bad_mount.json()["detail"]
-    )
+    assert "mounts[0].target must be a non-empty string" in bad_mount.json()["detail"]
 
     bad_mount_read_only = client.post(
         "/hub/repos/base/destination",
@@ -471,7 +490,9 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
         },
     )
     assert bad_mount_read_only.status_code == 400
-    assert "Mount read_only must be a boolean" in bad_mount_read_only.json()["detail"]
+    assert (
+        "mounts[0].read_only must be a boolean" in bad_mount_read_only.json()["detail"]
+    )
 
     bad_env = client.post(
         "/hub/repos/base/destination",
@@ -482,7 +503,7 @@ def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None
         },
     )
     assert bad_env.status_code == 400
-    assert "Docker env keys must be non-empty strings" in bad_env.json()["detail"]
+    assert "env keys must be non-empty strings" in bad_env.json()["detail"]
 
     bad_profile = client.post(
         "/hub/repos/base/destination",

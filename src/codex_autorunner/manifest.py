@@ -38,21 +38,38 @@ class ManifestError(Exception):
     pass
 
 
-def normalize_manifest_destination(value: Any) -> Optional[Dict[str, Any]]:
-    """Normalize destination payloads; return None for invalid shapes."""
+@dataclasses.dataclass(frozen=True)
+class ManifestValidationIssue:
+    repo_id: str
+    message: str
+
+
+def preserve_manifest_destination(value: Any) -> Optional[Dict[str, Any]]:
+    """Keep destination payload mappings round-trippable, including invalid values."""
     if not isinstance(value, dict):
         return None
-    kind = value.get("kind")
-    if not isinstance(kind, str) or not kind.strip():
-        return None
-    normalized: Dict[str, Any] = {}
+    preserved: Dict[str, Any] = {}
     for raw_key, raw_value in value.items():
         if not isinstance(raw_key, str):
             continue
         key = raw_key.strip()
         if not key:
             continue
-        normalized[key] = raw_value
+        if key == "kind" and isinstance(raw_value, str):
+            preserved[key] = raw_value.strip()
+            continue
+        preserved[key] = raw_value
+    return preserved
+
+
+def normalize_manifest_destination(value: Any) -> Optional[Dict[str, Any]]:
+    """Normalize destination payloads; return None for invalid shapes."""
+    normalized = preserve_manifest_destination(value)
+    if normalized is None:
+        return None
+    kind = normalized.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        return None
     normalized["kind"] = kind.strip()
     return normalized
 
@@ -89,7 +106,7 @@ class ManifestRepo:
             payload["worktree_setup_commands"] = [
                 str(cmd) for cmd in self.worktree_setup_commands if str(cmd).strip()
             ]
-        destination = normalize_manifest_destination(self.destination)
+        destination = preserve_manifest_destination(self.destination)
         if destination is not None:
             payload["destination"] = destination
         return payload
@@ -99,6 +116,11 @@ class ManifestRepo:
 class Manifest:
     version: int
     repos: List[ManifestRepo]
+    issues: List[ManifestValidationIssue] = dataclasses.field(
+        default_factory=list,
+        repr=False,
+        compare=False,
+    )
 
     def get(self, repo_id: str) -> Optional[ManifestRepo]:
         for repo in self.repos:
@@ -112,6 +134,13 @@ class Manifest:
             if repo.path == normalized_path:
                 return repo
         return None
+
+    def issues_for_repo(self, repo_id: str) -> List[str]:
+        return [
+            issue.message
+            for issue in self.issues
+            if issue.repo_id in {repo_id, "manifest"}
+        ]
 
     def ensure_repo(
         self,
@@ -167,46 +196,91 @@ def _relative_to_hub_root(hub_root: Path, target: Path) -> Path:
         return Path(os.path.relpath(target, hub_root))
 
 
-def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
-    if not manifest_path.exists():
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest = Manifest(version=MANIFEST_VERSION, repos=[])
-        save_manifest(manifest_path, manifest, hub_root)
-        return manifest
+def _parse_manifest_repos_with_issues(
+    *,
+    repos_data: Any,
+    hub_root: Path,
+) -> tuple[List[ManifestRepo], List[ManifestValidationIssue]]:
+    if repos_data is None:
+        return [], []
 
-    with manifest_path.open("r", encoding="utf-8") as f:
-        raw_data = yaml.safe_load(f) or {}
-    if not isinstance(raw_data, dict):
-        raw_data = {}
-    data = cast(Dict[str, Any], raw_data)
-
-    version = data.get("version")
-    if version != MANIFEST_VERSION:
-        raise ManifestError(
-            f"Unsupported manifest version {version}; expected {MANIFEST_VERSION}"
-        )
-    repos_data = data.get("repos", []) or []
+    issues: List[ManifestValidationIssue] = []
     if not isinstance(repos_data, list):
-        repos_data = []
+        issues.append(
+            ManifestValidationIssue(
+                repo_id="manifest",
+                message="manifest 'repos' must be a list",
+            )
+        )
+        return [], issues
+
+    # Import lazily to avoid circular-import issues at module import time.
+    from .core.destinations import parse_destination_config
+
     repos: List[ManifestRepo] = []
-    for entry in repos_data:
+    for idx, entry in enumerate(repos_data):
         if not isinstance(entry, dict):
+            issues.append(
+                ManifestValidationIssue(
+                    repo_id=f"<index:{idx}>",
+                    message="repo entry must be an object",
+                )
+            )
             continue
+
         repo_id = entry.get("id")
         path_val = entry.get("path")
-        if not isinstance(repo_id, str) or not repo_id:
+        repo_label = (
+            repo_id.strip()
+            if isinstance(repo_id, str) and repo_id.strip()
+            else f"<index:{idx}>"
+        )
+        if not isinstance(repo_id, str) or not repo_id.strip():
+            issues.append(
+                ManifestValidationIssue(
+                    repo_id=repo_label,
+                    message="repo entry requires non-empty string 'id'",
+                )
+            )
             continue
-        if not isinstance(path_val, str) or not path_val:
+        if not isinstance(path_val, str) or not path_val.strip():
+            issues.append(
+                ManifestValidationIssue(
+                    repo_id=repo_label,
+                    message=f"repo '{repo_id}' requires non-empty string 'path'",
+                )
+            )
             continue
         kind = entry.get("kind")
         if kind not in ("base", "worktree"):
             raise ManifestError(
                 f"Invalid manifest repo kind for {repo_id}: {kind} (expected base|worktree)"
             )
+
+        destination = (
+            preserve_manifest_destination(entry.get("destination"))
+            if "destination" in entry
+            else None
+        )
+        if "destination" in entry:
+            parsed_destination = parse_destination_config(
+                entry.get("destination"),
+                context=f"repo '{repo_id}' destination",
+            )
+            if parsed_destination.valid:
+                destination = normalize_manifest_destination(
+                    parsed_destination.destination.to_dict()
+                )
+            else:
+                for message in parsed_destination.errors:
+                    issues.append(
+                        ManifestValidationIssue(repo_id=repo_id, message=message)
+                    )
+
         repos.append(
             ManifestRepo(
-                id=repo_id,
-                path=_relative_to_hub_root(hub_root, hub_root / path_val),
+                id=repo_id.strip(),
+                path=_relative_to_hub_root(hub_root, hub_root / path_val.strip()),
                 enabled=bool(entry.get("enabled", True)),
                 auto_run=bool(entry.get("auto_run", False)),
                 kind=str(kind),
@@ -227,10 +301,43 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
                     ]
                     or None
                 ),
-                destination=normalize_manifest_destination(entry.get("destination")),
+                destination=destination,
             )
         )
-    return Manifest(version=MANIFEST_VERSION, repos=repos)
+
+    return repos, issues
+
+
+def load_manifest_with_issues(
+    manifest_path: Path, hub_root: Path
+) -> tuple[Manifest, List[ManifestValidationIssue]]:
+    if not manifest_path.exists():
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest = Manifest(version=MANIFEST_VERSION, repos=[])
+        save_manifest(manifest_path, manifest, hub_root)
+        return manifest, []
+
+    with manifest_path.open("r", encoding="utf-8") as f:
+        raw_data = yaml.safe_load(f) or {}
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+    data = cast(Dict[str, Any], raw_data)
+
+    version = data.get("version")
+    if version != MANIFEST_VERSION:
+        raise ManifestError(
+            f"Unsupported manifest version {version}; expected {MANIFEST_VERSION}"
+        )
+    repos, issues = _parse_manifest_repos_with_issues(
+        repos_data=data.get("repos", []), hub_root=hub_root
+    )
+    manifest = Manifest(version=MANIFEST_VERSION, repos=repos, issues=list(issues))
+    return manifest, list(issues)
+
+
+def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
+    manifest, _ = load_manifest_with_issues(manifest_path, hub_root)
+    return manifest
 
 
 def save_manifest(manifest_path: Path, manifest: Manifest, hub_root: Path) -> None:

@@ -3,11 +3,22 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 from pathlib import Path
-from typing import Callable, Literal, Mapping, Optional, Protocol, Sequence, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    cast,
+)
 
-import yaml
-
-from ..manifest import ManifestRepo, normalize_manifest_destination
+from ..manifest import (
+    ManifestRepo,
+    normalize_manifest_destination,
+)
 from ..workspace import workspace_id_for_path
 from .utils import subprocess_env
 
@@ -77,14 +88,15 @@ class DockerDestination:
 
 
 @dataclasses.dataclass(frozen=True)
-class DestinationValidationIssue:
-    repo_id: str
-    message: str
+class DestinationParseResult:
+    destination: Destination
+    valid: bool
+    errors: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
-class DestinationParseResult:
-    destination: Destination
+class DestinationWriteValidationResult:
+    normalized_destination: Optional[Dict[str, Any]]
     valid: bool
     errors: tuple[str, ...] = ()
 
@@ -369,6 +381,32 @@ def parse_destination_config(
     )
 
 
+def validate_destination_write_payload(
+    value: Any,
+    *,
+    context: str = "destination",
+) -> DestinationWriteValidationResult:
+    parsed = parse_destination_config(value, context=context)
+    if not parsed.valid:
+        return DestinationWriteValidationResult(
+            normalized_destination=None,
+            valid=False,
+            errors=tuple(parsed.errors),
+        )
+    normalized = normalize_manifest_destination(parsed.destination.to_dict())
+    if normalized is None:
+        return DestinationWriteValidationResult(
+            normalized_destination=None,
+            valid=False,
+            errors=(f"{context}: invalid destination payload",),
+        )
+    return DestinationWriteValidationResult(
+        normalized_destination=normalized,
+        valid=True,
+        errors=(),
+    )
+
+
 def resolve_effective_repo_destination(
     repo: ManifestRepo,
     repos_by_id: Mapping[str, ManifestRepo],
@@ -405,76 +443,11 @@ def resolve_effective_repo_destination(
     )
 
 
-def validate_manifest_destinations(
-    manifest_path: Path,
-) -> list[DestinationValidationIssue]:
-    if not manifest_path.exists():
-        return []
-
-    try:
-        payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    except Exception as exc:
-        return [
-            DestinationValidationIssue(
-                repo_id="manifest",
-                message=f"failed to parse manifest YAML: {exc}",
-            )
-        ]
-
-    if not isinstance(payload, dict):
-        return [
-            DestinationValidationIssue(
-                repo_id="manifest",
-                message="manifest root must be a mapping",
-            )
-        ]
-
-    repos_raw = payload.get("repos")
-    if repos_raw is None:
-        return []
-    if not isinstance(repos_raw, list):
-        return [
-            DestinationValidationIssue(
-                repo_id="manifest",
-                message="manifest 'repos' must be a list",
-            )
-        ]
-
-    issues: list[DestinationValidationIssue] = []
-    for idx, entry in enumerate(repos_raw):
-        if not isinstance(entry, dict):
-            issues.append(
-                DestinationValidationIssue(
-                    repo_id=f"<index:{idx}>",
-                    message="repo entry must be an object",
-                )
-            )
-            continue
-        if "destination" not in entry:
-            continue
-        repo_id_raw = entry.get("id")
-        repo_id = (
-            repo_id_raw.strip()
-            if isinstance(repo_id_raw, str) and repo_id_raw.strip()
-            else f"<index:{idx}>"
-        )
-        parsed = parse_destination_config(
-            entry.get("destination"),
-            context=f"repo '{repo_id}' destination",
-        )
-        if parsed.valid:
-            continue
-        for err in parsed.errors:
-            issues.append(DestinationValidationIssue(repo_id=repo_id, message=err))
-
-    return issues
-
-
 __all__ = [
     "Destination",
     "DestinationParseResult",
     "DestinationResolution",
-    "DestinationValidationIssue",
+    "DestinationWriteValidationResult",
     "DockerReadiness",
     "DockerMount",
     "DockerDestination",
@@ -484,5 +457,5 @@ __all__ = [
     "parse_destination_config",
     "probe_docker_readiness",
     "resolve_effective_repo_destination",
-    "validate_manifest_destinations",
+    "validate_destination_write_payload",
 ]

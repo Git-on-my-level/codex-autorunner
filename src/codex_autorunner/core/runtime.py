@@ -10,12 +10,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from ..manifest import load_manifest
+from ..manifest import load_manifest, load_manifest_with_issues
 from .config import HubConfig, RepoConfig, load_repo_config
 from .destinations import (
     probe_docker_readiness,
     resolve_effective_repo_destination,
-    validate_manifest_destinations,
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock
 from .notifications import NotificationManager
@@ -461,7 +460,9 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
 
     try:
-        manifest = load_manifest(hub_config.manifest_path, hub_config.root)
+        manifest, manifest_issues = load_manifest_with_issues(
+            hub_config.manifest_path, hub_config.root
+        )
     except Exception as exc:
         checks.append(
             DoctorCheck(
@@ -477,9 +478,8 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
 
     repos_by_id = {repo.id: repo for repo in manifest.repos}
     known_repo_ids = set(repos_by_id.keys())
-    validation_issues = validate_manifest_destinations(hub_config.manifest_path)
     issues_by_repo: dict[str, list[str]] = {}
-    for issue in validation_issues:
+    for issue in manifest_issues:
         issues_by_repo.setdefault(issue.repo_id, []).append(issue.message)
 
     if not manifest.repos:

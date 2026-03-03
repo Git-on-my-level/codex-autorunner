@@ -708,7 +708,11 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     ):
         raise ConfigError("server.auth_token_env must be a string if provided")
     _validate_server_security(server)
+    _validate_agents_config(cfg)
     _validate_app_server_config(cfg)
+    _validate_opencode_config(cfg)
+    _validate_update_config(cfg)
+    _validate_usage_config(cfg, root=root)
     server_log_cfg = cfg.get("server_log")
     if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
         raise ConfigError("server_log section must be a mapping or null")
