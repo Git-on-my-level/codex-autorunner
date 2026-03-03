@@ -32,6 +32,17 @@ class _GitHubServiceStub:
         }
 
 
+def test_issue_only_link_accepts_discord_mention_prefix() -> None:
+    link = "https://github.com/example/repo/issues/123"
+    assert context_module.issue_only_link(f"<@123456789> {link}", [link]) == link
+    assert context_module.issue_only_link(f"<@!123456789>\n<{link}>", [link]) == link
+
+
+def test_issue_only_link_rejects_plain_at_prefix() -> None:
+    link = "https://github.com/example/repo/issues/123"
+    assert context_module.issue_only_link(f"@help {link}", [link]) is None
+
+
 @pytest.mark.anyio
 async def test_pma_injection_uses_user_message_links_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -79,6 +90,34 @@ async def test_pma_injection_falls_back_to_workspace_when_repo_not_found(
 
     assert injected is True
     assert "Context: injected" in injected_prompt
+    assert "Issue-only GitHub message detected" in injected_prompt
+    assert "Closes #123" in injected_prompt
+
+
+@pytest.mark.anyio
+async def test_pma_injection_issue_only_with_discord_mention_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        context_module,
+        "find_repo_root",
+        lambda _path: (_ for _ in ()).throw(RepoNotFoundError("no repo")),
+    )
+    monkeypatch.setattr(context_module, "load_repo_config", lambda _path: None)
+    monkeypatch.setattr(context_module, "GitHubService", _GitHubServiceStub)
+
+    prompt_text = "PMA prompt"
+    source_text = "<@123456789> https://github.com/example/repo/issues/123"
+    injected_prompt, injected = await context_module.maybe_inject_github_context(
+        prompt_text=prompt_text,
+        link_source_text=source_text,
+        workspace_root=tmp_path,
+        logger=logging.getLogger("test.github_context.mention_prefix"),
+        event_prefix="test.github_context",
+        allow_cross_repo=True,
+    )
+
+    assert injected is True
     assert "Issue-only GitHub message detected" in injected_prompt
     assert "Closes #123" in injected_prompt
 

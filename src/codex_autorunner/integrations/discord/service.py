@@ -957,7 +957,7 @@ class DiscordBotService:
         prompt_text, github_injected = await self._maybe_inject_github_context(
             prompt_text,
             workspace_root,
-            link_source_text=text if pma_enabled else None,
+            link_source_text=text,
             allow_cross_repo=pma_enabled,
         )
 

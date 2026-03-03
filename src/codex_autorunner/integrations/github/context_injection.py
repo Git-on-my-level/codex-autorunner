@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -18,12 +19,18 @@ _ISSUE_ONLY_LINK_WRAPPERS = (
     "[{link}]",
     "`{link}`",
 )
+_ISSUE_ONLY_LEADING_MENTION_RE = re.compile(
+    r"^(?:(?:<@!?\d+>|<@&\d+>|<#\d+>)\s*[:,]?\s*)+"
+)
 
 
 def issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
     if not prompt_text or not links or len(links) != 1:
         return None
     stripped = prompt_text.strip()
+    if not stripped:
+        return None
+    stripped = _ISSUE_ONLY_LEADING_MENTION_RE.sub("", stripped).strip()
     if not stripped:
         return None
     link = links[0]
