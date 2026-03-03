@@ -5,7 +5,6 @@ Hub-level PMA routes (chat + models + events).
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import importlib
 import json
 import logging
@@ -75,6 +74,15 @@ from ..schemas import (
     PmaManagedThreadMessageRequest,
     PmaManagedThreadResumeRequest,
 )
+from ..services.pma.common import (
+    build_idempotency_key as service_build_idempotency_key,
+)
+from ..services.pma.common import (
+    normalize_optional_text as service_normalize_optional_text,
+)
+from ..services.pma.common import (
+    pma_config_from_raw,
+)
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
 
@@ -114,26 +122,11 @@ def build_pma_routes() -> APIRouter:
     item_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     def _normalize_optional_text(value: Any) -> Optional[str]:
-        if not isinstance(value, str):
-            return None
-        value = value.strip()
-        return value or None
+        return service_normalize_optional_text(value)
 
     def _get_pma_config(request: Request) -> dict[str, Any]:
         raw = getattr(request.app.state.config, "raw", {})
-        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
-        if not isinstance(pma_config, dict):
-            pma_config = {}
-        return {
-            "enabled": bool(pma_config.get("enabled", True)),
-            "default_agent": _normalize_optional_text(pma_config.get("default_agent")),
-            "model": _normalize_optional_text(pma_config.get("model")),
-            "reasoning": _normalize_optional_text(pma_config.get("reasoning")),
-            "active_context_max_lines": int(
-                pma_config.get("active_context_max_lines", 200)
-            ),
-            "max_text_chars": int(pma_config.get("max_text_chars", 800)),
-        }
+        return pma_config_from_raw(raw)
 
     def _build_idempotency_key(
         *,
@@ -144,17 +137,14 @@ def build_pma_routes() -> APIRouter:
         client_turn_id: Optional[str],
         message: str,
     ) -> str:
-        payload = {
-            "lane_id": lane_id,
-            "agent": agent,
-            "model": model,
-            "reasoning": reasoning,
-            "client_turn_id": client_turn_id,
-            "message": message,
-        }
-        raw = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
-        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-        return f"pma:{digest}"
+        return service_build_idempotency_key(
+            lane_id=lane_id,
+            agent=agent,
+            model=model,
+            reasoning=reasoning,
+            client_turn_id=client_turn_id,
+            message=message,
+        )
 
     def _get_state_store(request: Request) -> PmaStateStore:
         nonlocal pma_state_store, pma_state_root

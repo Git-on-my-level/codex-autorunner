@@ -14,20 +14,19 @@ from ..schemas import (
     RunResetResponse,
     RunStatusResponse,
 )
+from ..services.responses import ok_response
+from ..services.validation import normalize_optional_string
 
 
-def _normalize_override(value: Optional[str]) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    trimmed = value.strip()
-    return trimmed or None
+def _normalize_override(value: Optional[str], field: str) -> Optional[str]:
+    return normalize_optional_string(value, field, allow_blank=True)
 
 
 def _apply_run_overrides(request: Request, payload: RunControlRequest) -> None:
     engine = request.app.state.engine
-    agent = _normalize_override(payload.agent)
-    model = _normalize_override(payload.model)
-    reasoning = _normalize_override(payload.reasoning)
+    agent = _normalize_override(payload.agent, "agent")
+    model = _normalize_override(payload.model, "model")
+    reasoning = _normalize_override(payload.reasoning, "reasoning")
     fields_set: set[str] = getattr(payload, "model_fields_set", set())
     agent_set = "agent" in fields_set
     model_set = "model" in fields_set
@@ -191,6 +190,6 @@ def build_repos_routes() -> APIRouter:
             save_state(engine.state_path, initial_state)
         if engine.log_path.exists():
             engine.log_path.unlink()
-        return {"status": "ok", "message": "Runner reset complete"}
+        return ok_response(message="Runner reset complete")
 
     return router

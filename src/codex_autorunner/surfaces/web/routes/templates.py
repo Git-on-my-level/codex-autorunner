@@ -46,15 +46,8 @@ from ..schemas import (
     TemplateRepoSummary,
     TemplateRepoUpdateRequest,
 )
-
-
-def _error_detail(
-    code: str, message: str, meta: Optional[dict] = None
-) -> dict[str, object]:
-    payload: dict[str, object] = {"code": code, "message": message}
-    if meta:
-        payload["meta"] = meta
-    return payload
+from ..services.responses import error_detail
+from ..services.validation import normalize_optional_string, normalize_required_string
 
 
 def _require_templates_enabled(config: RepoConfig) -> None:
@@ -97,46 +90,29 @@ def _reload_repo_config(request: Request) -> RepoConfig:
     return new_config
 
 
+def _error_detail(
+    code: str, message: str, meta: Optional[dict[str, object]] = None
+) -> dict[str, object]:
+    return error_detail(code, message, meta=meta)
+
+
 def _normalize_required_string(value: object, field: str) -> str:
-    if not isinstance(value, str):
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail("validation_error", f"{field} must be a string"),
-        )
-    cleaned = value.strip()
-    if not cleaned:
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail("validation_error", f"{field} must not be empty"),
-        )
-    if "\n" in cleaned or "\r" in cleaned:
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail("validation_error", f"{field} must be single-line"),
-        )
-    return cleaned
+    return normalize_required_string(
+        value,
+        field,
+        require_single_line=True,
+        detail_builder=lambda msg: _error_detail("validation_error", msg),
+    )
 
 
 def _normalize_optional_string(value: object, field: str) -> Optional[str]:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail("validation_error", f"{field} must be a string"),
-        )
-    cleaned = value.strip()
-    if not cleaned:
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail("validation_error", f"{field} must not be empty"),
-        )
-    if "\n" in cleaned or "\r" in cleaned:
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail("validation_error", f"{field} must be single-line"),
-        )
-    return cleaned
+    return normalize_optional_string(
+        value,
+        field,
+        allow_blank=False,
+        require_single_line=True,
+        detail_builder=lambda msg: _error_detail("validation_error", msg),
+    )
 
 
 def _validate_repo_url(url: str) -> None:
