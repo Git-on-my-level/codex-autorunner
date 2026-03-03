@@ -8,6 +8,12 @@ from .lifecycle_events import (
     LifecycleEventStore,
     LifecycleEventType,
 )
+from .pma_automation_store import (
+    PmaAutomationStore,
+    PmaAutomationTimer,
+    PmaAutomationWakeup,
+    PmaLifecycleSubscription,
+)
 from .sse import SSEEvent, format_sse, parse_sse_lines
 
 __all__ = [
@@ -19,6 +25,10 @@ __all__ = [
     "LifecycleEventEmitter",
     "LifecycleEventStore",
     "LifecycleEventType",
+    "PmaAutomationStore",
+    "PmaAutomationTimer",
+    "PmaAutomationWakeup",
+    "PmaLifecycleSubscription",
     "SSEEvent",
     "format_sse",
     "parse_sse_lines",

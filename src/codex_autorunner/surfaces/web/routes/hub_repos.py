@@ -31,6 +31,7 @@ from ....core.logging_utils import safe_log
 from ....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
+from ....core.pma_thread_store import default_pma_threads_db_path
 from ....core.request_context import get_request_id
 from ....core.runtime import LockError
 from ....core.ticket_flow_projection import build_canonical_state_v1
@@ -783,6 +784,118 @@ def build_hub_repo_routes(
                     pass
         return bindings
 
+    def _read_active_pma_threads(
+        hub_root: Path,
+        repo_id_by_workspace: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        db_path = default_pma_threads_db_path(hub_root)
+        if not db_path.exists():
+            return []
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = _open_sqlite_read_only(db_path)
+            columns = _table_columns(conn, "pma_managed_threads")
+            if not columns:
+                return []
+            turns_columns = _table_columns(conn, "pma_managed_turns")
+            has_turns_table = bool(turns_columns)
+
+            select_cols = [
+                "managed_thread_id",
+                "agent",
+                "repo_id",
+                "workspace_root",
+                "name",
+                "backend_thread_id",
+                "status",
+                "updated_at",
+            ]
+            select_exprs = [col for col in select_cols if col in columns]
+            if "managed_thread_id" not in select_exprs:
+                return []
+            if has_turns_table:
+                select_exprs.append(
+                    """
+                    EXISTS(
+                        SELECT 1
+                          FROM pma_managed_turns turns
+                         WHERE turns.managed_thread_id = pma_managed_threads.managed_thread_id
+                           AND turns.status = 'running'
+                         LIMIT 1
+                    ) AS has_running_turn
+                    """.strip()
+                )
+            query = (
+                "SELECT "
+                + ", ".join(select_exprs)
+                + " FROM pma_managed_threads WHERE status = 'active'"
+            )
+            if "updated_at" in columns:
+                query += " ORDER BY updated_at DESC, managed_thread_id DESC"
+            rows = conn.execute(query).fetchall()
+            threads: list[dict[str, Any]] = []
+            for row in rows:
+                managed_thread_id = row["managed_thread_id"]
+                if (
+                    not isinstance(managed_thread_id, str)
+                    or not managed_thread_id.strip()
+                ):
+                    continue
+                workspace_raw = (
+                    row["workspace_root"] if "workspace_root" in columns else None
+                )
+                workspace_path = _canonical_workspace_path(workspace_raw)
+                repo_id = _resolve_repo_id(
+                    row["repo_id"] if "repo_id" in columns else None,
+                    workspace_raw,
+                    repo_id_by_workspace,
+                )
+                agent = _normalize_agent(row["agent"] if "agent" in columns else None)
+                backend_thread_id = (
+                    row["backend_thread_id"] if "backend_thread_id" in columns else None
+                )
+                if (
+                    not isinstance(backend_thread_id, str)
+                    or not backend_thread_id.strip()
+                ):
+                    backend_thread_id = None
+                name = row["name"] if "name" in columns else None
+                if not isinstance(name, str) or not name.strip():
+                    name = None
+                updated_at = row["updated_at"] if "updated_at" in columns else None
+                if not isinstance(updated_at, str) or not updated_at.strip():
+                    updated_at = None
+                has_running_turn = bool(
+                    row["has_running_turn"] if has_turns_table else False
+                )
+                threads.append(
+                    {
+                        "managed_thread_id": managed_thread_id.strip(),
+                        "agent": agent,
+                        "repo_id": repo_id,
+                        "workspace_path": workspace_path,
+                        "backend_thread_id": backend_thread_id,
+                        "name": name,
+                        "updated_at": updated_at,
+                        "has_running_turn": has_running_turn,
+                    }
+                )
+            return threads
+        except Exception as exc:
+            safe_log(
+                context.logger,
+                logging.WARNING,
+                f"Hub channel enrichment failed reading PMA threads from {db_path}",
+                exc=exc,
+            )
+            return []
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def _timestamp_rank(value: Any) -> float:
         if isinstance(value, bool):
             return float("-inf")
@@ -904,6 +1017,72 @@ def build_hub_repo_routes(
         for payload in by_session.values():
             payload.pop("__index", None)
         return by_session
+
+    def _resolve_pma_managed_thread_id(
+        *,
+        pma_threads: list[dict[str, Any]],
+        repo_id: Any,
+        workspace_path: Any,
+        agent: str,
+    ) -> Optional[str]:
+        normalized_repo_id = (
+            repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
+        )
+        normalized_workspace = (
+            _canonical_workspace_path(workspace_path)
+            if isinstance(workspace_path, str) and workspace_path
+            else None
+        )
+        if not pma_threads:
+            return None
+
+        def _matches(thread: dict[str, Any], *, exact_agent: bool) -> bool:
+            managed_thread_id = thread.get("managed_thread_id")
+            if not isinstance(managed_thread_id, str) or not managed_thread_id.strip():
+                return False
+            if exact_agent and _normalize_agent(thread.get("agent")) != agent:
+                return False
+            thread_workspace = thread.get("workspace_path")
+            thread_repo_id = thread.get("repo_id")
+            if (
+                normalized_workspace is not None
+                and isinstance(thread_workspace, str)
+                and thread_workspace == normalized_workspace
+            ):
+                return True
+            if (
+                normalized_repo_id is not None
+                and isinstance(thread_repo_id, str)
+                and thread_repo_id == normalized_repo_id
+            ):
+                return True
+            return False
+
+        for exact_agent in (True, False):
+            for thread in pma_threads:
+                if _matches(thread, exact_agent=exact_agent):
+                    managed_thread_id = thread.get("managed_thread_id")
+                    if isinstance(managed_thread_id, str) and managed_thread_id.strip():
+                        return managed_thread_id.strip()
+        return None
+
+    def _channel_row_matches_query(row: dict[str, Any], query_text: str) -> bool:
+        if not query_text:
+            return True
+        parts = [
+            row.get("key"),
+            row.get("display"),
+            row.get("source"),
+            row.get("repo_id"),
+            row.get("workspace_path"),
+            row.get("active_thread_id"),
+            row.get("status_label"),
+            row.get("channel_status"),
+            json.dumps(row.get("meta") or {}, sort_keys=True),
+            json.dumps(row.get("provenance") or {}, sort_keys=True),
+        ]
+        haystack = " ".join(str(part or "") for part in parts).lower()
+        return query_text in haystack
 
     def _build_registry_key(
         entry: dict[str, Any],
@@ -1334,7 +1513,7 @@ def build_hub_repo_routes(
             raise HTTPException(status_code=400, detail="limit must be <= 1000")
 
         store = ChannelDirectoryStore(context.config.root)
-        entries = await asyncio.to_thread(store.list_entries, query=query, limit=limit)
+        entries = await asyncio.to_thread(store.list_entries, query=None, limit=None)
         snapshots: list[Any] = []
         try:
             snapshots = await asyncio.to_thread(context.supervisor.list_repos)
@@ -1357,20 +1536,30 @@ def build_hub_repo_routes(
         telegram_bindings_task = asyncio.to_thread(
             _read_telegram_bindings, telegram_state_path, repo_id_by_workspace
         )
-        discord_bindings, telegram_bindings = await asyncio.gather(
+        pma_threads_task = asyncio.to_thread(
+            _read_active_pma_threads,
+            context.config.root,
+            repo_id_by_workspace,
+        )
+        discord_bindings, telegram_bindings, pma_threads = await asyncio.gather(
             discord_bindings_task,
             telegram_bindings_task,
+            pma_threads_task,
             return_exceptions=False,
         )
         run_cache: dict[str, dict[str, Any]] = {}
         usage_cache: dict[str, dict[str, dict[str, Any]]] = {}
         thread_map_cache: dict[str, dict[str, str]] = {}
+        seen_keys: set[str] = set()
 
         rows: list[dict[str, Any]] = []
         for entry in entries:
             key = channel_entry_key(entry)
             if not isinstance(key, str):
                 continue
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             row: dict[str, Any] = {
                 "key": key,
                 "display": entry.get("display"),
@@ -1379,6 +1568,9 @@ def build_hub_repo_routes(
                 "entry": entry,
             }
             platform = str(entry.get("platform") or "").strip().lower()
+            source = platform if platform in {"discord", "telegram"} else "unknown"
+            row["source"] = source
+            row["provenance"] = {"source": source}
             binding_source = (
                 discord_bindings if platform == "discord" else telegram_bindings
             )
@@ -1392,6 +1584,29 @@ def build_hub_repo_routes(
                     if isinstance(workspace_path, str) and workspace_path:
                         row["workspace_path"] = workspace_path
                     pma_enabled = bool(binding.get("pma_enabled"))
+                    agent = _normalize_agent(binding.get("agent"))
+                    if pma_enabled:
+                        managed_thread_id = _resolve_pma_managed_thread_id(
+                            pma_threads=pma_threads,
+                            repo_id=repo_id,
+                            workspace_path=workspace_path,
+                            agent=agent,
+                        )
+                        row["source"] = "pma_thread"
+                        row["provenance"] = {
+                            "source": "pma_thread",
+                            "platform": platform,
+                            "agent": agent,
+                        }
+                        if isinstance(managed_thread_id, str) and managed_thread_id:
+                            provenance = row.get("provenance")
+                            if isinstance(provenance, dict):
+                                provenance["managed_thread_id"] = managed_thread_id
+                    elif source in {"discord", "telegram"}:
+                        row["provenance"] = {
+                            "source": source,
+                            "platform": source,
+                        }
                     active_thread_id: Optional[str] = None
                     if platform == "telegram" and not pma_enabled:
                         direct_thread = binding.get("active_thread_id")
@@ -1482,6 +1697,103 @@ def build_hub_repo_routes(
                         exc=exc,
                     )
             rows.append(row)
+        for thread in pma_threads:
+            managed_thread_id = thread.get("managed_thread_id")
+            if not isinstance(managed_thread_id, str) or not managed_thread_id:
+                continue
+            key = f"pma_thread:{managed_thread_id}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            repo_id = thread.get("repo_id")
+            workspace_path = thread.get("workspace_path")
+            backend_thread_id = thread.get("backend_thread_id")
+            agent = _normalize_agent(thread.get("agent"))
+            has_running_turn = bool(thread.get("has_running_turn"))
+            status_label = "working" if has_running_turn else "final"
+            display_name = thread.get("name")
+            short_id = managed_thread_id[:8]
+            if not isinstance(display_name, str) or not display_name.strip():
+                display_name = f"PMA {agent} · {short_id}"
+            else:
+                display_name = display_name.strip()
+            row: dict[str, Any] = {
+                "key": key,
+                "display": display_name,
+                "seen_at": thread.get("updated_at"),
+                "meta": {
+                    "agent": agent,
+                    "managed_thread_id": managed_thread_id,
+                    "status": "active",
+                },
+                "entry": {
+                    "platform": "pma_thread",
+                    "thread_id": managed_thread_id,
+                    "agent": agent,
+                    "status": "active",
+                },
+                "source": "pma_thread",
+                "provenance": {
+                    "source": "pma_thread",
+                    "managed_thread_id": managed_thread_id,
+                    "agent": agent,
+                    "status": "active",
+                },
+                "active_thread_id": managed_thread_id,
+                "channel_status": status_label,
+                "status_label": status_label,
+            }
+            if isinstance(repo_id, str) and repo_id:
+                row["repo_id"] = repo_id
+            if isinstance(workspace_path, str) and workspace_path:
+                row["workspace_path"] = workspace_path
+                run_data = _load_workspace_run_data(
+                    workspace_path,
+                    repo_id if isinstance(repo_id, str) else None,
+                    run_cache,
+                )
+                if isinstance(run_data.get("diff_stats"), dict):
+                    row["diff_stats"] = run_data["diff_stats"]
+                if isinstance(run_data.get("dirty"), bool):
+                    row["dirty"] = run_data["dirty"]
+                usage_session_id = None
+                if isinstance(backend_thread_id, str) and backend_thread_id:
+                    usage_session_id = backend_thread_id
+                elif managed_thread_id:
+                    usage_session_id = managed_thread_id
+                if usage_session_id:
+                    usage_by_session = usage_cache.get(workspace_path)
+                    if usage_by_session is None:
+                        usage_by_session = _read_usage_by_session(workspace_path)
+                        usage_cache[workspace_path] = usage_by_session
+                    usage_payload = usage_by_session.get(usage_session_id)
+                    if isinstance(usage_payload, dict):
+                        row["token_usage"] = {
+                            "total_tokens": _coerce_int(
+                                usage_payload.get("total_tokens")
+                            ),
+                            "input_tokens": _coerce_int(
+                                usage_payload.get("input_tokens")
+                            ),
+                            "cached_input_tokens": _coerce_int(
+                                usage_payload.get("cached_input_tokens")
+                            ),
+                            "output_tokens": _coerce_int(
+                                usage_payload.get("output_tokens")
+                            ),
+                            "reasoning_output_tokens": _coerce_int(
+                                usage_payload.get("reasoning_output_tokens")
+                            ),
+                            "turn_id": usage_payload.get("turn_id"),
+                            "timestamp": usage_payload.get("timestamp"),
+                        }
+            rows.append(row)
+        query_text = (query or "").strip().lower()
+        if query_text:
+            rows = [row for row in rows if _channel_row_matches_query(row, query_text)]
+        rows.sort(key=lambda item: _timestamp_rank(item.get("seen_at")), reverse=True)
+        if limit >= 0:
+            rows = rows[:limit]
         return {"entries": rows}
 
     @router.get("/hub/repos/{repo_id}/remove-check")

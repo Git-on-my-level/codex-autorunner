@@ -41,6 +41,7 @@ PMA_MAX_TEMPLATE_FIELD_CHARS = 120
 PMA_MAX_PMA_FILES = 50
 PMA_MAX_LIFECYCLE_EVENTS = 20
 PMA_MAX_PMA_THREADS = 20
+PMA_MAX_AUTOMATION_ITEMS = 10
 PMA_ACTIVE_CONTEXT_STATE_FILENAME = ".active_context_state.json"
 
 # Keep this short and stable; see ticket TICKET-001 for rationale.
@@ -79,9 +80,22 @@ First-turn routine:
        - Ticket packs: copy to `<repo_root>/.codex-autorunner/tickets/` and run `car hub tickets setup-pack`
        - Docs: integrate into contextspace (`active_context.md`, `spec.md`, `decisions.md`)
        - Code: identify target worktree, propose handoff or direct edit
-       - Assets: suggest destination (repo docs, archive)
-     - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
-5) If the request is new work (not inbox/file processing):
+     - Assets: suggest destination (repo docs, archive)
+   - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
+5) BRANCH D - Automation continuity (subscriptions + timers):
+   - If work should continue without manual polling, use PMA automation primitives.
+   - Subscriptions:
+     - Create/list/delete via `/hub/pma/subscriptions`.
+     - Common event_types:
+       - ticket flow: `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
+       - managed thread: `managed_thread_completed`, `managed_thread_failed`
+   - Timers:
+     - one-shot (`timer_type=one_shot`, `delay_seconds`)
+     - watchdog (`timer_type=watchdog`, `idle_seconds`; touch/cancel as progress changes)
+     - Endpoints: `/hub/pma/timers`, `/hub/pma/timers/{timer_id}/touch`, `/hub/pma/timers/{timer_id}/cancel`
+   - Prefer idempotency keys and lane-specific routing (`lane_id`) for chainable plans.
+   - Consult `.codex-autorunner/pma/docs/ABOUT_CAR.md` section “PMA automation wake-ups” for recipes.
+6) If the request is new work (not inbox/file processing):
    - Identify the target repo(s).
    - Prefer hub-owned worktrees for changes.
    - Prefer one-shot setup/repair commands: `car hub tickets setup-pack`, `car hub tickets fmt`, `car hub tickets doctor --fix`.
@@ -501,6 +515,7 @@ def _render_hub_snapshot(
     max_pma_files: int = PMA_MAX_PMA_FILES,
     max_lifecycle_events: int = PMA_MAX_LIFECYCLE_EVENTS,
     max_pma_threads: int = PMA_MAX_PMA_THREADS,
+    max_automation_items: int = PMA_MAX_AUTOMATION_ITEMS,
 ) -> str:
     lines: list[str] = []
 
@@ -686,6 +701,111 @@ def _render_hub_snapshot(
             )
         lines.append("")
 
+    automation = snapshot.get("automation") or {}
+    subscriptions = automation.get("subscriptions") or {}
+    timers = automation.get("timers") or {}
+    wakeups = automation.get("wakeups") or {}
+    subscriptions_active = int(subscriptions.get("active_count") or 0)
+    timers_pending = int(timers.get("pending_count") or 0)
+    wakeups_pending = int(wakeups.get("pending_count") or 0)
+    wakeups_dispatched = int(wakeups.get("dispatched_recent_count") or 0)
+    if automation:
+        lines.append("PMA Automation:")
+        lines.append(
+            "- subscriptions_active="
+            f"{subscriptions_active} timers_pending={timers_pending} "
+            f"wakeups_pending={wakeups_pending} wakeups_dispatched_recent={wakeups_dispatched}"
+        )
+
+        subscription_sample = subscriptions.get("sample") or []
+        if subscription_sample:
+            lines.append("- subscriptions_sample:")
+            for item in list(subscription_sample)[: max(0, max_automation_items)]:
+                if not isinstance(item, dict):
+                    continue
+                sub_id = _truncate(
+                    str(item.get("subscription_id", "")), max_field_chars
+                )
+                event_types = item.get("event_types")
+                event_types_text = (
+                    ", ".join(
+                        _truncate(str(entry), max_field_chars)
+                        for entry in event_types
+                        if entry is not None
+                    )
+                    if isinstance(event_types, list)
+                    else _truncate(str(event_types or ""), max_field_chars)
+                )
+                lane_id = _truncate(str(item.get("lane_id") or ""), max_field_chars)
+                repo_id = _truncate(str(item.get("repo_id") or "-"), max_field_chars)
+                run_id = _truncate(str(item.get("run_id") or "-"), max_field_chars)
+                thread_id = _truncate(
+                    str(item.get("thread_id") or "-"), max_field_chars
+                )
+                from_state = _truncate(
+                    str(item.get("from_state") or "-"), max_field_chars
+                )
+                to_state = _truncate(str(item.get("to_state") or "-"), max_field_chars)
+                lines.append(
+                    "  - id="
+                    f"{sub_id} events=[{event_types_text}] repo_id={repo_id} run_id={run_id} "
+                    f"thread_id={thread_id} lane_id={lane_id} from={from_state} to={to_state}"
+                )
+
+        timer_sample = timers.get("sample") or []
+        if timer_sample:
+            lines.append("- timers_sample:")
+            for item in list(timer_sample)[: max(0, max_automation_items)]:
+                if not isinstance(item, dict):
+                    continue
+                timer_id = _truncate(str(item.get("timer_id") or ""), max_field_chars)
+                timer_type = _truncate(
+                    str(item.get("timer_type") or ""), max_field_chars
+                )
+                due_at = _truncate(str(item.get("due_at") or ""), max_field_chars)
+                lane_id = _truncate(str(item.get("lane_id") or ""), max_field_chars)
+                repo_id = _truncate(str(item.get("repo_id") or "-"), max_field_chars)
+                run_id = _truncate(str(item.get("run_id") or "-"), max_field_chars)
+                thread_id = _truncate(
+                    str(item.get("thread_id") or "-"), max_field_chars
+                )
+                lines.append(
+                    "  - id="
+                    f"{timer_id} type={timer_type} due_at={due_at} repo_id={repo_id} "
+                    f"run_id={run_id} thread_id={thread_id} lane_id={lane_id}"
+                )
+
+        wakeup_sample = wakeups.get("pending_sample") or []
+        if wakeup_sample:
+            lines.append("- pending_wakeups_sample:")
+            for item in list(wakeup_sample)[: max(0, max_automation_items)]:
+                if not isinstance(item, dict):
+                    continue
+                wakeup_id = _truncate(str(item.get("wakeup_id") or ""), max_field_chars)
+                source = _truncate(str(item.get("source") or ""), max_field_chars)
+                event_type = _truncate(
+                    str(item.get("event_type") or ""), max_field_chars
+                )
+                timer_id = _truncate(str(item.get("timer_id") or "-"), max_field_chars)
+                subscription_id = _truncate(
+                    str(item.get("subscription_id") or "-"), max_field_chars
+                )
+                lane_id = _truncate(str(item.get("lane_id") or ""), max_field_chars)
+                to_state = _truncate(str(item.get("to_state") or "-"), max_field_chars)
+                reason = _truncate(str(item.get("reason") or "-"), max_field_chars)
+                lines.append(
+                    "  - id="
+                    f"{wakeup_id} source={source} event_type={event_type} "
+                    f"subscription_id={subscription_id} timer_id={timer_id} "
+                    f"lane_id={lane_id} to={to_state} reason={reason}"
+                )
+        if not subscription_sample and not timer_sample and not wakeup_sample:
+            lines.append(
+                "- no automation configured; create rules via "
+                "/hub/pma/subscriptions and /hub/pma/timers"
+            )
+        lines.append("")
+
     lifecycle_events = snapshot.get("lifecycle_events") or []
     if lifecycle_events:
         lines.append("Lifecycle events (recent):")
@@ -721,6 +841,8 @@ def format_pma_discoverability_preamble(
         "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
         "Working context: `.codex-autorunner/pma/docs/active_context.md`.\n"
         "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
+        "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
+        'Automation recipes: `.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
         "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
         "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n"
         "Note: Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` redirect to filebox.\n\n"
@@ -1404,6 +1526,168 @@ def _gather_lifecycle_events(
     return result
 
 
+def _coerce_automation_items(payload: Any, *, key: str) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, dict)]
+    if isinstance(payload, dict):
+        candidate = payload.get(key)
+        if isinstance(candidate, list):
+            return [entry for entry in candidate if isinstance(entry, dict)]
+    return []
+
+
+def _call_automation_list(
+    method: Any, *, key: str, **kwargs: Any
+) -> list[dict[str, Any]]:
+    if not callable(method):
+        return []
+    try:
+        result = method(**kwargs)
+    except TypeError:
+        try:
+            result = method()
+        except Exception:
+            return []
+    except Exception:
+        return []
+    return _coerce_automation_items(result, key=key)
+
+
+def _snapshot_pma_automation(
+    supervisor: HubSupervisor, *, max_items: int = PMA_MAX_AUTOMATION_ITEMS
+) -> dict[str, Any]:
+    out = {
+        "subscriptions": {"active_count": 0, "sample": []},
+        "timers": {"pending_count": 0, "sample": []},
+        "wakeups": {
+            "pending_count": 0,
+            "dispatched_recent_count": 0,
+            "pending_sample": [],
+        },
+    }
+    try:
+        store = supervisor.get_pma_automation_store()
+    except Exception:
+        return out
+
+    subscriptions = _call_automation_list(
+        getattr(store, "list_subscriptions", None), key="subscriptions"
+    )
+    subscriptions_sample = _call_automation_list(
+        getattr(store, "list_subscriptions", None),
+        key="subscriptions",
+        limit=max_items,
+    )
+    timers = _call_automation_list(getattr(store, "list_timers", None), key="timers")
+    timers_sample = _call_automation_list(
+        getattr(store, "list_timers", None),
+        key="timers",
+        limit=max_items,
+    )
+    pending_wakeups = _call_automation_list(
+        getattr(store, "list_wakeups", None), key="wakeups", state_filter="pending"
+    )
+    pending_wakeups_sample = _call_automation_list(
+        getattr(store, "list_pending_wakeups", None),
+        key="wakeups",
+        limit=max_items,
+    )
+    if not pending_wakeups:
+        pending_wakeups = _call_automation_list(
+            getattr(store, "list_pending_wakeups", None), key="wakeups"
+        )
+    if not pending_wakeups_sample:
+        pending_wakeups_sample = _call_automation_list(
+            getattr(store, "list_wakeups", None),
+            key="wakeups",
+            state_filter="pending",
+            limit=max_items,
+        )
+    dispatched_wakeups = _call_automation_list(
+        getattr(store, "list_wakeups", None),
+        key="wakeups",
+        state_filter="dispatched",
+    )
+
+    def _pick(entry: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+        picked: dict[str, Any] = {}
+        for field in fields:
+            value = entry.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            picked[field] = value
+        return picked
+
+    out["subscriptions"] = {
+        "active_count": len(subscriptions),
+        "sample": [
+            _pick(
+                entry,
+                (
+                    "subscription_id",
+                    "event_types",
+                    "repo_id",
+                    "run_id",
+                    "thread_id",
+                    "lane_id",
+                    "from_state",
+                    "to_state",
+                    "reason",
+                ),
+            )
+            for entry in subscriptions_sample[:max_items]
+        ],
+    }
+    out["timers"] = {
+        "pending_count": len(timers),
+        "sample": [
+            _pick(
+                entry,
+                (
+                    "timer_id",
+                    "timer_type",
+                    "due_at",
+                    "idle_seconds",
+                    "repo_id",
+                    "run_id",
+                    "thread_id",
+                    "lane_id",
+                    "reason",
+                ),
+            )
+            for entry in timers_sample[:max_items]
+        ],
+    }
+    out["wakeups"] = {
+        "pending_count": len(pending_wakeups),
+        "dispatched_recent_count": len(dispatched_wakeups),
+        "pending_sample": [
+            _pick(
+                entry,
+                (
+                    "wakeup_id",
+                    "source",
+                    "event_type",
+                    "subscription_id",
+                    "timer_id",
+                    "repo_id",
+                    "run_id",
+                    "thread_id",
+                    "lane_id",
+                    "from_state",
+                    "to_state",
+                    "reason",
+                    "timestamp",
+                ),
+            )
+            for entry in pending_wakeups_sample[:max_items]
+        ],
+    }
+    return out
+
+
 async def build_hub_snapshot(
     supervisor: Optional[HubSupervisor],
     hub_root: Optional[Path] = None,
@@ -1416,6 +1700,15 @@ async def build_hub_snapshot(
             "lifecycle_events": [],
             "pma_files_detail": {"inbox": [], "outbox": []},
             "pma_threads": [],
+            "automation": {
+                "subscriptions": {"active_count": 0, "sample": []},
+                "timers": {"pending_count": 0, "sample": []},
+                "wakeups": {
+                    "pending_count": 0,
+                    "dispatched_recent_count": 0,
+                    "pending_sample": [],
+                },
+            },
         }
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
@@ -1487,6 +1780,7 @@ async def build_hub_snapshot(
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
     pma_files_detail: dict[str, list[dict[str, str]]] = {"inbox": [], "outbox": []}
     pma_threads: list[dict[str, Any]] = []
+    automation = await asyncio.to_thread(_snapshot_pma_automation, supervisor)
     if hub_root:
         pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
         pma_threads = _snapshot_pma_threads(hub_root)
@@ -1498,6 +1792,7 @@ async def build_hub_snapshot(
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
         "pma_threads": pma_threads,
+        "automation": automation,
         "lifecycle_events": lifecycle_events,
         "limits": {
             "max_repos": max_repos,

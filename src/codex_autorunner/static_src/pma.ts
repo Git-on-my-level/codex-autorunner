@@ -361,6 +361,10 @@ function renderPMADocsMeta(): void {
       <span class="muted">Active context:</span>
       <span class="pill pill-small ${statusClass}">${lineCount} / ${maxLines} lines</span>
     </div>
+    <div class="pma-docs-meta-item">
+      <span class="muted">Automation:</span>
+      <span class="muted small">See Ops Guide (ABOUT_CAR.md) for subscription/timer recipes.</span>
+    </div>
     ${autoPruneHtml}
   `;
 }
@@ -696,6 +700,9 @@ async function initPMA(): Promise<void> {
   await loadPMAThreadInfo();
   await initFileBoxUI();
   await loadPMADocs();
+  if (!currentDocName) {
+    switchPMADoc("AGENTS.md");
+  }
   attachHandlers();
   setPMAView(loadPMAView(), { persist: false });
   initNotificationBell();

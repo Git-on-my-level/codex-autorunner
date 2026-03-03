@@ -1335,6 +1335,32 @@ main {
   min-width: 0;
 }
 
+.hub-chat-binding-source {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 9px;
+}
+
+.hub-chat-binding-source-discord {
+  border-color: rgba(88, 166, 255, 0.55);
+  color: #9ac7ff;
+}
+
+.hub-chat-binding-source-telegram {
+  border-color: rgba(85, 210, 196, 0.55);
+  color: #85f2e5;
+}
+
+.hub-chat-binding-source-pma {
+  border-color: rgba(249, 196, 105, 0.55);
+  color: #f9c469;
+}
+
+.hub-chat-binding-source-unknown {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
 .hub-chat-binding-label {
   font-size: 10px;
   font-weight: 600;

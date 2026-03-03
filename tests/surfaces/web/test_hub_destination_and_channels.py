@@ -19,6 +19,7 @@ from codex_autorunner.core.config import (
 from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.agents.backend_orchestrator import (
     build_backend_orchestrator,
 )
@@ -720,6 +721,18 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
         },
     )
 
+    pma_store = PmaThreadStore(hub_root)
+    discord_pma_thread = pma_store.create_thread(
+        "opencode",
+        repo_work.path,
+        repo_id="work",
+    )
+    telegram_pma_thread = pma_store.create_thread(
+        "codex",
+        repo_work.path,
+        repo_id="work",
+    )
+
     _write_usage_rows(
         repo_work.path / ".codex-autorunner" / "usage" / "opencode_turn_usage.jsonl",
         rows=[
@@ -775,6 +788,8 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     assert work["repo_id"] == "work"
     assert work["workspace_path"] == str(repo_work.path)
     assert work["active_thread_id"] == "discord-working-thread"
+    assert work["source"] == "discord"
+    assert work["provenance"]["source"] == "discord"
     assert work["channel_status"] == "working"
     assert work["status_label"] == "working"
     assert work["diff_stats"] == {"insertions": 5, "deletions": 3, "files_changed": 3}
@@ -794,19 +809,85 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
 
     discord_pma = rows["discord:chan-pma"]
     assert discord_pma["active_thread_id"] == "discord-pma-thread"
+    assert discord_pma["source"] == "pma_thread"
+    assert discord_pma["provenance"]["source"] == "pma_thread"
+    assert discord_pma["provenance"]["agent"] == "opencode"
+    assert (
+        discord_pma["provenance"]["managed_thread_id"]
+        == discord_pma_thread["managed_thread_id"]
+    )
+    assert (
+        discord_pma["provenance"]["managed_thread_id"]
+        != discord_pma["active_thread_id"]
+    )
 
     telegram_pma = rows["telegram:-200:9"]
     assert telegram_pma["active_thread_id"] == "telegram-pma-thread"
+    assert telegram_pma["source"] == "pma_thread"
+    assert telegram_pma["provenance"]["source"] == "pma_thread"
+    assert telegram_pma["provenance"]["agent"] == "codex"
+    assert (
+        telegram_pma["provenance"]["managed_thread_id"]
+        == telegram_pma_thread["managed_thread_id"]
+    )
+    assert (
+        telegram_pma["provenance"]["managed_thread_id"]
+        != telegram_pma["active_thread_id"]
+    )
 
     telegram_final = rows["telegram:-300:11"]
     assert telegram_final["active_thread_id"] == "tg-direct-thread"
+    assert telegram_final["source"] == "telegram"
+    assert telegram_final["provenance"]["source"] == "telegram"
     assert telegram_final["channel_status"] == "final"
     assert telegram_final["status_label"] == "final"
     assert telegram_final["dirty"] is False
 
     telegram_clean = rows["telegram:-400:12"]
+    assert telegram_clean["source"] == "telegram"
+    assert telegram_clean["provenance"]["source"] == "telegram"
     assert telegram_clean["channel_status"] == "clean"
     assert telegram_clean["status_label"] == "clean"
+
+
+def test_hub_channel_directory_route_includes_pma_managed_threads(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/pma-provenance",
+        start_point="HEAD",
+    )
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    managed_thread_id = str(created["managed_thread_id"])
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/chat/channels")
+    assert response.status_code == 200
+    rows = {entry["key"]: entry for entry in response.json()["entries"]}
+
+    pma_key = f"pma_thread:{managed_thread_id}"
+    assert pma_key in rows
+    pma_row = rows[pma_key]
+    assert pma_row["repo_id"] == worktree.id
+    assert pma_row["workspace_path"] == str(worktree.path)
+    assert pma_row["source"] == "pma_thread"
+    assert pma_row["provenance"]["source"] == "pma_thread"
+    assert pma_row["provenance"]["agent"] == "codex"
+    assert pma_row["provenance"]["managed_thread_id"] == managed_thread_id
+    assert pma_row["channel_status"] in {"working", "final"}
+
+    filtered = client.get("/hub/chat/channels", params={"query": "pma", "limit": 1})
+    assert filtered.status_code == 200
+    filtered_rows = filtered.json()["entries"]
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0]["key"] == pma_key
 
 
 def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:

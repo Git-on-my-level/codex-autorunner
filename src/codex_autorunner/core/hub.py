@@ -54,6 +54,7 @@ from .lifecycle_events import (
     LifecycleEventType,
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
+from .pma_automation_store import DEFAULT_PMA_LANE_ID, PmaAutomationStore
 from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
 from .pma_reactive import PmaReactiveStore
@@ -371,7 +372,7 @@ class HubSupervisor:
             logger=logger,
         )
         self._lifecycle_worker = HubLifecycleWorker(
-            process_once=self.process_lifecycle_events,
+            process_once=self._process_lifecycle_event_cycle,
             poll_interval_seconds=5.0,
             join_timeout_seconds=2.0,
             thread_name="lifecycle-event-processor",
@@ -379,6 +380,8 @@ class HubSupervisor:
         )
         self._dispatch_interceptor: Optional[PmaDispatchInterceptor] = None
         self._pma_safety_checker: Optional[PmaSafetyChecker] = None
+        self._pma_automation_store: Optional[PmaAutomationStore] = None
+        self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
@@ -1578,11 +1581,71 @@ class HubSupervisor:
     def lifecycle_store(self) -> LifecycleEventStore:
         return self._lifecycle_emitter._store
 
+    def get_pma_automation_store(self) -> PmaAutomationStore:
+        if self._pma_automation_store is not None:
+            return self._pma_automation_store
+        self._pma_automation_store = PmaAutomationStore(self.hub_config.root)
+        return self._pma_automation_store
+
+    def get_automation_store(self) -> PmaAutomationStore:
+        return self.get_pma_automation_store()
+
+    @property
+    def pma_automation_store(self) -> PmaAutomationStore:
+        return self.get_pma_automation_store()
+
+    @property
+    def automation_store(self) -> PmaAutomationStore:
+        return self.get_pma_automation_store()
+
+    def set_pma_lane_worker_starter(
+        self, starter: Optional[Callable[[str], None]]
+    ) -> None:
+        self._pma_lane_worker_starter = starter
+
+    def _request_pma_lane_worker_start(self, lane_id: Optional[str]) -> None:
+        starter = self._pma_lane_worker_starter
+        if starter is None:
+            return
+        normalized_lane_id = (
+            lane_id.strip()
+            if isinstance(lane_id, str) and lane_id.strip()
+            else DEFAULT_PMA_LANE_ID
+        )
+        try:
+            starter(normalized_lane_id)
+        except Exception:
+            logger.exception(
+                "Failed requesting PMA lane worker startup for lane_id=%s",
+                normalized_lane_id,
+            )
+
+    def process_pma_automation_now(
+        self, *, include_timers: bool = True, limit: int = 100
+    ) -> dict[str, int]:
+        timer_wakeups = (
+            self.process_pma_automation_timers(limit=limit) if include_timers else 0
+        )
+        dispatched_wakeups = self.drain_pma_automation_wakeups(limit=limit)
+        return {
+            "timers_processed": timer_wakeups,
+            "wakeups_dispatched": dispatched_wakeups,
+        }
+
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
         self._process_lifecycle_event(event)
 
+    def _process_lifecycle_event_cycle(self) -> None:
+        self.process_lifecycle_events()
+        self.process_pma_automation_timers()
+        self.drain_pma_automation_wakeups()
+
     def process_lifecycle_events(self) -> None:
         self._lifecycle_event_processor.process_events(limit=100)
+        try:
+            self.drain_pma_automation_wakeups()
+        except Exception:
+            logger.exception("Failed draining PMA automation wake-ups")
 
     def _start_lifecycle_event_processor(self) -> None:
         self._lifecycle_worker.start()
@@ -1653,6 +1716,372 @@ class HubSupervisor:
                 return loop.run_until_complete(coro)
             finally:
                 loop.close()
+
+    def _lifecycle_transition_payload(
+        self, event: LifecycleEvent
+    ) -> dict[str, Optional[str]]:
+        data = event.data if isinstance(event.data, dict) else {}
+        to_state_fallback = {
+            LifecycleEventType.FLOW_PAUSED: "blocked",
+            LifecycleEventType.FLOW_COMPLETED: "completed",
+            LifecycleEventType.FLOW_FAILED: "failed",
+            LifecycleEventType.FLOW_STOPPED: "stopped",
+            LifecycleEventType.DISPATCH_CREATED: "dispatch_created",
+        }
+        from_state = (
+            str(data.get("from_state")).strip()
+            if isinstance(data.get("from_state"), str)
+            else None
+        )
+        to_state = (
+            str(data.get("to_state")).strip()
+            if isinstance(data.get("to_state"), str)
+            else to_state_fallback.get(event.event_type)
+        )
+        if from_state is None:
+            if event.event_type == LifecycleEventType.DISPATCH_CREATED:
+                from_state = "paused"
+            elif to_state in {"paused", "blocked", "completed", "failed", "stopped"}:
+                from_state = "running"
+
+        reason = (
+            str(data.get("reason")).strip()
+            if isinstance(data.get("reason"), str) and str(data.get("reason")).strip()
+            else event.event_type.value
+        )
+        timestamp = (
+            str(event.timestamp).strip()
+            if isinstance(event.timestamp, str) and str(event.timestamp).strip()
+            else now_iso()
+        )
+        thread_id = (
+            str(data.get("thread_id")).strip()
+            if isinstance(data.get("thread_id"), str)
+            and str(data.get("thread_id")).strip()
+            else None
+        )
+        repo_id = (
+            event.repo_id.strip()
+            if isinstance(event.repo_id, str) and event.repo_id.strip()
+            else (
+                str(data.get("repo_id")).strip()
+                if isinstance(data.get("repo_id"), str)
+                and str(data.get("repo_id")).strip()
+                else None
+            )
+        )
+        run_id = (
+            event.run_id.strip()
+            if isinstance(event.run_id, str) and event.run_id.strip()
+            else (
+                str(data.get("run_id")).strip()
+                if isinstance(data.get("run_id"), str)
+                and str(data.get("run_id")).strip()
+                else None
+            )
+        )
+        return {
+            "repo_id": repo_id,
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "from_state": from_state,
+            "to_state": to_state,
+            "reason": reason,
+            "timestamp": timestamp,
+        }
+
+    def _enqueue_automation_wakeups_for_lifecycle_event(
+        self, event: LifecycleEvent
+    ) -> int:
+        transition = self._lifecycle_transition_payload(event)
+        try:
+            store = self.get_pma_automation_store()
+            matches = store.match_lifecycle_subscriptions(
+                event_type=event.event_type.value,
+                repo_id=transition.get("repo_id"),
+                run_id=transition.get("run_id"),
+                thread_id=transition.get("thread_id"),
+                from_state=transition.get("from_state"),
+                to_state=transition.get("to_state"),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to match lifecycle subscriptions for event %s", event.event_id
+            )
+            return 0
+
+        if not matches:
+            return 0
+
+        created = 0
+        for subscription in matches:
+            subscription_id = str(subscription.get("subscription_id") or "").strip()
+            idempotency_key = f"lifecycle:{event.event_id}:subscription:{subscription_id or 'unknown'}"
+            reason = (
+                str(subscription.get("reason")).strip()
+                if isinstance(subscription.get("reason"), str)
+                and str(subscription.get("reason")).strip()
+                else transition.get("reason")
+            )
+            _, deduped = store.enqueue_wakeup(
+                source="lifecycle_subscription",
+                repo_id=transition.get("repo_id"),
+                run_id=transition.get("run_id"),
+                thread_id=transition.get("thread_id"),
+                lane_id=(
+                    str(subscription.get("lane_id")).strip()
+                    if isinstance(subscription.get("lane_id"), str)
+                    and str(subscription.get("lane_id")).strip()
+                    else "pma:default"
+                ),
+                from_state=transition.get("from_state"),
+                to_state=transition.get("to_state"),
+                reason=reason,
+                timestamp=transition.get("timestamp"),
+                idempotency_key=idempotency_key,
+                subscription_id=subscription_id or None,
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+                event_data=event.data if isinstance(event.data, dict) else {},
+                metadata={"origin": event.origin},
+            )
+            if not deduped:
+                created += 1
+        return created
+
+    def process_pma_automation_timers(self, *, limit: int = 100) -> int:
+        take = max(0, int(limit))
+        if take <= 0:
+            return 0
+
+        store = self.get_pma_automation_store()
+        dequeue_due_timers = getattr(store, "dequeue_due_timers", None)
+        if not callable(dequeue_due_timers):
+            return 0
+        due_timers = dequeue_due_timers(limit=take)
+        if not due_timers:
+            return 0
+
+        created = 0
+        for timer in due_timers:
+            timer_id = str(timer.get("timer_id") or "").strip()
+            timestamp = (
+                str(timer.get("fired_at")).strip()
+                if isinstance(timer.get("fired_at"), str)
+                and str(timer.get("fired_at")).strip()
+                else now_iso()
+            )
+            _, deduped = store.enqueue_wakeup(
+                source="timer",
+                repo_id=(
+                    str(timer.get("repo_id")).strip()
+                    if isinstance(timer.get("repo_id"), str)
+                    and str(timer.get("repo_id")).strip()
+                    else None
+                ),
+                run_id=(
+                    str(timer.get("run_id")).strip()
+                    if isinstance(timer.get("run_id"), str)
+                    and str(timer.get("run_id")).strip()
+                    else None
+                ),
+                thread_id=(
+                    str(timer.get("thread_id")).strip()
+                    if isinstance(timer.get("thread_id"), str)
+                    and str(timer.get("thread_id")).strip()
+                    else None
+                ),
+                lane_id=(
+                    str(timer.get("lane_id")).strip()
+                    if isinstance(timer.get("lane_id"), str)
+                    and str(timer.get("lane_id")).strip()
+                    else "pma:default"
+                ),
+                from_state=(
+                    str(timer.get("from_state")).strip()
+                    if isinstance(timer.get("from_state"), str)
+                    and str(timer.get("from_state")).strip()
+                    else None
+                ),
+                to_state=(
+                    str(timer.get("to_state")).strip()
+                    if isinstance(timer.get("to_state"), str)
+                    and str(timer.get("to_state")).strip()
+                    else None
+                ),
+                reason=(
+                    str(timer.get("reason")).strip()
+                    if isinstance(timer.get("reason"), str)
+                    and str(timer.get("reason")).strip()
+                    else "timer_due"
+                ),
+                timestamp=timestamp,
+                idempotency_key=f"timer:{timer_id}:{timestamp}",
+                timer_id=timer_id or None,
+                metadata=(
+                    dict(timer.get("metadata"))
+                    if isinstance(timer.get("metadata"), dict)
+                    else {}
+                ),
+            )
+            if not deduped:
+                created += 1
+        return created
+
+    def _build_pma_wakeup_message(self, wake_up: dict[str, Any]) -> str:
+        lines = ["Automation wake-up received."]
+        source = wake_up.get("source")
+        event_type = wake_up.get("event_type")
+        subscription_id = wake_up.get("subscription_id")
+        timer_id = wake_up.get("timer_id")
+        repo_id = wake_up.get("repo_id")
+        run_id = wake_up.get("run_id")
+        thread_id = wake_up.get("thread_id")
+        lane_id = wake_up.get("lane_id")
+        if source:
+            lines.append(f"source: {source}")
+        if event_type:
+            lines.append(f"event_type: {event_type}")
+        if subscription_id:
+            lines.append(f"subscription_id: {subscription_id}")
+        if timer_id:
+            lines.append(f"timer_id: {timer_id}")
+        if repo_id:
+            lines.append(f"repo_id: {repo_id}")
+        if run_id:
+            lines.append(f"run_id: {run_id}")
+        if thread_id:
+            lines.append(f"thread_id: {thread_id}")
+        if lane_id:
+            lines.append(f"lane_id: {lane_id}")
+        if wake_up.get("from_state"):
+            lines.append(f"from_state: {wake_up['from_state']}")
+        if wake_up.get("to_state"):
+            lines.append(f"to_state: {wake_up['to_state']}")
+        if wake_up.get("reason"):
+            lines.append(f"reason: {wake_up['reason']}")
+        if wake_up.get("timestamp"):
+            lines.append(f"timestamp: {wake_up['timestamp']}")
+        if source == "timer":
+            lines.append(
+                "suggested_next_action: verify progress, then use /hub/pma/timers/{timer_id}/touch or /hub/pma/timers/{timer_id}/cancel."
+            )
+        else:
+            lines.append(
+                "suggested_next_action: inspect the transition and adjust /hub/pma/subscriptions or /hub/pma/timers as needed."
+            )
+        return "\n".join(lines)
+
+    def drain_pma_automation_wakeups(self, *, limit: int = 100) -> int:
+        take = max(0, int(limit))
+        if take <= 0:
+            return 0
+        if not self.hub_config.pma.enabled:
+            return 0
+
+        store = self.get_pma_automation_store()
+        list_pending_wakeups = getattr(store, "list_pending_wakeups", None)
+        mark_wakeup_dispatched = getattr(store, "mark_wakeup_dispatched", None)
+        if not callable(list_pending_wakeups) or not callable(mark_wakeup_dispatched):
+            return 0
+        wakeups = list_pending_wakeups(limit=take)
+        if not wakeups:
+            return 0
+
+        queue = PmaQueue(self.hub_config.root)
+        drained = 0
+        for wakeup in wakeups:
+            wakeup_id = str(wakeup.get("wakeup_id") or "").strip()
+            if not wakeup_id:
+                continue
+            wake_payload = {
+                "wakeup_id": wakeup_id,
+                "repo_id": wakeup.get("repo_id"),
+                "run_id": wakeup.get("run_id"),
+                "thread_id": wakeup.get("thread_id"),
+                "lane_id": (
+                    str(wakeup.get("lane_id")).strip()
+                    if isinstance(wakeup.get("lane_id"), str)
+                    and str(wakeup.get("lane_id")).strip()
+                    else "pma:default"
+                ),
+                "from_state": wakeup.get("from_state"),
+                "to_state": wakeup.get("to_state"),
+                "reason": wakeup.get("reason"),
+                "timestamp": wakeup.get("timestamp"),
+                "source": wakeup.get("source"),
+                "event_type": wakeup.get("event_type"),
+                "subscription_id": wakeup.get("subscription_id"),
+                "timer_id": wakeup.get("timer_id"),
+            }
+            payload = {
+                "message": self._build_pma_wakeup_message(wake_payload),
+                "agent": None,
+                "model": None,
+                "reasoning": None,
+                "client_turn_id": wakeup_id,
+                "stream": False,
+                "hub_root": str(self.hub_config.root),
+                "wake_up": wake_payload,
+            }
+            event_id = wakeup.get("event_id")
+            event_type = wakeup.get("event_type")
+            if (
+                isinstance(event_id, str)
+                and event_id
+                and isinstance(event_type, str)
+                and event_type
+            ):
+                metadata = wakeup.get("metadata")
+                origin = (
+                    metadata.get("origin")
+                    if isinstance(metadata, dict)
+                    and isinstance(metadata.get("origin"), str)
+                    else "system"
+                )
+                payload["lifecycle_event"] = {
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "repo_id": wakeup.get("repo_id"),
+                    "run_id": wakeup.get("run_id"),
+                    "timestamp": wakeup.get("timestamp"),
+                    "data": (
+                        dict(wakeup.get("event_data"))
+                        if isinstance(wakeup.get("event_data"), dict)
+                        else {}
+                    ),
+                    "origin": origin,
+                }
+            idempotency_key = (
+                str(wakeup.get("idempotency_key")).strip()
+                if isinstance(wakeup.get("idempotency_key"), str)
+                and str(wakeup.get("idempotency_key")).strip()
+                else f"automation:{wakeup_id}"
+            )
+            try:
+                lane_id = (
+                    str(wakeup.get("lane_id")).strip()
+                    if isinstance(wakeup.get("lane_id"), str)
+                    and str(wakeup.get("lane_id")).strip()
+                    else "pma:default"
+                )
+                _, dupe_reason = queue.enqueue_sync(lane_id, idempotency_key, payload)
+                self._request_pma_lane_worker_start(lane_id)
+            except Exception:
+                logger.exception(
+                    "Failed to drain PMA automation wake-up %s into PMA queue",
+                    wakeup_id,
+                )
+                continue
+            if dupe_reason:
+                logger.info(
+                    "Deduped PMA queue item for automation wake-up %s: %s",
+                    wakeup_id,
+                    dupe_reason,
+                )
+            if mark_wakeup_dispatched(wakeup_id):
+                drained += 1
+        return drained
 
     def _build_pma_lifecycle_message(
         self, event: LifecycleEvent, *, reason: str
@@ -1843,6 +2272,17 @@ class HubSupervisor:
 
         decision = "skip"
         processed = False
+        automation_wakeups = 0
+        try:
+            automation_wakeups = self._enqueue_automation_wakeups_for_lifecycle_event(
+                event
+            )
+        except Exception:
+            logger.exception(
+                "Failed to enqueue lifecycle automation wake-ups for event %s",
+                event.event_id,
+            )
+            automation_wakeups = 0
 
         if event.event_type == LifecycleEventType.DISPATCH_CREATED:
             if not self.hub_config.pma.enabled:
@@ -1921,13 +2361,14 @@ class HubSupervisor:
             self.lifecycle_store.prune_processed(keep_last=50)
 
         logger.info(
-            "Lifecycle event processed: event_id=%s type=%s repo_id=%s run_id=%s decision=%s processed=%s",
+            "Lifecycle event processed: event_id=%s type=%s repo_id=%s run_id=%s decision=%s processed=%s automation_wakeups=%s",
             event.event_id,
             event.event_type.value,
             event.repo_id,
             event.run_id,
             decision,
             processed,
+            automation_wakeups,
         )
 
     def _snapshot_from_record(

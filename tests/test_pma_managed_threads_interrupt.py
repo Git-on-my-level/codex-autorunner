@@ -145,3 +145,58 @@ def test_interrupt_managed_thread_rejects_without_running_turn(hub_env) -> None:
 
     assert interrupt_resp.status_code == 409
     assert "running turn" in (interrupt_resp.json().get("detail") or "").lower()
+
+
+def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.transitions: list[dict[str, object]] = []
+
+        def notify_transition(self, payload: dict[str, object]) -> None:
+            self.transitions.append(dict(payload))
+
+    class FakeClient:
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: str | None = None
+        ) -> None:
+            _ = turn_id, thread_id
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    turn = store.create_turn(managed_thread_id, prompt="running turn")
+    managed_turn_id = turn["managed_turn_id"]
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
+
+    with TestClient(app) as client:
+        interrupt_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/interrupt",
+        )
+
+    assert interrupt_resp.status_code == 200
+    assert len(fake_store.transitions) == 1
+    transition = fake_store.transitions[0]
+    assert transition["thread_id"] == managed_thread_id
+    assert transition["repo_id"] == hub_env.repo_id
+    assert transition["from_state"] == "running"
+    assert transition["to_state"] == "failed"
+    assert transition["reason"] == "managed_turn_interrupted"

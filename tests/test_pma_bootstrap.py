@@ -32,6 +32,10 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "decisions.md" in prompt_content
     assert "spec.md" in prompt_content
     assert "car pma thread" in prompt_content
+    assert "Automation primitives (event-driven continuity)" in prompt_content
+    assert "/hub/pma/subscriptions" in prompt_content
+    assert "/hub/pma/timers" in prompt_content
+    assert "managed_thread_completed" in prompt_content
 
     about_path = docs_dir / "ABOUT_CAR.md"
     assert about_path.exists()
@@ -47,6 +51,10 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert ".codex-autorunner/DESTINATION_QUICKSTART.md" in about_content
     assert "docs/configuration/destinations.md" in about_content
     assert ".codex-autorunner/filebox/inbox/" in about_content
+    assert "PMA automation wake-ups (subscriptions + timers)" in about_content
+    assert "flow_completed" in about_content
+    assert "managed_thread_failed" in about_content
+    assert ".codex-autorunner/pma/automation_store.json" in about_content
 
 
 def test_pma_config_defaults(tmp_path: Path) -> None:
