@@ -7891,7 +7891,8 @@ class DiscordBotService:
             chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
 
         next_chunk_index = 0
-        continue_button_applied = False
+        last_chunk_index = len(chunks) - 1
+        preview_chunk_applied = False
         preview_message_id = (
             turn_result.preview_message_id
             if isinstance(turn_result.preview_message_id, str)
@@ -7901,15 +7902,18 @@ class DiscordBotService:
 
         if preview_message_id:
             try:
+                preview_payload: dict[str, Any] = {"content": chunks[0]}
+                if last_chunk_index == 0:
+                    preview_payload["components"] = [build_continue_turn_button()]
+                else:
+                    # This message is not terminal for long compactions.
+                    preview_payload["components"] = []
                 await self._rest.edit_channel_message(
                     channel_id=channel_id,
                     message_id=preview_message_id,
-                    payload={
-                        "content": chunks[0],
-                        "components": [build_continue_turn_button()],
-                    },
+                    payload=preview_payload,
                 )
-                continue_button_applied = True
+                preview_chunk_applied = True
                 next_chunk_index = 1
             except Exception as exc:
                 log_event(
@@ -7921,18 +7925,23 @@ class DiscordBotService:
                     exc=exc,
                 )
 
-        if not continue_button_applied:
+        if not preview_chunk_applied:
+            first_payload: dict[str, Any] = {"content": chunks[0]}
+            if last_chunk_index == 0:
+                first_payload["components"] = [build_continue_turn_button()]
             await self._send_channel_message_safe(
                 channel_id,
-                {
-                    "content": chunks[0],
-                    "components": [build_continue_turn_button()],
-                },
+                first_payload,
             )
             next_chunk_index = 1
 
-        for chunk in chunks[next_chunk_index:]:
-            await self._send_channel_message_safe(channel_id, {"content": chunk})
+        for chunk_index, chunk in enumerate(
+            chunks[next_chunk_index:], next_chunk_index
+        ):
+            payload: dict[str, Any] = {"content": chunk}
+            if chunk_index == last_chunk_index:
+                payload["components"] = [build_continue_turn_button()]
+            await self._send_channel_message_safe(channel_id, payload)
 
     async def _handle_car_rollout(
         self,
