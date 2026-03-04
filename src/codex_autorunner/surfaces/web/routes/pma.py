@@ -5,6 +5,7 @@ Hub-level PMA routes (chat + models + events).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 import logging
@@ -33,6 +34,10 @@ from ....bootstrap import (
     pma_prompt_content,
 )
 from ....core import filebox
+from ....core.chat_bindings import (
+    DISCORD_STATE_FILE_DEFAULT,
+    TELEGRAM_STATE_FILE_DEFAULT,
+)
 from ....core.logging_utils import log_event
 from ....core.pma_audit import PmaActionType, PmaAuditLog
 from ....core.pma_context import (
@@ -63,7 +68,26 @@ from ....core.state_roots import is_within_allowed_root
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from ....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from ....integrations.discord.rendering import (
+    chunk_discord_message,
+    format_discord_message,
+)
+from ....integrations.discord.state import (
+    DiscordStateStore,
+)
+from ....integrations.discord.state import (
+    OutboxRecord as DiscordOutboxRecord,
+)
 from ....integrations.github.context_injection import maybe_inject_github_context
+from ....integrations.telegram.state import (
+    OutboxRecord as TelegramOutboxRecord,
+)
+from ....integrations.telegram.state import (
+    TelegramStateStore,
+    parse_topic_key,
+    topic_key,
+)
+from ....manifest import load_manifest
 from ..schemas import (
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
@@ -92,6 +116,8 @@ PMA_TIMEOUT_SECONDS = 28800
 PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
 PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
 PMA_BULK_DELETE_SAMPLE_LIMIT = 10
+PMA_PUBLISH_RETRY_DELAYS_SECONDS = (0.0, 0.25, 0.75)
+PMA_DISCORD_MESSAGE_MAX_LEN = 1900
 MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
@@ -534,6 +560,455 @@ def build_pma_routes() -> APIRouter:
             f"{message}"
         )
 
+    def _resolve_chat_state_path(
+        request: Request, *, section: str, default_state_file: str
+    ) -> Path:
+        hub_root = request.app.state.config.root
+        raw = getattr(request.app.state.config, "raw", {})
+        section_cfg = raw.get(section) if isinstance(raw, dict) else {}
+        if not isinstance(section_cfg, dict):
+            section_cfg = {}
+        state_file = section_cfg.get("state_file")
+        if not isinstance(state_file, str) or not state_file.strip():
+            state_file = default_state_file
+        state_path = Path(state_file)
+        if not state_path.is_absolute():
+            state_path = (hub_root / state_path).resolve()
+        return state_path
+
+    def _normalize_workspace_path_for_repo_lookup(
+        value: Any, *, hub_root: Path
+    ) -> Optional[str]:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        candidate = Path(value.strip()).expanduser()
+        if not candidate.is_absolute():
+            candidate = hub_root / candidate
+        try:
+            return str(candidate.resolve())
+        except Exception:
+            return str(candidate.absolute())
+
+    def _repo_id_by_workspace_path(request: Request) -> dict[str, str]:
+        hub_root = request.app.state.config.root
+        manifest_path = request.app.state.config.manifest_path
+        if not manifest_path.exists():
+            return {}
+        try:
+            manifest = load_manifest(manifest_path, hub_root)
+        except Exception:
+            logger.exception("Failed loading manifest for PMA publish target lookup")
+            return {}
+        mapping: dict[str, str] = {}
+        for repo in manifest.repos:
+            try:
+                workspace_path = (hub_root / repo.path).resolve()
+            except Exception:
+                continue
+            mapping[str(workspace_path)] = repo.id
+        return mapping
+
+    def _resolve_binding_repo_id(
+        *,
+        repo_id: Any,
+        workspace_path: Any,
+        repo_id_by_workspace: dict[str, str],
+        hub_root: Path,
+    ) -> Optional[str]:
+        normalized_repo_id = _normalize_optional_text(repo_id)
+        if normalized_repo_id:
+            return normalized_repo_id
+        normalized_workspace = _normalize_workspace_path_for_repo_lookup(
+            workspace_path, hub_root=hub_root
+        )
+        if normalized_workspace:
+            mapped_repo = repo_id_by_workspace.get(normalized_workspace)
+            if isinstance(mapped_repo, str) and mapped_repo.strip():
+                return mapped_repo.strip()
+        return None
+
+    def _resolve_publish_repo_id(
+        *,
+        request: Request,
+        lifecycle_event: Optional[dict[str, Any]],
+        wake_up: Optional[dict[str, Any]],
+    ) -> Optional[str]:
+        for candidate in (
+            lifecycle_event.get("repo_id") if lifecycle_event else None,
+            wake_up.get("repo_id") if wake_up else None,
+        ):
+            normalized = _normalize_optional_text(candidate)
+            if normalized:
+                return normalized
+
+        thread_id = (
+            _normalize_optional_text(wake_up.get("thread_id"))
+            if isinstance(wake_up, dict)
+            else None
+        )
+        if not thread_id:
+            return None
+        try:
+            thread = PmaThreadStore(request.app.state.config.root).get_thread(thread_id)
+        except Exception:
+            logger.exception(
+                "Failed resolving managed thread repo for publish thread_id=%s",
+                thread_id,
+            )
+            return None
+        if not isinstance(thread, dict):
+            return None
+        return _normalize_optional_text(thread.get("repo_id"))
+
+    def _build_publish_correlation_id(
+        *,
+        result: dict[str, Any],
+        client_turn_id: Optional[str],
+        wake_up: Optional[dict[str, Any]],
+    ) -> str:
+        for candidate in (
+            client_turn_id,
+            result.get("client_turn_id"),
+            result.get("turn_id"),
+            wake_up.get("wakeup_id") if isinstance(wake_up, dict) else None,
+        ):
+            normalized = _normalize_optional_text(candidate)
+            if normalized:
+                return normalized
+        return f"pma-{uuid.uuid4().hex[:12]}"
+
+    def _build_publish_message(
+        *,
+        result: dict[str, Any],
+        lifecycle_event: Optional[dict[str, Any]],
+        wake_up: Optional[dict[str, Any]],
+        correlation_id: str,
+    ) -> str:
+        trigger = (
+            _normalize_optional_text(lifecycle_event.get("event_type"))
+            if isinstance(lifecycle_event, dict)
+            else None
+        )
+        if not trigger and isinstance(wake_up, dict):
+            trigger = _normalize_optional_text(wake_up.get("event_type")) or (
+                _normalize_optional_text(wake_up.get("source")) or "automation"
+            )
+        trigger = trigger or "automation"
+
+        repo_id = (
+            _normalize_optional_text(lifecycle_event.get("repo_id"))
+            if isinstance(lifecycle_event, dict)
+            else None
+        )
+        if not repo_id and isinstance(wake_up, dict):
+            repo_id = _normalize_optional_text(wake_up.get("repo_id"))
+
+        run_id = (
+            _normalize_optional_text(lifecycle_event.get("run_id"))
+            if isinstance(lifecycle_event, dict)
+            else None
+        )
+        if not run_id and isinstance(wake_up, dict):
+            run_id = _normalize_optional_text(wake_up.get("run_id"))
+
+        thread_id = (
+            _normalize_optional_text(wake_up.get("thread_id"))
+            if isinstance(wake_up, dict)
+            else None
+        )
+        status = _normalize_optional_text(result.get("status")) or "error"
+        detail = _normalize_optional_text(result.get("detail"))
+        output = _normalize_optional_text(result.get("message"))
+
+        lines: list[str] = [f"PMA update ({trigger})"]
+        if repo_id:
+            lines.append(f"repo_id: {repo_id}")
+        if run_id:
+            lines.append(f"run_id: {run_id}")
+        if thread_id:
+            lines.append(f"thread_id: {thread_id}")
+        lines.append(f"correlation_id: {correlation_id}")
+        lines.append("")
+
+        if status == "ok":
+            lines.append(output or "Turn completed with no assistant output.")
+        else:
+            lines.append(f"status: {status}")
+            lines.append(f"error: {detail or 'Turn failed without detail.'}")
+            lines.append(
+                "next_action: run /pma status and inspect PMA history if needed."
+            )
+        return "\n".join(lines).strip()
+
+    def _delivery_status_from_counts(
+        *,
+        published: int,
+        duplicates: int,
+        failed: int,
+        targets: int,
+    ) -> str:
+        if targets <= 0:
+            return "skipped"
+        if published > 0 and failed <= 0:
+            return "success"
+        if published > 0 and failed > 0:
+            return "partial_success"
+        if published <= 0 and failed <= 0 and duplicates > 0:
+            return "duplicate_only"
+        if failed > 0:
+            return "failed"
+        return "skipped"
+
+    async def _enqueue_with_retry(
+        enqueue_call: Any,
+    ) -> None:
+        last_error: Optional[Exception] = None
+        for delay_seconds in PMA_PUBLISH_RETRY_DELAYS_SECONDS:
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            try:
+                await enqueue_call()
+                return
+            except Exception as exc:  # pragma: no cover - guarded by caller assertions
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+
+    async def _publish_automation_result(
+        *,
+        request: Request,
+        result: dict[str, Any],
+        client_turn_id: Optional[str],
+        lifecycle_event: Optional[dict[str, Any]],
+        wake_up: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        hub_root = request.app.state.config.root
+        correlation_id = _build_publish_correlation_id(
+            result=result,
+            client_turn_id=client_turn_id,
+            wake_up=wake_up,
+        )
+        target_repo_id = _resolve_publish_repo_id(
+            request=request,
+            lifecycle_event=lifecycle_event,
+            wake_up=wake_up,
+        )
+        repo_id_by_workspace = _repo_id_by_workspace_path(request)
+        message = _build_publish_message(
+            result=result,
+            lifecycle_event=lifecycle_event,
+            wake_up=wake_up,
+            correlation_id=correlation_id,
+        )
+
+        published = 0
+        duplicates = 0
+        failed = 0
+        targets = 0
+        errors: list[str] = []
+
+        discord_store: Optional[DiscordStateStore] = None
+        telegram_store: Optional[TelegramStateStore] = None
+        try:
+            discord_state_path = _resolve_chat_state_path(
+                request,
+                section="discord_bot",
+                default_state_file=DISCORD_STATE_FILE_DEFAULT,
+            )
+            if discord_state_path.exists():
+                discord_store = DiscordStateStore(discord_state_path)
+                bindings = await discord_store.list_bindings()
+                seen_channels: set[str] = set()
+                for binding in bindings:
+                    if not bool(binding.get("pma_enabled")):
+                        continue
+                    channel_id = _normalize_optional_text(binding.get("channel_id"))
+                    if not channel_id or channel_id in seen_channels:
+                        continue
+                    binding_repo_id = _resolve_binding_repo_id(
+                        repo_id=binding.get("repo_id"),
+                        workspace_path=binding.get("workspace_path"),
+                        repo_id_by_workspace=repo_id_by_workspace,
+                        hub_root=hub_root,
+                    )
+                    prev_repo_id = _normalize_optional_text(
+                        binding.get("pma_prev_repo_id")
+                    )
+                    if target_repo_id and target_repo_id not in {
+                        binding_repo_id,
+                        prev_repo_id,
+                    }:
+                        continue
+                    seen_channels.add(channel_id)
+                    targets += 1
+                    chunks = chunk_discord_message(
+                        format_discord_message(message),
+                        max_len=PMA_DISCORD_MESSAGE_MAX_LEN,
+                        with_numbering=False,
+                    )
+                    if not chunks:
+                        chunks = [format_discord_message(message)]
+                    for index, chunk in enumerate(chunks, start=1):
+                        digest = hashlib.sha1(
+                            f"{correlation_id}:discord:{channel_id}:{index}".encode(
+                                "utf-8"
+                            )
+                        ).hexdigest()[:24]
+                        record_id = f"pma:{digest}"
+                        existing = await discord_store.get_outbox(record_id)
+                        if existing is not None:
+                            duplicates += 1
+                            continue
+                        record = DiscordOutboxRecord(
+                            record_id=record_id,
+                            channel_id=channel_id,
+                            message_id=None,
+                            operation="send",
+                            payload_json={"content": chunk},
+                            created_at=now_iso(),
+                        )
+                        try:
+                            await _enqueue_with_retry(
+                                lambda record=record: discord_store.enqueue_outbox(
+                                    record
+                                )
+                            )
+                        except Exception as exc:
+                            failed += 1
+                            errors.append(f"discord:{channel_id}:{exc}")
+                            logger.warning(
+                                "Failed to enqueue PMA discord publish: channel_id=%s correlation_id=%s error=%s",
+                                channel_id,
+                                correlation_id,
+                                exc,
+                            )
+                        else:
+                            published += 1
+
+            telegram_state_path = _resolve_chat_state_path(
+                request,
+                section="telegram_bot",
+                default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
+            )
+            if telegram_state_path.exists():
+                telegram_store = TelegramStateStore(telegram_state_path)
+                topics = await telegram_store.list_topics()
+                seen_topics: set[tuple[int, Optional[int]]] = set()
+                for key, topic in topics.items():
+                    if not bool(getattr(topic, "pma_enabled", False)):
+                        continue
+                    try:
+                        chat_id, thread_id, scope = parse_topic_key(key)
+                    except Exception:
+                        continue
+                    base_key = topic_key(chat_id, thread_id)
+                    current_scope = await telegram_store.get_topic_scope(base_key)
+                    if scope != current_scope:
+                        continue
+                    identity = (chat_id, thread_id)
+                    if identity in seen_topics:
+                        continue
+                    binding_repo_id = _resolve_binding_repo_id(
+                        repo_id=getattr(topic, "repo_id", None),
+                        workspace_path=getattr(topic, "workspace_path", None),
+                        repo_id_by_workspace=repo_id_by_workspace,
+                        hub_root=hub_root,
+                    )
+                    prev_repo_id = _normalize_optional_text(
+                        getattr(topic, "pma_prev_repo_id", None)
+                    )
+                    if target_repo_id and target_repo_id not in {
+                        binding_repo_id,
+                        prev_repo_id,
+                    }:
+                        continue
+                    seen_topics.add(identity)
+                    targets += 1
+                    digest = hashlib.sha1(
+                        f"{correlation_id}:telegram:{chat_id}:{thread_id or 'root'}".encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()[:24]
+                    record_id = f"pma:{digest}"
+                    outbox_key = (
+                        f"pma:{correlation_id}:{chat_id}:{thread_id or 'root'}:send"
+                    )
+                    existing = await telegram_store.get_outbox(record_id)
+                    if existing is not None:
+                        duplicates += 1
+                        continue
+                    record = TelegramOutboxRecord(
+                        record_id=record_id,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        reply_to_message_id=None,
+                        placeholder_message_id=None,
+                        text=message,
+                        created_at=now_iso(),
+                        operation="send",
+                        message_id=None,
+                        outbox_key=outbox_key,
+                    )
+                    try:
+                        await _enqueue_with_retry(
+                            lambda record=record: telegram_store.enqueue_outbox(record)
+                        )
+                    except Exception as exc:
+                        failed += 1
+                        errors.append(f"telegram:{chat_id}:{thread_id or 'root'}:{exc}")
+                        logger.warning(
+                            "Failed to enqueue PMA telegram publish: chat_id=%s thread_id=%s correlation_id=%s error=%s",
+                            chat_id,
+                            thread_id,
+                            correlation_id,
+                            exc,
+                        )
+                    else:
+                        published += 1
+        finally:
+            if discord_store is not None:
+                try:
+                    await discord_store.close()
+                except Exception:
+                    logger.exception("Failed to close discord publish store")
+            if telegram_store is not None:
+                try:
+                    await telegram_store.close()
+                except Exception:
+                    logger.exception("Failed to close telegram publish store")
+
+        delivery_status = _delivery_status_from_counts(
+            published=published,
+            duplicates=duplicates,
+            failed=failed,
+            targets=targets,
+        )
+        delivery_outcome = {
+            "published": published,
+            "duplicates": duplicates,
+            "failed": failed,
+            "targets": targets,
+            "repo_id": target_repo_id,
+            "correlation_id": correlation_id,
+            "errors": errors[:5],
+        }
+        log_event(
+            logger,
+            logging.INFO,
+            "pma.turn.publish",
+            delivery_status=delivery_status,
+            targets=targets,
+            published=published,
+            duplicates=duplicates,
+            failed=failed,
+            repo_id=target_repo_id,
+            correlation_id=correlation_id,
+        )
+        return {
+            "delivery_status": delivery_status,
+            "delivery_outcome": delivery_outcome,
+        }
+
     async def _get_pma_lock() -> asyncio.Lock:
         nonlocal pma_lock, pma_lock_loop, pma_event, pma_event_loop
         loop = asyncio.get_running_loop()
@@ -629,6 +1104,12 @@ def build_pma_routes() -> APIRouter:
             "started_at": current.get("started_at"),
             "finished_at": now_iso(),
         }
+        delivery_status = _normalize_optional_text(result.get("delivery_status"))
+        if delivery_status:
+            payload["delivery_status"] = delivery_status
+        delivery_outcome = result.get("delivery_outcome")
+        if isinstance(delivery_outcome, dict):
+            payload["delivery_outcome"] = dict(delivery_outcome)
         return payload
 
     def _resolve_transcript_turn_id(
@@ -993,11 +1474,65 @@ def build_pma_routes() -> APIRouter:
         lifecycle_event = payload.get("lifecycle_event")
         if not isinstance(lifecycle_event, dict):
             lifecycle_event = None
+        wake_up = payload.get("wake_up")
+        if not isinstance(wake_up, dict):
+            wake_up = None
+        automation_trigger = lifecycle_event is not None or wake_up is not None
 
         store = _get_state_store(request)
         agents, available_default = _available_agents(request)
         available_ids = {entry.get("id") for entry in agents if isinstance(entry, dict)}
         defaults = _get_pma_config(request)
+        started = False
+
+        async def _finalize_queue_result_payload(
+            result_payload: dict[str, Any],
+            *,
+            persist: bool = True,
+        ) -> dict[str, Any]:
+            payload_result = dict(result_payload or {})
+            if automation_trigger:
+                try:
+                    payload_result.update(
+                        await _publish_automation_result(
+                            request=request,
+                            result=payload_result,
+                            client_turn_id=(
+                                _normalize_optional_text(client_turn_id) or None
+                            ),
+                            lifecycle_event=lifecycle_event,
+                            wake_up=wake_up,
+                        )
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "Failed publishing PMA automation result: client_turn_id=%s",
+                        client_turn_id,
+                    )
+                    payload_result["delivery_status"] = "failed"
+                    payload_result["delivery_outcome"] = {
+                        "published": 0,
+                        "duplicates": 0,
+                        "failed": 1,
+                        "targets": 0,
+                        "repo_id": None,
+                        "correlation_id": (
+                            _normalize_optional_text(client_turn_id)
+                            or f"pma-{uuid.uuid4().hex[:12]}"
+                        ),
+                        "errors": [str(exc)],
+                    }
+            if persist and started:
+                await _finalize_result(
+                    payload_result,
+                    request=request,
+                    store=store,
+                    prompt_message=message,
+                    lifecycle_event=lifecycle_event,
+                    model=model,
+                    reasoning=reasoning,
+                )
+            return payload_result
 
         def _resolve_default_agent() -> str:
             configured_default = defaults.get("default_agent")
@@ -1022,7 +1557,10 @@ def build_pma_routes() -> APIRouter:
             detail = safety_check.reason or "PMA action blocked by safety check"
             if safety_check.details:
                 detail = f"{detail}: {safety_check.details}"
-            return {"status": "error", "detail": detail}
+            return await _finalize_queue_result_payload(
+                {"status": "error", "detail": detail},
+                persist=False,
+            )
 
         started = await _begin_turn(
             client_turn_id, store=store, lane_id=getattr(item, "lane_id", None)
@@ -1030,11 +1568,14 @@ def build_pma_routes() -> APIRouter:
         if not started:
             detail = "Another PMA turn is already active; queue item was not started"
             logger.warning("PMA queue item rejected: %s", detail)
-            return {
-                "status": "error",
-                "detail": detail,
-                "client_turn_id": client_turn_id or "",
-            }
+            return await _finalize_queue_result_payload(
+                {
+                    "status": "error",
+                    "detail": detail,
+                    "client_turn_id": client_turn_id or "",
+                },
+                persist=False,
+            )
 
         if not model and defaults.get("model"):
             model = defaults["model"]
@@ -1062,32 +1603,12 @@ def build_pma_routes() -> APIRouter:
                 "detail": str(exc),
                 "client_turn_id": client_turn_id or "",
             }
-            if started:
-                await _finalize_result(
-                    error_result,
-                    request=request,
-                    store=store,
-                    prompt_message=message,
-                    lifecycle_event=lifecycle_event,
-                    model=model,
-                    reasoning=reasoning,
-                )
-            return error_result
+            return await _finalize_queue_result_payload(error_result)
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
             result = {"status": "interrupted", "detail": "PMA chat interrupted"}
-            if started:
-                await _finalize_result(
-                    result,
-                    request=request,
-                    store=store,
-                    prompt_message=message,
-                    lifecycle_event=lifecycle_event,
-                    model=model,
-                    reasoning=reasoning,
-                )
-            return result
+            return await _finalize_queue_result_payload(result)
 
         async def _meta(thread_id: str, turn_id: str) -> None:
             await _update_current(
@@ -1134,17 +1655,7 @@ def build_pma_routes() -> APIRouter:
             if agent_id == "opencode":
                 if opencode is None:
                     result = {"status": "error", "detail": "OpenCode unavailable"}
-                    if started:
-                        await _finalize_result(
-                            result,
-                            request=request,
-                            store=store,
-                            prompt_message=message,
-                            lifecycle_event=lifecycle_event,
-                            model=model,
-                            reasoning=reasoning,
-                        )
-                    return result
+                    return await _finalize_queue_result_payload(result)
                 result = await _execute_opencode(
                     opencode,
                     hub_root,
@@ -1160,17 +1671,7 @@ def build_pma_routes() -> APIRouter:
             else:
                 if supervisor is None or events is None:
                     result = {"status": "error", "detail": "App-server unavailable"}
-                    if started:
-                        await _finalize_result(
-                            result,
-                            request=request,
-                            store=store,
-                            prompt_message=message,
-                            lifecycle_event=lifecycle_event,
-                            model=model,
-                            reasoning=reasoning,
-                        )
-                    return result
+                    return await _finalize_queue_result_payload(result)
                 result = await _execute_app_server(
                     supervisor,
                     events,
@@ -1184,36 +1685,17 @@ def build_pma_routes() -> APIRouter:
                     on_meta=_meta,
                 )
         except Exception as exc:
-            if started:
-                error_result = {
-                    "status": "error",
-                    "detail": str(exc),
-                    "client_turn_id": client_turn_id or "",
-                }
-                await _finalize_result(
-                    error_result,
-                    request=request,
-                    store=store,
-                    prompt_message=message,
-                    lifecycle_event=lifecycle_event,
-                    model=model,
-                    reasoning=reasoning,
-                )
+            error_result = {
+                "status": "error",
+                "detail": str(exc),
+                "client_turn_id": client_turn_id or "",
+            }
+            await _finalize_queue_result_payload(error_result)
             raise
 
         result = dict(result or {})
         result["client_turn_id"] = client_turn_id or ""
-        if started:
-            await _finalize_result(
-                result,
-                request=request,
-                store=store,
-                prompt_message=message,
-                lifecycle_event=lifecycle_event,
-                model=model,
-                reasoning=reasoning,
-            )
-        return result
+        return await _finalize_queue_result_payload(result)
 
     @router.get("/active")
     async def pma_active_status(
