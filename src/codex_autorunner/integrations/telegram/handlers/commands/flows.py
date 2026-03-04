@@ -8,8 +8,9 @@ import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
-from .....core.config import load_hub_config, load_repo_config
+from .....core.config import load_repo_config
 from .....core.flows import FlowController, FlowStore
+from .....core.flows.hub_overview import build_hub_flow_overview_entries
 from .....core.flows.models import FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
 from .....core.flows.surface_defaults import should_route_flow_read_to_hub_overview
@@ -140,58 +141,6 @@ def _worktree_suffix(repo_id: str) -> Optional[str]:
     if len(parts) <= 1:
         return None
     return parts[-1]
-
-
-def _discover_unregistered_worktrees(
-    manifest, hub_root: Optional[Path]
-) -> list[dict[str, object]]:
-    if not hub_root:
-        return []
-    try:
-        hub_config = load_hub_config(hub_root)
-    except Exception:
-        return []
-    worktrees_root = hub_config.worktrees_root
-    if not worktrees_root.exists() or not worktrees_root.is_dir():
-        return []
-
-    known_paths = {(hub_root / repo.path).resolve() for repo in manifest.repos}
-    known_ids = {repo.id for repo in manifest.repos}
-    extras: list[dict[str, object]] = []
-    for child in sorted(worktrees_root.iterdir()):
-        if not child.is_dir():
-            continue
-        if not (child / ".git").exists():
-            continue
-        resolved = child.resolve()
-        if resolved in known_paths:
-            continue
-
-        flows_root = child / ".codex-autorunner" / "flows"
-        flows_db = child / ".codex-autorunner" / "flows.db"
-        if not flows_root.exists() and not flows_db.exists():
-            continue
-
-        repo_id = child.name
-        label = repo_id
-        indent = ""
-        suffix = _worktree_suffix(repo_id)
-        if suffix:
-            label = suffix
-            indent = "  - "
-        label = f"{label} (unregistered)"
-        if repo_id in known_ids:
-            label = f"{label} (duplicate id)"
-        extras.append(
-            {
-                "repo_id": repo_id,
-                "repo_root": resolved,
-                "label": label,
-                "indent": indent,
-                "unregistered": True,
-            }
-        )
-    return extras
 
 
 def _get_ticket_controller(repo_root: Path) -> FlowController:
@@ -1147,12 +1096,6 @@ class FlowCommands(SharedHelpers):
             )
             return
 
-        def _group_key(repo_id: str) -> tuple[str, Optional[str]]:
-            parts = repo_id.split("--", 1)
-            if len(parts) == 1:
-                return repo_id, None
-            return parts[0], parts[1]
-
         def _format_status_line(
             label: str,
             *,
@@ -1172,39 +1115,25 @@ class FlowCommands(SharedHelpers):
         lines = ["Hub Flow Overview:"]
         groups: dict[str, list[tuple[str, str]]] = {}
         group_order: list[str] = []
+        raw_config: dict[str, object] = {}
+        try:
+            repo_config = load_repo_config(self._hub_root)
+            if isinstance(repo_config.raw, dict):
+                raw_config = repo_config.raw
+        except Exception:
+            raw_config = {}
+        overview_entries = build_hub_flow_overview_entries(
+            hub_root=self._hub_root,
+            manifest=manifest,
+            raw_config=raw_config,
+        )
+        has_unregistered = any(entry.unregistered for entry in overview_entries)
 
-        entries: list[dict[str, object]] = []
-        for repo in manifest.repos:
-            if not repo.enabled:
-                continue
-            repo_root = (self._hub_root / repo.path).resolve()
-            group, suffix = _group_key(repo.id)
-            label = _worktree_suffix(repo.id) or suffix or repo.id
-            indent = "  - " if suffix else ""
-            entries.append(
-                {
-                    "repo_id": repo.id,
-                    "repo_root": repo_root,
-                    "label": label,
-                    "indent": indent,
-                    "group": group,
-                    "unregistered": False,
-                }
-            )
-
-        extras = _discover_unregistered_worktrees(manifest, self._hub_root)
-        for extra in extras:
-            repo_id = str(extra["repo_id"])
-            group, _ = _group_key(repo_id)
-            extra["group"] = group
-            entries.append(extra)
-
-        for entry in entries:
-            repo_id = str(entry["repo_id"])
-            repo_root = Path(entry["repo_root"])
-            label = str(entry["label"])
-            indent = str(entry.get("indent", ""))
-            group = str(entry.get("group", repo_id))
+        for entry in overview_entries:
+            repo_root = entry.repo_root
+            label = entry.label
+            indent = entry.indent
+            group = entry.group
             if group not in groups:
                 groups[group] = []
                 group_order.append(group)
@@ -1238,14 +1167,16 @@ class FlowCommands(SharedHelpers):
             groups[group].append((label, status_line))
 
         for group in group_order:
-            entries = groups.get(group, [])
-            if not entries:
+            group_entries = groups.get(group, [])
+            if not group_entries:
                 continue
-            entries.sort(key=lambda pair: (0 if pair[0] == group else 1, pair[0]))
-            lines.extend([line for _label, line in entries])
-        if extras:
+            group_entries.sort(key=lambda pair: (0 if pair[0] == group else 1, pair[0]))
+            lines.extend([line for _label, line in group_entries])
+        if not overview_entries:
+            lines.append("No enabled repositories found.")
+        if has_unregistered:
             lines.append(
-                "Note: Unregistered worktrees detected. Run `car hub scan` to register them."
+                "Note: Active chat-bound unregistered worktrees detected. Run `car hub scan` to register them."
             )
         lines.append("Tip: use `/flow <repo-id> <worktree-id>` for repo details.")
 
