@@ -106,7 +106,7 @@ OpenAI Whisper (API):
 
 1. Set an API key env var (default key name):
    - `OPENAI_API_KEY=...`
-2. Keep or set provider:
+2. Set provider:
    - `voice.provider: openai_whisper`
 
 Local Whisper (on-device):
@@ -129,7 +129,7 @@ Example config:
 ```yaml
 voice:
   enabled: true
-  provider: openai_whisper # or local_whisper
+  provider: local_whisper # or openai_whisper
   providers:
     openai_whisper:
       api_key_env: OPENAI_API_KEY

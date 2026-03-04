@@ -11,7 +11,7 @@ This document outlines the shared speech input architecture for Codex Autorunner
 
 ## Config Surface (YAML + env overrides)
 - `voice.enabled` (bool, default `false`; env `CODEX_AUTORUNNER_VOICE_ENABLED`).
-- `voice.provider` (string, default `openai_whisper`; env `CODEX_AUTORUNNER_VOICE_PROVIDER`).
+- `voice.provider` (string, default `local_whisper`; env `CODEX_AUTORUNNER_VOICE_PROVIDER`).
 - `voice.latency_mode` (enum `realtime|balanced|quality`; env `CODEX_AUTORUNNER_VOICE_LATENCY`).
 - `voice.push_to_talk`: `{ max_ms: 15000, silence_auto_stop_ms: 1200, min_hold_ms: 150 }`.
 - `voice.chunk_ms` (default `600`) and `voice.sample_rate` (default `16000`) guide capture chunking.

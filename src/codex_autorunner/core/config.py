@@ -574,7 +574,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "terminal": _default_terminal_section(),
     "voice": {
         "enabled": True,
-        "provider": "openai_whisper",
+        "provider": "local_whisper",
         "latency_mode": "balanced",
         "chunk_ms": 600,
         "sample_rate": 16_000,
