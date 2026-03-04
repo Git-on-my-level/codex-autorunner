@@ -849,7 +849,7 @@ def build_pma_routes() -> APIRouter:
                     if not chunks:
                         chunks = [format_discord_message(message)]
                     for index, chunk in enumerate(chunks, start=1):
-                        digest = hashlib.sha1(
+                        digest = hashlib.sha256(
                             f"{correlation_id}:discord:{channel_id}:{index}".encode(
                                 "utf-8"
                             )
@@ -924,7 +924,7 @@ def build_pma_routes() -> APIRouter:
                         continue
                     seen_topics.add(identity)
                     targets += 1
-                    digest = hashlib.sha1(
+                    digest = hashlib.sha256(
                         f"{correlation_id}:telegram:{chat_id}:{thread_id or 'root'}".encode(
                             "utf-8"
                         )
