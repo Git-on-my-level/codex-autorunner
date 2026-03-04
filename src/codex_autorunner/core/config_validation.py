@@ -112,6 +112,14 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), (int, float)):
                 raise ConfigError(f"app_server.{key} must be a number or null")
+    if (
+        "turn_stall_max_recovery_attempts" in app_server_cfg
+        and app_server_cfg.get("turn_stall_max_recovery_attempts") is not None
+    ):
+        if not isinstance(app_server_cfg.get("turn_stall_max_recovery_attempts"), int):
+            raise ConfigError(
+                "app_server.turn_stall_max_recovery_attempts must be an integer or null"
+            )
     client_cfg = app_server_cfg.get("client")
     if client_cfg is not None:
         if not isinstance(client_cfg, dict):

@@ -51,9 +51,10 @@
     "request_timeout": null,
     "state_root": "~/.codex-autorunner/workspaces",
     "turn_stall_poll_interval_seconds": 2,
+    "turn_stall_max_recovery_attempts": 8,
     "turn_stall_recovery_min_interval_seconds": 10,
     "turn_stall_timeout_seconds": 60,
-    "turn_timeout_seconds": 28800
+    "turn_timeout_seconds": 7200
   },
   "autorunner": {
     "reuse_session": false
@@ -299,15 +300,15 @@
   },
   "telegram_bot": {
     "agent_timeouts": {
-      "codex": 28800,
-      "opencode": 28800
+      "codex": 7200,
+      "opencode": 7200
     },
     "allowed_chat_ids": [],
     "allowed_user_ids": [],
     "app_server": {
       "idle_ttl_seconds": 3600,
       "max_handles": 20,
-      "turn_timeout_seconds": 28800
+      "turn_timeout_seconds": 7200
     },
     "app_server_command": [
       "codex",

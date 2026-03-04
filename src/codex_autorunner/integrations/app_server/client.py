@@ -63,6 +63,7 @@ _RESTART_BACKOFF_JITTER_RATIO = 0.1
 _TURN_STALL_TIMEOUT_SECONDS = 60.0
 _TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
+_TURN_STALL_MAX_RECOVERY_ATTEMPTS = 8
 _MAX_TURN_RAW_EVENTS = 200
 _INVALID_JSON_PREVIEW_BYTES = 200
 _DEFAULT_OUTPUT_POLICY = "final_only"
@@ -180,6 +181,7 @@ class CodexAppServerClient:
         turn_stall_timeout_seconds: Optional[float] = _TURN_STALL_TIMEOUT_SECONDS,
         turn_stall_poll_interval_seconds: Optional[float] = None,
         turn_stall_recovery_min_interval_seconds: Optional[float] = None,
+        turn_stall_max_recovery_attempts: Optional[int] = None,
         max_message_bytes: Optional[int] = None,
         oversize_preview_bytes: Optional[int] = None,
         max_oversize_drain_bytes: Optional[int] = None,
@@ -294,6 +296,15 @@ class CodexAppServerClient:
         ):
             self._turn_stall_recovery_min_interval_seconds = (
                 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
+            )
+        self._turn_stall_max_recovery_attempts: Optional[int]
+        if turn_stall_max_recovery_attempts is None:
+            self._turn_stall_max_recovery_attempts = _TURN_STALL_MAX_RECOVERY_ATTEMPTS
+        elif turn_stall_max_recovery_attempts <= 0:
+            self._turn_stall_max_recovery_attempts = None
+        else:
+            self._turn_stall_max_recovery_attempts = int(
+                turn_stall_max_recovery_attempts
             )
         _CLIENT_INSTANCES.add(self)
 
@@ -587,6 +598,7 @@ class CodexAppServerClient:
             idle_seconds=round(idle_seconds, 2),
             last_method=state.last_method,
             recovery_attempts=state.recovery_attempts,
+            max_recovery_attempts=self._turn_stall_max_recovery_attempts,
         )
         try:
             resume_result = await self.thread_resume(thread_id)
@@ -600,11 +612,27 @@ class CodexAppServerClient:
                 idle_seconds=round(idle_seconds, 2),
                 exc=exc,
             )
+            self._maybe_fail_stalled_turn(
+                state,
+                turn_id=turn_id,
+                thread_id=thread_id,
+                idle_seconds=idle_seconds,
+                reason="thread_resume_failed",
+                recovery_status=state.status,
+            )
             state.last_event_at = now
             return
 
         snapshot = _extract_turn_snapshot_from_resume(resume_result, turn_id)
         if snapshot is None:
+            self._maybe_fail_stalled_turn(
+                state,
+                turn_id=turn_id,
+                thread_id=thread_id,
+                idle_seconds=idle_seconds,
+                reason="resume_snapshot_missing",
+                recovery_status=state.status,
+            )
             state.last_event_at = now
             return
 
@@ -634,7 +662,82 @@ class CodexAppServerClient:
             )
             return
 
+        self._maybe_fail_stalled_turn(
+            state,
+            turn_id=turn_id,
+            thread_id=thread_id,
+            idle_seconds=idle_seconds,
+            reason="resume_non_terminal",
+            recovery_status=state.status,
+        )
         state.last_event_at = now
+
+    def _maybe_fail_stalled_turn(
+        self,
+        state: _TurnState,
+        *,
+        turn_id: str,
+        thread_id: str,
+        idle_seconds: float,
+        reason: str,
+        recovery_status: Optional[str],
+    ) -> None:
+        if state.future.done():
+            return
+        max_attempts = self._turn_stall_max_recovery_attempts
+        if max_attempts is None or state.recovery_attempts < max_attempts:
+            return
+
+        error = (
+            "Turn stalled and recovery exhausted: "
+            f"attempts={state.recovery_attempts}, "
+            f"max_attempts={max_attempts}, "
+            f"reason={reason}, "
+            f"last_method={state.last_method or 'unknown'}, "
+            f"status={recovery_status or state.status or 'unknown'}."
+        )
+        state.status = "failed"
+        state.errors.append(error)
+        state.raw_events.append(
+            {
+                "method": "turn/stalledRecoveryExhausted",
+                "params": {
+                    "turnId": turn_id,
+                    "threadId": thread_id,
+                    "reason": reason,
+                    "recoveryAttempts": state.recovery_attempts,
+                    "maxRecoveryAttempts": max_attempts,
+                    "lastMethod": state.last_method,
+                    "status": recovery_status or state.status,
+                    "idleSeconds": round(idle_seconds, 2),
+                },
+            }
+        )
+        log_event(
+            self._logger,
+            logging.ERROR,
+            "app_server.turn_recovery.exhausted",
+            turn_id=turn_id,
+            thread_id=thread_id,
+            reason=reason,
+            idle_seconds=round(idle_seconds, 2),
+            last_method=state.last_method,
+            status=recovery_status or state.status,
+            recovery_attempts=state.recovery_attempts,
+            max_recovery_attempts=max_attempts,
+        )
+        state.future.set_result(
+            TurnResult(
+                turn_id=state.turn_id,
+                status=state.status,
+                final_message=_final_message_for_result(
+                    state, policy=self._output_policy
+                ),
+                agent_messages=_agent_messages_for_result(state),
+                errors=list(state.errors),
+                raw_events=list(state.raw_events),
+            )
+        )
 
     async def _ensure_process(self) -> None:
         async with self._circuit_breaker.call():

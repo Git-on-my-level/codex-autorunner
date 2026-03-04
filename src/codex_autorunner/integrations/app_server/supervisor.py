@@ -41,6 +41,7 @@ class WorkspaceAppServerSupervisor:
         turn_stall_timeout_seconds: Optional[float] = None,
         turn_stall_poll_interval_seconds: Optional[float] = None,
         turn_stall_recovery_min_interval_seconds: Optional[float] = None,
+        turn_stall_max_recovery_attempts: Optional[int] = None,
         max_message_bytes: Optional[int] = None,
         oversize_preview_bytes: Optional[int] = None,
         max_oversize_drain_bytes: Optional[int] = None,
@@ -73,6 +74,7 @@ class WorkspaceAppServerSupervisor:
         self._turn_stall_recovery_min_interval_seconds = (
             turn_stall_recovery_min_interval_seconds
         )
+        self._turn_stall_max_recovery_attempts = turn_stall_max_recovery_attempts
         self._max_message_bytes = max_message_bytes
         self._oversize_preview_bytes = oversize_preview_bytes
         self._max_oversize_drain_bytes = max_oversize_drain_bytes
@@ -167,6 +169,7 @@ class WorkspaceAppServerSupervisor:
                 turn_stall_timeout_seconds=self._turn_stall_timeout_seconds,
                 turn_stall_poll_interval_seconds=self._turn_stall_poll_interval_seconds,
                 turn_stall_recovery_min_interval_seconds=self._turn_stall_recovery_min_interval_seconds,
+                turn_stall_max_recovery_attempts=self._turn_stall_max_recovery_attempts,
                 max_message_bytes=self._max_message_bytes,
                 oversize_preview_bytes=self._oversize_preview_bytes,
                 max_oversize_drain_bytes=self._max_oversize_drain_bytes,

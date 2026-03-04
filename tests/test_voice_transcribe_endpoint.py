@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.server import create_hub_app
@@ -10,7 +11,9 @@ def _client(hub_env) -> TestClient:
     return TestClient(app)
 
 
-def test_voice_transcribe_reads_uploaded_file_bytes(hub_env, repo: Path) -> None:
+def test_voice_transcribe_reads_uploaded_file_bytes(
+    hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """
     The web UI uploads audio as multipart/form-data (FormData).
     The server must read the uploaded file bytes, not the raw multipart body.
@@ -18,6 +21,10 @@ def test_voice_transcribe_reads_uploaded_file_bytes(hub_env, repo: Path) -> None
     If it incorrectly reads the raw body, even an empty uploaded file would look non-empty
     (multipart boundaries) and we'd get a provider error instead of empty_audio.
     """
+
+    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_ENABLED", "1")
+    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "openai_whisper")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-token")
 
     client = _client(hub_env)
     res = client.post(

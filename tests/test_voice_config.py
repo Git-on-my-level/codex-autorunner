@@ -82,7 +82,10 @@ def test_resolve_provider_requires_enabled_and_known_provider():
     with pytest.raises(ValueError):
         resolve_speech_provider(disabled)
 
-    unknown = VoiceConfig.from_raw({"enabled": True, "provider": "does_not_exist"})
+    unknown = VoiceConfig.from_raw(
+        {"enabled": True, "provider": "does_not_exist"},
+        env={"TEST_ENV": "1"},
+    )
     with pytest.raises(ValueError):
         resolve_speech_provider(unknown)
 

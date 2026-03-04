@@ -85,10 +85,11 @@ def _default_app_server_section() -> Dict[str, Any]:
         "auto_restart": True,
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
-        "turn_timeout_seconds": 28800,
+        "turn_timeout_seconds": 7200,
         "turn_stall_timeout_seconds": 60,
         "turn_stall_poll_interval_seconds": 2,
         "turn_stall_recovery_min_interval_seconds": 10,
+        "turn_stall_max_recovery_attempts": 8,
         "request_timeout": None,
         "client": {
             "max_message_bytes": 50 * 1024 * 1024,
@@ -202,7 +203,7 @@ def _default_telegram_bot_section(
         "app_server": {
             "max_handles": 20,
             "idle_ttl_seconds": 3600,
-            "turn_timeout_seconds": 28800,
+            "turn_timeout_seconds": 7200,
         },
         "polling": {
             "timeout_seconds": 30,
@@ -212,8 +213,8 @@ def _default_telegram_bot_section(
 
     if include_agent_timeouts:
         config["agent_timeouts"] = {
-            "codex": 28800,
-            "opencode": 28800,
+            "codex": 7200,
+            "opencode": 7200,
         }
 
     return config
@@ -835,6 +836,7 @@ class AppServerConfig:
     turn_stall_timeout_seconds: Optional[float]
     turn_stall_poll_interval_seconds: Optional[float]
     turn_stall_recovery_min_interval_seconds: Optional[float]
+    turn_stall_max_recovery_attempts: Optional[int]
     request_timeout: Optional[float]
     client: AppServerClientConfig
     output: AppServerOutputConfig
@@ -1561,6 +1563,18 @@ def _parse_app_server_config(
         turn_stall_recovery_min_interval_seconds = defaults.get(
             "turn_stall_recovery_min_interval_seconds"
         )
+    stall_max_attempts_raw = cfg.get(
+        "turn_stall_max_recovery_attempts",
+        defaults.get("turn_stall_max_recovery_attempts"),
+    )
+    turn_stall_max_recovery_attempts = (
+        int(stall_max_attempts_raw) if stall_max_attempts_raw is not None else None
+    )
+    if (
+        turn_stall_max_recovery_attempts is not None
+        and turn_stall_max_recovery_attempts <= 0
+    ):
+        turn_stall_max_recovery_attempts = None
     request_timeout_raw = cfg.get("request_timeout", defaults.get("request_timeout"))
     request_timeout = (
         float(request_timeout_raw) if request_timeout_raw is not None else None
@@ -1601,6 +1615,7 @@ def _parse_app_server_config(
         turn_stall_timeout_seconds=turn_stall_timeout_seconds,
         turn_stall_poll_interval_seconds=turn_stall_poll_interval_seconds,
         turn_stall_recovery_min_interval_seconds=turn_stall_recovery_min_interval_seconds,
+        turn_stall_max_recovery_attempts=turn_stall_max_recovery_attempts,
         request_timeout=request_timeout,
         client=AppServerClientConfig(
             max_message_bytes=_client_int("max_message_bytes"),

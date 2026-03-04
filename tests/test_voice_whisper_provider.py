@@ -121,7 +121,8 @@ def test_resolve_speech_provider_builds_openai():
             "provider": "openai_whisper",
             "providers": {"openai_whisper": {"model": "whisper-1"}},
             "warn_on_remote_api": False,
-        }
+        },
+        env={"TEST_ENV": "1"},
     )
     provider = resolve_speech_provider(
         voice_config=config, env={"OPENAI_API_KEY": "token"}, logger=None

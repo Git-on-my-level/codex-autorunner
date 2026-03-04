@@ -42,7 +42,10 @@ def _build_service_in_closed_loop(
 
 def test_whisper_disclaimer_appended_for_transcripts(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
-    voice_config = VoiceConfig.from_raw({"enabled": True, "provider": "openai_whisper"})
+    voice_config = VoiceConfig.from_raw(
+        {"enabled": True, "provider": "openai_whisper"},
+        env={"TEST_ENV": "1"},
+    )
     service = _build_service_in_closed_loop(tmp_path, config, voice_config)
 
     prompt = "hello"
@@ -70,7 +73,10 @@ def test_whisper_disclaimer_skipped_for_other_providers(tmp_path: Path) -> None:
 
 def test_whisper_disclaimer_not_duplicated(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
-    voice_config = VoiceConfig.from_raw({"enabled": True, "provider": "openai_whisper"})
+    voice_config = VoiceConfig.from_raw(
+        {"enabled": True, "provider": "openai_whisper"},
+        env={"TEST_ENV": "1"},
+    )
     service = _build_service_in_closed_loop(tmp_path, config, voice_config)
 
     prompt = f"hello\n\n{wrap_injected_context(WHISPER_TRANSCRIPT_DISCLAIMER)}"
