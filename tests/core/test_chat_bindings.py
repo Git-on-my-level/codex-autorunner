@@ -19,10 +19,17 @@ from codex_autorunner.manifest import (
 from tests.conftest import write_test_config
 
 
-def _write_manifest_repo(hub_root: Path, *, repo_id: str, relative_path: str) -> Path:
+def _write_manifest_repo(
+    hub_root: Path,
+    *,
+    repo_id: str,
+    relative_path: str,
+    manifest_relative_path: str = ".codex-autorunner/manifest.yml",
+) -> Path:
     workspace_path = (hub_root / relative_path).resolve()
     workspace_path.mkdir(parents=True, exist_ok=True)
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path = (hub_root / manifest_relative_path).resolve()
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest = Manifest(
         version=MANIFEST_VERSION,
         repos=[
@@ -322,6 +329,41 @@ def test_chat_binding_lookup_resolves_repo_from_workspace_paths(
             hub_root=hub_root,
             raw_config=cfg,
             repo_id="repo-chat-managed",
+        )
+        is True
+    )
+
+
+def test_chat_binding_lookup_resolves_repo_from_custom_manifest_path(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["hub"]["manifest"] = "state/custom-manifest.yml"
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    workspace = _write_manifest_repo(
+        hub_root,
+        repo_id="repo-custom-manifest",
+        relative_path="worktrees/custom/discord/discord-1",
+        manifest_relative_path="state/custom-manifest.yml",
+    )
+    workspace_str = str(workspace)
+
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-chan-custom",
+        repo_id=None,
+        workspace_path=workspace_str,
+    )
+
+    counts = active_chat_binding_counts(hub_root=hub_root, raw_config=cfg)
+    assert counts.get("repo-custom-manifest") == 1
+    assert (
+        repo_has_active_chat_binding(
+            hub_root=hub_root,
+            raw_config=cfg,
+            repo_id="repo-custom-manifest",
         )
         is True
     )
