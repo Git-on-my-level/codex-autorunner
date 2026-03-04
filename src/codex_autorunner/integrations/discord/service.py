@@ -31,6 +31,7 @@ from ...core.flows import (
     archive_flow_run_artifacts,
     load_latest_paused_ticket_flow_dispatch,
 )
+from ...core.flows.hub_overview import build_hub_flow_overview_entries
 from ...core.flows.reconciler import reconcile_flow_run
 from ...core.flows.surface_defaults import should_route_flow_read_to_hub_overview
 from ...core.flows.ux_helpers import (
@@ -4562,23 +4563,53 @@ class DiscordBotService:
             )
             return
 
-        lines = ["Hub Flow Overview:"]
-        seen_any = False
+        raw_config: dict[str, object] = {}
+        try:
+            repo_config = load_repo_config(self._config.root)
+            if isinstance(repo_config.raw, dict):
+                raw_config = repo_config.raw
+        except Exception:
+            raw_config = {}
+
+        overview_entries = build_hub_flow_overview_entries(
+            hub_root=self._config.root,
+            manifest=manifest,
+            raw_config=raw_config,
+        )
+        display_label_by_repo_id: dict[str, str] = {}
         for repo in manifest.repos:
             if not repo.enabled:
                 continue
-            seen_any = True
-            repo_root = (self._config.root / repo.path).resolve()
-            label = repo.display_name or repo.id
+            label = (
+                repo.display_name.strip()
+                if isinstance(repo.display_name, str) and repo.display_name.strip()
+                else repo.id
+            )
+            display_label_by_repo_id[repo.id] = label
+
+        lines = ["Hub Flow Overview:"]
+        groups: dict[str, list[tuple[str, str]]] = {}
+        group_order: list[str] = []
+        has_unregistered = any(entry.unregistered for entry in overview_entries)
+        for entry in overview_entries:
+            line_label = display_label_by_repo_id.get(entry.repo_id, entry.label)
+            if entry.group not in groups:
+                groups[entry.group] = []
+                group_order.append(entry.group)
             try:
-                store = self._open_flow_store(repo_root)
+                store = self._open_flow_store(entry.repo_root)
             except Exception:
-                lines.append(f"❓ {label}: Error reading state")
+                groups[entry.group].append(
+                    (
+                        line_label,
+                        f"{entry.indent}❓ {line_label}: Error reading state",
+                    )
+                )
                 continue
             try:
                 runs = store.list_flow_runs(flow_type="ticket_flow")
                 latest = runs[0] if runs else None
-                progress = ticket_progress(repo_root)
+                progress = ticket_progress(entry.repo_root)
                 display = build_ticket_flow_display(
                     status=latest.status.value if latest else None,
                     done_count=progress.get("done", 0),
@@ -4587,17 +4618,29 @@ class DiscordBotService:
                 )
                 run_id = display.get("run_id")
                 run_suffix = f" run {run_id}" if run_id else ""
-                lines.append(
-                    f"{display['status_icon']} {label}: {display['status_label']} "
-                    f"{display['done_count']}/{display['total_count']}{run_suffix}"
+                line = (
+                    f"{entry.indent}{display['status_icon']} {line_label}: "
+                    f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}"
                 )
             except Exception:
-                lines.append(f"❓ {label}: Error reading state")
+                line = f"{entry.indent}❓ {line_label}: Error reading state"
             finally:
                 store.close()
+            groups[entry.group].append((line_label, line))
 
-        if not seen_any:
+        for group in group_order:
+            group_entries = groups.get(group, [])
+            if not group_entries:
+                continue
+            group_entries.sort(key=lambda pair: (0 if pair[0] == group else 1, pair[0]))
+            lines.extend([line for _label, line in group_entries])
+
+        if not overview_entries:
             lines.append("No enabled repositories found.")
+        if has_unregistered:
+            lines.append(
+                "Note: Active chat-bound unregistered worktrees detected. Run `car hub scan` to register them."
+            )
         lines.append("Use `/car bind` for repo-specific flow actions.")
         await self._respond_ephemeral(
             interaction_id,
@@ -7848,7 +7891,8 @@ class DiscordBotService:
             chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
 
         next_chunk_index = 0
-        continue_button_applied = False
+        last_chunk_index = len(chunks) - 1
+        preview_chunk_applied = False
         preview_message_id = (
             turn_result.preview_message_id
             if isinstance(turn_result.preview_message_id, str)
@@ -7858,15 +7902,18 @@ class DiscordBotService:
 
         if preview_message_id:
             try:
+                preview_payload: dict[str, Any] = {"content": chunks[0]}
+                if last_chunk_index == 0:
+                    preview_payload["components"] = [build_continue_turn_button()]
+                else:
+                    # This message is not terminal for long compactions.
+                    preview_payload["components"] = []
                 await self._rest.edit_channel_message(
                     channel_id=channel_id,
                     message_id=preview_message_id,
-                    payload={
-                        "content": chunks[0],
-                        "components": [build_continue_turn_button()],
-                    },
+                    payload=preview_payload,
                 )
-                continue_button_applied = True
+                preview_chunk_applied = True
                 next_chunk_index = 1
             except Exception as exc:
                 log_event(
@@ -7878,18 +7925,23 @@ class DiscordBotService:
                     exc=exc,
                 )
 
-        if not continue_button_applied:
+        if not preview_chunk_applied:
+            first_payload: dict[str, Any] = {"content": chunks[0]}
+            if last_chunk_index == 0:
+                first_payload["components"] = [build_continue_turn_button()]
             await self._send_channel_message_safe(
                 channel_id,
-                {
-                    "content": chunks[0],
-                    "components": [build_continue_turn_button()],
-                },
+                first_payload,
             )
             next_chunk_index = 1
 
-        for chunk in chunks[next_chunk_index:]:
-            await self._send_channel_message_safe(channel_id, {"content": chunk})
+        for chunk_index, chunk in enumerate(
+            chunks[next_chunk_index:], next_chunk_index
+        ):
+            payload: dict[str, Any] = {"content": chunk}
+            if chunk_index == last_chunk_index:
+                payload["components"] = [build_continue_turn_button()]
+            await self._send_channel_message_safe(channel_id, payload)
 
     async def _handle_car_rollout(
         self,

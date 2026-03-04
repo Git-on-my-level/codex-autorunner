@@ -14,6 +14,8 @@ from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
+from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from tests.conftest import write_test_config
@@ -92,6 +94,51 @@ def _install_fake_successful_chat_supervisor(
             return self.client
 
     app.state.app_server_supervisor = FakeSupervisor()
+
+
+async def _seed_discord_pma_binding(hub_env, *, channel_id: str) -> None:
+    store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await store.upsert_binding(
+            channel_id=channel_id,
+            guild_id="guild-1",
+            workspace_path=str(hub_env.repo_root.resolve()),
+            repo_id=hub_env.repo_id,
+        )
+        await store.update_pma_state(
+            channel_id=channel_id,
+            pma_enabled=True,
+            pma_prev_workspace_path=str(hub_env.repo_root.resolve()),
+            pma_prev_repo_id=hub_env.repo_id,
+        )
+    finally:
+        await store.close()
+
+
+async def _seed_telegram_pma_binding(
+    hub_env, *, chat_id: int, thread_id: Optional[int]
+) -> None:
+    store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        key = topic_key(chat_id, thread_id)
+        await store.bind_topic(
+            key,
+            str(hub_env.repo_root.resolve()),
+            repo_id=hub_env.repo_id,
+        )
+
+        def _enable(record: Any) -> None:
+            record.pma_enabled = True
+            record.pma_prev_repo_id = hub_env.repo_id
+            record.pma_prev_workspace_path = str(hub_env.repo_root.resolve())
+
+        await store.update_topic(key, _enable)
+    finally:
+        await store.close()
 
 
 def test_build_pma_routes_does_not_construct_async_primitives_on_route_build(
@@ -605,6 +652,158 @@ async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> Non
         first_resp = await chat_task
         assert first_resp.status_code == 200
         assert first_resp.json().get("status") == "ok"
+
+
+@pytest.mark.anyio
+async def test_pma_wakeup_turn_publishes_to_discord_and_telegram_outboxes(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id="turn-wakeup-success",
+        message="automation summary complete",
+    )
+    app.state.app_server_events = object()
+
+    await _seed_discord_pma_binding(hub_env, channel_id="discord-123")
+    await _seed_telegram_pma_binding(hub_env, chat_id=1001, thread_id=2002)
+
+    queue = PmaQueue(hub_env.hub_root)
+    lane_id = "pma:test-publish"
+    start_lane_worker = app.state.pma_lane_worker_start
+    stop_lane_worker = app.state.pma_lane_worker_stop
+    assert callable(start_lane_worker)
+    assert callable(stop_lane_worker)
+
+    item, _ = await queue.enqueue(
+        lane_id,
+        "pma:test-publish:key-1",
+        {
+            "message": "Automation wake-up received.",
+            "agent": "codex",
+            "client_turn_id": "wakeup-123",
+            "wake_up": {
+                "wakeup_id": "wakeup-123",
+                "repo_id": hub_env.repo_id,
+                "event_type": "managed_thread_completed",
+                "source": "lifecycle_subscription",
+                "run_id": "run-123",
+            },
+        },
+    )
+
+    try:
+        await start_lane_worker(app, lane_id)
+        result: dict[str, Any] | None = None
+        with anyio.fail_after(3):
+            while True:
+                items = await queue.list_items(lane_id)
+                match = next(
+                    (entry for entry in items if entry.item_id == item.item_id), None
+                )
+                assert match is not None
+                if match.state in (QueueItemState.COMPLETED, QueueItemState.FAILED):
+                    result = dict(match.result or {})
+                    break
+                await anyio.sleep(0.05)
+        assert result is not None
+        assert result.get("status") == "ok"
+        assert result.get("delivery_status") == "success"
+    finally:
+        await stop_lane_worker(app, lane_id)
+
+    discord_store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    telegram_store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        discord_outbox = await discord_store.list_outbox()
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await discord_store.close()
+        await telegram_store.close()
+
+    assert any(record.channel_id == "discord-123" for record in discord_outbox)
+    assert any(
+        record.chat_id == 1001 and record.thread_id == 2002
+        for record in telegram_outbox
+    )
+    assert any(
+        "automation summary complete" in record.text for record in telegram_outbox
+    )
+
+
+@pytest.mark.anyio
+async def test_pma_wakeup_failure_publishes_failure_summary(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    app.state.app_server_supervisor = None
+    app.state.app_server_events = None
+
+    await _seed_telegram_pma_binding(hub_env, chat_id=3003, thread_id=4004)
+
+    queue = PmaQueue(hub_env.hub_root)
+    lane_id = "pma:test-publish-failure"
+    start_lane_worker = app.state.pma_lane_worker_start
+    stop_lane_worker = app.state.pma_lane_worker_stop
+    assert callable(start_lane_worker)
+    assert callable(stop_lane_worker)
+
+    item, _ = await queue.enqueue(
+        lane_id,
+        "pma:test-publish:key-2",
+        {
+            "message": "Automation wake-up received.",
+            "agent": "codex",
+            "client_turn_id": "wakeup-456",
+            "wake_up": {
+                "wakeup_id": "wakeup-456",
+                "repo_id": hub_env.repo_id,
+                "event_type": "managed_thread_failed",
+                "source": "lifecycle_subscription",
+                "run_id": "run-456",
+            },
+        },
+    )
+
+    try:
+        await start_lane_worker(app, lane_id)
+        result: dict[str, Any] | None = None
+        with anyio.fail_after(3):
+            while True:
+                items = await queue.list_items(lane_id)
+                match = next(
+                    (entry for entry in items if entry.item_id == item.item_id), None
+                )
+                assert match is not None
+                if match.state in (QueueItemState.COMPLETED, QueueItemState.FAILED):
+                    result = dict(match.result or {})
+                    break
+                await anyio.sleep(0.05)
+        assert result is not None
+        assert result.get("status") == "error"
+        assert result.get("delivery_status") == "success"
+    finally:
+        await stop_lane_worker(app, lane_id)
+
+    telegram_store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await telegram_store.close()
+
+    failure_message = next(
+        (record.text for record in telegram_outbox if record.chat_id == 3003),
+        "",
+    )
+    assert "status: error" in failure_message
+    assert "next_action:" in failure_message
 
 
 def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:

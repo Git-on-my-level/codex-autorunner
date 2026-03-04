@@ -10,6 +10,7 @@ from typing import Any, Optional
 import pytest
 
 from codex_autorunner.core.flows import FlowStore
+from codex_autorunner.core.flows import hub_overview as hub_overview_module
 from codex_autorunner.core.flows.models import (
     FlowEventType,
     FlowRunRecord,
@@ -929,8 +930,21 @@ async def test_flow_hub_overview_marks_completed_idle_as_done(
         flows_module,
         "load_manifest",
         lambda _path, _root: SimpleNamespace(
-            repos=[SimpleNamespace(id="base--my-worktree", enabled=True, path=".")]
+            repos=[
+                SimpleNamespace(
+                    id="base--my-worktree",
+                    enabled=True,
+                    path=".",
+                    kind="worktree",
+                    worktree_of="base",
+                )
+            ]
         ),
+    )
+    monkeypatch.setattr(
+        hub_overview_module,
+        "active_chat_binding_counts",
+        lambda *, hub_root, raw_config: {"base--my-worktree": 1},
     )
 
     handler = _HubOverviewHandler()
@@ -949,6 +963,96 @@ async def test_flow_hub_overview_marks_completed_idle_as_done(
 
     assert handler.sent
     assert "🔵 `my-worktree`: Done 3/3" in handler.sent[0][0]
+
+
+@pytest.mark.anyio
+async def test_flow_hub_overview_shows_only_active_chat_bound_worktrees(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _StubStore:
+        def initialize(self) -> None: ...
+
+        def list_flow_runs(self, *args, **kwargs):
+            return []
+
+        def close(self) -> None: ...
+
+    class _HubOverviewHandler(FlowCommands):
+        def __init__(self) -> None:
+            self._manifest_path = tmp_path / "manifest.yml"
+            self._hub_root = tmp_path
+            self._store = _TopicStoreStub(None)
+            self.sent: list[tuple[str, Optional[str]]] = []
+
+        async def _resolve_topic_key(
+            self, _chat_id: int, _thread_id: int | None
+        ) -> str:
+            return "topic"
+
+        def _resolve_workspace(self, _arg: str) -> tuple[str, Path] | None:
+            return None
+
+        async def _send_message(
+            self,
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: int | None = None,
+            reply_to: int | None = None,
+            reply_markup: dict[str, object] | None = None,
+            parse_mode: str | None = None,
+        ) -> None:
+            _ = (thread_id, reply_to, reply_markup, parse_mode)
+            self.sent.append((text, parse_mode))
+
+    monkeypatch.setattr(flows_module, "_load_flow_store", lambda _root: _StubStore())
+    monkeypatch.setattr(
+        flows_module,
+        "load_manifest",
+        lambda _path, _root: SimpleNamespace(
+            repos=[
+                SimpleNamespace(id="base", enabled=True, path=".", kind="base"),
+                SimpleNamespace(
+                    id="base--wt-visible",
+                    enabled=True,
+                    path=".",
+                    kind="worktree",
+                    worktree_of="base",
+                ),
+                SimpleNamespace(
+                    id="base--wt-hidden",
+                    enabled=True,
+                    path=".",
+                    kind="worktree",
+                    worktree_of="base",
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        hub_overview_module,
+        "active_chat_binding_counts",
+        lambda *, hub_root, raw_config: {"base--wt-visible": 1},
+    )
+
+    handler = _HubOverviewHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._send_flow_hub_overview(message)
+
+    assert handler.sent
+    content = handler.sent[0][0]
+    assert "`wt-visible`" in content
+    assert "`wt-hidden`" not in content
 
 
 @pytest.mark.anyio
@@ -1005,9 +1109,20 @@ async def test_flow_hub_overview_uses_latest_run_not_stale_active(
         "load_manifest",
         lambda _path, _root: SimpleNamespace(
             repos=[
-                SimpleNamespace(id="base--extension-refactor", enabled=True, path=".")
+                SimpleNamespace(
+                    id="base--extension-refactor",
+                    enabled=True,
+                    path=".",
+                    kind="worktree",
+                    worktree_of="base",
+                )
             ]
         ),
+    )
+    monkeypatch.setattr(
+        hub_overview_module,
+        "active_chat_binding_counts",
+        lambda *, hub_root, raw_config: {"base--extension-refactor": 1},
     )
 
     handler = _HubOverviewHandler()

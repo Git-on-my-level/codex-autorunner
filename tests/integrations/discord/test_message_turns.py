@@ -2976,9 +2976,14 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         assert rest.edited_channel_messages
         compact_preview_edit = rest.edited_channel_messages[-1]
         assert compact_preview_edit["message_id"] == "preview-1"
-        components = compact_preview_edit["payload"].get("components") or []
-        assert components
-        button = components[0]["components"][0]
+        assert compact_preview_edit["payload"].get("components") == []
+        assert rest.channel_messages
+
+        for msg in rest.channel_messages[:-1]:
+            assert not (msg["payload"].get("components") or [])
+        tail_components = rest.channel_messages[-1]["payload"].get("components") or []
+        assert tail_components
+        button = tail_components[0]["components"][0]
         assert button["label"] == "Continue"
         assert button["custom_id"] == "continue_turn"
 
@@ -2987,6 +2992,103 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
             msg["payload"].get("content", "") for msg in rest.channel_messages
         )
         assert len(rendered_chunks) > 1
+        assert any("Conversation Summary" in chunk for chunk in rendered_chunks)
+        assert all(
+            not re.match(r"^Part \d+/\d+$", (chunk.splitlines() or [""])[0].strip())
+            for chunk in rendered_chunks
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_session_compact_places_continue_button_on_last_chunk_without_preview(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _CompactOrchestrator:
+        def get_thread_id(self, session_key: str) -> Optional[str]:
+            _ = session_key
+            return "thread-1"
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return _CompactOrchestrator()
+
+    summary = "\n".join(
+        [
+            f"- compact summary detail line {idx} with enough content to wrap"
+            for idx in range(1, 30)
+        ]
+    )
+
+    async def _fake_run_turn(
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return DiscordMessageTurnResult(
+            final_message=summary,
+            preview_message_id=None,
+        )
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+    service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_compact(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert not rest.edited_channel_messages
+        assert len(rest.channel_messages) > 1
+
+        for msg in rest.channel_messages[:-1]:
+            assert not (msg["payload"].get("components") or [])
+        tail_components = rest.channel_messages[-1]["payload"].get("components") or []
+        assert tail_components
+        button = tail_components[0]["components"][0]
+        assert button["label"] == "Continue"
+        assert button["custom_id"] == "continue_turn"
+
+        rendered_chunks = [
+            msg["payload"].get("content", "") for msg in rest.channel_messages
+        ]
         assert any("Conversation Summary" in chunk for chunk in rendered_chunks)
         assert all(
             not re.match(r"^Part \d+/\d+$", (chunk.splitlines() or [""])[0].strip())

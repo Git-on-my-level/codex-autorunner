@@ -64,7 +64,7 @@ class VoiceConfig:
         env = env or os.environ
         merged: MutableMapping[str, Any] = {
             "enabled": False,
-            "provider": "openai_whisper",
+            "provider": "local_whisper",
             "latency_mode": "balanced",
             "chunk_ms": 600,
             "sample_rate": 16_000,
@@ -106,7 +106,7 @@ class VoiceConfig:
             # Auto-enable if the provider's API key is available
             provider_name_raw = env.get(
                 "CODEX_AUTORUNNER_VOICE_PROVIDER",
-                merged.get("provider", "openai_whisper"),
+                merged.get("provider", "local_whisper"),
             )
             provider_name = (
                 "local_whisper"
@@ -134,7 +134,7 @@ class VoiceConfig:
         if explicit_warn is not None:
             merged["warn_on_remote_api"] = _env_bool(explicit_warn, True)
         else:
-            provider_name_raw = merged.get("provider", "openai_whisper")
+            provider_name_raw = merged.get("provider", "local_whisper")
             provider_name = (
                 "local_whisper"
                 if str(provider_name_raw).strip().lower() == "local"

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.server import create_hub_app
@@ -12,7 +11,7 @@ def _client(hub_env) -> TestClient:
 
 
 def test_voice_transcribe_reads_uploaded_file_bytes(
-    hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch
+    hub_env, repo: Path, monkeypatch
 ) -> None:
     """
     The web UI uploads audio as multipart/form-data (FormData).
@@ -22,10 +21,9 @@ def test_voice_transcribe_reads_uploaded_file_bytes(
     (multipart boundaries) and we'd get a provider error instead of empty_audio.
     """
 
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_ENABLED", "1")
+    # Keep this endpoint contract test independent from local-whisper optional deps.
     monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "openai_whisper")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-token")
-
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     client = _client(hub_env)
     res = client.post(
         f"/repos/{hub_env.repo_id}/api/voice/transcribe",

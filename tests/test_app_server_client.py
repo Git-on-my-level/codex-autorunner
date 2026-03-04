@@ -18,6 +18,17 @@ def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
+def test_turn_stall_max_recovery_attempts_defaults_and_disable_override() -> None:
+    client_default = CodexAppServerClient(fixture_command("basic"))
+    assert client_default._turn_stall_max_recovery_attempts == 8
+
+    client_disabled = CodexAppServerClient(
+        fixture_command("basic"),
+        turn_stall_max_recovery_attempts=None,
+    )
+    assert client_disabled._turn_stall_max_recovery_attempts is None
+
+
 @pytest.mark.anyio
 async def test_handshake_and_status(tmp_path: Path) -> None:
     client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)

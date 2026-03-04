@@ -16,6 +16,7 @@ logger = logging.getLogger("codex_autorunner.core.chat_bindings")
 
 DISCORD_STATE_FILE_DEFAULT = ".codex-autorunner/discord_state.sqlite3"
 TELEGRAM_STATE_FILE_DEFAULT = ".codex-autorunner/telegram_state.sqlite3"
+MANIFEST_FILE_DEFAULT = ".codex-autorunner/manifest.yml"
 
 
 def _normalize_repo_id(value: Any) -> str | None:
@@ -57,8 +58,23 @@ def _resolve_state_path(
     return state_path
 
 
-def _repo_id_by_workspace_path(hub_root: Path) -> dict[str, str]:
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+def _resolve_manifest_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
+    hub_cfg = raw_config.get("hub")
+    if not isinstance(hub_cfg, Mapping):
+        hub_cfg = {}
+    manifest_file = hub_cfg.get("manifest")
+    if not isinstance(manifest_file, str) or not manifest_file.strip():
+        manifest_file = MANIFEST_FILE_DEFAULT
+    manifest_path = Path(manifest_file)
+    if not manifest_path.is_absolute():
+        manifest_path = (hub_root / manifest_path).resolve()
+    return manifest_path
+
+
+def _repo_id_by_workspace_path(
+    hub_root: Path, raw_config: Mapping[str, Any]
+) -> dict[str, str]:
+    manifest_path = _resolve_manifest_path(hub_root, raw_config)
     if not manifest_path.exists():
         return {}
     try:
@@ -455,7 +471,7 @@ def active_chat_binding_counts(
 ) -> dict[str, int]:
     """Return repo-id keyed counts of active chat bindings from persisted stores."""
 
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
     counts: Counter[str] = Counter()
 
     for repo_id, count in _active_pma_thread_counts(
@@ -489,7 +505,7 @@ def repo_has_active_chat_binding(
     if normalized_repo_id is None:
         return False
 
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
 
     if _has_active_pma_thread(hub_root, normalized_repo_id, repo_id_by_workspace):
         return True

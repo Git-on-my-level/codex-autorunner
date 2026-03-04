@@ -181,7 +181,9 @@ class CodexAppServerClient:
         turn_stall_timeout_seconds: Optional[float] = _TURN_STALL_TIMEOUT_SECONDS,
         turn_stall_poll_interval_seconds: Optional[float] = None,
         turn_stall_recovery_min_interval_seconds: Optional[float] = None,
-        turn_stall_max_recovery_attempts: Optional[int] = None,
+        turn_stall_max_recovery_attempts: Optional[
+            int
+        ] = _TURN_STALL_MAX_RECOVERY_ATTEMPTS,
         max_message_bytes: Optional[int] = None,
         oversize_preview_bytes: Optional[int] = None,
         max_oversize_drain_bytes: Optional[int] = None,
@@ -299,7 +301,7 @@ class CodexAppServerClient:
             )
         self._turn_stall_max_recovery_attempts: Optional[int]
         if turn_stall_max_recovery_attempts is None:
-            self._turn_stall_max_recovery_attempts = _TURN_STALL_MAX_RECOVERY_ATTEMPTS
+            self._turn_stall_max_recovery_attempts = None
         elif turn_stall_max_recovery_attempts <= 0:
             self._turn_stall_max_recovery_attempts = None
         else:
