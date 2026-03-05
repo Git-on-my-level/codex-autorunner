@@ -199,12 +199,9 @@ interface HubRepoGroup {
 }
 
 function nonPmaChatBoundThreadCount(repo: HubRepo): number {
-  const explicitCount = Number(repo.non_pma_chat_bound_thread_count || 0);
-  if (explicitCount > 0) return explicitCount;
-  const discordCount = Number(repo.discord_chat_bound_thread_count || 0);
-  const telegramCount = Number(repo.telegram_chat_bound_thread_count || 0);
-  const directCount = discordCount + telegramCount;
-  if (directCount > 0) return directCount;
+  if (repo.non_pma_chat_bound_thread_count != null) {
+    return Math.max(0, Number(repo.non_pma_chat_bound_thread_count || 0));
+  }
   const totalCount = Number(repo.chat_bound_thread_count || 0);
   const pmaCount = Number(repo.pma_chat_bound_thread_count || 0);
   return Math.max(0, totalCount - pmaCount);

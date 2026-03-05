@@ -340,7 +340,7 @@ def build_hub_repo_routes(
         pma_binding_count = int(source_counts.get("pma", 0))
         discord_binding_count = int(source_counts.get("discord", 0))
         telegram_binding_count = int(source_counts.get("telegram", 0))
-        non_pma_binding_count = discord_binding_count + telegram_binding_count
+        non_pma_binding_count = max(0, binding_count - pma_binding_count)
         repo_dict["chat_bound"] = binding_count > 0
         repo_dict["chat_bound_thread_count"] = binding_count
         repo_dict["pma_chat_bound_thread_count"] = pma_binding_count
