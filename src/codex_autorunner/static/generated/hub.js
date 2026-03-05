@@ -510,7 +510,7 @@ async function loadUpdateTargetOptions(selectId) {
     if (!select)
         return;
     const isInitialized = select.dataset.updateTargetsInitialized === "1";
-    let payload = null;
+    let payload;
     try {
         payload = await api("/system/update/targets", { method: "GET" });
     }
@@ -869,9 +869,9 @@ function buildMountBadge(repo) {
     if (!repo)
         return "";
     const missing = !repo.exists_on_disk;
-    let label = "";
+    let label;
     let className = "pill pill-small";
-    let title = "";
+    let title;
     if (missing) {
         label = "missing";
         className += " pill-error";

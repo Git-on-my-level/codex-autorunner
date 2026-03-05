@@ -196,7 +196,7 @@ async function loadUpdateTargetOptions(selectId) {
     if (!select)
         return;
     const isInitialized = select.dataset.updateTargetsInitialized === "1";
-    let payload = null;
+    let payload;
     try {
         payload = await api("/system/update/targets", { method: "GET" });
     }

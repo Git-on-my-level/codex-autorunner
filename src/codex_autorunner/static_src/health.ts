@@ -73,7 +73,7 @@ async function tryFetch(path: string): Promise<{ ok: boolean; status: number; pa
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(target, { headers });
   const text = await res.text();
-  let payload: unknown = null;
+  let payload: unknown;
   try {
     payload = JSON.parse(text);
   } catch (_err) {

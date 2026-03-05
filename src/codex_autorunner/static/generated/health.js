@@ -60,7 +60,7 @@ async function tryFetch(path) {
         headers.Authorization = `Bearer ${token}`;
     const res = await fetch(target, { headers });
     const text = await res.text();
-    let payload = null;
+    let payload;
     try {
         payload = JSON.parse(text);
     }

@@ -21,7 +21,7 @@ export interface StreamOptions {
 }
 
 export function getAuthToken(): string | null {
-  let token: string | null = null;
+  let token: string | null;
   try {
     token = sessionStorage.getItem(AUTH_TOKEN_KEY);
   } catch (_err) {
@@ -192,7 +192,7 @@ async function buildErrorMessage(res: Response): Promise<string> {
   if (res.status === 401) {
     return "Unauthorized. Provide a valid token to access this server.";
   }
-  let text = "";
+  let text: string;
   try {
     text = await res.text();
   } catch (_err) {

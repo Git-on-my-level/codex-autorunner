@@ -45,8 +45,8 @@ function eventToAction(event, maxTextLength) {
     const rawText = normalizeText(event.summary || event.detail || "");
     if (!rawText)
         return null;
-    let label = event.kind;
-    let status = "update";
+    let label;
+    let status;
     if (event.kind === "command") {
         label = "command";
         status = event.method.includes("requestApproval") ? "warn" : "done";
