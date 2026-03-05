@@ -255,43 +255,6 @@ def _read_current_telegram_repo_counts(
     return dict(counts)
 
 
-def _telegram_repo_has_current_binding(
-    *, db_path: Path, repo_id: str, repo_id_by_workspace: Mapping[str, str]
-) -> bool:
-    normalized_repo_id = _normalize_repo_id(repo_id)
-    if normalized_repo_id is None or not db_path.exists():
-        return False
-    try:
-        with open_sqlite(db_path) as conn:
-            rows = conn.execute(
-                """
-                SELECT topic_key, chat_id, thread_id, scope, workspace_path, repo_id
-                  FROM telegram_topics
-                """
-            ).fetchall()
-            if not rows:
-                return False
-            scope_map = _read_telegram_current_scope_map(conn)
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return False
-        raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
-        ) from exc
-
-    for row in rows:
-        if not _is_current_telegram_topic_row(row=row, scope_map=scope_map):
-            continue
-        resolved_repo_id = _resolve_bound_repo_id(
-            repo_id=row["repo_id"],
-            repo_id_by_workspace=repo_id_by_workspace,
-            workspace_values=(row["workspace_path"], row["scope"]),
-        )
-        if resolved_repo_id == normalized_repo_id:
-            return True
-    return False
-
-
 def _read_discord_repo_counts(
     *, db_path: Path, repo_id_by_workspace: Mapping[str, str]
 ) -> dict[str, int]:
@@ -326,41 +289,6 @@ def _read_discord_repo_counts(
             continue
         counts[repo_id] += 1
     return dict(counts)
-
-
-def _discord_repo_has_binding(
-    *, db_path: Path, repo_id: str, repo_id_by_workspace: Mapping[str, str]
-) -> bool:
-    normalized_repo_id = _normalize_repo_id(repo_id)
-    if normalized_repo_id is None or not db_path.exists():
-        return False
-    try:
-        with open_sqlite(db_path) as conn:
-            columns = _table_columns(conn, "channel_bindings")
-            if not columns:
-                return False
-            has_workspace_path = "workspace_path" in columns
-            rows = conn.execute(
-                "SELECT repo_id"
-                + (", workspace_path" if has_workspace_path else "")
-                + " FROM channel_bindings"
-            ).fetchall()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return False
-        raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
-        ) from exc
-
-    for row in rows:
-        resolved_repo_id = _resolve_bound_repo_id(
-            repo_id=row["repo_id"],
-            repo_id_by_workspace=repo_id_by_workspace,
-            workspace_values=((row["workspace_path"],) if has_workspace_path else ()),
-        )
-        if resolved_repo_id == normalized_repo_id:
-            return True
-    return False
 
 
 def _active_pma_thread_counts(
@@ -409,45 +337,6 @@ def _active_pma_thread_counts(
     return dict(counts)
 
 
-def _has_active_pma_thread(
-    hub_root: Path, repo_id: str, repo_id_by_workspace: Mapping[str, str]
-) -> bool:
-    normalized_repo_id = _normalize_repo_id(repo_id)
-    if normalized_repo_id is None:
-        return False
-    db_path = default_pma_threads_db_path(hub_root)
-    if not db_path.exists():
-        return False
-    store = PmaThreadStore(hub_root)
-    if store.list_threads(status="active", repo_id=normalized_repo_id, limit=1):
-        return True
-    try:
-        with open_sqlite(db_path) as conn:
-            rows = conn.execute(
-                """
-                SELECT workspace_root
-                  FROM pma_managed_threads
-                 WHERE status = 'active'
-                   AND (repo_id IS NULL OR TRIM(repo_id) = '')
-                """
-            ).fetchall()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return False
-        raise RuntimeError(
-            f"Failed reading chat bindings from {db_path}: {exc}"
-        ) from exc
-    for row in rows:
-        resolved_repo_id = _resolve_bound_repo_id(
-            repo_id=None,
-            repo_id_by_workspace=repo_id_by_workspace,
-            workspace_values=(row["workspace_root"],),
-        )
-        if resolved_repo_id == normalized_repo_id:
-            return True
-    return False
-
-
 def _resolve_discord_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
     return _resolve_state_path(
         hub_root=hub_root,
@@ -471,33 +360,60 @@ def active_chat_binding_counts(
 ) -> dict[str, int]:
     """Return repo-id keyed counts of active chat bindings from persisted stores."""
 
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
+    counts_by_source = active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config=raw_config,
+    )
     counts: Counter[str] = Counter()
-
-    for repo_id, count in _active_pma_thread_counts(
-        hub_root, repo_id_by_workspace
-    ).items():
-        counts[repo_id] += count
-
-    discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
-    for repo_id, count in _read_discord_repo_counts(
-        db_path=discord_state_path,
-        repo_id_by_workspace=repo_id_by_workspace,
-    ).items():
-        counts[repo_id] += count
-
-    telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
-    for repo_id, count in _read_current_telegram_repo_counts(
-        db_path=telegram_state_path,
-        repo_id_by_workspace=repo_id_by_workspace,
-    ).items():
-        counts[repo_id] += count
-
+    for repo_id, source_counts in counts_by_source.items():
+        counts[repo_id] += sum(source_counts.values())
     return dict(counts)
 
 
+def active_chat_binding_counts_by_source(
+    *, hub_root: Path, raw_config: Mapping[str, Any]
+) -> dict[str, dict[str, int]]:
+    """Return repo-id keyed active chat binding counts split by source."""
+
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
+    source_counts: dict[str, dict[str, int]] = {}
+
+    def _merge_counts(source: str, counts: Mapping[str, int]) -> None:
+        for repo_id, count in counts.items():
+            if count <= 0:
+                continue
+            repo_counts = source_counts.setdefault(repo_id, {})
+            repo_counts[source] = int(repo_counts.get(source, 0)) + int(count)
+
+    _merge_counts("pma", _active_pma_thread_counts(hub_root, repo_id_by_workspace))
+
+    discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
+    _merge_counts(
+        "discord",
+        _read_discord_repo_counts(
+            db_path=discord_state_path,
+            repo_id_by_workspace=repo_id_by_workspace,
+        ),
+    )
+
+    telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
+    _merge_counts(
+        "telegram",
+        _read_current_telegram_repo_counts(
+            db_path=telegram_state_path,
+            repo_id_by_workspace=repo_id_by_workspace,
+        ),
+    )
+
+    return source_counts
+
+
 def repo_has_active_chat_binding(
-    *, hub_root: Path, raw_config: Mapping[str, Any], repo_id: str
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    repo_id: str,
+    include_pma: bool = True,
 ) -> bool:
     """Return True when a repo has any persisted active chat binding."""
 
@@ -505,31 +421,33 @@ def repo_has_active_chat_binding(
     if normalized_repo_id is None:
         return False
 
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
+    source_counts = active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config=raw_config,
+    ).get(normalized_repo_id, {})
+    if include_pma:
+        return any(int(count) > 0 for count in source_counts.values())
+    return any(
+        source != "pma" and int(count) > 0 for source, count in source_counts.items()
+    )
 
-    if _has_active_pma_thread(hub_root, normalized_repo_id, repo_id_by_workspace):
-        return True
 
-    discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
-    if _discord_repo_has_binding(
-        db_path=discord_state_path,
-        repo_id=normalized_repo_id,
-        repo_id_by_workspace=repo_id_by_workspace,
-    ):
-        return True
+def repo_has_active_non_pma_chat_binding(
+    *, hub_root: Path, raw_config: Mapping[str, Any], repo_id: str
+) -> bool:
+    """Return True when a repo has active non-PMA chat bindings."""
 
-    telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
-    if _telegram_repo_has_current_binding(
-        db_path=telegram_state_path,
-        repo_id=normalized_repo_id,
-        repo_id_by_workspace=repo_id_by_workspace,
-    ):
-        return True
-
-    return False
+    return repo_has_active_chat_binding(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        repo_id=repo_id,
+        include_pma=False,
+    )
 
 
 __all__ = [
     "active_chat_binding_counts",
+    "active_chat_binding_counts_by_source",
     "repo_has_active_chat_binding",
+    "repo_has_active_non_pma_chat_binding",
 ]

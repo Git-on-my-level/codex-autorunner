@@ -6,7 +6,9 @@ from pathlib import Path
 
 from codex_autorunner.core.chat_bindings import (
     active_chat_binding_counts,
+    active_chat_binding_counts_by_source,
     repo_has_active_chat_binding,
+    repo_has_active_non_pma_chat_binding,
 )
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -208,6 +210,12 @@ def test_active_chat_binding_counts_aggregates_persisted_sources(
     assert counts["repo-a"] == 3
     assert counts["repo-b"] == 2
 
+    counts_by_source = active_chat_binding_counts_by_source(
+        hub_root=hub_root, raw_config=cfg
+    )
+    assert counts_by_source["repo-a"] == {"pma": 2, "discord": 1}
+    assert counts_by_source["repo-b"] == {"discord": 1, "telegram": 1}
+
 
 def test_repo_has_active_chat_binding_uses_configured_state_files(
     tmp_path: Path,
@@ -222,6 +230,12 @@ def test_repo_has_active_chat_binding_uses_configured_state_files(
     telegram_db = hub_root / "state" / "custom-telegram.sqlite3"
     _write_discord_binding(discord_db, channel_id="discord-chan", repo_id="repo-x")
     _write_telegram_binding(telegram_db, topic_key="999:root", repo_id="repo-y")
+    thread_store = PmaThreadStore(hub_root)
+    thread_store.create_thread(
+        "codex",
+        (hub_root / "worktrees" / "repo-pma-only").resolve(),
+        repo_id="repo-pma-only",
+    )
 
     assert (
         repo_has_active_chat_binding(
@@ -240,6 +254,31 @@ def test_repo_has_active_chat_binding_uses_configured_state_files(
             hub_root=hub_root, raw_config=cfg, repo_id="repo-z"
         )
         is False
+    )
+    assert (
+        repo_has_active_chat_binding(
+            hub_root=hub_root,
+            raw_config=cfg,
+            repo_id="repo-pma-only",
+            include_pma=False,
+        )
+        is False
+    )
+    assert (
+        repo_has_active_non_pma_chat_binding(
+            hub_root=hub_root,
+            raw_config=cfg,
+            repo_id="repo-pma-only",
+        )
+        is False
+    )
+    assert (
+        repo_has_active_non_pma_chat_binding(
+            hub_root=hub_root,
+            raw_config=cfg,
+            repo_id="repo-x",
+        )
+        is True
     )
 
 
