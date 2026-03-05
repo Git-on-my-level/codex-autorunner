@@ -3,6 +3,7 @@ App-server support routes (thread registry).
 """
 
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -31,15 +32,26 @@ def build_app_server_routes() -> APIRouter:
 
     @router.get("/api/app-server/turns/{turn_id}/events")
     async def stream_app_server_turn_events(
-        turn_id: str, request: Request, thread_id: str
+        turn_id: str,
+        request: Request,
+        thread_id: str,
+        since_event_id: Optional[int] = None,
     ):
         events = getattr(request.app.state, "app_server_events", None)
         if events is None:
             raise HTTPException(status_code=404, detail="App-server events unavailable")
         if not thread_id:
             raise HTTPException(status_code=400, detail="thread_id is required")
+        resume_after = since_event_id
+        if resume_after is None:
+            last_event_id = request.headers.get("Last-Event-ID")
+            if last_event_id:
+                try:
+                    resume_after = int(last_event_id)
+                except ValueError:
+                    resume_after = None
         return StreamingResponse(
-            events.stream(thread_id, turn_id),
+            events.stream(thread_id, turn_id, after_id=(resume_after or 0)),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )

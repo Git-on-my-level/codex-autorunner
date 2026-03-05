@@ -109,9 +109,21 @@ def build_agents_routes() -> APIRouter:
 
     @router.get("/api/agents/{agent}/turns/{turn_id}/events")
     async def stream_agent_turn_events(
-        agent: str, turn_id: str, request: Request, thread_id: Optional[str] = None
+        agent: str,
+        turn_id: str,
+        request: Request,
+        thread_id: Optional[str] = None,
+        since_event_id: Optional[int] = None,
     ):
         agent_id = _normalize_path_agent_id(agent)
+        resume_after = since_event_id
+        if resume_after is None:
+            last_event_id = request.headers.get("Last-Event-ID")
+            if last_event_id:
+                try:
+                    resume_after = int(last_event_id)
+                except ValueError:
+                    resume_after = None
         if agent_id == "codex":
             events = getattr(request.app.state, "app_server_events", None)
             if events is None:
@@ -119,7 +131,7 @@ def build_agents_routes() -> APIRouter:
             if not thread_id:
                 raise HTTPException(status_code=400, detail="thread_id is required")
             return StreamingResponse(
-                events.stream(thread_id, turn_id),
+                events.stream(thread_id, turn_id, after_id=(resume_after or 0)),
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )

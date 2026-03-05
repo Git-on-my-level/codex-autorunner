@@ -17,7 +17,13 @@ class SSEEvent:
     retry: Optional[int] = None
 
 
-def format_sse(event: str, data: object) -> str:
+def format_sse(
+    event: str,
+    data: object,
+    *,
+    event_id: Optional[str] = None,
+    retry: Optional[int] = None,
+) -> str:
     """Format a Server-Sent Event message.
 
     Args:
@@ -31,6 +37,10 @@ def format_sse(event: str, data: object) -> str:
     payload = data if isinstance(data, str) else json.dumps(data)
     lines = payload.splitlines() or [""]
     parts = [f"event: {event}"]
+    if event_id is not None:
+        parts.append(f"id: {event_id}")
+    if retry is not None:
+        parts.append(f"retry: {retry}")
     for line in lines:
         parts.append(f"data: {line}")
     return "\n".join(parts) + "\n\n"

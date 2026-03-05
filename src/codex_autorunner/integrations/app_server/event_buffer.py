@@ -91,28 +91,70 @@ class AppServerEventBuffer:
         thread_id: str,
         turn_id: str,
         *,
+        after_id: int = 0,
         heartbeat_interval: float = 15.0,
     ) -> AsyncIterator[str]:
+        async for event in self.stream_entries(
+            thread_id,
+            turn_id,
+            after_id=after_id,
+            heartbeat_interval=heartbeat_interval,
+        ):
+            if event is None:
+                yield ": ping\n\n"
+                continue
+            event_id = event.get("id")
+            event_id_text = str(event_id) if isinstance(event_id, int) else None
+            yield format_sse("app-server", event, event_id=event_id_text)
+
+    async def list_events(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        after_id: int = 0,
+        limit: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        normalized_after = max(0, int(after_id or 0))
+        entry = await self._ensure_entry(thread_id, turn_id)
+        async with entry.condition:
+            selected = [e for e in entry.events if int(e.get("id") or 0) > normalized_after]
+            if limit is not None and limit > 0:
+                selected = selected[-limit:]
+            return [dict(event) for event in selected]
+
+    async def stream_entries(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        after_id: int = 0,
+        heartbeat_interval: float = 15.0,
+    ) -> AsyncIterator[Optional[dict[str, Any]]]:
         entry = await self._ensure_entry(thread_id, turn_id)
         async with self._ensure_lock():
             entry.active_streams += 1
             self._turn_index[turn_id] = thread_id
-        last_id = 0
+        last_id = max(0, int(after_id or 0))
         try:
             while True:
                 async with entry.condition:
-                    events = [e for e in entry.events if e["id"] > last_id]
+                    events = [
+                        dict(event)
+                        for event in entry.events
+                        if int(event.get("id") or 0) > last_id
+                    ]
                     if not events:
                         try:
                             await asyncio.wait_for(
                                 entry.condition.wait(), timeout=heartbeat_interval
                             )
                         except asyncio.TimeoutError:
-                            yield ": ping\n\n"
+                            yield None
                         continue
                 for event in events:
-                    last_id = event["id"]
-                    yield format_sse("app-server", event)
+                    last_id = int(event.get("id") or last_id)
+                    yield event
         finally:
             async with self._ensure_lock():
                 entry.active_streams = max(0, entry.active_streams - 1)

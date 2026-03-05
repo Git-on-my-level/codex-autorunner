@@ -53,6 +53,7 @@ def test_pma_cli_thread_group_has_required_commands():
     assert "send" in output, "PMA thread should have 'send' command"
     assert "turns" in output, "PMA thread should have 'turns' command"
     assert "output" in output, "PMA thread should have 'output' command"
+    assert "tail" in output, "PMA thread should have 'tail' command"
     assert "compact" in output, "PMA thread should have 'compact' command"
     assert "resume" in output, "PMA thread should have 'resume' command"
     assert "archive" in output, "PMA thread should have 'archive' command"

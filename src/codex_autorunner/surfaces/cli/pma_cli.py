@@ -92,6 +92,17 @@ def _request_json(
     return data if isinstance(data, dict) else {}
 
 
+def _auth_headers_from_env(token_env: Optional[str]) -> Optional[dict[str, str]]:
+    if not token_env:
+        return None
+    import os
+
+    token = os.environ.get(token_env)
+    if token and token.strip():
+        return {"Authorization": f"Bearer {token.strip()}"}
+    return None
+
+
 def _is_json_response_error(data: dict) -> Optional[str]:
     if not isinstance(data, dict):
         return "Unexpected response format"
@@ -133,6 +144,92 @@ def _extract_compact_summary_items(content: str, *, limit: int) -> list[str]:
         if len(items) >= limit:
             break
     return items
+
+
+def _iter_sse_events(lines):
+    event_name = "message"
+    data_lines: list[str] = []
+    event_id: Optional[str] = None
+    for line in lines:
+        if line is None:
+            continue
+        if line == "":
+            if data_lines or event_id is not None:
+                data = "\n".join(data_lines)
+                yield event_name, data, event_id
+            event_name = "message"
+            data_lines = []
+            event_id = None
+            continue
+        if line.startswith(":"):
+            continue
+        if ":" in line:
+            field, value = line.split(":", 1)
+            if value.startswith(" "):
+                value = value[1:]
+        else:
+            field, value = line, ""
+        if field == "event":
+            event_name = value or "message"
+        elif field == "data":
+            data_lines.append(value)
+        elif field == "id":
+            event_id = value
+
+
+def _format_seconds(seconds: Optional[int]) -> str:
+    if seconds is None:
+        return "-"
+    value = max(0, int(seconds))
+    if value < 60:
+        return f"{value}s"
+    minutes, sec = divmod(value, 60)
+    if minutes < 60:
+        return f"{minutes}m{sec:02d}s"
+    hours, rem_minutes = divmod(minutes, 60)
+    return f"{hours}h{rem_minutes:02d}m"
+
+
+def _format_tail_event_line(event: dict[str, Any]) -> str:
+    event_type = str(event.get("event_type") or "event")
+    event_id = event.get("event_id")
+    summary = str(event.get("summary") or "")
+    timestamp = str(event.get("received_at") or "")
+    ts_out = timestamp
+    if timestamp:
+        try:
+            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            ts_out = dt.strftime("%H:%M:%S")
+        except ValueError:
+            ts_out = timestamp
+    prefix = f"[{ts_out}] " if ts_out else ""
+    id_part = f"#{event_id} " if isinstance(event_id, int) and event_id > 0 else ""
+    return f"{prefix}{id_part}{event_type}: {summary}".rstrip()
+
+
+def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
+    managed_turn_id = snapshot.get("managed_turn_id") or "-"
+    status = snapshot.get("turn_status") or "none"
+    activity = snapshot.get("activity") or "idle"
+    elapsed = _format_seconds(snapshot.get("elapsed_seconds"))
+    idle = _format_seconds(snapshot.get("idle_seconds"))
+    typer.echo(
+        f"turn={managed_turn_id} status={status} activity={activity} elapsed={elapsed} idle={idle}"
+    )
+    lifecycle = snapshot.get("lifecycle_events")
+    if isinstance(lifecycle, list) and lifecycle:
+        typer.echo("lifecycle: " + ", ".join(str(item) for item in lifecycle))
+    events = snapshot.get("events")
+    if not isinstance(events, list) or not events:
+        typer.echo("No tail events.")
+        if status == "running" and snapshot.get("idle_seconds") is not None:
+            idle_seconds = int(snapshot.get("idle_seconds") or 0)
+            if idle_seconds >= 30:
+                typer.echo(f"No events for {idle_seconds}s (possibly stalled).")
+        return
+    for event in events:
+        if isinstance(event, dict):
+            typer.echo(_format_tail_event_line(event))
 
 
 def _render_compacted_active_context(
@@ -866,6 +963,100 @@ def pma_thread_output(
     turn = turn_data.get("turn", {}) if isinstance(turn_data, dict) else {}
     assistant_text = turn.get("assistant_text") if isinstance(turn, dict) else ""
     typer.echo(str(assistant_text or ""))
+
+
+@thread_app.command("tail")
+def pma_thread_tail(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    follow: bool = typer.Option(
+        False, "--follow", help="Follow live events until turn completes"
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since", help="Only include events newer than duration (e.g. 5m)"
+    ),
+    level: str = typer.Option(
+        "info", "--level", help="Verbosity level (info|debug)"
+    ),
+    limit: int = typer.Option(50, "--limit", min=1, help="Maximum events to include"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Show managed-thread tail/progress events."""
+    hub_root = _resolve_hub_path(path)
+    params: dict[str, Any] = {"limit": limit, "level": level}
+    if since:
+        params["since"] = since
+    try:
+        config = load_hub_config(hub_root)
+        if not follow:
+            data = _request_json(
+                "GET",
+                _build_pma_url(config, f"/threads/{managed_thread_id}/tail"),
+                token_env=config.server_auth_token_env,
+                params=params,
+            )
+            if output_json:
+                typer.echo(json.dumps(data, indent=2))
+            else:
+                _render_tail_snapshot(data)
+            return
+
+        headers = _auth_headers_from_env(config.server_auth_token_env)
+        url = _build_pma_url(config, f"/threads/{managed_thread_id}/tail/events")
+        with httpx.stream(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            timeout=None,
+        ) as response:
+            response.raise_for_status()
+            for event_name, data_str, event_id in _iter_sse_events(
+                response.iter_lines()
+            ):
+                try:
+                    data = json.loads(data_str) if data_str else {}
+                except json.JSONDecodeError:
+                    data = {"raw": data_str}
+                if output_json:
+                    payload = {"event": event_name, "data": data}
+                    if event_id is not None:
+                        payload["id"] = event_id
+                    typer.echo(json.dumps(payload))
+                    continue
+                if event_name == "state":
+                    if isinstance(data, dict):
+                        _render_tail_snapshot(data)
+                    continue
+                if event_name == "tail":
+                    if isinstance(data, dict):
+                        typer.echo(_format_tail_event_line(data))
+                    continue
+                if event_name == "progress" and isinstance(data, dict):
+                    status = data.get("turn_status") or "running"
+                    elapsed = _format_seconds(data.get("elapsed_seconds"))
+                    idle = _format_seconds(data.get("idle_seconds"))
+                    line = f"progress: status={status} elapsed={elapsed} idle={idle}"
+                    idle_seconds = data.get("idle_seconds")
+                    if (
+                        isinstance(idle_seconds, int)
+                        and status == "running"
+                        and idle_seconds >= 30
+                    ):
+                        line += " (possibly stalled)"
+                    typer.echo(line)
+                    if status != "running":
+                        return
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
 
 
 @thread_app.command("compact")
