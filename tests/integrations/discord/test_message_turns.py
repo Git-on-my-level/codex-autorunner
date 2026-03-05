@@ -17,7 +17,11 @@ from codex_autorunner.core.context_awareness import (
     CAR_AWARENESS_BLOCK,
     PROMPT_WRITING_HINT,
 )
-from codex_autorunner.core.filebox import inbox_dir, outbox_pending_dir
+from codex_autorunner.core.filebox import (
+    inbox_dir,
+    outbox_pending_dir,
+    outbox_sent_dir,
+)
 from codex_autorunner.core.ports.run_event import (
     Completed,
     OutputDelta,
@@ -503,6 +507,147 @@ async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> N
             "Done from fake turn" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_flushes_pending_outbox_files_after_turn(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    pending_dir = outbox_pending_dir(workspace.resolve())
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    pending_file = pending_dir / "result.txt"
+    pending_file.write_text("artifact payload\n", encoding="utf-8")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.attachment_messages
+        assert any(
+            item["filename"] == "result.txt" for item in rest.attachment_messages
+        )
+        sent_files = list(outbox_sent_dir(workspace.resolve()).glob("result*.txt"))
+        assert sent_files
+        assert sent_files[0].read_text(encoding="utf-8") == "artifact payload\n"
+        assert not pending_file.exists()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_flush_outbox_skips_symlink_outside_pending(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    pending_dir = outbox_pending_dir(workspace.resolve())
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    external_file = tmp_path / "secret.txt"
+    external_file.write_text("do-not-leak\n", encoding="utf-8")
+    symlink_path = pending_dir / "leak.txt"
+    try:
+        symlink_path.symlink_to(external_file)
+    except OSError:
+        pytest.skip("symlinks not supported in this test environment")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.attachment_messages == []
+        assert symlink_path.exists()
+        assert external_file.read_text(encoding="utf-8") == "do-not-leak\n"
+        assert not (outbox_sent_dir(workspace.resolve()) / "leak.txt").exists()
     finally:
         await store.close()
 
