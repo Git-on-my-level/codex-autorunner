@@ -1,5 +1,7 @@
 import asyncio
+import concurrent.futures
 import json
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1123,6 +1125,43 @@ def test_pma_files_bulk_delete_preserves_hidden_legacy_duplicate(hub_env) -> Non
     payload = client.get("/hub/pma/files").json()
     assert payload["outbox"][0]["name"] == "shared.txt"
     assert payload["outbox"][0]["source"] == "pma"
+
+
+def test_pma_files_list_waits_for_bulk_delete_to_finish(hub_env, monkeypatch) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    filebox.ensure_structure(hub_env.hub_root)
+    race_file = filebox.inbox_dir(hub_env.hub_root) / "race.txt"
+    race_file.write_bytes(b"race")
+
+    unlink_started = threading.Event()
+    release_unlink = threading.Event()
+    original_unlink = Path.unlink
+
+    def _gated_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == race_file and not unlink_started.is_set():
+            unlink_started.set()
+            if not release_unlink.wait(timeout=3):
+                raise AssertionError("Timed out waiting to release bulk delete unlink")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _gated_unlink)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        delete_future = executor.submit(lambda: client.delete("/hub/pma/files/inbox"))
+        assert unlink_started.wait(timeout=3), "Bulk delete did not reach unlink gate"
+        list_future = executor.submit(lambda: client.get("/hub/pma/files"))
+        release_unlink.set()
+
+        delete_resp = delete_future.result(timeout=3)
+        list_resp = list_future.result(timeout=3)
+
+    assert delete_resp.status_code == 200
+    assert list_resp.status_code == 200
+    assert list_resp.json()["inbox"] == []
 
 
 def test_pma_files_rejects_invalid_filenames(hub_env) -> None:

@@ -3129,10 +3129,13 @@ def build_pma_routes() -> APIRouter:
         }
 
     @router.get("/files")
-    def list_pma_files(request: Request) -> dict[str, list[dict[str, Any]]]:
+    async def list_pma_files(request: Request) -> dict[str, list[dict[str, Any]]]:
         hub_root = request.app.state.config.root
         result: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
-        listing = filebox.list_filebox(hub_root, include_legacy=True)
+        async with await _get_pma_lock():
+            listing = await asyncio.to_thread(
+                filebox.list_filebox, hub_root, include_legacy=True
+            )
         for box in ("inbox", "outbox"):
             entries = listing.get(box, [])
             result[box] = [
@@ -3200,7 +3203,10 @@ def build_pma_routes() -> APIRouter:
                     detail=f"File too large (max {max_upload_bytes} bytes)",
                 )
             try:
-                target_path = filebox.save_file(hub_root, box, filename, content)
+                async with await _get_pma_lock():
+                    target_path = await asyncio.to_thread(
+                        filebox.save_file, hub_root, box, filename, content
+                    )
                 saved.append(target_path.name)
                 _get_safety_checker(request).record_action(
                     action_type=PmaActionType.FILE_UPLOADED,
@@ -3244,24 +3250,23 @@ def build_pma_routes() -> APIRouter:
         return FileResponse(entry.path, filename=entry.name)
 
     @router.delete("/files/{box}/{filename}")
-    def delete_pma_file(box: str, filename: str, request: Request):
+    async def delete_pma_file(box: str, filename: str, request: Request):
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
+        entry: Optional[filebox.FileBoxEntry] = None
         try:
-            entry = filebox.resolve_file(hub_root, box, filename)
+            async with await _get_pma_lock():
+                entry = await asyncio.to_thread(
+                    filebox.resolve_file, hub_root, box, filename
+                )
+                if entry is None:
+                    logger.warning("File not found in PMA delete: %s", filename)
+                    raise HTTPException(status_code=404, detail="File not found")
+                await asyncio.to_thread(entry.path.unlink)
         except ValueError as exc:
             logger.warning("Invalid filename in PMA delete: %s (%s)", filename, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if entry is None:
-            logger.warning("File not found in PMA delete: %s", filename)
-            raise HTTPException(status_code=404, detail="File not found")
-        try:
-            entry.path.unlink()
-            _get_safety_checker(request).record_action(
-                action_type=PmaActionType.FILE_DELETED,
-                details={"box": box, "filename": entry.name, "size": entry.size},
-            )
         except HTTPException:
             raise
         except FileNotFoundError:
@@ -3272,21 +3277,29 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=500, detail="Failed to delete file"
             ) from exc
+        if entry is not None:
+            _get_safety_checker(request).record_action(
+                action_type=PmaActionType.FILE_DELETED,
+                details={"box": box, "filename": entry.name, "size": entry.size},
+            )
         return {"status": "ok"}
 
     @router.delete("/files/{box}")
-    def delete_pma_box(box: str, request: Request):
+    async def delete_pma_box(box: str, request: Request):
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         deleted_files: list[str] = []
-        entries = filebox.list_filebox(hub_root, include_legacy=True).get(box, [])
-        for entry in entries:
-            try:
-                entry.path.unlink()
-                deleted_files.append(entry.name)
-            except FileNotFoundError:
-                continue
+        async with await _get_pma_lock():
+            entries = await asyncio.to_thread(
+                filebox.list_filebox, hub_root, include_legacy=True
+            )
+            for entry in entries.get(box, []):
+                try:
+                    await asyncio.to_thread(entry.path.unlink)
+                    deleted_files.append(entry.name)
+                except FileNotFoundError:
+                    continue
         _get_safety_checker(request).record_action(
             action_type=PmaActionType.FILE_BULK_DELETED,
             details={
