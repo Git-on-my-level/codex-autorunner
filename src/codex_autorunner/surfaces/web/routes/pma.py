@@ -1985,6 +1985,23 @@ def build_pma_routes() -> APIRouter:
         hub_root = request.app.state.config.root
         repo_id = _normalize_optional_text(payload.repo_id)
         workspace_root = _normalize_optional_text(payload.workspace_root)
+        raw_payload: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                raw_payload = parsed
+        except Exception:
+            raw_payload = {}
+        notify_on = _normalize_notify_on(
+            raw_payload.get("notify_on") or raw_payload.get("notifyOn")
+        )
+        notify_lane = _normalize_optional_text(
+            raw_payload.get("notify_lane") or raw_payload.get("notifyLane")
+        )
+        raw_notify_once = raw_payload.get("notify_once")
+        if raw_notify_once is None:
+            raw_notify_once = raw_payload.get("notifyOnce")
+        notify_once = bool(raw_notify_once) if raw_notify_once is not None else True
 
         if bool(repo_id) == bool(workspace_root):
             raise HTTPException(
@@ -2017,23 +2034,6 @@ def build_pma_routes() -> APIRouter:
             name=_normalize_optional_text(payload.name),
             backend_thread_id=_normalize_optional_text(payload.backend_thread_id),
         )
-        raw_payload: dict[str, Any] = {}
-        try:
-            parsed = await request.json()
-            if isinstance(parsed, dict):
-                raw_payload = parsed
-        except Exception:
-            raw_payload = {}
-        notify_on = _normalize_notify_on(
-            raw_payload.get("notify_on") or raw_payload.get("notifyOn")
-        )
-        notify_lane = _normalize_optional_text(
-            raw_payload.get("notify_lane") or raw_payload.get("notifyLane")
-        )
-        raw_notify_once = raw_payload.get("notify_once")
-        if raw_notify_once is None:
-            raw_notify_once = raw_payload.get("notifyOnce")
-        notify_once = bool(raw_notify_once) if raw_notify_once is not None else True
         notification: Optional[dict[str, Any]] = None
         if notify_on == "terminal":
             notification = await _register_managed_thread_terminal_notify(

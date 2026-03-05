@@ -64,6 +64,34 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     assert thread["name"] == "Workspace thread"
 
 
+def test_create_managed_thread_rejects_invalid_notify_on_without_side_effect(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        before_resp = client.get("/hub/pma/threads")
+        assert before_resp.status_code == 200
+        before_count = len(before_resp.json().get("threads") or [])
+
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "repo_id": hub_env.repo_id,
+                "notify_on": "invalid",
+            },
+        )
+        assert create_resp.status_code == 400
+        assert "notify_on" in (create_resp.json().get("detail") or "")
+
+        after_resp = client.get("/hub/pma/threads")
+        assert after_resp.status_code == 200
+        after_count = len(after_resp.json().get("threads") or [])
+
+    assert after_count == before_count
+
+
 def test_create_managed_thread_rejects_missing_or_both_inputs(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
