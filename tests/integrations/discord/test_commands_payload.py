@@ -87,6 +87,7 @@ def test_required_options_are_marked_required() -> None:
     bind = _find_option(car_options, "bind")
     bind_workspace = _find_option(bind["options"], "workspace")
     assert bind_workspace["required"] is False
+    assert bind_workspace["autocomplete"] is True
     update = _find_option(car_options, "update")
     update_target = _find_option(update["options"], "target")
     assert update_target["required"] is False

@@ -25,7 +25,8 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "workspace",
-                            "description": "Workspace path (optional - shows picker if omitted)",
+                            "description": "Workspace path or repo id (optional - shows picker if omitted)",
+                            "autocomplete": True,
                             "required": False,
                         }
                     ],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from codex_autorunner.integrations.discord.interactions import (
+    extract_autocomplete_command_context,
     extract_channel_id,
     extract_command_path_and_options,
     extract_component_custom_id,
@@ -9,6 +10,7 @@ from codex_autorunner.integrations.discord.interactions import (
     extract_interaction_id,
     extract_interaction_token,
     extract_user_id,
+    is_autocomplete_interaction,
     is_component_interaction,
 )
 
@@ -64,6 +66,16 @@ def test_is_component_interaction_returns_false_for_type_2() -> None:
     assert is_component_interaction(payload) is False
 
 
+def test_is_autocomplete_interaction_returns_true_for_type_4() -> None:
+    payload = {"type": 4, "data": {"name": "car"}}
+    assert is_autocomplete_interaction(payload) is True
+
+
+def test_is_autocomplete_interaction_returns_false_for_type_2() -> None:
+    payload = {"type": 2, "data": {"name": "car"}}
+    assert is_autocomplete_interaction(payload) is False
+
+
 def test_extract_component_custom_id() -> None:
     payload = {"data": {"custom_id": "flow:run-123:resume"}}
     assert extract_component_custom_id(payload) == "flow:run-123:resume"
@@ -112,3 +124,33 @@ def test_extract_command_path_and_options_for_car_new() -> None:
     path, options = extract_command_path_and_options(payload)
     assert path == ("car", "new")
     assert options == {}
+
+
+def test_extract_autocomplete_command_context_for_bind_workspace() -> None:
+    payload = {
+        "type": 4,
+        "data": {
+            "name": "car",
+            "options": [
+                {
+                    "type": 1,
+                    "name": "bind",
+                    "options": [
+                        {
+                            "type": 3,
+                            "name": "workspace",
+                            "value": "codex-autor",
+                            "focused": True,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    path, options, focused_name, focused_value = extract_autocomplete_command_context(
+        payload
+    )
+    assert path == ("car", "bind")
+    assert options == {"workspace": "codex-autor"}
+    assert focused_name == "workspace"
+    assert focused_value == "codex-autor"

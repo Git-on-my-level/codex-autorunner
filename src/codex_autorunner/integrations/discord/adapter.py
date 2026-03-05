@@ -28,6 +28,7 @@ from ..chat.renderer import RenderedText, TextRenderer
 from .constants import DISCORD_MAX_MESSAGE_LENGTH
 from .errors import DiscordAPIError
 from .interactions import (
+    extract_autocomplete_command_context,
     extract_channel_id,
     extract_command_path_and_options,
     extract_component_custom_id,
@@ -35,6 +36,7 @@ from .interactions import (
     extract_interaction_id,
     extract_interaction_token,
     extract_user_id,
+    is_autocomplete_interaction,
     is_component_interaction,
 )
 from .rendering import (
@@ -347,6 +349,18 @@ class DiscordChatAdapter(ChatAdapter):
                 if isinstance(values, list):
                     payload_data["values"] = values
             payload_data["type"] = "component"
+        elif is_autocomplete_interaction(payload):
+            command_path, options, focused_name, focused_value = (
+                extract_autocomplete_command_context(payload)
+            )
+            command_str = ":".join(command_path) if command_path else ""
+            payload_data["command"] = command_str
+            payload_data["options"] = options
+            payload_data["autocomplete"] = {
+                "name": focused_name,
+                "value": focused_value,
+            }
+            payload_data["type"] = "autocomplete"
         else:
             command_path, options = extract_command_path_and_options(payload)
             command_str = ":".join(command_path) if command_path else ""
