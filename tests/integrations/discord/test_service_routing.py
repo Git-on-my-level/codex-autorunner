@@ -27,6 +27,12 @@ from codex_autorunner.integrations.discord.config import (
 from codex_autorunner.integrations.discord.errors import DiscordAPIError
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.manifest import (
+    MANIFEST_VERSION,
+    Manifest,
+    ManifestRepo,
+    save_manifest,
+)
 
 
 class _FakeRest:
@@ -217,6 +223,40 @@ def _bind_select_interaction(
     }
 
 
+def _autocomplete_interaction(
+    *,
+    name: str,
+    focused_name: str,
+    focused_value: str,
+    user_id: str = "user-1",
+) -> dict[str, Any]:
+    return {
+        "id": "inter-autocomplete-1",
+        "token": "token-autocomplete-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "type": 4,
+        "member": {"user": {"id": user_id}},
+        "data": {
+            "name": "car",
+            "options": [
+                {
+                    "type": 1,
+                    "name": name,
+                    "options": [
+                        {
+                            "type": 3,
+                            "name": focused_name,
+                            "value": focused_value,
+                            "focused": True,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+
 def _component_interaction(
     *, custom_id: str | None, values: list[Any] | None = None, user_id: str = "user-1"
 ) -> dict[str, Any]:
@@ -397,6 +437,338 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         assert status_payload["data"]["flags"] == 64
         assert "bound this channel" in bind_payload["data"]["content"].lower()
         assert "channel is bound" in status_payload["data"]["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_bind_picker_prioritizes_recent_worktrees_when_truncated(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
+    repos = [
+        ManifestRepo(
+            id=f"base-{index:02d}",
+            path=Path(f"repos/base-{index:02d}"),
+            kind="base",
+        )
+        for index in range(26)
+    ]
+    repos.append(
+        ManifestRepo(
+            id="base-00--new-worktree",
+            path=Path("worktrees/base-00--new-worktree"),
+            kind="worktree",
+            worktree_of="base-00",
+            branch="new-worktree",
+        )
+    )
+    save_manifest(
+        manifest_path,
+        Manifest(version=MANIFEST_VERSION, repos=repos),
+        tmp_path,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="bind", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        content = payload["data"]["content"]
+        assert "page 1/2" in content
+        menu = payload["data"]["components"][0]["components"][0]
+        values = [option["value"] for option in menu["options"]]
+        assert len(values) == 25
+        assert "base-00--new-worktree" in values
+        assert "base-00" not in values
+        nav = payload["data"]["components"][1]["components"]
+        assert [button["label"] for button in nav] == ["Prev", "Page 1/2", "Next"]
+        assert nav[0]["disabled"] is True
+        assert nav[1]["disabled"] is True
+        assert nav[2]["disabled"] is False
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_bind_accepts_repo_id_as_workspace_option(tmp_path: Path) -> None:
+    workspace = tmp_path / "worktrees" / "repo-1"
+    workspace.mkdir(parents=True)
+    manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
+    save_manifest(
+        manifest_path,
+        Manifest(
+            version=MANIFEST_VERSION,
+            repos=[
+                ManifestRepo(
+                    id="repo-1",
+                    path=Path("worktrees/repo-1"),
+                    kind="worktree",
+                    worktree_of="base-1",
+                    branch="feature/repo-1",
+                )
+            ],
+        ),
+        tmp_path,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="bind",
+                options=[{"type": 3, "name": "workspace", "value": "repo-1"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["repo_id"] == "repo-1"
+        assert binding["workspace_path"] == str(workspace.resolve())
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_routes_bind_page_component_interaction(tmp_path: Path) -> None:
+    repos = [(f"repo-{index:02d}", f"/tmp/repo-{index:02d}") for index in range(30)]
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_component_interaction(custom_id="bind_page:1")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_manifest_repos = lambda: repos
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 7
+        menu = payload["data"]["components"][0]["components"][0]
+        values = [option["value"] for option in menu["options"]]
+        assert values == [f"repo-{index:02d}" for index in range(25, 30)]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_bind_workspace_autocomplete_returns_matching_repo_ids(
+    tmp_path: Path,
+) -> None:
+    repos = [
+        ("codex-autorunner--discord-1", "/tmp/worktrees/codex-autorunner--discord-1"),
+        ("codex-autorunner--discord-2", "/tmp/worktrees/codex-autorunner--discord-2"),
+        ("ios-app-template", "/tmp/repos/ios-app-template"),
+    ]
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _autocomplete_interaction(
+                name="bind",
+                focused_name="workspace",
+                focused_value="discord",
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_manifest_repos = lambda: repos
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 8
+        choices = payload["data"]["choices"]
+        assert [choice["value"] for choice in choices] == [
+            "codex-autorunner--discord-1",
+            "codex-autorunner--discord-2",
+        ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_bind_workspace_autocomplete_long_repo_id_uses_token(
+    tmp_path: Path,
+) -> None:
+    long_repo_id = "repo-" + ("x" * 140)
+    repos = [(long_repo_id, "/tmp/worktrees/repo-long")]
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _autocomplete_interaction(
+                name="bind",
+                focused_name="workspace",
+                focused_value="repo-",
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_manifest_repos = lambda: repos
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 8
+        choices = payload["data"]["choices"]
+        assert len(choices) == 1
+        assert choices[0]["value"].startswith("repo@")
+        assert len(choices[0]["value"]) <= 100
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_bind_accepts_autocomplete_repo_token(tmp_path: Path) -> None:
+    long_repo_id = "repo-" + ("y" * 140)
+    workspace = tmp_path / "worktrees" / "repo-token"
+    workspace.mkdir(parents=True)
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="bind", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_manifest_repos = lambda: [(long_repo_id, str(workspace))]
+    token = service._repo_autocomplete_value(long_repo_id)
+    assert token.startswith("repo@")
+
+    bind_gateway = _FakeGateway(
+        [
+            _interaction(
+                name="bind",
+                options=[{"type": 3, "name": "workspace", "value": token}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=bind_gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_manifest_repos = lambda: [(long_repo_id, str(workspace))]
+
+    try:
+        await service.run_forever()
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["repo_id"] == long_repo_id
+        assert binding["workspace_path"] == str(workspace.resolve())
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_bind_accepts_disabled_repo_id(tmp_path: Path) -> None:
+    workspace = tmp_path / "worktrees" / "repo-disabled"
+    workspace.mkdir(parents=True)
+    manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
+    save_manifest(
+        manifest_path,
+        Manifest(
+            version=MANIFEST_VERSION,
+            repos=[
+                ManifestRepo(
+                    id="repo-disabled",
+                    path=Path("worktrees/repo-disabled"),
+                    kind="worktree",
+                    worktree_of="base-1",
+                    branch="feature/repo-disabled",
+                    enabled=False,
+                )
+            ],
+        ),
+        tmp_path,
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="bind",
+                options=[{"type": 3, "name": "workspace", "value": "repo-disabled"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["repo_id"] == "repo-disabled"
     finally:
         await store.close()
 

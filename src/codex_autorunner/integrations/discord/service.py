@@ -138,8 +138,10 @@ from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
+    build_action_row,
     build_agent_picker,
     build_bind_picker,
+    build_button,
     build_cancel_turn_button,
     build_continue_turn_button,
     build_flow_runs_picker,
@@ -154,6 +156,7 @@ from .config import DiscordBotConfig
 from .errors import DiscordAPIError, DiscordTransientError
 from .gateway import DiscordGatewayClient
 from .interactions import (
+    extract_autocomplete_command_context,
     extract_channel_id,
     extract_command_path_and_options,
     extract_component_custom_id,
@@ -162,6 +165,7 @@ from .interactions import (
     extract_interaction_id,
     extract_interaction_token,
     extract_user_id,
+    is_autocomplete_interaction,
     is_component_interaction,
 )
 from .outbox import DiscordOutboxManager
@@ -202,6 +206,8 @@ FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 UPDATE_TARGET_SELECT_ID = "update_target_select"
 REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 MODEL_EFFORT_SELECT_ID = "model_effort_select"
+BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
+REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 FLOW_ACTIONS_WITH_RUN_PICKER = {
     "status",
     "restart",
@@ -663,6 +669,38 @@ class DiscordBotService:
                 values=payload_data.get("values"),
                 guild_id=payload_data.get("guild_id"),
                 user_id=event.from_user_id,
+            )
+            return
+
+        if payload_data.get("type") == "autocomplete":
+            command_raw = payload_data.get("command")
+            command_path = (
+                tuple(part for part in str(command_raw).split(":") if part)
+                if isinstance(command_raw, str)
+                else ()
+            )
+            autocomplete_payload = payload_data.get("autocomplete")
+            focused_name: Optional[str] = None
+            focused_value = ""
+            if isinstance(autocomplete_payload, dict):
+                focused_name_raw = autocomplete_payload.get("name")
+                focused_value_raw = autocomplete_payload.get("value")
+                if isinstance(focused_name_raw, str) and focused_name_raw.strip():
+                    focused_name = focused_name_raw.strip()
+                if isinstance(focused_value_raw, str):
+                    focused_value = focused_value_raw
+            options = (
+                payload_data.get("options")
+                if isinstance(payload_data.get("options"), dict)
+                else {}
+            )
+            await self._handle_command_autocomplete(
+                interaction_id,
+                interaction_token,
+                command_path=command_path,
+                options=options,
+                focused_name=focused_name,
+                focused_value=focused_value,
             )
             return
 
@@ -3017,6 +3055,9 @@ class DiscordBotService:
         if is_component_interaction(interaction_payload):
             await self._handle_component_interaction(interaction_payload)
             return
+        if is_autocomplete_interaction(interaction_payload):
+            await self._handle_autocomplete_interaction(interaction_payload)
+            return
 
         interaction_id = extract_interaction_id(interaction_payload)
         interaction_token = extract_interaction_token(interaction_payload)
@@ -3105,6 +3146,43 @@ class DiscordBotService:
                 "An unexpected error occurred. Please try again later.",
             )
 
+    async def _handle_autocomplete_interaction(
+        self, interaction_payload: dict[str, Any]
+    ) -> None:
+        interaction_id = extract_interaction_id(interaction_payload)
+        interaction_token = extract_interaction_token(interaction_payload)
+        channel_id = extract_channel_id(interaction_payload)
+
+        if not interaction_id or not interaction_token or not channel_id:
+            self._logger.warning(
+                "handle_autocomplete_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
+                bool(interaction_id),
+                bool(interaction_token),
+                bool(channel_id),
+            )
+            return
+
+        if not allowlist_allows(interaction_payload, self._allowlist):
+            await self._respond_autocomplete(
+                interaction_id, interaction_token, choices=[]
+            )
+            return
+
+        (
+            command_path,
+            options,
+            focused_name,
+            focused_value,
+        ) = extract_autocomplete_command_context(interaction_payload)
+        await self._handle_command_autocomplete(
+            interaction_id,
+            interaction_token,
+            command_path=command_path,
+            options=options,
+            focused_name=focused_name,
+            focused_value=focused_value,
+        )
+
     async def _handle_bind(
         self,
         interaction_id: str,
@@ -3134,11 +3212,11 @@ class DiscordBotService:
             )
             return
 
-        components = [build_bind_picker(repos)]
+        prompt, components = self._build_bind_page_prompt_and_components(repos, page=0)
         await self._respond_with_components(
             interaction_id,
             interaction_token,
-            "Select a workspace to bind:",
+            prompt,
             components,
         )
 
@@ -3147,13 +3225,172 @@ class DiscordBotService:
             return []
         try:
             manifest = load_manifest(self._manifest_path, self._config.root)
-            return [
-                (repo.id, str(self._config.root / repo.path))
-                for repo in manifest.repos
-                if repo.id
-            ]
+            ordered: list[tuple[int, int, str, str]] = []
+            for index, repo in enumerate(manifest.repos):
+                if not repo.id:
+                    continue
+                worktree_priority = 0 if repo.kind == "worktree" else 1
+                ordered.append(
+                    (
+                        worktree_priority,
+                        -index,
+                        repo.id,
+                        str(self._config.root / repo.path),
+                    )
+                )
+            ordered.sort(key=lambda item: (item[0], item[1], item[2]))
+            return [(repo_id, path) for _, _, repo_id, path in ordered]
         except Exception:
             return []
+
+    def _build_bind_page_prompt_and_components(
+        self,
+        repos: list[tuple[str, str]],
+        *,
+        page: int,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        page_size = DISCORD_SELECT_OPTION_MAX_OPTIONS
+        total = len(repos)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        bounded_page = max(0, min(page, total_pages - 1))
+        start = bounded_page * page_size
+        end = start + page_size
+        page_repos = repos[start:end]
+
+        prompt = "Select a workspace to bind:"
+        if total > page_size:
+            prompt = (
+                "Select a workspace to bind "
+                f"(page {bounded_page + 1}/{total_pages}, {total} total; "
+                "recent worktrees first). Use `/car bind workspace:<repo_id>` "
+                "or `/car bind workspace:<path>` for any repo not listed."
+            )
+
+        components: list[dict[str, Any]] = [build_bind_picker(page_repos)]
+        if total_pages > 1:
+            components.append(
+                build_action_row(
+                    [
+                        build_button(
+                            "Prev",
+                            f"{BIND_PAGE_CUSTOM_ID_PREFIX}:{bounded_page - 1}",
+                            disabled=bounded_page <= 0,
+                        ),
+                        build_button(
+                            f"Page {bounded_page + 1}/{total_pages}",
+                            f"{BIND_PAGE_CUSTOM_ID_PREFIX}:noop",
+                            disabled=True,
+                        ),
+                        build_button(
+                            "Next",
+                            f"{BIND_PAGE_CUSTOM_ID_PREFIX}:{bounded_page + 1}",
+                            disabled=bounded_page >= total_pages - 1,
+                        ),
+                    ]
+                )
+            )
+
+        return prompt, components
+
+    def _repo_autocomplete_value(self, repo_id: str) -> str:
+        normalized_id = repo_id.strip()
+        if len(normalized_id) <= 100:
+            return normalized_id
+        digest = hashlib.sha256(normalized_id.encode("utf-8")).hexdigest()[:24]
+        return f"{REPO_AUTOCOMPLETE_TOKEN_PREFIX}{digest}"
+
+    def _resolve_repo_from_token(
+        self, token: str, repos: list[tuple[str, str]]
+    ) -> Optional[tuple[str, str]]:
+        normalized = token.strip()
+        if not normalized:
+            return None
+
+        for repo_id, repo_path in repos:
+            if repo_id == normalized:
+                return repo_id, repo_path
+
+        if normalized.startswith(REPO_AUTOCOMPLETE_TOKEN_PREFIX):
+            digest = normalized[len(REPO_AUTOCOMPLETE_TOKEN_PREFIX) :]
+            if digest:
+                matches = [
+                    (repo_id, repo_path)
+                    for repo_id, repo_path in repos
+                    if hashlib.sha256(repo_id.encode("utf-8"))
+                    .hexdigest()
+                    .startswith(digest)
+                ]
+                if len(matches) == 1:
+                    return matches[0]
+
+        return None
+
+    def _build_bind_autocomplete_choices(self, query: str) -> list[dict[str, str]]:
+        repos = self._list_manifest_repos()
+        normalized_query = query.strip().lower()
+        scored: list[tuple[int, int, str, str]] = []
+
+        for index, (repo_id, path) in enumerate(repos):
+            rid = repo_id.lower()
+            pth = path.lower()
+            if (
+                normalized_query
+                and normalized_query not in rid
+                and normalized_query not in pth
+            ):
+                continue
+
+            score = 0
+            if normalized_query:
+                if rid.startswith(normalized_query):
+                    score += 40
+                elif normalized_query in rid:
+                    score += 20
+                if pth.startswith(normalized_query):
+                    score += 10
+                elif normalized_query in pth:
+                    score += 5
+
+            scored.append((score, -index, repo_id, path))
+
+        scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        seen: set[str] = set()
+        choices: list[dict[str, str]] = []
+        for _score, _neg_index, repo_id, path in scored:
+            value = self._repo_autocomplete_value(repo_id)
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            option_name = f"{repo_id} - {path}"
+            choices.append(
+                {
+                    "name": option_name[:100],
+                    "value": self._repo_autocomplete_value(value),
+                }
+            )
+            if len(choices) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
+                break
+        return choices
+
+    async def _handle_command_autocomplete(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        command_path: tuple[str, ...],
+        options: dict[str, Any],
+        focused_name: Optional[str],
+        focused_value: str,
+    ) -> None:
+        _ = options
+        choices: list[dict[str, str]] = []
+        if command_path == ("car", "bind") and focused_name == "workspace":
+            choices = self._build_bind_autocomplete_choices(focused_value)
+        await self._respond_autocomplete(
+            interaction_id,
+            interaction_token,
+            choices=choices,
+        )
 
     async def _bind_with_path(
         self,
@@ -3164,10 +3401,22 @@ class DiscordBotService:
         guild_id: Optional[str],
         raw_path: str,
     ) -> None:
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = self._config.root / candidate
-        workspace = canonicalize_path(candidate)
+        token = raw_path.strip()
+        repos = self._list_manifest_repos()
+        resolved_repo = self._resolve_repo_from_token(token, repos)
+        repo_match = resolved_repo[1] if resolved_repo else None
+        if repo_match:
+            workspace = canonicalize_path(Path(repo_match))
+            selected_repo_id: Optional[str] = (
+                resolved_repo[0] if resolved_repo else None
+            )
+        else:
+            candidate = Path(token)
+            if not candidate.is_absolute():
+                candidate = self._config.root / candidate
+            workspace = canonicalize_path(candidate)
+            selected_repo_id = None
+
         if not workspace.exists() or not workspace.is_dir():
             await self._respond_ephemeral(
                 interaction_id,
@@ -3180,7 +3429,7 @@ class DiscordBotService:
             channel_id=channel_id,
             guild_id=guild_id,
             workspace_path=str(workspace),
-            repo_id=None,
+            repo_id=selected_repo_id,
         )
         await self._respond_ephemeral(
             interaction_id,
@@ -6358,6 +6607,43 @@ class DiscordBotService:
                     interaction_id,
                 )
 
+    async def _respond_autocomplete(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        choices: list[dict[str, str]],
+    ) -> None:
+        sanitized_choices: list[dict[str, str]] = []
+        for choice in choices[:DISCORD_SELECT_OPTION_MAX_OPTIONS]:
+            name = choice.get("name", "")
+            value = choice.get("value", "")
+            if not isinstance(name, str) or not isinstance(value, str):
+                continue
+            normalized_name = name.strip()
+            normalized_value = value.strip()
+            if not normalized_name or not normalized_value:
+                continue
+            sanitized_choices.append(
+                {
+                    "name": normalized_name[:100],
+                    "value": normalized_value[:100],
+                }
+            )
+
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={"type": 8, "data": {"choices": sanitized_choices}},
+            )
+        except DiscordAPIError as exc:
+            self._logger.error(
+                "Failed to send autocomplete response: %s (interaction_id=%s)",
+                exc,
+                interaction_id,
+            )
+
     async def _update_component_message(
         self,
         *,
@@ -6458,6 +6744,15 @@ class DiscordBotService:
             return
 
         try:
+            if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
+                page_token = custom_id.split(":", 1)[1].strip()
+                await self._handle_bind_page_component(
+                    interaction_id,
+                    interaction_token,
+                    page_token=page_token,
+                )
+                return
+
             if custom_id == "bind_select":
                 values = extract_component_values(interaction_payload)
                 if not values:
@@ -6781,6 +7076,15 @@ class DiscordBotService:
         user_id: Optional[str] = None,
     ) -> None:
         try:
+            if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
+                page_token = custom_id.split(":", 1)[1].strip()
+                await self._handle_bind_page_component(
+                    interaction_id,
+                    interaction_token,
+                    page_token=page_token,
+                )
+                return
+
             if custom_id == "bind_select":
                 if not values:
                     await self._respond_ephemeral(
@@ -7130,6 +7434,50 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             f"Bound this channel to: {selected_repo_id} ({workspace})",
+        )
+
+    async def _handle_bind_page_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        page_token: str,
+    ) -> None:
+        if page_token == "noop":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Already on this page.",
+            )
+            return
+        try:
+            requested_page = int(page_token)
+        except (TypeError, ValueError):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Invalid bind page selection.",
+            )
+            return
+
+        repos = self._list_manifest_repos()
+        if not repos:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No repos found in manifest.",
+            )
+            return
+
+        prompt, components = self._build_bind_page_prompt_and_components(
+            repos,
+            page=requested_page,
+        )
+        await self._update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            text=prompt,
+            components=components,
         )
 
     async def _handle_flow_button(

@@ -17,11 +17,61 @@ def extract_command_path_and_options(
     if not isinstance(data, dict):
         return (), {}
 
-    root_name = data.get("name")
-    if not isinstance(root_name, str) or not root_name:
+    path, current_options = _extract_command_path_and_leaf_options(data)
+    if not path:
         return (), {}
 
-    path: list[str] = [root_name]
+    parsed_options: dict[str, Any] = {}
+    for item in current_options:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        parsed_options[name] = item.get("value")
+
+    return tuple(path), parsed_options
+
+
+def extract_autocomplete_command_context(
+    interaction_payload: dict[str, Any],
+) -> tuple[tuple[str, ...], dict[str, Any], Optional[str], str]:
+    data = interaction_payload.get("data")
+    if not isinstance(data, dict):
+        return (), {}, None, ""
+
+    path, current_options = _extract_command_path_and_leaf_options(data)
+    if not path:
+        return (), {}, None, ""
+
+    parsed_options: dict[str, Any] = {}
+    focused_name: Optional[str] = None
+    focused_value = ""
+
+    for item in current_options:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        value = item.get("value")
+        parsed_options[name] = value
+
+        if bool(item.get("focused")):
+            focused_name = name
+            focused_value = str(value) if value is not None else ""
+
+    return tuple(path), parsed_options, focused_name, focused_value
+
+
+def _extract_command_path_and_leaf_options(
+    data: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    root_name = data.get("name")
+    if not isinstance(root_name, str) or not root_name:
+        return [], []
+
+    path = [root_name]
     options = data.get("options")
     current_options = options if isinstance(options, list) else []
 
@@ -37,17 +87,8 @@ def extract_command_path_and_options(
             path.append(name)
         nested = first.get("options")
         current_options = nested if isinstance(nested, list) else []
-
-    parsed_options: dict[str, Any] = {}
-    for item in current_options:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-        parsed_options[name] = item.get("value")
-
-    return tuple(path), parsed_options
+    normalized_options = [item for item in current_options if isinstance(item, dict)]
+    return path, normalized_options
 
 
 def extract_interaction_id(interaction_payload: dict[str, Any]) -> Optional[str]:
@@ -83,6 +124,11 @@ def extract_user_id(interaction_payload: dict[str, Any]) -> Optional[str]:
 def is_component_interaction(interaction_payload: dict[str, Any]) -> bool:
     interaction_type = interaction_payload.get("type")
     return interaction_type == 3
+
+
+def is_autocomplete_interaction(interaction_payload: dict[str, Any]) -> bool:
+    interaction_type = interaction_payload.get("type")
+    return interaction_type == 4
 
 
 def extract_component_custom_id(interaction_payload: dict[str, Any]) -> Optional[str]:
