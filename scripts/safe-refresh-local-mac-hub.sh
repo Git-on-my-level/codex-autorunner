@@ -291,6 +291,10 @@ _normalize_voice_provider() {
   local raw normalized
   raw="${1:-}"
   normalized="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  normalized="${normalized%\"}"
+  normalized="${normalized#\"}"
+  normalized="${normalized%\'}"
+  normalized="${normalized#\'}"
   case "${normalized}" in
     ""|local|local_whisper)
       echo "local_whisper"

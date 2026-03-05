@@ -207,3 +207,35 @@ def test_discord_doctor_checks_openai_voice_skips_local_dependency_check(
     checks = discord_doctor_checks(hub_config)
     by_id = {check.check_id: check for check in checks}
     assert "discord.voice.dependencies" not in by_id
+
+
+def test_discord_doctor_checks_voice_disabled_skips_local_dependency_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
+    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "local_whisper")
+    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_ENABLED", "0")
+
+    original_missing = discord_doctor.missing_optional_dependencies
+
+    def _missing(deps):
+        if deps == (("faster_whisper", "faster-whisper"),):
+            return ["faster-whisper"]
+        return original_missing(deps)
+
+    monkeypatch.setattr(discord_doctor, "missing_optional_dependencies", _missing)
+
+    hub_config = _load_hub_with_discord(
+        tmp_path,
+        {
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "allowed_guild_ids": ["123"],
+        },
+    )
+
+    checks = discord_doctor_checks(hub_config)
+    by_id = {check.check_id: check for check in checks}
+    assert "discord.voice.dependencies" not in by_id

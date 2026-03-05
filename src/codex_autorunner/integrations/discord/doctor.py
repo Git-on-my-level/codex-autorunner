@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from ...core.config import HubConfig
 from ...core.optional_dependencies import missing_optional_dependencies
 from ...core.runtime import DoctorCheck
+from ...voice.config import VoiceConfig
 from .config import (
     DEFAULT_APP_ID_ENV,
     DEFAULT_BOT_TOKEN_ENV,
@@ -72,9 +73,14 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
         )
         return checks
 
-    voice_provider = _configured_voice_provider(raw)
+    voice_raw = _resolve_voice_raw(raw)
+    voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
     voice_ingestion_enabled = _discord_voice_ingestion_enabled(discord_cfg)
-    if voice_ingestion_enabled and voice_provider == "local_whisper":
+    if (
+        voice_ingestion_enabled
+        and voice_config.enabled
+        and _normalize_voice_provider(voice_config.provider) == "local_whisper"
+    ):
         missing_local_voice = missing_optional_dependencies(
             (("faster_whisper", "faster-whisper"),)
         )
@@ -294,22 +300,22 @@ def _resolve_state_file(root: Path, raw_state_file: object) -> Path:
     return (root / DEFAULT_STATE_FILE).resolve()
 
 
-def _configured_voice_provider(raw: dict[str, Any]) -> str | None:
-    env_provider = os.environ.get("CODEX_AUTORUNNER_VOICE_PROVIDER")
-    if isinstance(env_provider, str) and env_provider.strip():
-        return _normalize_voice_provider(env_provider)
+def _resolve_voice_raw(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
+    repo_defaults = raw.get("repo_defaults")
+    if isinstance(repo_defaults, dict):
+        voice = repo_defaults.get("voice")
+        if isinstance(voice, dict):
+            return voice
 
     voice_raw = raw.get("voice")
-    if not isinstance(voice_raw, dict):
-        return None
-
-    provider = voice_raw.get("provider")
-    if not isinstance(provider, str) or not provider.strip():
-        return None
-    return _normalize_voice_provider(provider)
+    if isinstance(voice_raw, dict):
+        return voice_raw
+    return None
 
 
-def _normalize_voice_provider(value: str) -> str:
+def _normalize_voice_provider(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
     normalized = value.strip().lower()
     if normalized == "local":
         return "local_whisper"
