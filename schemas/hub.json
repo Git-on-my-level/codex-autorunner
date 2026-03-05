@@ -42,6 +42,11 @@
       "effective_destination": {"type": "object"},
       "chat_bound": {"type": "boolean"},
       "chat_bound_thread_count": {"type": "integer"},
+      "pma_chat_bound_thread_count": {"type": "integer"},
+      "discord_chat_bound_thread_count": {"type": "integer"},
+      "telegram_chat_bound_thread_count": {"type": "integer"},
+      "non_pma_chat_bound_thread_count": {"type": "integer"},
+      "cleanup_blocked_by_chat_binding": {"type": "boolean"},
       "mounted": {"type": "boolean"},
       "mount_error": {"type": ["null", "string"]},
       "ticket_flow": {

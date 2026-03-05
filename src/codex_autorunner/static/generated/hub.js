@@ -4,11 +4,28 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";
 import { preserveScroll } from "./preserve.js";
 import { initNotificationBell } from "./notificationBell.js";
-function isChatBoundWorktree(repo) {
+function nonPmaChatBoundThreadCount(repo) {
+    const explicitCount = Number(repo.non_pma_chat_bound_thread_count || 0);
+    if (explicitCount > 0)
+        return explicitCount;
+    const discordCount = Number(repo.discord_chat_bound_thread_count || 0);
+    const telegramCount = Number(repo.telegram_chat_bound_thread_count || 0);
+    const directCount = discordCount + telegramCount;
+    if (directCount > 0)
+        return directCount;
+    const totalCount = Number(repo.chat_bound_thread_count || 0);
+    const pmaCount = Number(repo.pma_chat_bound_thread_count || 0);
+    return Math.max(0, totalCount - pmaCount);
+}
+function isCleanupBlockedByChatBinding(repo) {
     if ((repo.kind || "base") !== "worktree")
         return false;
-    const boundCount = Number(repo.chat_bound_thread_count || 0);
-    return repo.chat_bound === true || boundCount > 0;
+    if (repo.cleanup_blocked_by_chat_binding === true)
+        return true;
+    return nonPmaChatBoundThreadCount(repo) > 0;
+}
+function isChatBoundWorktree(repo) {
+    return isCleanupBlockedByChatBinding(repo);
 }
 const HUB_VIEW_PREFS_KEY = `car:hub-view-prefs:${HUB_BASE || "/"}`;
 const HUB_DEFAULT_VIEW_PREFS = {
@@ -678,11 +695,15 @@ function buildActions(repo) {
         });
     }
     if (!missing && kind === "worktree") {
+        const cleanupBlockedByChatBinding = isCleanupBlockedByChatBinding(repo);
         actions.push({
             key: "cleanup_worktree",
             label: "Cleanup",
             kind: "ghost",
-            title: "Remove worktree and delete branch",
+            title: cleanupBlockedByChatBinding
+                ? "Unbind Discord/Telegram chats before cleanup"
+                : "Remove worktree and delete branch",
+            disabled: cleanupBlockedByChatBinding,
         });
     }
     return actions;
@@ -1904,6 +1925,11 @@ async function handleRepoAction(repoId, action) {
             return;
         }
         if (action === "cleanup_worktree") {
+            const repo = hubData.repos.find((item) => item.id === repoId);
+            if (repo && isCleanupBlockedByChatBinding(repo)) {
+                flash("Unbind Discord/Telegram chats before cleaning up this worktree", "error");
+                return;
+            }
             const displayName = repoId.includes("--")
                 ? repoId.split("--").pop()
                 : repoId;

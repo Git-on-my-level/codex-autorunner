@@ -19,6 +19,7 @@ from ....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
     active_chat_binding_counts,
+    active_chat_binding_counts_by_source,
 )
 from ....core.config import ConfigError
 from ....core.destinations import (
@@ -312,14 +313,41 @@ def build_hub_repo_routes(
             )
             return {}
 
+    def _active_chat_binding_counts_by_source() -> dict[str, dict[str, int]]:
+        try:
+            return active_chat_binding_counts_by_source(
+                hub_root=context.config.root,
+                raw_config=context.config.raw,
+            )
+        except Exception as exc:
+            safe_log(
+                context.logger,
+                logging.WARNING,
+                "Hub source chat-bound worktree lookup failed",
+                exc=exc,
+            )
+            return {}
+
     def _enrich_repo(
-        snapshot, chat_binding_counts: Optional[dict[str, int]] = None
+        snapshot,
+        chat_binding_counts: Optional[dict[str, int]] = None,
+        chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
     ) -> dict:
         repo_dict = snapshot.to_dict(context.config.root)
         repo_dict = mount_manager.add_mount_info(repo_dict)
         binding_count = int((chat_binding_counts or {}).get(snapshot.id, 0))
+        source_counts = dict((chat_binding_counts_by_source or {}).get(snapshot.id, {}))
+        pma_binding_count = int(source_counts.get("pma", 0))
+        discord_binding_count = int(source_counts.get("discord", 0))
+        telegram_binding_count = int(source_counts.get("telegram", 0))
+        non_pma_binding_count = discord_binding_count + telegram_binding_count
         repo_dict["chat_bound"] = binding_count > 0
         repo_dict["chat_bound_thread_count"] = binding_count
+        repo_dict["pma_chat_bound_thread_count"] = pma_binding_count
+        repo_dict["discord_chat_bound_thread_count"] = discord_binding_count
+        repo_dict["telegram_chat_bound_thread_count"] = telegram_binding_count
+        repo_dict["non_pma_chat_bound_thread_count"] = non_pma_binding_count
+        repo_dict["cleanup_blocked_by_chat_binding"] = non_pma_binding_count > 0
         if snapshot.initialized and snapshot.exists_on_disk:
             ticket_flow = _get_ticket_flow_summary(snapshot.path)
             repo_dict["ticket_flow"] = ticket_flow
@@ -1242,11 +1270,17 @@ def build_hub_repo_routes(
         safe_log(context.logger, logging.INFO, "Hub list_repos")
         snapshots = await asyncio.to_thread(context.supervisor.list_repos)
         chat_binding_counts = await asyncio.to_thread(_active_chat_binding_counts)
+        chat_binding_counts_by_source = await asyncio.to_thread(
+            _active_chat_binding_counts_by_source
+        )
         await mount_manager.refresh_mounts(snapshots)
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [_enrich_repo(snap, chat_binding_counts) for snap in snapshots],
+            "repos": [
+                _enrich_repo(snap, chat_binding_counts, chat_binding_counts_by_source)
+                for snap in snapshots
+            ],
         }
 
     @router.post("/hub/repos/scan")
@@ -1254,12 +1288,18 @@ def build_hub_repo_routes(
         safe_log(context.logger, logging.INFO, "Hub scan_repos")
         snapshots = await asyncio.to_thread(context.supervisor.scan)
         chat_binding_counts = await asyncio.to_thread(_active_chat_binding_counts)
+        chat_binding_counts_by_source = await asyncio.to_thread(
+            _active_chat_binding_counts_by_source
+        )
         await mount_manager.refresh_mounts(snapshots)
 
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [_enrich_repo(snap, chat_binding_counts) for snap in snapshots],
+            "repos": [
+                _enrich_repo(snap, chat_binding_counts, chat_binding_counts_by_source)
+                for snap in snapshots
+            ],
         }
 
     @router.post("/hub/jobs/scan", response_model=HubJobResponse)

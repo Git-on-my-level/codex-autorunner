@@ -24,7 +24,7 @@ from ..manifest import (
 )
 from ..tickets.outbox import set_lifecycle_emitter
 from .archive import archive_worktree_snapshot, build_snapshot_id
-from .chat_bindings import repo_has_active_chat_binding
+from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .destinations import (
     DockerDestination,
@@ -136,6 +136,11 @@ class RepoSnapshot:
     )
     chat_bound: bool = False
     chat_bound_thread_count: int = 0
+    pma_chat_bound_thread_count: int = 0
+    discord_chat_bound_thread_count: int = 0
+    telegram_chat_bound_thread_count: int = 0
+    non_pma_chat_bound_thread_count: int = 0
+    cleanup_blocked_by_chat_binding: bool = False
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         try:
@@ -166,6 +171,11 @@ class RepoSnapshot:
             "effective_destination": self.effective_destination,
             "chat_bound": self.chat_bound,
             "chat_bound_thread_count": self.chat_bound_thread_count,
+            "pma_chat_bound_thread_count": self.pma_chat_bound_thread_count,
+            "discord_chat_bound_thread_count": self.discord_chat_bound_thread_count,
+            "telegram_chat_bound_thread_count": self.telegram_chat_bound_thread_count,
+            "non_pma_chat_bound_thread_count": self.non_pma_chat_bound_thread_count,
+            "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
         }
 
 
@@ -1356,7 +1366,7 @@ class HubSupervisor:
         return {"status": "ok", "docker_cleanup": docker_cleanup}
 
     def _has_active_chat_binding(self, repo_id: str) -> bool:
-        return repo_has_active_chat_binding(
+        return repo_has_active_non_pma_chat_binding(
             hub_root=self.hub_config.root,
             raw_config=self.hub_config.raw,
             repo_id=repo_id,

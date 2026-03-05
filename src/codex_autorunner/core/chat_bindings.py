@@ -471,33 +471,60 @@ def active_chat_binding_counts(
 ) -> dict[str, int]:
     """Return repo-id keyed counts of active chat bindings from persisted stores."""
 
-    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
+    counts_by_source = active_chat_binding_counts_by_source(
+        hub_root=hub_root,
+        raw_config=raw_config,
+    )
     counts: Counter[str] = Counter()
-
-    for repo_id, count in _active_pma_thread_counts(
-        hub_root, repo_id_by_workspace
-    ).items():
-        counts[repo_id] += count
-
-    discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
-    for repo_id, count in _read_discord_repo_counts(
-        db_path=discord_state_path,
-        repo_id_by_workspace=repo_id_by_workspace,
-    ).items():
-        counts[repo_id] += count
-
-    telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
-    for repo_id, count in _read_current_telegram_repo_counts(
-        db_path=telegram_state_path,
-        repo_id_by_workspace=repo_id_by_workspace,
-    ).items():
-        counts[repo_id] += count
-
+    for repo_id, source_counts in counts_by_source.items():
+        counts[repo_id] += sum(source_counts.values())
     return dict(counts)
 
 
+def active_chat_binding_counts_by_source(
+    *, hub_root: Path, raw_config: Mapping[str, Any]
+) -> dict[str, dict[str, int]]:
+    """Return repo-id keyed active chat binding counts split by source."""
+
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
+    source_counts: dict[str, dict[str, int]] = {}
+
+    def _merge_counts(source: str, counts: Mapping[str, int]) -> None:
+        for repo_id, count in counts.items():
+            if count <= 0:
+                continue
+            repo_counts = source_counts.setdefault(repo_id, {})
+            repo_counts[source] = int(repo_counts.get(source, 0)) + int(count)
+
+    _merge_counts("pma", _active_pma_thread_counts(hub_root, repo_id_by_workspace))
+
+    discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
+    _merge_counts(
+        "discord",
+        _read_discord_repo_counts(
+            db_path=discord_state_path,
+            repo_id_by_workspace=repo_id_by_workspace,
+        ),
+    )
+
+    telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
+    _merge_counts(
+        "telegram",
+        _read_current_telegram_repo_counts(
+            db_path=telegram_state_path,
+            repo_id_by_workspace=repo_id_by_workspace,
+        ),
+    )
+
+    return source_counts
+
+
 def repo_has_active_chat_binding(
-    *, hub_root: Path, raw_config: Mapping[str, Any], repo_id: str
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    repo_id: str,
+    include_pma: bool = True,
 ) -> bool:
     """Return True when a repo has any persisted active chat binding."""
 
@@ -507,7 +534,9 @@ def repo_has_active_chat_binding(
 
     repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
 
-    if _has_active_pma_thread(hub_root, normalized_repo_id, repo_id_by_workspace):
+    if include_pma and _has_active_pma_thread(
+        hub_root, normalized_repo_id, repo_id_by_workspace
+    ):
         return True
 
     discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
@@ -529,7 +558,22 @@ def repo_has_active_chat_binding(
     return False
 
 
+def repo_has_active_non_pma_chat_binding(
+    *, hub_root: Path, raw_config: Mapping[str, Any], repo_id: str
+) -> bool:
+    """Return True when a repo has active Discord/Telegram chat bindings."""
+
+    return repo_has_active_chat_binding(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        repo_id=repo_id,
+        include_pma=False,
+    )
+
+
 __all__ = [
     "active_chat_binding_counts",
+    "active_chat_binding_counts_by_source",
     "repo_has_active_chat_binding",
+    "repo_has_active_non_pma_chat_binding",
 ]

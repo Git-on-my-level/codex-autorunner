@@ -316,6 +316,9 @@ def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
     worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
     assert worktree_payload["chat_bound"] is True
     assert worktree_payload["chat_bound_thread_count"] == 1
+    assert worktree_payload["pma_chat_bound_thread_count"] == 1
+    assert worktree_payload["non_pma_chat_bound_thread_count"] == 0
+    assert worktree_payload["cleanup_blocked_by_chat_binding"] is False
 
 
 def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
@@ -362,6 +365,9 @@ def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
     worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
     assert worktree_payload["chat_bound"] is True
     assert worktree_payload["chat_bound_thread_count"] == 1
+    assert worktree_payload["pma_chat_bound_thread_count"] == 1
+    assert worktree_payload["non_pma_chat_bound_thread_count"] == 0
+    assert worktree_payload["cleanup_blocked_by_chat_binding"] is False
 
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
@@ -1259,7 +1265,7 @@ def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
     ]
 
 
-def test_cleanup_worktree_rejects_chat_bound_without_force(tmp_path: Path):
+def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
@@ -1280,16 +1286,11 @@ def test_cleanup_worktree_rejects_chat_bound_without_force(tmp_path: Path):
     store = PmaThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
-    with pytest.raises(
-        ValueError,
-        match="Refusing to clean up chat-bound worktree",
-    ):
-        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
-
-    assert worktree.path.exists()
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+    assert not worktree.path.exists()
 
 
-def test_cleanup_worktree_allows_chat_bound_with_force(tmp_path: Path):
+def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
@@ -1309,9 +1310,45 @@ def test_cleanup_worktree_allows_chat_bound_with_force(tmp_path: Path):
     )
     store = PmaThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    _write_discord_binding(
+        hub_root, channel_id="discord-chan-force", repo_id=worktree.id
+    )
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True, force=True)
     assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_rejects_mixed_chat_bound_without_force(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-guard-mixed",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    _write_discord_binding(
+        hub_root, channel_id="discord-chan-mixed", repo_id=worktree.id
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Refusing to clean up chat-bound worktree",
+    ):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+
+    assert worktree.path.exists()
 
 
 def test_cleanup_worktree_rejects_when_binding_lookup_fails_without_force(
@@ -1408,6 +1445,9 @@ def test_hub_api_marks_chat_bound_worktrees_from_discord_binding_db(tmp_path: Pa
     worktree_payload = next(item for item in data["repos"] if item["id"] == worktree.id)
     assert worktree_payload["chat_bound"] is True
     assert worktree_payload["chat_bound_thread_count"] == 1
+    assert worktree_payload["discord_chat_bound_thread_count"] == 1
+    assert worktree_payload["non_pma_chat_bound_thread_count"] == 1
+    assert worktree_payload["cleanup_blocked_by_chat_binding"] is True
 
 
 def test_cleanup_worktree_rejects_discord_bound_worktree_without_force(tmp_path: Path):
