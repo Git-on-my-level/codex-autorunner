@@ -112,6 +112,50 @@ def test_managed_thread_tail_snapshot_redacts_and_supports_cursor(hub_env) -> No
         assert [event["event_id"] for event in cursor_payload["events"]] == [2]
 
 
+def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, managed_turn_id = _seed_managed_thread_with_events(hub_env, app)
+    store = PmaThreadStore(hub_env.hub_root)
+
+    events = app.state.app_server_events
+
+    async def _seed() -> None:
+        await events.register_turn("backend-thread-1", "backend-turn-1")
+        await events.handle_notification(
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": "backend-turn-1",
+                    "threadId": "backend-thread-1",
+                    "item": {"type": "tool", "name": "status-check"},
+                },
+            }
+        )
+
+    import asyncio
+
+    asyncio.run(_seed())
+    store.mark_turn_finished(
+        managed_turn_id,
+        status="ok",
+        assistant_text="completed assistant output",
+        backend_turn_id="backend-turn-1",
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["managed_thread_id"] == managed_thread_id
+        assert isinstance(payload.get("thread"), dict)
+        assert isinstance(payload.get("turn"), dict)
+        assert payload["turn"]["status"] == "ok"
+        assert payload["is_alive"] is False
+        assert isinstance(payload.get("recent_progress"), list)
+        assert "completed assistant output" in payload.get("latest_output_excerpt", "")
+
+
 def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

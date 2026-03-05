@@ -612,6 +612,25 @@ class PmaManagedThreadMessageRequest(Payload):
     message: str
     model: Optional[str] = None
     reasoning: Optional[str] = None
+    defer_execution: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "defer_execution",
+            "deferExecution",
+            "background",
+            "async_mode",
+            "asyncMode",
+        ),
+    )
+    notify_on: Optional[Literal["terminal"]] = Field(
+        default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
+    )
+    notify_lane: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("notify_lane", "notifyLane")
+    )
+    notify_once: bool = Field(
+        default=True, validation_alias=AliasChoices("notify_once", "notifyOnce")
+    )
 
 
 class PmaManagedThreadCompactRequest(Payload):

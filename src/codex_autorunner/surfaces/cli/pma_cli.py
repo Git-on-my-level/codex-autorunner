@@ -232,6 +232,83 @@ def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
             typer.echo(_format_tail_event_line(event))
 
 
+def _normalize_notify_on(value: Optional[str]) -> Optional[str]:
+    text = (value or "").strip().lower()
+    if not text:
+        return None
+    if text != "terminal":
+        raise typer.BadParameter("notify-on must be 'terminal'")
+    return text
+
+
+def _request_json_with_status(
+    method: str,
+    url: str,
+    payload: Optional[dict[str, Any]] = None,
+    token_env: Optional[str] = None,
+    params: Optional[dict[str, Any]] = None,
+    timeout: float = 30.0,
+) -> tuple[int, dict[str, Any]]:
+    headers = _auth_headers_from_env(token_env)
+    response = httpx.request(
+        method,
+        url,
+        json=payload,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+    )
+    data: dict[str, Any] = {}
+    try:
+        parsed = response.json()
+        if isinstance(parsed, dict):
+            data = parsed
+    except Exception:
+        data = {}
+    return response.status_code, data
+
+
+def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
+    thread = data.get("thread") if isinstance(data.get("thread"), dict) else {}
+    turn = data.get("turn") if isinstance(data.get("turn"), dict) else {}
+    managed_thread_id = str(data.get("managed_thread_id") or "")
+    agent = str(thread.get("agent") or "-")
+    repo_id = str(thread.get("repo_id") or "-")
+    thread_state = str(thread.get("status") or "-")
+    managed_turn_id = str(turn.get("managed_turn_id") or "-")
+    turn_state = str(turn.get("status") or "-")
+    activity = str(turn.get("activity") or "-")
+    elapsed = _format_seconds(turn.get("elapsed_seconds"))
+    idle = _format_seconds(turn.get("idle_seconds"))
+    alive = "yes" if bool(data.get("is_alive")) else "no"
+    typer.echo(
+        " ".join(
+            [
+                f"id={managed_thread_id}",
+                f"agent={agent}",
+                f"repo={repo_id}",
+                f"thread={thread_state}",
+                f"alive={alive}",
+            ]
+        )
+    )
+    typer.echo(
+        f"turn={managed_turn_id} status={turn_state} activity={activity} elapsed={elapsed} idle={idle}"
+    )
+    progress = data.get("recent_progress")
+    if isinstance(progress, list) and progress:
+        typer.echo("recent progress:")
+        for event in progress:
+            if isinstance(event, dict):
+                typer.echo(_format_tail_event_line(event))
+    else:
+        typer.echo("No recent progress events.")
+    excerpt = str(data.get("latest_output_excerpt") or "").strip()
+    if excerpt:
+        typer.echo("latest output:")
+        typer.echo(excerpt)
+
+
 def _render_compacted_active_context(
     *,
     timestamp: str,
@@ -674,6 +751,19 @@ def pma_thread_spawn(
     backend_id: Optional[str] = typer.Option(
         None, "--backend-id", help="Optional existing backend thread/session id"
     ),
+    notify_on: Optional[str] = typer.Option(
+        None,
+        "--notify-on",
+        help="Auto-subscribe for lifecycle events (supported: terminal)",
+    ),
+    notify_lane: Optional[str] = typer.Option(
+        None, "--notify-lane", help="Lane id used for terminal notifications"
+    ),
+    notify_once: bool = typer.Option(
+        True,
+        "--notify-once/--no-notify-once",
+        help="Auto-cancel notification after first fire",
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
@@ -687,6 +777,7 @@ def pma_thread_spawn(
 
     hub_root = _resolve_hub_path(path)
     try:
+        normalized_notify_on = _normalize_notify_on(notify_on)
         config = load_hub_config(hub_root)
         data = _request_json(
             "POST",
@@ -697,6 +788,9 @@ def pma_thread_spawn(
                 "workspace_root": workspace_root,
                 "name": name,
                 "backend_thread_id": backend_id,
+                "notify_on": normalized_notify_on,
+                "notify_lane": notify_lane,
+                "notify_once": notify_once,
             },
             token_env=config.server_auth_token_env,
         )
@@ -812,6 +906,47 @@ def pma_thread_info(
     typer.echo(json.dumps(thread, indent=2))
 
 
+@thread_app.command("status")
+def pma_thread_status(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    limit: int = typer.Option(
+        20, "--limit", min=1, help="Maximum progress events to include"
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since", help="Only include events newer than duration (e.g. 5m)"
+    ),
+    level: str = typer.Option("info", "--level", help="Verbosity level (info|debug)"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Show unified managed-thread status in one view."""
+    hub_root = _resolve_hub_path(path)
+    params: dict[str, Any] = {"limit": limit, "level": level}
+    if since:
+        params["since"] = since
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/status"),
+            token_env=config.server_auth_token_env,
+            params=params,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+    _render_thread_status_snapshot(data)
+
+
 @thread_app.command("send")
 def pma_thread_send(
     managed_thread_id: str = typer.Option(
@@ -824,49 +959,120 @@ def pma_thread_send(
     reasoning: Optional[str] = typer.Option(
         None, "--reasoning", help="Reasoning override"
     ),
+    watch: bool = typer.Option(
+        False,
+        "--watch",
+        help="Follow tail/events until the turn reaches terminal state",
+    ),
+    notify_on: Optional[str] = typer.Option(
+        None,
+        "--notify-on",
+        help="Auto-subscribe for lifecycle events (supported: terminal)",
+    ),
+    notify_lane: Optional[str] = typer.Option(
+        None, "--notify-lane", help="Lane id used for terminal notifications"
+    ),
+    notify_once: bool = typer.Option(
+        True,
+        "--notify-once/--no-notify-once",
+        help="Auto-cancel notification after first fire",
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """Send a message to a managed PMA thread."""
-    payload: dict[str, Any] = {"message": message}
+    normalized_notify_on = _normalize_notify_on(notify_on)
+    should_defer = watch or normalized_notify_on == "terminal"
+    payload: dict[str, Any] = {
+        "message": message,
+        "defer_execution": should_defer,
+    }
     if model:
         payload["model"] = model
     if reasoning:
         payload["reasoning"] = reasoning
+    if normalized_notify_on:
+        payload["notify_on"] = normalized_notify_on
+        payload["notify_lane"] = notify_lane
+        payload["notify_once"] = notify_once
 
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-        data = _request_json(
+        status_code, data = _request_json_with_status(
             "POST",
             _build_pma_url(config, f"/threads/{managed_thread_id}/messages"),
             payload,
             token_env=config.server_auth_token_env,
+            timeout=240.0 if not should_defer else 30.0,
         )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
+    send_state = str(data.get("send_state") or "").strip().lower()
     status = (data.get("status") if isinstance(data, dict) else "") or ""
-    if status != "ok":
+    if status_code >= 400 or status != "ok":
         if output_json:
             typer.echo(json.dumps(data, indent=2))
         else:
-            detail = (
-                data.get("error")
-                if isinstance(data, dict)
-                else "Managed thread send failed"
-            ) or "Managed thread send failed"
-            typer.echo(str(detail), err=True)
+            detail = str(
+                data.get("detail") or data.get("error") or "Managed thread send failed"
+            )
+            next_step = str(data.get("next_step") or "").strip()
+            if send_state:
+                typer.echo(f"send_state={send_state} error={detail}", err=True)
+            else:
+                typer.echo(detail, err=True)
+            if next_step:
+                typer.echo(f"next: {next_step}", err=True)
         raise typer.Exit(code=1) from None
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
-    else:
-        typer.echo(str(data.get("assistant_text") or ""))
+        if watch:
+            pma_thread_tail(
+                managed_thread_id=managed_thread_id,
+                follow=True,
+                since=None,
+                level="info",
+                limit=50,
+                output_json=True,
+                path=path,
+            )
+        return
+
+    execution_state = str(data.get("execution_state") or "").strip().lower()
+    if should_defer and execution_state == "running":
+        typer.echo(
+            f"send_state=accepted managed_turn_id={data.get('managed_turn_id') or ''}"
+        )
+        if watch:
+            pma_thread_tail(
+                managed_thread_id=managed_thread_id,
+                follow=True,
+                since=None,
+                level="info",
+                limit=50,
+                output_json=False,
+                path=path,
+            )
+            try:
+                status_data = _request_json(
+                    "GET",
+                    _build_pma_url(config, f"/threads/{managed_thread_id}/status"),
+                    token_env=config.server_auth_token_env,
+                    params={"limit": 1},
+                )
+            except Exception:
+                status_data = {}
+            excerpt = str(status_data.get("latest_output_excerpt") or "").strip()
+            if excerpt:
+                typer.echo("\nlatest output:")
+                typer.echo(excerpt)
+        return
+
+    typer.echo(str(data.get("assistant_text") or ""))
 
 
 @thread_app.command("turns")

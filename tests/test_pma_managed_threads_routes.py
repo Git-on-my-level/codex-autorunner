@@ -136,6 +136,35 @@ def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     assert fetched["repo_id"] == hub_env.repo_id
 
 
+def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "repo_id": hub_env.repo_id,
+                "notify_on": "terminal",
+                "notify_lane": "pma:lane-next",
+                "notify_once": True,
+            },
+        )
+        assert create_resp.status_code == 200
+        payload = create_resp.json()
+        thread = payload["thread"]
+        notification = payload.get("notification") or {}
+        subscription = notification.get("subscription") or {}
+        assert subscription.get("thread_id") == thread["managed_thread_id"]
+        assert subscription.get("lane_id") == "pma:lane-next"
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(
+        thread_id=thread["managed_thread_id"]
+    )
+    assert len(subscriptions) == 1
+
+
 def test_managed_thread_routes_respect_pma_enabled_flag(hub_env) -> None:
     _disable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

@@ -342,6 +342,8 @@ def test_send_message_rejects_when_running_turn_exists(hub_env) -> None:
 
     assert resp.status_code == 409
     assert "running turn" in (resp.json().get("detail") or "").lower()
+    assert resp.json().get("send_state") == "already_in_flight"
+    assert "next_step" in resp.json()
 
 
 def test_send_message_handles_not_active_race(hub_env, monkeypatch) -> None:
@@ -881,3 +883,83 @@ def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None
         and wake_up.get("lane_id") == "pma:lane-next"
         for wake_up in wake_ups
     )
+
+
+def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        message_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={
+                "message": "trigger completion",
+                "notify_on": "terminal",
+                "notify_lane": "pma:auto-lane",
+                "notify_once": True,
+            },
+        )
+        assert message_resp.status_code == 200
+        payload = message_resp.json()
+        assert payload["status"] == "ok"
+        assert payload["send_state"] == "accepted"
+        notification = payload.get("notification") or {}
+        subscription = notification.get("subscription") or {}
+        assert subscription.get("thread_id") == managed_thread_id
+        assert subscription.get("lane_id") == "pma:auto-lane"
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    active_subs = automation_store.list_subscriptions(thread_id=managed_thread_id)
+    assert active_subs == []
+    all_subs = automation_store.list_subscriptions(
+        include_inactive=True, thread_id=managed_thread_id
+    )
+    assert all_subs
+    assert all_subs[0].get("state") == "cancelled"
+    assert all_subs[0].get("match_count") == 1

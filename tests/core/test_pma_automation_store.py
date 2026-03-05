@@ -178,6 +178,51 @@ def test_subscription_lane_id_flows_into_transition_wakeup(tmp_path) -> None:
     assert pending[0]["lane_id"] == "pma:lane-next"
 
 
+def test_notify_once_subscription_cancels_after_first_match(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path)
+    subscription = store.create_subscription(
+        {
+            "event_types": ["managed_thread_completed"],
+            "thread_id": "thread-1",
+            "lane_id": "pma:lane-next",
+            "notify_once": True,
+        }
+    )["subscription"]
+
+    first = store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": "thread-1",
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": "managed-turn-1:completed",
+        }
+    )
+    assert first["matched"] == 1
+    assert first["created"] == 1
+
+    active = store.list_subscriptions(thread_id="thread-1")
+    assert active == []
+    all_subs = store.list_subscriptions(include_inactive=True, thread_id="thread-1")
+    assert all_subs
+    assert all_subs[0]["subscription_id"] == subscription["subscription_id"]
+    assert all_subs[0]["state"] == "cancelled"
+    assert all_subs[0]["match_count"] == 1
+    assert all_subs[0]["max_matches"] == 1
+
+    second = store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": "thread-1",
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": "managed-turn-2:completed",
+        }
+    )
+    assert second["matched"] == 0
+    assert second["created"] == 0
+
+
 def test_timer_rejects_invalid_due_at_timestamp(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path)
     with pytest.raises(ValueError):

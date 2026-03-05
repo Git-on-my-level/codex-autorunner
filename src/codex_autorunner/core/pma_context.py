@@ -64,8 +64,9 @@ First-turn routine:
    - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
    - If no suitable thread exists, spawn one, run work, and keep it compact:
      - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
-     - `car pma thread send --id <managed_thread_id> --message "..."`
-     - `car pma thread output --id <managed_thread_id>`
+     - `car pma thread send --id <managed_thread_id> --message "..." --watch`
+     - `car pma thread send --id <managed_thread_id> --message "..." --notify-on terminal --notify-lane <lane_id>`
+     - `car pma thread status --id <managed_thread_id>`
      - `car pma thread compact --id <id> --summary "..."`
      - `car pma thread archive --id <id>`
    - If request is a multi-step deliverable or cross-repo change, prefer tickets/ticket_flow.

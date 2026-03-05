@@ -61,6 +61,31 @@ def _normalize_non_negative_int(
     return parsed
 
 
+def _normalize_positive_int(
+    value: Any, *, fallback: Optional[int] = None
+) -> Optional[int]:
+    parsed = _normalize_non_negative_int(value, fallback=fallback)
+    if parsed is None:
+        return None
+    if parsed <= 0:
+        return fallback
+    return parsed
+
+
+def _normalize_bool(value: Any, *, fallback: Optional[bool] = None) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return fallback
+
+
 def _normalize_text_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -138,6 +163,8 @@ class PmaLifecycleSubscription:
     to_state: Optional[str] = None
     reason: Optional[str] = None
     idempotency_key: Optional[str] = None
+    max_matches: Optional[int] = None
+    match_count: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -153,9 +180,15 @@ class PmaLifecycleSubscription:
         to_state: Optional[str] = None,
         reason: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        notify_once: Optional[bool] = None,
+        max_matches: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> "PmaLifecycleSubscription":
         stamp = _iso_now()
+        resolved_once = _normalize_bool(notify_once, fallback=None)
+        resolved_max = _normalize_positive_int(max_matches, fallback=None)
+        if resolved_max is None and resolved_once:
+            resolved_max = 1
         return cls(
             subscription_id=str(uuid.uuid4()),
             created_at=stamp,
@@ -170,6 +203,8 @@ class PmaLifecycleSubscription:
             to_state=_normalize_text(to_state),
             reason=_normalize_text(reason),
             idempotency_key=_normalize_text(idempotency_key),
+            max_matches=resolved_max,
+            match_count=0,
             metadata=dict(metadata or {}),
         )
 
@@ -181,10 +216,22 @@ class PmaLifecycleSubscription:
         created_at = _normalize_text(data.get("created_at")) or _iso_now()
         updated_at = _normalize_text(data.get("updated_at")) or created_at
         state = _normalize_text(data.get("state")) or "active"
+        max_matches = _normalize_positive_int(data.get("max_matches"), fallback=None)
+        if max_matches is None and _normalize_bool(
+            data.get("notify_once"), fallback=False
+        ):
+            max_matches = 1
+        match_count = _normalize_non_negative_int(data.get("match_count"), fallback=0)
+        if match_count is None:
+            match_count = 0
         metadata_raw = data.get("metadata")
         metadata: dict[str, Any] = (
             dict(metadata_raw) if isinstance(metadata_raw, dict) else {}
         )
+        if max_matches is None and _normalize_bool(
+            metadata.get("notify_once"), fallback=False
+        ):
+            max_matches = 1
         return cls(
             subscription_id=subscription_id,
             created_at=created_at,
@@ -199,6 +246,8 @@ class PmaLifecycleSubscription:
             to_state=_normalize_text(data.get("to_state")),
             reason=_normalize_text(data.get("reason")),
             idempotency_key=_normalize_text(data.get("idempotency_key")),
+            max_matches=max_matches,
+            match_count=int(match_count),
             metadata=metadata,
         )
 
@@ -578,6 +627,8 @@ class PmaAutomationStore:
         to_state: Optional[str] = None,
         reason: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        notify_once: Optional[bool] = None,
+        max_matches: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[PmaLifecycleSubscription, bool]:
         key = _normalize_text(idempotency_key)
@@ -599,6 +650,8 @@ class PmaAutomationStore:
                 to_state=to_state,
                 reason=reason,
                 idempotency_key=key,
+                notify_once=notify_once,
+                max_matches=max_matches,
                 metadata=metadata,
             )
             subscriptions.append(created)
@@ -619,6 +672,8 @@ class PmaAutomationStore:
             to_state=_normalize_text(data.get("to_state")),
             reason=_normalize_text(data.get("reason")),
             idempotency_key=_normalize_text(data.get("idempotency_key")),
+            notify_once=_normalize_bool(data.get("notify_once"), fallback=None),
+            max_matches=_normalize_positive_int(data.get("max_matches"), fallback=None),
             metadata=(
                 data.get("metadata") if isinstance(data.get("metadata"), dict) else None
             ),
@@ -1124,55 +1179,94 @@ class PmaAutomationStore:
         transition_id = _normalize_text(data.get("transition_id")) or _normalize_text(
             data.get("idempotency_key")
         )
+        event_type_norm = event_type.lower()
+        metadata_payload = {
+            key_name: value
+            for key_name, value in data.items()
+            if key_name
+            not in {
+                "repo_id",
+                "run_id",
+                "thread_id",
+                "from_state",
+                "to_state",
+                "reason",
+                "timestamp",
+            }
+        }
+        with file_lock(self._lock_path()):
+            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
+            matched = 0
+            created = 0
+            changed = False
 
-        matches = self.match_lifecycle_subscriptions(
-            event_type=event_type,
-            repo_id=repo_id,
-            run_id=run_id,
-            thread_id=thread_id,
-            from_state=from_state,
-            to_state=to_state,
-        )
-        created = 0
-        for match in matches:
-            subscription_id = _normalize_text(match.get("subscription_id"))
-            key = (
-                transition_id
-                or f"{event_type}:{repo_id or ''}:{run_id or ''}:{thread_id or ''}:{from_state or ''}:{to_state or ''}:{timestamp}"
-            )
-            _, deduped = self.enqueue_wakeup(
-                source="transition",
-                repo_id=repo_id,
-                run_id=run_id,
-                thread_id=thread_id,
-                lane_id=_normalize_text(match.get("lane_id")),
-                from_state=from_state,
-                to_state=to_state,
-                reason=reason,
-                timestamp=timestamp,
-                idempotency_key=f"transition:{key}:{subscription_id or 'all'}",
-                subscription_id=subscription_id,
-                event_type=event_type,
-                metadata={
-                    key_name: value
-                    for key_name, value in data.items()
-                    if key_name
-                    not in {
-                        "repo_id",
-                        "run_id",
-                        "thread_id",
-                        "from_state",
-                        "to_state",
-                        "reason",
-                        "timestamp",
-                    }
-                },
-            )
-            if not deduped:
+            for entry in subscriptions:
+                if entry.state != "active":
+                    continue
+                if (
+                    entry.max_matches is not None
+                    and entry.match_count >= entry.max_matches
+                ):
+                    entry.state = "cancelled"
+                    entry.updated_at = _iso_now()
+                    changed = True
+                    continue
+                if entry.event_types and event_type_norm not in entry.event_types:
+                    continue
+                if entry.repo_id is not None and entry.repo_id != repo_id:
+                    continue
+                if entry.run_id is not None and entry.run_id != run_id:
+                    continue
+                if entry.thread_id is not None and entry.thread_id != thread_id:
+                    continue
+                if entry.from_state is not None and entry.from_state != from_state:
+                    continue
+                if entry.to_state is not None and entry.to_state != to_state:
+                    continue
+
+                matched += 1
+                subscription_id = entry.subscription_id
+                key = (
+                    transition_id
+                    or f"{event_type_norm}:{repo_id or ''}:{run_id or ''}:{thread_id or ''}:{from_state or ''}:{to_state or ''}:{timestamp}"
+                )
+                wakeup_key = f"transition:{key}:{subscription_id or 'all'}"
+                deduped = any(
+                    existing.idempotency_key == wakeup_key for existing in wakeups
+                )
+                if deduped:
+                    continue
+
+                wakeups.append(
+                    PmaAutomationWakeup.create(
+                        source="transition",
+                        repo_id=repo_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        lane_id=entry.lane_id,
+                        from_state=from_state,
+                        to_state=to_state,
+                        reason=reason,
+                        timestamp=timestamp,
+                        idempotency_key=wakeup_key,
+                        subscription_id=subscription_id,
+                        event_type=event_type_norm,
+                        metadata=dict(metadata_payload),
+                    )
+                )
                 created += 1
+                if entry.max_matches is not None:
+                    entry.match_count = max(0, int(entry.match_count)) + 1
+                    entry.updated_at = _iso_now()
+                    changed = True
+                    if entry.match_count >= entry.max_matches:
+                        entry.state = "cancelled"
+
+            if created > 0 or changed:
+                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
         return {
             "status": "ok",
-            "matched": len(matches),
+            "matched": matched,
             "created": created,
             "repo_id": repo_id,
             "run_id": run_id,
