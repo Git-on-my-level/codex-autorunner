@@ -783,12 +783,18 @@ class DiscordBotService:
                         reply_text,
                         saved_attachments,
                         failed_attachments,
+                        transcript_message,
                     ) = await self._with_attachment_context(
                         prompt_text=text,
                         workspace_root=workspace_root,
                         attachments=event.attachments,
                         channel_id=channel_id,
                     )
+                    if transcript_message:
+                        await self._send_channel_message_safe(
+                            channel_id,
+                            {"content": transcript_message},
+                        )
                     if failed_attachments > 0:
                         warning = (
                             "Some Discord attachments could not be downloaded. "
@@ -849,12 +855,18 @@ class DiscordBotService:
             prompt_text,
             saved_attachments,
             failed_attachments,
+            transcript_message,
         ) = await self._with_attachment_context(
             prompt_text=prompt_text,
             workspace_root=workspace_root,
             attachments=event.attachments,
             channel_id=channel_id,
         )
+        if transcript_message:
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": transcript_message},
+            )
         if failed_attachments > 0:
             warning = (
                 "Some Discord attachments could not be downloaded. "
@@ -1142,9 +1154,9 @@ class DiscordBotService:
         workspace_root: Path,
         attachments: tuple[Any, ...],
         channel_id: str,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, Optional[str]]:
         if not attachments:
-            return prompt_text, 0, 0
+            return prompt_text, 0, 0, None
 
         inbox = inbox_dir(workspace_root)
         inbox.mkdir(parents=True, exist_ok=True)
@@ -1205,7 +1217,28 @@ class DiscordBotService:
                 )
 
         if not saved:
-            return prompt_text, 0, failed
+            return prompt_text, 0, failed, None
+
+        transcript_lines: list[str] = []
+        transcript_items = [item for item in saved if item.transcript_text]
+        if len(transcript_items) == 1:
+            transcript_lines = ["User:", transcript_items[0].transcript_text or ""]
+        elif transcript_items:
+            transcript_lines = ["User:"]
+            for item in transcript_items:
+                transcript_lines.append(f"[{item.original_name}]")
+                transcript_lines.append(item.transcript_text or "")
+                transcript_lines.append("")
+            while transcript_lines and not transcript_lines[-1].strip():
+                transcript_lines.pop()
+        user_visible_transcript = None
+        if transcript_lines:
+            transcript_text = "\n".join(transcript_lines)
+            max_len = max(int(self._config.max_message_length), 32)
+            user_visible_transcript = truncate_for_discord(
+                format_discord_message(transcript_text),
+                max_len=max_len,
+            )
 
         details: list[str] = ["Inbound Discord attachments:"]
         for item in saved:
@@ -1246,8 +1279,13 @@ class DiscordBotService:
 
         if prompt_text.strip():
             separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-            return f"{prompt_text}{separator}{attachment_context}", len(saved), failed
-        return attachment_context, len(saved), failed
+            return (
+                f"{prompt_text}{separator}{attachment_context}",
+                len(saved),
+                failed,
+                user_visible_transcript,
+            )
+        return attachment_context, len(saved), failed, user_visible_transcript
 
     def _build_attachment_filename(self, attachment: Any, *, index: int) -> str:
         raw_name = getattr(attachment, "file_name", None) or f"attachment-{index}"
