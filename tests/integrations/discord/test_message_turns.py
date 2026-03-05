@@ -920,6 +920,7 @@ async def test_message_create_audio_attachment_injects_transcript_context(
         prompt = captured_prompts[0]
         assert "Inbound Discord attachments:" in prompt
         assert "Transcript: Do we have whisper support?" in prompt
+        assert "Outbox (pending):" not in prompt
         assert fake_voice.calls
         assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
         assert fake_voice.calls[0]["client"] == "discord"
@@ -1012,6 +1013,7 @@ async def test_message_create_audio_attachment_does_not_transcribe_when_voice_di
         await service.run_forever()
         assert captured_prompts
         assert "Transcript:" not in captured_prompts[0]
+        assert "Outbox (pending):" not in captured_prompts[0]
         assert fake_voice.calls == []
     finally:
         await store.close()
@@ -1101,6 +1103,7 @@ async def test_message_create_audio_attachment_without_content_type_still_transc
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "Transcript: transcribed despite missing mime" in prompt
+        assert "Outbox (pending):" not in prompt
         assert fake_voice.calls
         assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
         assert fake_voice.calls[0]["filename"] == "voice-note.ogg"
@@ -1195,10 +1198,113 @@ async def test_message_create_audio_attachment_with_generic_content_type_transcr
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "Transcript: transcribed generic mime" in prompt
+        assert "Outbox (pending):" not in prompt
         assert fake_voice.calls
         assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
         assert fake_voice.calls[0]["content_type"] == "audio/ogg"
         assert str(fake_voice.calls[0]["filename"]).endswith(".ogg")
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_mixed_audio_and_file_attachment_keeps_outbox_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    audio_url = "https://cdn.discordapp.com/attachments/audio-mixed"
+    file_url = "https://cdn.discordapp.com/attachments/file-mixed"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[audio_url] = b"voice-bytes"
+    rest.attachment_data_by_url[file_url] = b"report-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="",
+                    attachments=[
+                        {
+                            "id": "att-audio-mixed",
+                            "filename": "voice-note.ogg",
+                            "content_type": "audio/ogg",
+                            "size": 11,
+                            "url": audio_url,
+                        },
+                        {
+                            "id": "att-file-mixed",
+                            "filename": "report.txt",
+                            "content_type": "text/plain",
+                            "size": 12,
+                            "url": file_url,
+                        },
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    fake_voice = _FakeVoiceService("mixed transcript")
+    monkeypatch.setattr(
+        service,
+        "_voice_service_for_workspace",
+        lambda _workspace: (fake_voice, SimpleNamespace(provider="local_whisper")),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "Transcript: mixed transcript" in prompt
+        assert "Outbox (pending):" in prompt
+        assert "voice-note.ogg" in prompt
+        assert "report.txt" in prompt
+        assert fake_voice.calls
     finally:
         await store.close()
 
