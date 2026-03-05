@@ -118,7 +118,9 @@ class AppServerEventBuffer:
         normalized_after = max(0, int(after_id or 0))
         entry = await self._ensure_entry(thread_id, turn_id)
         async with entry.condition:
-            selected = [e for e in entry.events if int(e.get("id") or 0) > normalized_after]
+            selected = [
+                e for e in entry.events if int(e.get("id") or 0) > normalized_after
+            ]
             if limit is not None and limit > 0:
                 selected = selected[-limit:]
             return [dict(event) for event in selected]

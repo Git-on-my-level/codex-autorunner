@@ -646,7 +646,10 @@ def build_pma_routes() -> APIRouter:
             return "turn_completed"
         if method == "error":
             return "turn_failed"
-        if method in {"item/commandexecution/requestapproval", "item/filechange/requestapproval"}:
+        if method in {
+            "item/commandexecution/requestapproval",
+            "item/filechange/requestapproval",
+        }:
             return "tool_started"
         if method == "item/completed":
             item_type = str(item.get("type") or "").strip().lower()
@@ -2367,7 +2370,9 @@ def build_pma_routes() -> APIRouter:
         started_dt = _parse_iso_datetime(started_at)
         finished_dt = _parse_iso_datetime(finished_at)
         now_dt = datetime.now(timezone.utc)
-        effective_finished = finished_dt or (None if turn_status == "running" else now_dt)
+        effective_finished = finished_dt or (
+            None if turn_status == "running" else now_dt
+        )
         elapsed_seconds: Optional[int] = None
         if started_dt is not None:
             end_dt = effective_finished or now_dt
@@ -2421,7 +2426,9 @@ def build_pma_routes() -> APIRouter:
         idle_seconds: Optional[int] = None
         if turn_status == "running":
             if isinstance(last_event_ms, (int, float)) and last_event_ms > 0:
-                idle_seconds = max(0, int((now_dt.timestamp() * 1000 - last_event_ms) / 1000))
+                idle_seconds = max(
+                    0, int((now_dt.timestamp() * 1000 - last_event_ms) / 1000)
+                )
             elif started_dt is not None:
                 idle_seconds = max(0, int((now_dt - started_dt).total_seconds()))
 
@@ -2453,7 +2460,9 @@ def build_pma_routes() -> APIRouter:
             "lifecycle_events": lifecycle_events,
             "events": tail_events,
             "last_event_id": last_event_id,
-            "last_event_at": tail_events[-1].get("received_at") if tail_events else None,
+            "last_event_at": (
+                tail_events[-1].get("received_at") if tail_events else None
+            ),
             "stream_available": bool(can_stream_codex),
         }
 
@@ -2581,7 +2590,9 @@ def build_pma_routes() -> APIRouter:
                         elapsed = max(0, int((now - started_dt).total_seconds()))
                     idle = None
                     if snapshot.get("last_event_at"):
-                        last_event_dt = _parse_iso_datetime(snapshot.get("last_event_at"))
+                        last_event_dt = _parse_iso_datetime(
+                            snapshot.get("last_event_at")
+                        )
                         if last_event_dt is not None:
                             idle = max(0, int((now - last_event_dt).total_seconds()))
                     progress_payload = {

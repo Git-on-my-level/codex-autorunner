@@ -976,9 +976,7 @@ def pma_thread_tail(
     since: Optional[str] = typer.Option(
         None, "--since", help="Only include events newer than duration (e.g. 5m)"
     ),
-    level: str = typer.Option(
-        "info", "--level", help="Verbosity level (info|debug)"
-    ),
+    level: str = typer.Option("info", "--level", help="Verbosity level (info|debug)"),
     limit: int = typer.Option(50, "--limit", min=1, help="Maximum events to include"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
