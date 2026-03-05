@@ -123,7 +123,6 @@ PMA_DISCORD_MESSAGE_MAX_LEN = 1900
 MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
-_DURATION_PART_RE = re.compile(r"(\d+)([smhdw])")
 
 
 def build_pma_routes() -> APIRouter:
@@ -572,22 +571,49 @@ def build_pma_routes() -> APIRouter:
         raw = value.strip().lower()
         if not raw:
             raise HTTPException(status_code=400, detail="since must not be empty")
-        matches = list(_DURATION_PART_RE.finditer(raw))
-        if not matches or "".join(m.group(0) for m in matches) != raw:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Invalid since duration. Use forms like 30s, 5m, 2h, 1d, "
-                    "or combined 1h30m."
-                ),
-            )
         multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
         total_seconds = 0
-        for match in matches:
-            total_seconds += int(match.group(1)) * multipliers[match.group(2)]
+        idx = 0
+        size = len(raw)
+        while idx < size:
+            start = idx
+            while idx < size and raw[idx].isdigit():
+                idx += 1
+            if start == idx or idx >= size:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Invalid since duration. Use forms like 30s, 5m, 2h, 1d, "
+                        "or combined 1h30m."
+                    ),
+                )
+            amount_text = raw[start:idx]
+            # Keep duration parsing bounded and predictable.
+            if len(amount_text) > 9:
+                raise HTTPException(
+                    status_code=400, detail="since duration component is too large"
+                )
+            unit = raw[idx]
+            multiplier = multipliers.get(unit)
+            if multiplier is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Invalid since duration. Use forms like 30s, 5m, 2h, 1d, "
+                        "or combined 1h30m."
+                    ),
+                )
+            idx += 1
+            total_seconds += int(amount_text) * multiplier
         if total_seconds <= 0:
             raise HTTPException(status_code=400, detail="since must be > 0")
         return total_seconds
+
+    def _since_ms_from_duration(value: Optional[str]) -> Optional[int]:
+        seconds = _parse_tail_duration_seconds(value)
+        if seconds is None:
+            return None
+        return int((datetime.now(timezone.utc).timestamp() - seconds) * 1000)
 
     def _normalize_tail_level(level: Optional[str]) -> str:
         normalized = (level or "info").strip().lower() or "info"
@@ -2336,7 +2362,7 @@ def build_pma_routes() -> APIRouter:
         managed_thread_id: str,
         limit: int,
         level: str,
-        since_duration: Optional[str],
+        since_ms: Optional[int],
         resume_after: Optional[int],
     ) -> dict[str, Any]:
         store = PmaThreadStore(request.app.state.config.root)
@@ -2385,11 +2411,6 @@ def build_pma_routes() -> APIRouter:
             lifecycle_events.append("turn_failed")
         elif turn_status == "interrupted":
             lifecycle_events.append("turn_interrupted")
-
-        since_seconds = _parse_tail_duration_seconds(since_duration)
-        since_ms: Optional[int] = None
-        if since_seconds is not None:
-            since_ms = int((now_dt.timestamp() - since_seconds) * 1000)
 
         backend_thread_id = _normalize_optional_text(thread.get("backend_thread_id"))
         backend_turn_id = _normalize_optional_text(turn.get("backend_turn_id"))
@@ -2480,12 +2501,13 @@ def build_pma_routes() -> APIRouter:
         normalized_limit = min(limit, 200)
         normalized_level = _normalize_tail_level(level)
         resume_after = _resolve_resume_after(request, since_event_id)
+        since_ms = _since_ms_from_duration(since)
         return await _build_managed_thread_tail_snapshot(
             request=request,
             managed_thread_id=managed_thread_id,
             limit=normalized_limit,
             level=normalized_level,
-            since_duration=since,
+            since_ms=since_ms,
             resume_after=resume_after,
         )
 
@@ -2503,12 +2525,13 @@ def build_pma_routes() -> APIRouter:
         normalized_limit = min(limit, 200)
         normalized_level = _normalize_tail_level(level)
         resume_after = _resolve_resume_after(request, since_event_id)
+        since_ms = _since_ms_from_duration(since)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             managed_thread_id=managed_thread_id,
             limit=normalized_limit,
             level=normalized_level,
-            since_duration=since,
+            since_ms=since_ms,
             resume_after=resume_after,
         )
 
@@ -2611,7 +2634,10 @@ def build_pma_routes() -> APIRouter:
                     continue
 
                 serialized = _serialize_tail_event(
-                    entry, level=normalized_level, formatter=formatter, since_ms=None
+                    entry,
+                    level=normalized_level,
+                    formatter=formatter,
+                    since_ms=since_ms,
                 )
                 if serialized is None:
                     continue

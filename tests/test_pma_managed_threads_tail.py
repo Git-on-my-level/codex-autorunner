@@ -163,3 +163,68 @@ def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
         assert "event: tail" in body
         assert "\nid: 2\n" in body
         assert "\nid: 1\n" not in body
+
+
+def test_managed_thread_tail_stream_preserves_since_filter_for_live_events(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, _ = _seed_managed_thread_with_events(hub_env, app)
+
+    import time
+
+    now_ms = int(time.time() * 1000)
+    old_ms = now_ms - 10_000
+    new_ms = now_ms
+
+    class FakeEvents:
+        async def list_events(
+            self,
+            thread_id: str,
+            turn_id: str,
+            *,
+            after_id: int = 0,
+            limit: int | None = None,
+        ):
+            _ = thread_id, turn_id, after_id, limit
+            return []
+
+        async def stream_entries(
+            self,
+            thread_id: str,
+            turn_id: str,
+            *,
+            after_id: int = 0,
+            heartbeat_interval: float = 15.0,
+        ):
+            _ = thread_id, turn_id, after_id, heartbeat_interval
+            yield {
+                "id": 1,
+                "received_at": old_ms,
+                "message": {
+                    "method": "item/completed",
+                    "params": {"item": {"type": "tool", "name": "old"}},
+                },
+            }
+            yield {
+                "id": 2,
+                "received_at": new_ms,
+                "message": {
+                    "method": "item/completed",
+                    "params": {"item": {"type": "tool", "name": "new"}},
+                },
+            }
+
+    app.state.app_server_events = FakeEvents()
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={"since": "1s"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "event: tail" in body
+        assert "\nid: 2\n" in body
+        assert "\nid: 1\n" not in body
