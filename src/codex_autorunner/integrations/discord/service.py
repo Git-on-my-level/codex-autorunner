@@ -72,6 +72,7 @@ from ...core.update_paths import resolve_update_paths
 from ...core.utils import (
     atomic_write,
     canonicalize_path,
+    is_within,
 )
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
@@ -269,6 +270,15 @@ def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
         if len(options) >= limit:
             break
     return options
+
+
+def _path_within(root: Path, target: Path) -> bool:
+    try:
+        root = canonicalize_path(root)
+        target = canonicalize_path(target)
+    except Exception:
+        return False
+    return is_within(root, target)
 
 
 async def _model_list_with_agent_compat(
@@ -6316,6 +6326,16 @@ class DiscordBotService:
             return
         sent_dir = outbox_sent_dir(workspace_root)
         for path in files:
+            if not _path_within(pending_dir, path):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.files.outbox.skipped_outside_pending",
+                    channel_id=channel_id,
+                    path=str(path),
+                    pending_dir=str(pending_dir),
+                )
+                continue
             await self._send_outbox_file(
                 path,
                 sent_dir=sent_dir,
