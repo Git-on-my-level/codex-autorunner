@@ -763,8 +763,16 @@ async def test_message_create_audio_attachment_injects_transcript_context(
         assert fake_voice.calls[0]["audio_bytes"] == b"voice-bytes"
         assert fake_voice.calls[0]["client"] == "discord"
         assert fake_voice.calls[0]["filename"] == "voice-note.ogg"
+        transcript_messages = [
+            msg
+            for msg in rest.channel_messages
+            if msg["payload"].get("content", "") == "User:\nDo we have whisper support?"
+        ]
+        assert transcript_messages
+        assert transcript_messages[0]["payload"].get("allowed_mentions") == {
+            "parse": []
+        }
         contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
-        assert "User:\nDo we have whisper support?" in contents
         assert "Done with audio" in contents
     finally:
         await store.close()

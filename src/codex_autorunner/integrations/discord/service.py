@@ -793,7 +793,10 @@ class DiscordBotService:
                     if transcript_message:
                         await self._send_channel_message_safe(
                             channel_id,
-                            {"content": transcript_message},
+                            {
+                                "content": transcript_message,
+                                "allowed_mentions": {"parse": []},
+                            },
                         )
                     if failed_attachments > 0:
                         warning = (
@@ -865,7 +868,10 @@ class DiscordBotService:
         if transcript_message:
             await self._send_channel_message_safe(
                 channel_id,
-                {"content": transcript_message},
+                {
+                    "content": transcript_message,
+                    "allowed_mentions": {"parse": []},
+                },
             )
         if failed_attachments > 0:
             warning = (
