@@ -272,6 +272,45 @@ if isinstance(value, str) and value.strip():
 PY
 }
 
+_dotenv_value() {
+  local root key env_path
+  root="$1"
+  key="$2"
+  env_path="${root}/.codex-autorunner/.env"
+  if [[ ! -f "${env_path}" ]]; then
+    return 1
+  fi
+  awk -F= -v key="${key}" '
+    $1 == key {
+      print substr($0, index($0, "=") + 1)
+    }
+  ' "${env_path}" | tail -n 1
+}
+
+_normalize_voice_provider() {
+  local raw normalized
+  raw="${1:-}"
+  normalized="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${normalized}" in
+    ""|local|local_whisper)
+      echo "local_whisper"
+      ;;
+    *)
+      echo "${normalized}"
+      ;;
+  esac
+}
+
+_voice_provider_for_hub_root() {
+  local root provider
+  root="$1"
+  provider="$(_dotenv_value "${root}" "CODEX_AUTORUNNER_VOICE_PROVIDER" || true)"
+  if [[ -z "${provider}" ]]; then
+    provider="$(_config_python "${root}" "voice.provider" || true)"
+  fi
+  _normalize_voice_provider "${provider}"
+}
+
 _resolve_pyenv_python() {
   local candidate
   if command -v pyenv >/dev/null 2>&1; then
@@ -394,6 +433,15 @@ if [[ ! -f "${PLIST_PATH}" ]]; then
   fail "LaunchAgent plist not found at ${PLIST_PATH}. Run scripts/install-local-mac-hub.sh or scripts/launchd-hub.sh (or set PLIST_PATH)."
 fi
 
+HUB_ROOT="$(_plist_arg_value path)"
+PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}"
+if [[ -n "${HUB_ROOT}" ]]; then
+  VOICE_PROVIDER="$(_voice_provider_for_hub_root "${HUB_ROOT}")"
+  if [[ "${VOICE_PROVIDER}" == "local_whisper" ]]; then
+    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[voice-local]"
+  fi
+fi
+
 _realpath() {
   "${HELPER_PYTHON}" - "$1" <<'PY'
 import os
@@ -443,8 +491,8 @@ echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
 "${PIPX_PYTHON}" -m venv "${next_venv}"
 "${next_venv}/bin/python" -m pip -q install --upgrade pip
 
-echo "Installing codex-autorunner from ${PACKAGE_SRC} into staged venv..."
-"${next_venv}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}"
+echo "Installing codex-autorunner from ${PACKAGE_INSTALL_SPEC} into staged venv..."
+"${next_venv}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_INSTALL_SPEC}"
 
 echo "Smoke-checking staged venv imports..."
 "${next_venv}/bin/python" -c "import codex_autorunner; from codex_autorunner.server import create_hub_app; print('ok')"
@@ -1552,7 +1600,7 @@ if [[ "${health_ok}" == "true" ]]; then
     status_msg+=" ${discord_health_reason}"
   fi
   echo "Updating global car CLI..."
-  pipx install --force "${PACKAGE_SRC}"
+  pipx install --force "${PACKAGE_INSTALL_SPEC}"
   ensure_login_shell_path "${LOCAL_BIN}"
   write_status "ok" "${status_msg}"
 else

@@ -144,6 +144,60 @@ set_env_var() {
   fi
 }
 
+resolve_voice_provider() {
+  local config_path="$1"
+  local env_path="$2"
+  local python_bin="$3"
+
+  if [[ ! -x "${python_bin}" ]]; then
+    echo ""
+    return 0
+  fi
+
+  "${python_bin}" - "${config_path}" "${env_path}" <<'PY'
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+import yaml
+
+config_path = Path(sys.argv[1])
+env_path = Path(sys.argv[2])
+
+provider = ""
+if env_path.exists():
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() == "CODEX_AUTORUNNER_VOICE_PROVIDER":
+            provider = value.strip().strip('"').strip("'")
+            break
+
+if not provider and config_path.exists():
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        data = {}
+    if isinstance(data, dict):
+        voice = data.get("voice")
+        if isinstance(voice, dict):
+            raw_provider = voice.get("provider")
+            if isinstance(raw_provider, str):
+                provider = raw_provider.strip()
+
+provider = provider.strip().lower()
+if provider == "local":
+    provider = "local_whisper"
+if not provider:
+    provider = "local_whisper"
+
+print(provider)
+PY
+}
+
 if ! command -v pipx >/dev/null 2>&1; then
   echo "pipx is required; install via 'python3 -m pip install --user pipx' and re-run." >&2
   exit 1
@@ -212,6 +266,16 @@ config_path.write_text(
 PY
 else
   echo "Warning: ${CURRENT_VENV_LINK}/bin/python not found; skipping config update." >&2
+fi
+
+if [[ -x "${CURRENT_VENV_LINK}/bin/python" ]]; then
+  VOICE_PROVIDER="$(
+    resolve_voice_provider "${CONFIG_PATH}" "${ENV_PATH}" "${CURRENT_VENV_LINK}/bin/python"
+  )"
+  if [[ "${VOICE_PROVIDER}" == "local_whisper" ]]; then
+    echo "Voice provider is local_whisper; installing local Whisper optional deps..."
+    "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-local]"
+  fi
 fi
 
 echo "Writing launchd plist to ${PLIST_PATH}..."

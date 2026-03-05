@@ -113,6 +113,7 @@ Local Whisper (on-device):
 
 1. Install local voice dependencies:
    - `pip install "codex-autorunner[voice-local]"`
+   - macOS launchd path (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`) now installs this automatically when voice provider resolves to `local_whisper`.
 2. Set provider:
    - `voice.provider: local_whisper`
    - or env override: `CODEX_AUTORUNNER_VOICE_PROVIDER=local_whisper`
