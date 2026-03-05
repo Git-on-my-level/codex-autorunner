@@ -4,11 +4,12 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 from ...core.config import HubConfig, RepoConfig
 from ...core.optional_dependencies import missing_optional_dependencies
 from ...core.runtime import DoctorCheck
+from ...voice.config import VoiceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,44 @@ def telegram_doctor_checks(
                     severity="info",
                 )
             )
+
+        voice_raw = _resolve_voice_raw(config)
+        voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
+        if (
+            _telegram_voice_ingestion_enabled(telegram_cfg)
+            and voice_config.enabled
+            and _normalize_voice_provider(voice_config.provider) == "local_whisper"
+        ):
+            missing_local_voice = missing_optional_dependencies(
+                (("faster_whisper", "faster-whisper"),)
+            )
+            if missing_local_voice:
+                checks.append(
+                    DoctorCheck(
+                        name="Telegram voice dependencies",
+                        passed=False,
+                        message=(
+                            "Telegram voice transcription is configured with "
+                            "local_whisper but faster-whisper is not installed."
+                        ),
+                        check_id="telegram.voice.dependencies",
+                        severity="error",
+                        fix="Install with `pip install codex-autorunner[voice-local]`.",
+                    )
+                )
+            else:
+                checks.append(
+                    DoctorCheck(
+                        name="Telegram voice dependencies",
+                        passed=True,
+                        message=(
+                            "Telegram voice transcription is using local_whisper and "
+                            "local dependencies are installed."
+                        ),
+                        check_id="telegram.voice.dependencies",
+                        severity="info",
+                    )
+                )
 
         bot_token_env = telegram_cfg.get("bot_token_env", "CAR_TELEGRAM_BOT_TOKEN")
         chat_id_env = telegram_cfg.get("chat_id_env", "CAR_TELEGRAM_CHAT_ID")
@@ -202,6 +241,55 @@ def telegram_doctor_checks(
         )
 
     return checks
+
+
+def _resolve_voice_raw(
+    config: Union[HubConfig, RepoConfig, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if isinstance(config, dict):
+        repo_defaults = config.get("repo_defaults")
+        if isinstance(repo_defaults, dict):
+            voice = repo_defaults.get("voice")
+            if isinstance(voice, dict):
+                return voice
+        voice = config.get("voice")
+        if isinstance(voice, dict):
+            return voice
+        return None
+
+    repo_defaults = getattr(config, "repo_defaults", None)
+    if isinstance(repo_defaults, dict):
+        voice = repo_defaults.get("voice")
+        if isinstance(voice, dict):
+            return voice
+
+    if isinstance(config.raw, dict):
+        repo_defaults_raw = config.raw.get("repo_defaults")
+        if isinstance(repo_defaults_raw, dict):
+            voice = repo_defaults_raw.get("voice")
+            if isinstance(voice, dict):
+                return voice
+        voice = config.raw.get("voice")
+        if isinstance(voice, dict):
+            return voice
+    return None
+
+
+def _normalize_voice_provider(provider: Any) -> str:
+    if not isinstance(provider, str):
+        return ""
+    normalized = provider.strip().lower()
+    if normalized == "local":
+        return "local_whisper"
+    return normalized
+
+
+def _telegram_voice_ingestion_enabled(telegram_cfg: dict[str, Any]) -> bool:
+    media_raw = telegram_cfg.get("media")
+    media_cfg = media_raw if isinstance(media_raw, dict) else {}
+    media_enabled = bool(media_cfg.get("enabled", True))
+    media_voice = bool(media_cfg.get("voice", True))
+    return media_enabled and media_voice
 
 
 def _check_stuck_turns(checks: list[DoctorCheck], state_file_path: Path) -> None:

@@ -6,11 +6,13 @@ This replaces Engine as the runtime authority while preserving utility functions
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
 
 from ..manifest import load_manifest, load_manifest_with_issues
+from ..voice.config import VoiceConfig
 from .config import HubConfig, RepoConfig, load_repo_config
 from .destinations import (
     probe_docker_readiness,
@@ -18,6 +20,7 @@ from .destinations import (
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock
 from .notifications import NotificationManager
+from .optional_dependencies import missing_optional_dependencies
 from .runner_state import LockError, RunnerStateManager
 from .state import now_iso
 from .state_roots import REPO_STATE_DIR, resolve_repo_state_root
@@ -163,7 +166,7 @@ def doctor(
         )
     else:
         try:
-            load_repo_config(repo_root)
+            repo_config = load_repo_config(repo_root)
             checks.append(
                 DoctorCheck(
                     name="Config file",
@@ -172,6 +175,9 @@ def doctor(
                     severity="info",
                     check_id=check_id,
                 )
+            )
+            _append_local_voice_dependency_check(
+                checks, repo_config=repo_config, check_id=check_id
             )
         except Exception as e:
             checks.append(
@@ -273,6 +279,57 @@ def doctor(
             )
 
     return DoctorReport(checks)
+
+
+def _append_local_voice_dependency_check(
+    checks: list[DoctorCheck],
+    *,
+    repo_config: RepoConfig,
+    check_id: Optional[str],
+) -> None:
+    voice_cfg = VoiceConfig.from_raw(repo_config.voice, env=os.environ)
+    if not voice_cfg.enabled:
+        return
+
+    provider = _normalize_voice_provider(voice_cfg.provider)
+    if provider != "local_whisper":
+        return
+
+    missing_local_voice = missing_optional_dependencies(
+        (("faster_whisper", "faster-whisper"),)
+    )
+    if missing_local_voice:
+        checks.append(
+            DoctorCheck(
+                name="Voice dependencies",
+                passed=False,
+                message=(
+                    "Voice is enabled with local_whisper but faster-whisper is "
+                    "not installed."
+                ),
+                severity="error",
+                check_id=check_id or "voice.dependencies",
+                fix="Install with `pip install codex-autorunner[voice-local]`.",
+            )
+        )
+        return
+
+    checks.append(
+        DoctorCheck(
+            name="Voice dependencies",
+            passed=True,
+            message="Voice local dependencies are installed.",
+            severity="info",
+            check_id=check_id or "voice.dependencies",
+        )
+    )
+
+
+def _normalize_voice_provider(provider: Optional[str]) -> str:
+    normalized = (provider or "").strip().lower()
+    if normalized == "local":
+        return "local_whisper"
+    return normalized
 
 
 def clear_stale_lock(repo_root: Path) -> bool:

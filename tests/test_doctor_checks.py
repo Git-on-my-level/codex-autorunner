@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -11,12 +12,14 @@ from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
 from codex_autorunner.core.runtime import (
     DoctorCheck,
+    doctor,
     hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
     pma_doctor_checks,
 )
 from codex_autorunner.integrations.chat.doctor import chat_doctor_checks
 from codex_autorunner.integrations.chat.parity_checker import ParityCheckResult
+from codex_autorunner.integrations.telegram import doctor as telegram_doctor
 from codex_autorunner.integrations.telegram.doctor import (
     telegram_doctor_checks,
 )
@@ -46,11 +49,110 @@ def test_telegram_doctor_checks_mode_validation():
     assert any(c.check_id == "telegram.mode" for c in checks)
 
 
+def test_telegram_doctor_checks_local_voice_dependency_missing(monkeypatch):
+    """Test Telegram doctor check catches missing local whisper dependency."""
+
+    def _missing_optional(deps):
+        if deps == (("httpx", "httpx"),):
+            return []
+        if deps == (("faster_whisper", "faster-whisper"),):
+            return ["faster-whisper"]
+        return []
+
+    monkeypatch.setattr(
+        telegram_doctor, "missing_optional_dependencies", _missing_optional
+    )
+    cfg = {"telegram_bot": {"enabled": True}}
+    with patch.dict(
+        os.environ,
+        {
+            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
+            "CODEX_AUTORUNNER_VOICE_PROVIDER": "local_whisper",
+        },
+        clear=True,
+    ):
+        checks = telegram_doctor_checks(cfg)
+
+    by_id = {check.check_id: check for check in checks}
+    voice_check = by_id["telegram.voice.dependencies"]
+    assert voice_check.passed is False
+    assert voice_check.severity == "error"
+    assert voice_check.fix is not None
+    assert "voice-local" in voice_check.fix
+
+
+def test_telegram_doctor_checks_openai_voice_skips_local_dependency_check(monkeypatch):
+    """Test Telegram doctor check skips local deps when provider is OpenAI."""
+
+    def _missing_optional(deps):
+        if deps == (("httpx", "httpx"),):
+            return []
+        return ["faster-whisper"]
+
+    monkeypatch.setattr(
+        telegram_doctor, "missing_optional_dependencies", _missing_optional
+    )
+    cfg = {"telegram_bot": {"enabled": True}}
+    with patch.dict(
+        os.environ,
+        {
+            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
+            "CODEX_AUTORUNNER_VOICE_PROVIDER": "openai_whisper",
+        },
+        clear=True,
+    ):
+        checks = telegram_doctor_checks(cfg)
+
+    by_id = {check.check_id: check for check in checks}
+    assert "telegram.voice.dependencies" not in by_id
+
+
 def test_pma_doctor_checks_disabled():
     """Test PMA doctor checks when disabled."""
     checks = pma_doctor_checks({"pma": {"enabled": False}})
     assert len(checks) > 0
     assert any(c.check_id == "pma.enabled" for c in checks)
+
+
+def test_doctor_reports_missing_local_voice_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test core doctor reports missing local whisper deps when voice is enabled."""
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.git_utils.run_git",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+
+    def _missing_optional(deps):
+        if deps == (("faster_whisper", "faster-whisper"),):
+            return ["faster-whisper"]
+        return []
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.missing_optional_dependencies",
+        _missing_optional,
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
+            "CODEX_AUTORUNNER_VOICE_PROVIDER": "local_whisper",
+        },
+        clear=True,
+    ):
+        report = doctor(hub_root)
+
+    by_id = {check.check_id: check for check in report.checks if check.check_id}
+    voice_check = by_id["voice.dependencies"]
+    assert voice_check.passed is False
+    assert voice_check.severity == "error"
+    assert voice_check.fix is not None
+    assert "voice-local" in voice_check.fix
 
 
 def test_pma_doctor_checks_invalid_agent():
