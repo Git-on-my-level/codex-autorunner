@@ -5,7 +5,7 @@ const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
 const AUTH_TOKEN_KEY = "car_auth_token";
 export function getAuthToken() {
-    let token = null;
+    let token;
     try {
         token = sessionStorage.getItem(AUTH_TOKEN_KEY);
     }
@@ -183,7 +183,7 @@ async function buildErrorMessage(res) {
     if (res.status === 401) {
         return "Unauthorized. Provide a valid token to access this server.";
     }
-    let text = "";
+    let text;
     try {
         text = await res.text();
     }

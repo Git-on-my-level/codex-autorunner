@@ -2099,7 +2099,7 @@ export class TerminalManager {
       event.preventDefault();
       event.stopImmediatePropagation();
 
-      let deltaLines = 0;
+      let deltaLines: number;
       if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
         deltaLines = event.deltaY;
       } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
@@ -3305,7 +3305,7 @@ export class TerminalManager {
       return;
     }
     this.textInputHookInFlight = true;
-    let payload = normalized;
+    let payload: string;
     try {
       payload = await this._applyTextInputHooksAsync(normalized);
     } finally {

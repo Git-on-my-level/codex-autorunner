@@ -236,7 +236,7 @@ async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
   const select = selectId ? document.getElementById(selectId) as HTMLSelectElement | null : null;
   if (!select) return;
   const isInitialized = select.dataset.updateTargetsInitialized === "1";
-  let payload: UpdateTargetsResponse | null = null;
+  let payload: UpdateTargetsResponse | null;
   try {
     payload = await api("/system/update/targets", { method: "GET" }) as UpdateTargetsResponse;
   } catch (_err) {

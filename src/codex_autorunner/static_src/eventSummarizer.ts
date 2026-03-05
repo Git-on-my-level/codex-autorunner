@@ -62,8 +62,8 @@ function eventToAction(event: AgentEvent, maxTextLength: number): CompactAction 
   const rawText = normalizeText(event.summary || event.detail || "");
   if (!rawText) return null;
 
-  let label: string = event.kind;
-  let status: CompactActionStatus = "update";
+  let label: string;
+  let status: CompactActionStatus;
 
   if (event.kind === "command") {
     label = "command";

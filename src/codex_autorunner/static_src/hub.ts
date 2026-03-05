@@ -764,7 +764,7 @@ async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
   const select = selectId ? (document.getElementById(selectId) as HTMLSelectElement | null) : null;
   if (!select) return;
   const isInitialized = select.dataset.updateTargetsInitialized === "1";
-  let payload: UpdateTargetsResponse | null = null;
+  let payload: UpdateTargetsResponse | null;
   try {
     payload = await api("/system/update/targets", { method: "GET" }) as UpdateTargetsResponse;
   } catch (_err) {
@@ -1169,9 +1169,9 @@ function buildFlowStatusBadge(statusLabel: string, statusValue: string): string 
 function buildMountBadge(repo: HubRepo): string {
   if (!repo) return "";
   const missing = !repo.exists_on_disk;
-  let label = "";
+  let label: string;
   let className = "pill pill-small";
-  let title = "";
+  let title: string;
   if (missing) {
     label = "missing";
     className += " pill-error";
