@@ -174,6 +174,15 @@ class CodexAppServerBackend(AgentBackend):
         self._event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
         self._latest_completed_agent_message: str = ""
 
+    def reset_session_state(self) -> None:
+        """Clear cached session/thread ids so the next turn starts fresh."""
+        self._session_id = None
+        self._thread_id = None
+        self._turn_id = None
+        self._thread_info = None
+        self._reasoning_summary_buffers.clear()
+        self._latest_completed_agent_message = ""
+
     async def _ensure_client(self) -> CodexAppServerClient:
         if self._client is None:
             self._client = await self._supervisor.get_client(self._workspace_root)

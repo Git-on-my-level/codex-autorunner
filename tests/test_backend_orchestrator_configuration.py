@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 import pytest
 
@@ -12,6 +12,7 @@ from codex_autorunner.core.ports.agent_backend import AgentBackend
 from codex_autorunner.core.ports.run_event import Completed, RunEvent, now_iso
 from codex_autorunner.core.state import RunnerState
 from codex_autorunner.integrations.agents.backend_orchestrator import (
+    BackendContext,
     BackendOrchestrator,
 )
 
@@ -124,3 +125,110 @@ async def test_backend_orchestrator_uses_generic_backend_configure(
 def test_backend_orchestrator_run_turn_has_no_backend_isinstance_checks() -> None:
     source = inspect.getsource(BackendOrchestrator.run_turn)
     assert "isinstance(backend" not in source
+
+
+@pytest.mark.asyncio
+async def test_reset_thread_id_clears_runtime_state_for_codex_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _fake_factory(*_args: Any, **_kwargs: Any):
+        def _build_backend(
+            agent_id: str, state: RunnerState, notification_handler: Any
+        ) -> AgentBackend:
+            _ = agent_id, state, notification_handler
+            raise AssertionError("backend should not be created in this test")
+
+        return _build_backend
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        _fake_factory,
+    )
+
+    config = SimpleNamespace(
+        autorunner_reuse_session=False,
+        app_server=SimpleNamespace(turn_timeout_seconds=321.0),
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
+    orchestrator = BackendOrchestrator(repo_root=tmp_path, config=config)
+    orchestrator._context = BackendContext(
+        agent_id="codex",
+        session_id="thread-old",
+        turn_id="turn-old",
+        thread_info={"id": "thread-old"},
+    )
+
+    reset_calls: list[Optional[str]] = []
+
+    class _Factory:
+        def reset_session_state(self, *, agent_id: Optional[str] = None) -> None:
+            reset_calls.append(agent_id)
+
+    monkeypatch.setattr(orchestrator, "_agent_backend_factory", lambda: _Factory())
+
+    cleared = orchestrator.reset_thread_id("file_chat.discord.channel.123456789abc")
+    assert cleared is False
+    assert reset_calls == ["codex"]
+    assert orchestrator._context is not None
+    assert orchestrator._context.session_id is None
+    assert orchestrator._context.turn_id is None
+    assert orchestrator._context.thread_info is None
+
+
+@pytest.mark.asyncio
+async def test_reset_thread_id_targets_opencode_runtime_for_opencode_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _fake_factory(*_args: Any, **_kwargs: Any):
+        def _build_backend(
+            agent_id: str, state: RunnerState, notification_handler: Any
+        ) -> AgentBackend:
+            _ = agent_id, state, notification_handler
+            raise AssertionError("backend should not be created in this test")
+
+        return _build_backend
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        _fake_factory,
+    )
+
+    config = SimpleNamespace(
+        autorunner_reuse_session=False,
+        app_server=SimpleNamespace(turn_timeout_seconds=321.0),
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
+    orchestrator = BackendOrchestrator(repo_root=tmp_path, config=config)
+    orchestrator._context = BackendContext(
+        agent_id="codex",
+        session_id="thread-old",
+        turn_id="turn-old",
+        thread_info={"id": "thread-old"},
+    )
+
+    reset_calls: list[Optional[str]] = []
+
+    class _Factory:
+        def reset_session_state(self, *, agent_id: Optional[str] = None) -> None:
+            reset_calls.append(agent_id)
+
+    monkeypatch.setattr(orchestrator, "_agent_backend_factory", lambda: _Factory())
+
+    cleared = orchestrator.reset_thread_id(
+        "file_chat.opencode.discord.channel.123456789abc"
+    )
+    assert cleared is False
+    assert reset_calls == ["opencode"]
+    assert orchestrator._context is not None
+    # codex context should remain intact when resetting opencode state.
+    assert orchestrator._context.session_id == "thread-old"
+    assert orchestrator._context.turn_id == "turn-old"
+    assert orchestrator._context.thread_info == {"id": "thread-old"}

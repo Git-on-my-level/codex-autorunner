@@ -22,6 +22,9 @@ from ...core.ports.backend_orchestrator import (
 from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
 from ...integrations.app_server.threads import (
+    FILE_CHAT_OPENCODE_KEY,
+    FILE_CHAT_OPENCODE_PREFIX,
+    PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
@@ -254,6 +257,8 @@ class BackendOrchestrator:
 
     def reset_thread_id(self, session_key: str) -> bool:
         """Reset the persisted thread ID for a given session key."""
+        target_agent = self._agent_for_session_key(session_key)
+        self._clear_runtime_session_state(agent_id=target_agent)
         with self._app_server_threads_lock:
             return self._app_server_threads.reset_thread(session_key)
 
@@ -261,6 +266,39 @@ class BackendOrchestrator:
         if isinstance(self._backend_factory, AgentBackendFactory):
             return self._backend_factory
         return None
+
+    @staticmethod
+    def _agent_for_session_key(session_key: str) -> Optional[str]:
+        normalized = session_key.strip().lower() if isinstance(session_key, str) else ""
+        if not normalized:
+            return None
+        if (
+            normalized == PMA_OPENCODE_KEY
+            or normalized == FILE_CHAT_OPENCODE_KEY
+            or normalized.startswith(FILE_CHAT_OPENCODE_PREFIX)
+            or normalized.endswith(".opencode")
+        ):
+            return "opencode"
+        return "codex"
+
+    def _clear_runtime_session_state(self, *, agent_id: Optional[str]) -> None:
+        if self._context is not None and (
+            agent_id is None or self._context.agent_id == agent_id
+        ):
+            self._context.session_id = None
+            self._context.turn_id = None
+            self._context.thread_info = None
+
+        factory = self._agent_backend_factory()
+        if factory is not None:
+            factory.reset_session_state(agent_id=agent_id)
+            return
+
+        if self._active_backend is None:
+            return
+        reset = getattr(self._active_backend, "reset_session_state", None)
+        if callable(reset):
+            reset()
 
     def ensure_opencode_supervisor(self) -> Optional[Any]:
         """

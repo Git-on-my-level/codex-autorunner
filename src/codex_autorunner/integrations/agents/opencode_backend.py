@@ -83,6 +83,11 @@ class OpenCodeBackend(AgentBackend):
         self._last_token_total: Optional[dict[str, Any]] = None
         self._event_formatter = OpenCodeEventFormatter()
 
+    def reset_session_state(self) -> None:
+        """Clear cached session ids so the next turn creates/resumes explicitly."""
+        self._session_id = None
+        self._last_turn_id = None
+
     def configure(self, **options: Any) -> None:
         self._model = options.get("model")
         reasoning = options.get("reasoning")

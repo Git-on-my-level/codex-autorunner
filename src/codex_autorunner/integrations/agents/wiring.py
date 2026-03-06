@@ -189,6 +189,19 @@ class AgentBackendFactory:
         self._opencode_supervisor = supervisor
         return supervisor
 
+    def reset_session_state(self, *, agent_id: Optional[str] = None) -> None:
+        """Clear cached in-memory session state for one or all backends."""
+        if isinstance(agent_id, str) and agent_id:
+            backends = [self._backend_cache.get(agent_id)]
+        else:
+            backends = list(self._backend_cache.values())
+        for backend in backends:
+            if backend is None:
+                continue
+            reset = getattr(backend, "reset_session_state", None)
+            if callable(reset):
+                reset()
+
     async def close_all(self) -> None:
         backends = list(self._backend_cache.values())
         self._backend_cache = {}

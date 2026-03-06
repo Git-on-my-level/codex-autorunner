@@ -115,6 +115,10 @@ class AgentBackend:
         """Optional backend configuration hook; default is no-op."""
         _ = options
 
+    def reset_session_state(self) -> None:
+        """Optional hook to clear in-memory session/thread state."""
+        return None
+
     async def start_session(self, target: dict, context: dict) -> str:
         raise NotImplementedError
 
