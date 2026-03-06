@@ -297,11 +297,7 @@ _normalize_voice_provider() {
   normalized="${normalized#\'}"
   case "${normalized}" in
     "")
-      if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
-        echo "mlx_whisper"
-      else
-        echo "local_whisper"
-      fi
+      echo "local_whisper"
       ;;
     local|local_whisper)
       echo "local_whisper"
@@ -319,6 +315,9 @@ _voice_provider_for_hub_root() {
   local root provider
   root="$1"
   provider="$(_dotenv_value "${root}" "CODEX_AUTORUNNER_VOICE_PROVIDER" || true)"
+  if [[ -z "${provider}" ]]; then
+    provider="$(_config_python "${root}" "repo_defaults.voice.provider" || true)"
+  fi
   if [[ -z "${provider}" ]]; then
     provider="$(_config_python "${root}" "voice.provider" || true)"
   fi

@@ -183,7 +183,12 @@ if not provider and config_path.exists():
     except Exception:
         data = {}
     if isinstance(data, dict):
-        voice = data.get("voice")
+        repo_defaults = data.get("repo_defaults")
+        voice = None
+        if isinstance(repo_defaults, dict):
+            voice = repo_defaults.get("voice")
+        if not isinstance(voice, dict):
+            voice = data.get("voice")
         if isinstance(voice, dict):
             raw_provider = voice.get("provider")
             if isinstance(raw_provider, str):
@@ -309,9 +314,13 @@ data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 if not isinstance(data, dict):
     raise SystemExit(0)
 
-voice = data.setdefault("voice", {})
-if not isinstance(voice, dict):
+repo_defaults = data.setdefault("repo_defaults", {})
+if not isinstance(repo_defaults, dict):
     raise SystemExit(0)
+voice = repo_defaults.get("voice")
+if not isinstance(voice, dict):
+    voice = {}
+    repo_defaults["voice"] = voice
 
 provider = str(voice.get("provider", "") or "").strip().lower()
 if provider in ("", "local", "local_whisper"):
