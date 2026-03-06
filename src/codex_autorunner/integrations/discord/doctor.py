@@ -10,7 +10,10 @@ from ...core.config import HubConfig
 from ...core.optional_dependencies import missing_optional_dependencies
 from ...core.runtime import DoctorCheck
 from ...voice.config import VoiceConfig
-from ...voice.provider_catalog import local_voice_provider_spec
+from ...voice.provider_catalog import (
+    local_voice_provider_spec,
+    missing_local_voice_runtime_commands,
+)
 from .config import (
     DEFAULT_APP_ID_ENV,
     DEFAULT_BOT_TOKEN_ENV,
@@ -85,8 +88,16 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
     ):
         provider_name, deps, extra = local_provider_spec
         missing_local_voice = missing_optional_dependencies(deps)
+        missing_runtime_commands = missing_local_voice_runtime_commands(provider_name)
         if missing_local_voice:
             missing_desc = ", ".join(missing_local_voice)
+            runtime_hint = ""
+            if missing_runtime_commands:
+                missing_runtime_desc = ", ".join(missing_runtime_commands)
+                runtime_hint = (
+                    " Required runtime command(s) are also missing from PATH: "
+                    f"{missing_runtime_desc}."
+                )
             checks.append(
                 DoctorCheck(
                     name="Discord voice dependencies",
@@ -94,10 +105,38 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                     message=(
                         "Discord voice transcription is configured with "
                         f"{provider_name} but {missing_desc} is not installed."
+                        f"{runtime_hint}"
                     ),
                     check_id="discord.voice.dependencies",
                     severity="error",
-                    fix=f"Install with `pip install codex-autorunner[{extra}]`.",
+                    fix=(
+                        f"Install with `pip install codex-autorunner[{extra}]`."
+                        + (
+                            " Install ffmpeg and ensure it is on PATH (for macOS: "
+                            "`brew install ffmpeg`)."
+                            if "ffmpeg" in missing_runtime_commands
+                            else ""
+                        )
+                    ),
+                )
+            )
+        elif missing_runtime_commands:
+            missing_runtime_desc = ", ".join(missing_runtime_commands)
+            checks.append(
+                DoctorCheck(
+                    name="Discord voice dependencies",
+                    passed=False,
+                    message=(
+                        "Discord voice transcription is configured with "
+                        f"{provider_name} but required runtime command(s) are "
+                        f"missing from PATH: {missing_runtime_desc}."
+                    ),
+                    check_id="discord.voice.dependencies",
+                    severity="error",
+                    fix=(
+                        "Install ffmpeg and ensure it is on PATH (for macOS: "
+                        "`brew install ffmpeg`)."
+                    ),
                 )
             )
         else:

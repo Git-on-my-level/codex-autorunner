@@ -98,6 +98,7 @@ Local provider:
 - Install local deps with `pip install "codex-autorunner[voice-local]"`.
 - `voice.provider: mlx_whisper` uses on-device transcription via `mlx-whisper` (Apple Silicon).
 - Install MLX deps with `pip install "codex-autorunner[voice-mlx]"`.
+- Local voice providers also require `ffmpeg` available on PATH.
 
 ## OpenCode server credentials
 

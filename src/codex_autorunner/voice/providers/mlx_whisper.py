@@ -109,18 +109,26 @@ class MlxWhisperProvider(SpeechProvider):
             with os.fdopen(fd, "wb") as temp_file:
                 temp_file.write(audio_bytes)
 
-            result = transcribe(
-                temp_path,
-                path_or_hf_repo=str(payload.get("path_or_hf_repo", "small")),
-                language=payload.get("language"),
-                temperature=float(payload.get("temperature", 0.0)),
-                initial_prompt=payload.get("initial_prompt"),
-                word_timestamps=bool(payload.get("word_timestamps", False)),
-                condition_on_previous_text=bool(
-                    payload.get("condition_on_previous_text", False)
-                ),
-                **_beam_size_kwargs(payload.get("beam_size")),
-            )
+            try:
+                result = transcribe(
+                    temp_path,
+                    path_or_hf_repo=str(payload.get("path_or_hf_repo", "small")),
+                    language=payload.get("language"),
+                    temperature=float(payload.get("temperature", 0.0)),
+                    initial_prompt=payload.get("initial_prompt"),
+                    word_timestamps=bool(payload.get("word_timestamps", False)),
+                    condition_on_previous_text=bool(
+                        payload.get("condition_on_previous_text", False)
+                    ),
+                    **_beam_size_kwargs(payload.get("beam_size")),
+                )
+            except FileNotFoundError as exc:
+                if _is_missing_ffmpeg_error(exc):
+                    raise RuntimeError(
+                        "MLX Whisper provider requires ffmpeg on PATH. "
+                        "Install ffmpeg (for macOS: brew install ffmpeg)."
+                    ) from exc
+                raise
         finally:
             try:
                 os.unlink(temp_path)
@@ -178,6 +186,13 @@ class _MlxWhisperStream(TranscriptionStream):
                 return [
                     TranscriptionEvent(
                         text="", is_final=True, error="local_provider_unavailable"
+                    )
+                ]
+            if "requires ffmpeg on PATH" in message:
+                self._logger.error("MLX Whisper unavailable: %s", message)
+                return [
+                    TranscriptionEvent(
+                        text="", is_final=True, error="local_runtime_dependency_missing"
                     )
                 ]
             self._logger.error("MLX Whisper transcription failed: %s", exc)
@@ -267,3 +282,10 @@ def build_mlx_whisper_provider(
 ) -> MlxWhisperProvider:
     settings = MlxWhisperSettings.from_mapping(config)
     return MlxWhisperProvider(settings=settings, logger=logger)
+
+
+def _is_missing_ffmpeg_error(exc: FileNotFoundError) -> bool:
+    filename = getattr(exc, "filename", None)
+    if isinstance(filename, str) and filename.strip().lower() == "ffmpeg":
+        return True
+    return "ffmpeg" in str(exc).lower()

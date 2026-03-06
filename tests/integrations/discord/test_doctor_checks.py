@@ -244,6 +244,47 @@ def test_discord_doctor_checks_mlx_voice_missing_dependency_is_failure(
     assert "voice-mlx" in voice_check.fix
 
 
+def test_discord_doctor_checks_voice_missing_ffmpeg_is_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
+    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "mlx_whisper")
+
+    original_missing = discord_doctor.missing_optional_dependencies
+
+    def _missing(deps):
+        if deps == (("mlx_whisper", "mlx-whisper"),):
+            return []
+        return original_missing(deps)
+
+    monkeypatch.setattr(discord_doctor, "missing_optional_dependencies", _missing)
+    monkeypatch.setattr(
+        discord_doctor,
+        "missing_local_voice_runtime_commands",
+        lambda provider: ["ffmpeg"],
+    )
+
+    hub_config = _load_hub_with_discord(
+        tmp_path,
+        {
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "allowed_guild_ids": ["123"],
+        },
+    )
+
+    checks = discord_doctor_checks(hub_config)
+    by_id = {check.check_id: check for check in checks}
+    voice_check = by_id["discord.voice.dependencies"]
+    assert voice_check.passed is False
+    assert voice_check.severity == "error"
+    assert "ffmpeg" in voice_check.message
+    assert voice_check.fix is not None
+    assert "ffmpeg" in voice_check.fix
+
+
 def test_discord_doctor_checks_voice_disabled_skips_local_dependency_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

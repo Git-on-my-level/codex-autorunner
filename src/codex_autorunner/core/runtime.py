@@ -13,7 +13,10 @@ from typing import Any, Optional, Union
 
 from ..manifest import load_manifest, load_manifest_with_issues
 from ..voice.config import VoiceConfig
-from ..voice.provider_catalog import local_voice_provider_spec
+from ..voice.provider_catalog import (
+    local_voice_provider_spec,
+    missing_local_voice_runtime_commands,
+)
 from .config import HubConfig, RepoConfig, load_repo_config
 from .destinations import (
     probe_docker_readiness,
@@ -298,19 +301,55 @@ def _append_local_voice_dependency_check(
     provider, deps, extra = provider_spec
 
     missing_local_voice = missing_optional_dependencies(deps)
+    missing_runtime_commands = missing_local_voice_runtime_commands(provider)
     if missing_local_voice:
         missing_desc = ", ".join(missing_local_voice)
+        runtime_hint = ""
+        if missing_runtime_commands:
+            missing_runtime_desc = ", ".join(missing_runtime_commands)
+            runtime_hint = (
+                " Required runtime command(s) are also missing from PATH: "
+                f"{missing_runtime_desc}."
+            )
         checks.append(
             DoctorCheck(
                 name="Voice dependencies",
                 passed=False,
                 message=(
                     f"Voice is enabled with {provider} but {missing_desc} is "
-                    "not installed."
+                    f"not installed.{runtime_hint}"
                 ),
                 severity="error",
                 check_id=check_id or "voice.dependencies",
-                fix=f"Install with `pip install codex-autorunner[{extra}]`.",
+                fix=(
+                    f"Install with `pip install codex-autorunner[{extra}]`."
+                    + (
+                        " Install ffmpeg and ensure it is on PATH (for macOS: "
+                        "`brew install ffmpeg`)."
+                        if "ffmpeg" in missing_runtime_commands
+                        else ""
+                    )
+                ),
+            )
+        )
+        return
+
+    if missing_runtime_commands:
+        missing_runtime_desc = ", ".join(missing_runtime_commands)
+        checks.append(
+            DoctorCheck(
+                name="Voice dependencies",
+                passed=False,
+                message=(
+                    f"Voice is enabled with {provider} but required runtime "
+                    f"command(s) are missing from PATH: {missing_runtime_desc}."
+                ),
+                severity="error",
+                check_id=check_id or "voice.dependencies",
+                fix=(
+                    "Install ffmpeg and ensure it is on PATH (for macOS: "
+                    "`brew install ffmpeg`)."
+                ),
             )
         )
         return

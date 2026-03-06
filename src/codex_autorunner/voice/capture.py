@@ -311,6 +311,7 @@ class PushToTalkCapture(VoiceCaptureSession):
             "audio_too_large",
             "rate_limited",
             "local_provider_unavailable",
+            "local_runtime_dependency_missing",
         ):
             self.fail(reason)
             return False

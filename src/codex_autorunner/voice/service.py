@@ -166,6 +166,19 @@ class VoiceService:
                     "OpenAI rate limited the request; wait a moment and try again.",
                     user_message="Voice transcription rate limited. Retrying...",
                 )
+            if buffer.error_reason == "local_runtime_dependency_missing":
+                provider = normalize_voice_provider(
+                    self.config.provider or "local_whisper"
+                )
+                raise VoicePermanentError(
+                    "local_runtime_dependency_missing",
+                    "Local voice runtime dependencies are unavailable. Ensure ffmpeg "
+                    "is installed and available on PATH.",
+                    user_message=(
+                        f"Voice transcription failed: local provider '{provider}' "
+                        "needs ffmpeg on PATH."
+                    ),
+                )
             if buffer.error_reason == "local_provider_unavailable":
                 provider = normalize_voice_provider(
                     self.config.provider or "local_whisper"
