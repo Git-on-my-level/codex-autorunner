@@ -183,16 +183,31 @@ if not provider and config_path.exists():
     except Exception:
         data = {}
     if isinstance(data, dict):
+        legacy_fallback = False
+        repo_provider = ""
         repo_defaults = data.get("repo_defaults")
-        voice = None
         if isinstance(repo_defaults, dict):
-            voice = repo_defaults.get("voice")
-        if not isinstance(voice, dict):
+            repo_voice = repo_defaults.get("voice")
+            if isinstance(repo_voice, dict):
+                raw_provider = repo_voice.get("provider")
+                if isinstance(raw_provider, str):
+                    repo_provider = raw_provider.strip()
+
+        if not repo_provider:
             voice = data.get("voice")
-        if isinstance(voice, dict):
-            raw_provider = voice.get("provider")
-            if isinstance(raw_provider, str):
-                provider = raw_provider.strip()
+            if isinstance(voice, dict):
+                raw_provider = voice.get("provider")
+                if isinstance(raw_provider, str):
+                    repo_provider = raw_provider.strip()
+                    legacy_fallback = bool(repo_provider)
+
+        provider = repo_provider
+        if legacy_fallback:
+            print(
+                "Hint: Found legacy top-level voice.provider. "
+                "Please migrate to repo_defaults.voice.provider in hub config.",
+                file=sys.stderr,
+            )
 
 provider = provider.strip().lower()
 if provider == "local":
@@ -354,11 +369,11 @@ PY
   )"
   case "${VOICE_PROVIDER}" in
     local_whisper)
-      echo "Voice provider is local_whisper; installing faster-whisper optional deps..."
+      echo "Voice provider is local_whisper; installing local Whisper optional deps..."
       "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-local]"
       ;;
     mlx_whisper)
-      echo "Voice provider is mlx_whisper; installing mlx-whisper optional deps..."
+      echo "Voice provider is mlx_whisper; installing MLX Whisper optional deps..."
       "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-mlx]"
       ;;
   esac

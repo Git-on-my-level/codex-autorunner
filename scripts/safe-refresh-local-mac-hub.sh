@@ -320,6 +320,9 @@ _voice_provider_for_hub_root() {
   fi
   if [[ -z "${provider}" ]]; then
     provider="$(_config_python "${root}" "voice.provider" || true)"
+    if [[ -n "${provider}" ]]; then
+      echo "Hint: Found legacy top-level voice.provider; migrate to repo_defaults.voice.provider in hub config." >&2
+    fi
   fi
   _normalize_voice_provider "${provider}"
 }
