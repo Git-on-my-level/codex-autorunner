@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence, Tuple, Union
 
+from ..core.utils import resolve_executable
+
 OptionalDependency = Tuple[Union[str, Sequence[str]], str]
 
 _LOCAL_PROVIDER_DEPS: dict[str, tuple[tuple[OptionalDependency, ...], str]] = {
@@ -13,6 +15,11 @@ _LOCAL_PROVIDER_DEPS: dict[str, tuple[tuple[OptionalDependency, ...], str]] = {
         (("mlx_whisper", "mlx-whisper"),),
         "voice-mlx",
     ),
+}
+
+_LOCAL_PROVIDER_RUNTIME_COMMANDS: dict[str, tuple[str, ...]] = {
+    "local_whisper": ("ffmpeg",),
+    "mlx_whisper": ("ffmpeg",),
 }
 
 _ALIASES = {
@@ -39,3 +46,9 @@ def local_voice_provider_spec(
         return None
     deps, extra = spec
     return normalized, deps, extra
+
+
+def missing_local_voice_runtime_commands(provider: Any) -> list[str]:
+    normalized = normalize_voice_provider(provider)
+    commands = _LOCAL_PROVIDER_RUNTIME_COMMANDS.get(normalized, ())
+    return [command for command in commands if resolve_executable(command) is None]

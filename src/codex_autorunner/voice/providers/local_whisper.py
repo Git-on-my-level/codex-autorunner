@@ -125,12 +125,20 @@ class LocalWhisperProvider(SpeechProvider):
     ) -> Dict[str, Any]:
         model = self._get_model()
         audio_buffer = io.BytesIO(audio_bytes)
-        segments, info = model.transcribe(
-            audio_buffer,
-            language=cast(Optional[str], payload.get("language")),
-            beam_size=int(payload.get("beam_size", 1)),
-            vad_filter=bool(payload.get("vad_filter", True)),
-        )
+        try:
+            segments, info = model.transcribe(
+                audio_buffer,
+                language=cast(Optional[str], payload.get("language")),
+                beam_size=int(payload.get("beam_size", 1)),
+                vad_filter=bool(payload.get("vad_filter", True)),
+            )
+        except FileNotFoundError as exc:
+            if _is_missing_ffmpeg_error(exc):
+                raise RuntimeError(
+                    "Local Whisper provider requires ffmpeg on PATH. "
+                    "Install ffmpeg (for macOS: brew install ffmpeg)."
+                ) from exc
+            raise
         text_parts = []
         for segment in segments:
             text = str(getattr(segment, "text", "") or "").strip()
@@ -186,6 +194,13 @@ class _LocalWhisperStream(TranscriptionStream):
                         text="", is_final=True, error="local_provider_unavailable"
                     )
                 ]
+            if "requires ffmpeg on PATH" in message:
+                self._logger.error("Local Whisper unavailable: %s", message)
+                return [
+                    TranscriptionEvent(
+                        text="", is_final=True, error="local_runtime_dependency_missing"
+                    )
+                ]
             self._logger.error("Local Whisper transcription failed: %s", exc)
             return [TranscriptionEvent(text="", is_final=True, error="provider_error")]
         except Exception as exc:
@@ -225,3 +240,10 @@ def build_local_whisper_provider(
 ) -> LocalWhisperProvider:
     settings = LocalWhisperSettings.from_mapping(config)
     return LocalWhisperProvider(settings=settings, logger=logger)
+
+
+def _is_missing_ffmpeg_error(exc: FileNotFoundError) -> bool:
+    filename = getattr(exc, "filename", None)
+    if isinstance(filename, str) and filename.strip().lower() == "ffmpeg":
+        return True
+    return "ffmpeg" in str(exc).lower()

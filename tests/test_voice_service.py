@@ -107,6 +107,19 @@ def test_voice_service_reports_missing_mlx_provider_with_voice_mlx_hint():
     assert "voice-mlx" in str(exc.value)
 
 
+def test_voice_service_reports_missing_local_runtime_dependency():
+    cfg = VoiceConfig.from_raw(
+        {"enabled": True, "provider": "mlx_whisper", "warn_on_remote_api": False},
+        env={"TEST_ENV": "1"},
+    )
+    provider = DummyProvider(DummyStream(error="local_runtime_dependency_missing"))
+    service = VoiceService(cfg, provider_resolver=lambda _: provider)
+
+    with pytest.raises(VoiceServiceError) as exc:
+        service.transcribe(b"audio")
+    assert "ffmpeg" in str(exc.value).lower()
+
+
 def test_voice_service_passes_env_to_provider_resolver():
     cfg = VoiceConfig.from_raw({"enabled": True, "warn_on_remote_api": False})
     provider = DummyProvider(DummyStream("ok"))

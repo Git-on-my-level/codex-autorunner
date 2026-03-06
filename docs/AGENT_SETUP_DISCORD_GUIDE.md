@@ -113,6 +113,7 @@ Local Whisper (on-device, faster-whisper):
 
 1. Install local voice dependencies:
    - `pip install "codex-autorunner[voice-local]"`
+   - Ensure `ffmpeg` is installed and on PATH (for macOS: `brew install ffmpeg`)
    - macOS launchd path (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`) now installs this automatically when voice provider resolves to `local_whisper` or `mlx_whisper`.
 2. Set provider:
    - `voice.provider: local_whisper`
@@ -122,6 +123,7 @@ MLX Whisper (on-device, Apple Silicon):
 
 1. Install MLX voice dependencies:
    - `pip install "codex-autorunner[voice-mlx]"`
+   - Ensure `ffmpeg` is installed and on PATH (for macOS: `brew install ffmpeg`)
    - macOS launchd setup auto-selects this for new Apple Silicon installs.
 2. Set provider:
    - `voice.provider: mlx_whisper`
