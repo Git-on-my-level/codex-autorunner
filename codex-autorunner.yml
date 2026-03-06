@@ -147,7 +147,7 @@ repo_defaults:
         remote_api: false
         model: small
         language: null
-        beam_size: 1
+        beam_size: null
         temperature: 0.0
         condition_on_previous_text: false
         word_timestamps: false

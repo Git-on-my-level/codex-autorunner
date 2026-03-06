@@ -17,14 +17,14 @@ from ..provider import (
 )
 
 _MODEL_ALIAS_TO_REPO = {
-    "tiny": "mlx-community/whisper-tiny",
-    "tiny.en": "mlx-community/whisper-tiny.en",
-    "base": "mlx-community/whisper-base",
-    "base.en": "mlx-community/whisper-base.en",
-    "small": "mlx-community/whisper-small",
-    "small.en": "mlx-community/whisper-small.en",
-    "medium": "mlx-community/whisper-medium",
-    "medium.en": "mlx-community/whisper-medium.en",
+    "tiny": "mlx-community/whisper-tiny-mlx",
+    "tiny.en": "mlx-community/whisper-tiny.en-mlx",
+    "base": "mlx-community/whisper-base-mlx",
+    "base.en": "mlx-community/whisper-base.en-mlx",
+    "small": "mlx-community/whisper-small-mlx",
+    "small.en": "mlx-community/whisper-small.en-mlx",
+    "medium": "mlx-community/whisper-medium-mlx",
+    "medium.en": "mlx-community/whisper-medium.en-mlx",
     "large-v3": "mlx-community/whisper-large-v3-turbo",
     "turbo": "mlx-community/whisper-turbo",
 }
@@ -34,7 +34,7 @@ _MODEL_ALIAS_TO_REPO = {
 class MlxWhisperSettings:
     model: str = "small"
     language: Optional[str] = None
-    beam_size: int = 1
+    beam_size: Optional[int] = None
     temperature: float = 0.0
     condition_on_previous_text: bool = False
     word_timestamps: bool = False
@@ -43,6 +43,7 @@ class MlxWhisperSettings:
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "MlxWhisperSettings":
+        raw_beam_size = raw.get("beam_size")
         return cls(
             model=str(raw.get("model", "small")),
             language=(
@@ -50,7 +51,7 @@ class MlxWhisperSettings:
                 if raw.get("language") is not None
                 else None
             ),
-            beam_size=max(1, int(raw.get("beam_size", 1))),
+            beam_size=_coerce_beam_size(raw_beam_size),
             temperature=float(raw.get("temperature", 0.0)),
             condition_on_previous_text=bool(
                 raw.get("condition_on_previous_text", False)
@@ -118,7 +119,7 @@ class MlxWhisperProvider(SpeechProvider):
                 condition_on_previous_text=bool(
                     payload.get("condition_on_previous_text", False)
                 ),
-                beam_size=int(payload.get("beam_size", 1)),
+                **_beam_size_kwargs(payload.get("beam_size")),
             )
         finally:
             try:
@@ -196,13 +197,14 @@ class _MlxWhisperStream(TranscriptionStream):
     def _build_payload(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "path_or_hf_repo": _resolve_mlx_model_path(self._settings.model),
-            "beam_size": self._settings.beam_size,
             "temperature": self._settings.temperature,
             "condition_on_previous_text": self._settings.condition_on_previous_text,
             "word_timestamps": self._settings.word_timestamps,
             "initial_prompt": self._settings.initial_prompt,
             "language": self._settings.language or self._session.language,
         }
+        if self._settings.beam_size is not None:
+            payload["beam_size"] = self._settings.beam_size
         if not self._settings.redact_request:
             payload.update(
                 {
@@ -236,6 +238,27 @@ def _resolve_mlx_model_path(model: str) -> str:
     if normalized in _MODEL_ALIAS_TO_REPO:
         return _MODEL_ALIAS_TO_REPO[normalized]
     return candidate
+
+
+def _coerce_beam_size(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    # mlx-whisper currently runs greedy decoding by default; beam search kwargs
+    # can fail in environments where beam decoding isn't implemented.
+    if parsed <= 1:
+        return None
+    return parsed
+
+
+def _beam_size_kwargs(beam_size: Any) -> Dict[str, int]:
+    normalized = _coerce_beam_size(beam_size)
+    if normalized is None:
+        return {}
+    return {"beam_size": normalized}
 
 
 def build_mlx_whisper_provider(

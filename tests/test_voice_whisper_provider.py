@@ -9,6 +9,7 @@ from codex_autorunner.voice import (
     VoiceConfig,
     resolve_speech_provider,
 )
+from codex_autorunner.voice.providers import mlx_whisper as mlx_whisper_provider
 
 
 def test_openai_whisper_respects_env_and_redaction():
@@ -167,7 +168,8 @@ def test_resolve_speech_provider_builds_local():
             "provider": "local_whisper",
             "providers": {"local_whisper": {"model": "small"}},
             "warn_on_remote_api": False,
-        }
+        },
+        env={"TEST_ENV": "1"},
     )
     provider = resolve_speech_provider(voice_config=config, logger=None)
     assert isinstance(provider, LocalWhisperProvider)
@@ -199,3 +201,25 @@ def test_resolve_speech_provider_accepts_mlx_alias():
     )
     provider = resolve_speech_provider(voice_config=config, logger=None)
     assert isinstance(provider, MlxWhisperProvider)
+
+
+def test_mlx_whisper_model_aliases_resolve_to_public_repos():
+    assert (
+        mlx_whisper_provider._resolve_mlx_model_path("small")
+        == "mlx-community/whisper-small-mlx"
+    )
+    assert (
+        mlx_whisper_provider._resolve_mlx_model_path("small.en")
+        == "mlx-community/whisper-small.en-mlx"
+    )
+
+
+def test_mlx_whisper_beam_size_coercion_defaults_to_greedy():
+    assert mlx_whisper_provider._coerce_beam_size(None) is None
+    assert mlx_whisper_provider._coerce_beam_size(0) is None
+    assert mlx_whisper_provider._coerce_beam_size(1) is None
+    assert mlx_whisper_provider._coerce_beam_size(2) == 2
+
+    assert mlx_whisper_provider._beam_size_kwargs(None) == {}
+    assert mlx_whisper_provider._beam_size_kwargs(1) == {}
+    assert mlx_whisper_provider._beam_size_kwargs(2) == {"beam_size": 2}

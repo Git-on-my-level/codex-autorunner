@@ -612,7 +612,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "remote_api": False,
                 "model": "small",
                 "language": None,
-                "beam_size": 1,
+                "beam_size": None,
                 "temperature": 0.0,
                 "condition_on_previous_text": False,
                 "word_timestamps": False,

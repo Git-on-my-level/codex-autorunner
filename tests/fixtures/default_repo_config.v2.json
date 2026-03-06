@@ -434,7 +434,7 @@
         "vad_filter": true
       },
       "mlx_whisper": {
-        "beam_size": 1,
+        "beam_size": null,
         "condition_on_previous_text": false,
         "initial_prompt": null,
         "language": null,
