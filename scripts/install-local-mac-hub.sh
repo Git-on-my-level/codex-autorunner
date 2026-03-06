@@ -158,6 +158,7 @@ resolve_voice_provider() {
 from __future__ import annotations
 
 from pathlib import Path
+import platform
 import sys
 
 import yaml
@@ -191,8 +192,16 @@ if not provider and config_path.exists():
 provider = provider.strip().lower()
 if provider == "local":
     provider = "local_whisper"
+if provider == "mlx":
+    provider = "mlx_whisper"
 if not provider:
-    provider = "local_whisper"
+    if platform.system() == "Darwin" and platform.machine().lower() in {
+        "arm64",
+        "aarch64",
+    }:
+        provider = "mlx_whisper"
+    else:
+        provider = "local_whisper"
 
 print(provider)
 PY
@@ -216,9 +225,13 @@ fi
 
 echo "Ensuring hub workspace at ${WORKSPACE}..."
 mkdir -p "${WORKSPACE}"
+CONFIG_PATH="${WORKSPACE}/.codex-autorunner/config.yml"
+CONFIG_PREEXISTED=0
+if [[ -f "${CONFIG_PATH}" ]]; then
+  CONFIG_PREEXISTED=1
+fi
 codex-autorunner init --mode hub --path "${WORKSPACE}"
 
-CONFIG_PATH="${WORKSPACE}/.codex-autorunner/config.yml"
 ENV_PATH="${WORKSPACE}/.codex-autorunner/.env"
 AUTH_TOKEN_ENV_NAME="CAR_SERVER_TOKEN"
 AUTH_TOKEN=""
@@ -269,13 +282,77 @@ else
 fi
 
 if [[ -x "${CURRENT_VENV_LINK}/bin/python" ]]; then
+  "${CURRENT_VENV_LINK}/bin/python" - "${CONFIG_PATH}" "${CONFIG_PREEXISTED}" <<'PY'
+from __future__ import annotations
+
+from pathlib import Path
+import platform
+import sys
+
+import yaml
+
+config_path = Path(sys.argv[1])
+config_preexisted = sys.argv[2] == "1"
+if not config_path.exists():
+    raise SystemExit(0)
+
+if config_preexisted:
+    raise SystemExit(0)
+
+if not (
+    platform.system() == "Darwin"
+    and platform.machine().lower() in {"arm64", "aarch64"}
+):
+    raise SystemExit(0)
+
+data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+if not isinstance(data, dict):
+    raise SystemExit(0)
+
+voice = data.setdefault("voice", {})
+if not isinstance(voice, dict):
+    raise SystemExit(0)
+
+provider = str(voice.get("provider", "") or "").strip().lower()
+if provider in ("", "local", "local_whisper"):
+    voice["provider"] = "mlx_whisper"
+
+providers = voice.setdefault("providers", {})
+if isinstance(providers, dict):
+    local_cfg = providers.get("local_whisper")
+    if isinstance(local_cfg, dict):
+        local_cfg.setdefault("model", "small")
+    mlx_cfg = providers.get("mlx_whisper")
+    if isinstance(mlx_cfg, dict):
+        mlx_cfg.setdefault("model", "small")
+    else:
+        providers["mlx_whisper"] = {
+            "remote_api": False,
+            "model": "small",
+            "language": None,
+            "beam_size": 1,
+            "temperature": 0.0,
+            "condition_on_previous_text": False,
+            "word_timestamps": False,
+            "initial_prompt": None,
+        }
+
+config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+
   VOICE_PROVIDER="$(
     resolve_voice_provider "${CONFIG_PATH}" "${ENV_PATH}" "${CURRENT_VENV_LINK}/bin/python"
   )"
-  if [[ "${VOICE_PROVIDER}" == "local_whisper" ]]; then
-    echo "Voice provider is local_whisper; installing local Whisper optional deps..."
-    "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-local]"
-  fi
+  case "${VOICE_PROVIDER}" in
+    local_whisper)
+      echo "Voice provider is local_whisper; installing faster-whisper optional deps..."
+      "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-local]"
+      ;;
+    mlx_whisper)
+      echo "Voice provider is mlx_whisper; installing mlx-whisper optional deps..."
+      "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-mlx]"
+      ;;
+  esac
 fi
 
 echo "Writing launchd plist to ${PLIST_PATH}..."

@@ -451,6 +451,7 @@ def build_app_context(
     hub_config: Optional[HubConfig] = None,
 ) -> AppContext:
     from ...voice import VoiceConfig, VoiceService
+    from ...voice.provider_catalog import local_voice_provider_spec
 
     target_root = (repo_root or Path.cwd()).resolve()
     if hub_config is None:
@@ -482,11 +483,13 @@ def build_app_context(
             ),
             extra="voice",
         )
-        if voice_config.provider in {"local_whisper", "local"}:
+        local_provider_spec = local_voice_provider_spec(voice_config.provider)
+        if local_provider_spec is not None:
+            provider_name, deps, extra = local_provider_spec
             require_optional_dependencies(
-                feature="voice (local_whisper)",
-                deps=(("faster_whisper", "faster-whisper"),),
-                extra="voice-local",
+                feature=f"voice ({provider_name})",
+                deps=deps,
+                extra=extra,
             )
     except ConfigError as exc:
         voice_missing_reason = str(exc)

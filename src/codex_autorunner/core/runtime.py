@@ -13,6 +13,7 @@ from typing import Any, Optional, Union
 
 from ..manifest import load_manifest, load_manifest_with_issues
 from ..voice.config import VoiceConfig
+from ..voice.provider_catalog import local_voice_provider_spec
 from .config import HubConfig, RepoConfig, load_repo_config
 from .destinations import (
     probe_docker_readiness,
@@ -291,25 +292,25 @@ def _append_local_voice_dependency_check(
     if not voice_cfg.enabled:
         return
 
-    provider = _normalize_voice_provider(voice_cfg.provider)
-    if provider != "local_whisper":
+    provider_spec = local_voice_provider_spec(voice_cfg.provider)
+    if provider_spec is None:
         return
+    provider, deps, extra = provider_spec
 
-    missing_local_voice = missing_optional_dependencies(
-        (("faster_whisper", "faster-whisper"),)
-    )
+    missing_local_voice = missing_optional_dependencies(deps)
     if missing_local_voice:
+        missing_desc = ", ".join(missing_local_voice)
         checks.append(
             DoctorCheck(
                 name="Voice dependencies",
                 passed=False,
                 message=(
-                    "Voice is enabled with local_whisper but faster-whisper is "
+                    f"Voice is enabled with {provider} but {missing_desc} is "
                     "not installed."
                 ),
                 severity="error",
                 check_id=check_id or "voice.dependencies",
-                fix="Install with `pip install codex-autorunner[voice-local]`.",
+                fix=f"Install with `pip install codex-autorunner[{extra}]`.",
             )
         )
         return
@@ -318,18 +319,11 @@ def _append_local_voice_dependency_check(
         DoctorCheck(
             name="Voice dependencies",
             passed=True,
-            message="Voice local dependencies are installed.",
+            message=f"Voice local dependencies for {provider} are installed.",
             severity="info",
             check_id=check_id or "voice.dependencies",
         )
     )
-
-
-def _normalize_voice_provider(provider: Optional[str]) -> str:
-    normalized = (provider or "").strip().lower()
-    if normalized == "local":
-        return "local_whisper"
-    return normalized
 
 
 def clear_stale_lock(repo_root: Path) -> bool:

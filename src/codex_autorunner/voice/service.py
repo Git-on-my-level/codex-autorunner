@@ -11,6 +11,7 @@ from ..core.exceptions import CodexError, PermanentError, TransientError
 from .capture import CaptureCallbacks, CaptureState, PushToTalkCapture
 from .config import VoiceConfig
 from .provider import SpeechSessionMetadata
+from .provider_catalog import local_voice_provider_spec, normalize_voice_provider
 from .resolver import resolve_speech_provider
 
 
@@ -166,14 +167,19 @@ class VoiceService:
                     user_message="Voice transcription rate limited. Retrying...",
                 )
             if buffer.error_reason == "local_provider_unavailable":
-                provider = self.config.provider or "local_whisper"
+                provider = normalize_voice_provider(
+                    self.config.provider or "local_whisper"
+                )
+                provider_spec = local_voice_provider_spec(provider)
+                extra = provider_spec[2] if provider_spec is not None else "voice-local"
                 raise VoicePermanentError(
                     "local_provider_unavailable",
                     "Local Whisper provider is unavailable. Install optional "
-                    "dependencies with: pip install 'codex-autorunner[voice-local]'",
+                    "dependencies with: "
+                    f"pip install 'codex-autorunner[{extra}]'",
                     user_message=(
                         f"Voice transcription failed: local provider '{provider}' is "
-                        "not installed. Install 'codex-autorunner[voice-local]'."
+                        f"not installed. Install 'codex-autorunner[{extra}]'."
                     ),
                 )
             raise VoiceServiceError(

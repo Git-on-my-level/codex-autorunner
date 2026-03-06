@@ -83,7 +83,8 @@ def test_voice_service_passes_filename_and_content_type_into_session():
 
 def test_voice_service_reports_missing_local_provider():
     cfg = VoiceConfig.from_raw(
-        {"enabled": True, "provider": "local_whisper", "warn_on_remote_api": False}
+        {"enabled": True, "provider": "local_whisper", "warn_on_remote_api": False},
+        env={"TEST_ENV": "1"},
     )
     provider = DummyProvider(DummyStream(error="local_provider_unavailable"))
     service = VoiceService(cfg, provider_resolver=lambda _: provider)
@@ -91,6 +92,19 @@ def test_voice_service_reports_missing_local_provider():
     with pytest.raises(VoiceServiceError) as exc:
         service.transcribe(b"audio")
     assert "local whisper provider" in str(exc.value).lower()
+
+
+def test_voice_service_reports_missing_mlx_provider_with_voice_mlx_hint():
+    cfg = VoiceConfig.from_raw(
+        {"enabled": True, "provider": "mlx_whisper", "warn_on_remote_api": False},
+        env={"TEST_ENV": "1"},
+    )
+    provider = DummyProvider(DummyStream(error="local_provider_unavailable"))
+    service = VoiceService(cfg, provider_resolver=lambda _: provider)
+
+    with pytest.raises(VoiceServiceError) as exc:
+        service.transcribe(b"audio")
+    assert "voice-mlx" in str(exc.value)
 
 
 def test_voice_service_passes_env_to_provider_resolver():

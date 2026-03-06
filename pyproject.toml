@@ -52,6 +52,9 @@ voice = [
 voice-local = [
   "faster-whisper>=1.1.0",
 ]
+voice-mlx = [
+  "mlx-whisper>=0.4.2; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
 github = []
 discord = [
   "websockets>=12",

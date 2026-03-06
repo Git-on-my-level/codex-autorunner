@@ -50,8 +50,8 @@
     },
     "request_timeout": null,
     "state_root": "~/.codex-autorunner/workspaces",
-    "turn_stall_poll_interval_seconds": 2,
     "turn_stall_max_recovery_attempts": 8,
+    "turn_stall_poll_interval_seconds": 2,
     "turn_stall_recovery_min_interval_seconds": 10,
     "turn_stall_timeout_seconds": 60,
     "turn_timeout_seconds": 7200
@@ -428,10 +428,20 @@
         "download_root": null,
         "language": null,
         "local_files_only": false,
-        "model": "tiny",
+        "model": "small",
         "num_workers": 1,
         "remote_api": false,
         "vad_filter": true
+      },
+      "mlx_whisper": {
+        "beam_size": 1,
+        "condition_on_previous_text": false,
+        "initial_prompt": null,
+        "language": null,
+        "model": "small",
+        "remote_api": false,
+        "temperature": 0.0,
+        "word_timestamps": false
       },
       "openai_whisper": {
         "api_key_env": "OPENAI_API_KEY",

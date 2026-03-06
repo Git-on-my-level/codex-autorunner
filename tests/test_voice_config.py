@@ -134,3 +134,15 @@ def test_voice_config_local_alias_disables_remote_warning_by_default():
         env={},
     )
     assert cfg.warn_on_remote_api is False
+
+
+def test_voice_config_mlx_alias_disables_remote_warning_by_default():
+    cfg = VoiceConfig.from_raw(
+        {
+            "enabled": True,
+            "provider": "mlx",
+        },
+        env={},
+    )
+    assert cfg.provider == "mlx_whisper"
+    assert cfg.warn_on_remote_api is False

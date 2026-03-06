@@ -133,7 +133,7 @@ repo_defaults:
         redact_request: true
       local_whisper:
         remote_api: false
-        model: tiny
+        model: small
         device: auto
         compute_type: default
         cpu_threads: 0
@@ -143,6 +143,15 @@ repo_defaults:
         beam_size: 1
         vad_filter: true
         language: null
+      mlx_whisper:
+        remote_api: false
+        model: small
+        language: null
+        beam_size: 1
+        temperature: 0.0
+        condition_on_previous_text: false
+        word_timestamps: false
+        initial_prompt: null
 
   log:
     # Path is relative to the repo root.

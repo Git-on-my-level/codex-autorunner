@@ -15,6 +15,8 @@ from .provider import (
 from .providers import (
     LocalWhisperProvider,
     LocalWhisperSettings,
+    MlxWhisperProvider,
+    MlxWhisperSettings,
     OpenAIWhisperProvider,
     OpenAIWhisperSettings,
 )
@@ -31,6 +33,8 @@ __all__ = [
     "PushToTalkCapture",
     "LocalWhisperProvider",
     "LocalWhisperSettings",
+    "MlxWhisperProvider",
+    "MlxWhisperSettings",
     "OpenAIWhisperProvider",
     "OpenAIWhisperSettings",
     "resolve_speech_provider",

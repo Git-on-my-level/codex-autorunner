@@ -98,7 +98,7 @@ discord_bot:
 
 When `discord_bot.media.voice: true`, inbound Discord audio attachments are transcribed through the configured `voice.provider` and injected into attachment context.
 
-### Voice Provider Setup (OpenAI vs Local Whisper)
+### Voice Provider Setup (OpenAI vs Local Whisper / MLX Whisper)
 
 You can run voice transcription with either OpenAI Whisper (API) or local Whisper (on-device).
 
@@ -109,20 +109,29 @@ OpenAI Whisper (API):
 2. Set provider:
    - `voice.provider: openai_whisper`
 
-Local Whisper (on-device):
+Local Whisper (on-device, faster-whisper):
 
 1. Install local voice dependencies:
    - `pip install "codex-autorunner[voice-local]"`
-   - macOS launchd path (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`) now installs this automatically when voice provider resolves to `local_whisper`.
+   - macOS launchd path (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`) now installs this automatically when voice provider resolves to `local_whisper` or `mlx_whisper`.
 2. Set provider:
    - `voice.provider: local_whisper`
    - or env override: `CODEX_AUTORUNNER_VOICE_PROVIDER=local_whisper`
+
+MLX Whisper (on-device, Apple Silicon):
+
+1. Install MLX voice dependencies:
+   - `pip install "codex-autorunner[voice-mlx]"`
+   - macOS launchd setup auto-selects this for new Apple Silicon installs.
+2. Set provider:
+   - `voice.provider: mlx_whisper`
+   - or env override: `CODEX_AUTORUNNER_VOICE_PROVIDER=mlx_whisper`
 
 Provider selection and precedence:
 
 - Only one provider is active at runtime.
 - `CODEX_AUTORUNNER_VOICE_PROVIDER` overrides `voice.provider` in config.
-- It is normal to keep both `voice.providers.openai_whisper` and `voice.providers.local_whisper` blocks in config; only the selected provider is used.
+- It is normal to keep multiple provider blocks (for example `openai_whisper`, `local_whisper`, `mlx_whisper`) in config; only the selected provider is used.
 - There is no automatic provider fallback. If the selected provider fails, transcription fails for that request.
 
 Example config:
@@ -130,15 +139,17 @@ Example config:
 ```yaml
 voice:
   enabled: true
-  provider: local_whisper # or openai_whisper
+  provider: local_whisper # or mlx_whisper / openai_whisper
   providers:
     openai_whisper:
       api_key_env: OPENAI_API_KEY
       model: whisper-1
     local_whisper:
-      model: tiny
+      model: small
       device: auto
       compute_type: default
+    mlx_whisper:
+      model: small
 ```
 
 Allowlist behavior:

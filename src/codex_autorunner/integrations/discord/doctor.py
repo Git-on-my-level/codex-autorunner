@@ -10,6 +10,7 @@ from ...core.config import HubConfig
 from ...core.optional_dependencies import missing_optional_dependencies
 from ...core.runtime import DoctorCheck
 from ...voice.config import VoiceConfig
+from ...voice.provider_catalog import local_voice_provider_spec
 from .config import (
     DEFAULT_APP_ID_ENV,
     DEFAULT_BOT_TOKEN_ENV,
@@ -76,26 +77,27 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
     voice_raw = _resolve_voice_raw(raw)
     voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
     voice_ingestion_enabled = _discord_voice_ingestion_enabled(discord_cfg)
+    local_provider_spec = local_voice_provider_spec(voice_config.provider)
     if (
         voice_ingestion_enabled
         and voice_config.enabled
-        and _normalize_voice_provider(voice_config.provider) == "local_whisper"
+        and local_provider_spec is not None
     ):
-        missing_local_voice = missing_optional_dependencies(
-            (("faster_whisper", "faster-whisper"),)
-        )
+        provider_name, deps, extra = local_provider_spec
+        missing_local_voice = missing_optional_dependencies(deps)
         if missing_local_voice:
+            missing_desc = ", ".join(missing_local_voice)
             checks.append(
                 DoctorCheck(
                     name="Discord voice dependencies",
                     passed=False,
                     message=(
                         "Discord voice transcription is configured with "
-                        "local_whisper but faster-whisper is not installed."
+                        f"{provider_name} but {missing_desc} is not installed."
                     ),
                     check_id="discord.voice.dependencies",
                     severity="error",
-                    fix="Install with `pip install codex-autorunner[voice-local]`.",
+                    fix=f"Install with `pip install codex-autorunner[{extra}]`.",
                 )
             )
         else:
@@ -104,7 +106,7 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                     name="Discord voice dependencies",
                     passed=True,
                     message=(
-                        "Discord voice transcription is using local_whisper and "
+                        f"Discord voice transcription is using {provider_name} and "
                         "local dependencies are installed."
                     ),
                     check_id="discord.voice.dependencies",
@@ -311,15 +313,6 @@ def _resolve_voice_raw(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
     if isinstance(voice_raw, dict):
         return voice_raw
     return None
-
-
-def _normalize_voice_provider(value: Any) -> str:
-    if not isinstance(value, str):
-        return ""
-    normalized = value.strip().lower()
-    if normalized == "local":
-        return "local_whisper"
-    return normalized
 
 
 def _discord_voice_ingestion_enabled(discord_cfg: dict[str, Any]) -> bool:

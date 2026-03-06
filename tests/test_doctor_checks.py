@@ -81,6 +81,38 @@ def test_telegram_doctor_checks_local_voice_dependency_missing(monkeypatch):
     assert "voice-local" in voice_check.fix
 
 
+def test_telegram_doctor_checks_mlx_voice_dependency_missing(monkeypatch):
+    """Test Telegram doctor check catches missing MLX whisper dependency."""
+
+    def _missing_optional(deps):
+        if deps == (("httpx", "httpx"),):
+            return []
+        if deps == (("mlx_whisper", "mlx-whisper"),):
+            return ["mlx-whisper"]
+        return []
+
+    monkeypatch.setattr(
+        telegram_doctor, "missing_optional_dependencies", _missing_optional
+    )
+    cfg = {"telegram_bot": {"enabled": True}}
+    with patch.dict(
+        os.environ,
+        {
+            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
+            "CODEX_AUTORUNNER_VOICE_PROVIDER": "mlx_whisper",
+        },
+        clear=True,
+    ):
+        checks = telegram_doctor_checks(cfg)
+
+    by_id = {check.check_id: check for check in checks}
+    voice_check = by_id["telegram.voice.dependencies"]
+    assert voice_check.passed is False
+    assert voice_check.severity == "error"
+    assert voice_check.fix is not None
+    assert "voice-mlx" in voice_check.fix
+
+
 def test_telegram_doctor_checks_openai_voice_skips_local_dependency_check(monkeypatch):
     """Test Telegram doctor check skips local deps when provider is OpenAI."""
 
@@ -153,6 +185,47 @@ def test_doctor_reports_missing_local_voice_dependency(
     assert voice_check.severity == "error"
     assert voice_check.fix is not None
     assert "voice-local" in voice_check.fix
+
+
+def test_doctor_reports_missing_mlx_voice_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test core doctor reports missing MLX deps when voice is enabled."""
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.git_utils.run_git",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+
+    def _missing_optional(deps):
+        if deps == (("mlx_whisper", "mlx-whisper"),):
+            return ["mlx-whisper"]
+        return []
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.missing_optional_dependencies",
+        _missing_optional,
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
+            "CODEX_AUTORUNNER_VOICE_PROVIDER": "mlx_whisper",
+        },
+        clear=True,
+    ):
+        report = doctor(hub_root)
+
+    by_id = {check.check_id: check for check in report.checks if check.check_id}
+    voice_check = by_id["voice.dependencies"]
+    assert voice_check.passed is False
+    assert voice_check.severity == "error"
+    assert voice_check.fix is not None
+    assert "voice-mlx" in voice_check.fix
 
 
 def test_pma_doctor_checks_invalid_agent():

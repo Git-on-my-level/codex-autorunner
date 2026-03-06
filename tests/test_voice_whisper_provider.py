@@ -2,6 +2,7 @@ from codex_autorunner.voice import (
     AudioChunk,
     LocalWhisperProvider,
     LocalWhisperSettings,
+    MlxWhisperProvider,
     OpenAIWhisperProvider,
     OpenAIWhisperSettings,
     SpeechSessionMetadata,
@@ -164,9 +165,37 @@ def test_resolve_speech_provider_builds_local():
         {
             "enabled": True,
             "provider": "local_whisper",
-            "providers": {"local_whisper": {"model": "tiny"}},
+            "providers": {"local_whisper": {"model": "small"}},
             "warn_on_remote_api": False,
         }
     )
     provider = resolve_speech_provider(voice_config=config, logger=None)
     assert isinstance(provider, LocalWhisperProvider)
+
+
+def test_resolve_speech_provider_builds_mlx():
+    config = VoiceConfig.from_raw(
+        {
+            "enabled": True,
+            "provider": "mlx_whisper",
+            "providers": {"mlx_whisper": {"model": "small"}},
+            "warn_on_remote_api": False,
+        },
+        env={"TEST_ENV": "1"},
+    )
+    provider = resolve_speech_provider(voice_config=config, logger=None)
+    assert isinstance(provider, MlxWhisperProvider)
+
+
+def test_resolve_speech_provider_accepts_mlx_alias():
+    config = VoiceConfig.from_raw(
+        {
+            "enabled": True,
+            "provider": "mlx",
+            "providers": {"mlx_whisper": {"model": "small"}},
+            "warn_on_remote_api": False,
+        },
+        env={"TEST_ENV": "1"},
+    )
+    provider = resolve_speech_provider(voice_config=config, logger=None)
+    assert isinstance(provider, MlxWhisperProvider)

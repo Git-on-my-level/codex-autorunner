@@ -19,7 +19,7 @@ DEFAULT_PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
     },
     "local_whisper": {
         "remote_api": False,
-        "model": "tiny",
+        "model": "small",
         "device": "auto",
         "compute_type": "default",
         "cpu_threads": 0,
@@ -29,6 +29,16 @@ DEFAULT_PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
         "beam_size": 1,
         "vad_filter": True,
         "language": None,
+    },
+    "mlx_whisper": {
+        "remote_api": False,
+        "model": "small",
+        "language": None,
+        "beam_size": 1,
+        "temperature": 0.0,
+        "condition_on_previous_text": False,
+        "word_timestamps": False,
+        "initial_prompt": None,
     },
 }
 
@@ -61,7 +71,8 @@ class VoiceConfig:
         Build a normalized VoiceConfig from config.yml voice section and env overrides.
         This does not touch global config to keep voice optional until integrated.
         """
-        env = env or os.environ
+        if env is None:
+            env = os.environ
         merged: MutableMapping[str, Any] = {
             "enabled": False,
             "provider": "local_whisper",
@@ -108,17 +119,13 @@ class VoiceConfig:
                 "CODEX_AUTORUNNER_VOICE_PROVIDER",
                 merged.get("provider", "local_whisper"),
             )
-            provider_name = (
-                "local_whisper"
-                if str(provider_name_raw).strip().lower() == "local"
-                else provider_name_raw
-            )
+            provider_name = _normalize_provider_alias(provider_name_raw)
             provider_cfg = merged.get("providers", {}).get(provider_name, {})
             api_key_env = provider_cfg.get("api_key_env")
             if isinstance(api_key_env, str) and api_key_env and env.get(api_key_env):
                 merged["enabled"] = True
-        merged["provider"] = env.get(
-            "CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider")
+        merged["provider"] = _normalize_provider_alias(
+            env.get("CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider"))
         )
         merged["latency_mode"] = env.get(
             "CODEX_AUTORUNNER_VOICE_LATENCY", merged.get("latency_mode", "balanced")
@@ -135,11 +142,7 @@ class VoiceConfig:
             merged["warn_on_remote_api"] = _env_bool(explicit_warn, True)
         else:
             provider_name_raw = merged.get("provider", "local_whisper")
-            provider_name = (
-                "local_whisper"
-                if str(provider_name_raw).strip().lower() == "local"
-                else provider_name_raw
-            )
+            provider_name = _normalize_provider_alias(provider_name_raw)
             provider_cfg = merged.get("providers", {}).get(provider_name, {})
             is_remote_api = bool(provider_cfg.get("remote_api", True))
             api_key_env = provider_cfg.get("api_key_env")
@@ -191,3 +194,14 @@ def _env_int(raw: Optional[str], default: int) -> int:
         return int(raw.strip())
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_provider_alias(raw: Any) -> Any:
+    if not isinstance(raw, str):
+        return raw
+    normalized = raw.strip().lower()
+    if normalized == "local":
+        return "local_whisper"
+    if normalized == "mlx":
+        return "mlx_whisper"
+    return normalized

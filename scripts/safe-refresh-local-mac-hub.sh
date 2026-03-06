@@ -296,8 +296,18 @@ _normalize_voice_provider() {
   normalized="${normalized%\'}"
   normalized="${normalized#\'}"
   case "${normalized}" in
-    ""|local|local_whisper)
+    "")
+      if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+        echo "mlx_whisper"
+      else
+        echo "local_whisper"
+      fi
+      ;;
+    local|local_whisper)
       echo "local_whisper"
+      ;;
+    mlx|mlx_whisper)
+      echo "mlx_whisper"
       ;;
     *)
       echo "${normalized}"
@@ -443,6 +453,8 @@ if [[ -n "${HUB_ROOT}" ]]; then
   VOICE_PROVIDER="$(_voice_provider_for_hub_root "${HUB_ROOT}")"
   if [[ "${VOICE_PROVIDER}" == "local_whisper" ]]; then
     PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[voice-local]"
+  elif [[ "${VOICE_PROVIDER}" == "mlx_whisper" ]]; then
+    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[voice-mlx]"
   fi
 fi
 

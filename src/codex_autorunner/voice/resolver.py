@@ -6,10 +6,13 @@ from typing import Mapping, Optional
 
 from .config import VoiceConfig
 from .provider import SpeechProvider
+from .provider_catalog import normalize_voice_provider
 from .providers import (
     LocalWhisperProvider,
+    MlxWhisperProvider,
     OpenAIWhisperProvider,
     build_local_whisper_provider,
+    build_mlx_whisper_provider,
     build_speech_provider,
 )
 
@@ -25,7 +28,7 @@ def resolve_speech_provider(
     if not voice_config.enabled:
         raise ValueError("Voice features are disabled in config")
 
-    provider_name = voice_config.provider
+    provider_name = normalize_voice_provider(voice_config.provider)
     provider_configs = voice_config.providers or {}
     if not provider_name:
         raise ValueError("No voice provider configured")
@@ -37,11 +40,19 @@ def resolve_speech_provider(
             env=env or os.environ,
             logger=logger,
         )
-    if provider_name in {LocalWhisperProvider.name, "local"}:
+    if provider_name == LocalWhisperProvider.name:
         provider_cfg = provider_configs.get(provider_name)
         if not isinstance(provider_cfg, Mapping):
             provider_cfg = provider_configs.get(LocalWhisperProvider.name, {})
         return build_local_whisper_provider(
+            provider_cfg if isinstance(provider_cfg, Mapping) else {},
+            logger=logger,
+        )
+    if provider_name == MlxWhisperProvider.name:
+        provider_cfg = provider_configs.get(provider_name)
+        if not isinstance(provider_cfg, Mapping):
+            provider_cfg = provider_configs.get(MlxWhisperProvider.name, {})
+        return build_mlx_whisper_provider(
             provider_cfg if isinstance(provider_cfg, Mapping) else {},
             logger=logger,
         )

@@ -28,7 +28,7 @@ class _WhisperModelLike(Protocol):
 
 @dataclasses.dataclass
 class LocalWhisperSettings:
-    model: str = "tiny"
+    model: str = "small"
     device: str = "auto"
     compute_type: str = "default"
     cpu_threads: int = 0
@@ -43,7 +43,7 @@ class LocalWhisperSettings:
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "LocalWhisperSettings":
         return cls(
-            model=str(raw.get("model", "tiny")),
+            model=str(raw.get("model", "small")),
             device=str(raw.get("device", "auto")),
             compute_type=str(raw.get("compute_type", "default")),
             cpu_threads=int(raw.get("cpu_threads", 0)),
