@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -821,7 +822,11 @@ async def test_newt_branch_name_includes_chat_identity(
 
     assert len(branch_calls) == 1
     assert branch_calls[0]["repo_root"] == workspace.resolve()
-    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
+    expected_branch = (
+        "thread-chat-7777-thread-333-"
+        f"{hashlib.sha256(str(workspace.resolve()).encode('utf-8')).hexdigest()[:10]}"
+    )
+    assert branch_calls[0]["branch_name"] == expected_branch
 
 
 @pytest.mark.anyio
@@ -903,7 +908,11 @@ async def test_newt_infers_base_repo_from_worktree_id_when_missing_metadata(
 
     assert len(branch_calls) == 1
     assert branch_calls[0]["repo_root"] == workspace.resolve()
-    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
+    expected_branch = (
+        "thread-chat-7777-thread-333-"
+        f"{hashlib.sha256(str(workspace.resolve()).encode('utf-8')).hexdigest()[:10]}"
+    )
+    assert branch_calls[0]["branch_name"] == expected_branch
     assert all("Failed to reset branch" not in text for text in handler._sent)
 
 
@@ -936,7 +945,11 @@ async def test_newt_infers_base_repo_from_legacy_wt_worktree_id(
 
     assert len(branch_calls) == 1
     assert branch_calls[0]["repo_root"] == workspace.resolve()
-    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
+    expected_branch = (
+        "thread-chat-7777-thread-333-"
+        f"{hashlib.sha256(str(workspace.resolve()).encode('utf-8')).hexdigest()[:10]}"
+    )
+    assert branch_calls[0]["branch_name"] == expected_branch
 
 
 @pytest.mark.anyio
@@ -968,7 +981,11 @@ async def test_newt_prefers_longest_manifest_base_match_for_worktree_id(
 
     assert len(branch_calls) == 1
     assert branch_calls[0]["repo_root"] == workspace.resolve()
-    assert branch_calls[0]["branch_name"] == "thread-chat-7777-thread-333"
+    expected_branch = (
+        "thread-chat-7777-thread-333-"
+        f"{hashlib.sha256(str(workspace.resolve()).encode('utf-8')).hexdigest()[:10]}"
+    )
+    assert branch_calls[0]["branch_name"] == expected_branch
 
 
 @pytest.mark.anyio
@@ -1005,7 +1022,11 @@ async def test_newt_thread_fallback_and_workspace_state_reset(
 
     assert len(branch_calls) == 1
     assert branch_calls[0]["repo_root"] == workspace.resolve()
-    assert branch_calls[0]["branch_name"] == "thread-chat-123456-msg-808-upd-909"
+    expected_branch = (
+        "thread-chat-123456-msg-808-upd-909-"
+        f"{hashlib.sha256(str(workspace.resolve()).encode('utf-8')).hexdigest()[:10]}"
+    )
+    assert branch_calls[0]["branch_name"] == expected_branch
 
     # First topic update is /newt state reset before new thread is attached.
     reset_snapshot = handler._router.update_snapshots[0]
