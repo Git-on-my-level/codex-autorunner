@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -2525,10 +2526,14 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
 
     try:
         await service.run_forever()
+        expected_branch = (
+            "thread-channel-1-"
+            f"{hashlib.sha256(str(workspace.resolve()).encode('utf-8')).hexdigest()[:10]}"
+        )
         assert branch_calls == [
             {
                 "repo_root": workspace.resolve(),
-                "branch_name": "thread-channel-1",
+                "branch_name": expected_branch,
             }
         ]
         assert fake_orchestrator.reset_keys

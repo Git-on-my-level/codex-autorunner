@@ -4078,7 +4078,10 @@ class DiscordBotService:
         safe_channel_id = re.sub(r"[^a-zA-Z0-9]+", "-", channel_id).strip("-")
         if not safe_channel_id:
             safe_channel_id = "channel"
-        branch_name = f"thread-{safe_channel_id}"
+        branch_suffix = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[
+            :10
+        ]
+        branch_name = f"thread-{safe_channel_id}-{branch_suffix}"
 
         try:
             default_branch = await asyncio.to_thread(

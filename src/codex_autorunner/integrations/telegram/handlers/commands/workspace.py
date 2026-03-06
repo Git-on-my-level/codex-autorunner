@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -1309,7 +1310,10 @@ class WorkspaceCommands(SharedHelpers):
         safe_thread_id = re.sub(r"[^a-zA-Z0-9]+", "-", thread_identity).strip("-")
         if not safe_thread_id:
             safe_thread_id = "unscoped"
-        branch_name = f"thread-chat-{safe_chat_id}-{safe_thread_id}"
+        branch_suffix = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[
+            :10
+        ]
+        branch_name = f"thread-chat-{safe_chat_id}-{safe_thread_id}-{branch_suffix}"
 
         try:
             default_branch = await asyncio.to_thread(
