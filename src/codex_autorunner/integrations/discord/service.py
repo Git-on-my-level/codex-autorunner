@@ -21,6 +21,7 @@ from ...core.context_awareness import (
 )
 from ...core.filebox import (
     inbox_dir,
+    outbox_dir,
     outbox_pending_dir,
     outbox_sent_dir,
 )
@@ -1400,8 +1401,9 @@ class DiscordBotService:
                     "\n".join(
                         [
                             f"Inbox: {inbox}",
+                            f"Outbox: {outbox_dir(workspace_root)}",
                             f"Outbox (pending): {outbox_pending_dir(workspace_root)}",
-                            "Use inbox files as local inputs and place reply files in outbox (pending).",
+                            "Use inbox files as local inputs and place reply files in outbox.",
                         ]
                     )
                 )
@@ -6436,22 +6438,55 @@ class DiscordBotService:
         workspace_root: Path,
         channel_id: str,
     ) -> None:
+        outbox_root = outbox_dir(workspace_root)
         pending_dir = outbox_pending_dir(workspace_root)
-        if not pending_dir.exists():
+        candidates: list[tuple[Path, Path]] = []
+        if outbox_root.exists():
+            for path in self._list_paths_in_dir(outbox_root):
+                candidates.append((outbox_root, path))
+        if pending_dir.exists():
+            for path in self._list_paths_in_dir(pending_dir):
+                candidates.append((pending_dir, path))
+        if not candidates:
             return
-        files = self._list_paths_in_dir(pending_dir)
-        if not files:
-            return
+
+        deduped: dict[str, tuple[Path, Path]] = {}
+        for source_dir, path in candidates:
+            key = str(path)
+            with contextlib.suppress(Exception):
+                key = str(canonicalize_path(path))
+            existing = deduped.get(key)
+            if existing is None:
+                deduped[key] = (source_dir, path)
+                continue
+            existing_source, _existing_path = existing
+            existing_is_root = existing_source == outbox_root
+            current_is_root = source_dir == outbox_root
+            # Preserve outbox-root candidates over pending aliases that resolve
+            # to the same canonical target (e.g., pending symlink to root file).
+            if existing_is_root and not current_is_root:
+                continue
+            if current_is_root and not existing_is_root:
+                deduped[key] = (source_dir, path)
+
+        def _mtime(item: tuple[Path, Path]) -> float:
+            _source, path = item
+            with contextlib.suppress(OSError):
+                return path.stat().st_mtime
+            return 0.0
+
+        files = sorted(deduped.values(), key=_mtime, reverse=True)
+
         sent_dir = outbox_sent_dir(workspace_root)
-        for path in files:
-            if not _path_within(pending_dir, path):
+        for source_dir, path in files:
+            if not _path_within(source_dir, path):
                 log_event(
                     self._logger,
                     logging.WARNING,
                     "discord.files.outbox.skipped_outside_pending",
                     channel_id=channel_id,
                     path=str(path),
-                    pending_dir=str(pending_dir),
+                    pending_dir=str(source_dir),
                 )
                 continue
             await self._send_outbox_file(
@@ -6503,11 +6538,23 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
+        outbox_root = outbox_dir(workspace_root)
         pending = outbox_pending_dir(workspace_root)
         sent = outbox_sent_dir(workspace_root)
+        root_files = self._list_files_in_dir(outbox_root)
+        root_files = [
+            entry for entry in root_files if entry[0] not in {"pending", "sent"}
+        ]
         pending_files = self._list_files_in_dir(pending)
         sent_files = self._list_files_in_dir(sent)
         lines = []
+        if root_files:
+            lines.append(f"Outbox root ({len(root_files)} file(s)):")
+            for name, size, mtime in root_files[:20]:
+                lines.append(f"- {name} ({self._format_file_size(size)}, {mtime})")
+            if len(root_files) > 20:
+                lines.append(f"... and {len(root_files) - 20} more")
+            lines.append("")
         if pending_files:
             lines.append(f"Outbox pending ({len(pending_files)} file(s)):")
             for name, size, mtime in pending_files[:20]:
@@ -6539,16 +6586,19 @@ class DiscordBotService:
     ) -> None:
         target = (options.get("target") or "all").lower().strip()
         inbox = inbox_dir(workspace_root)
+        outbox_root = outbox_dir(workspace_root)
         pending = outbox_pending_dir(workspace_root)
         sent = outbox_sent_dir(workspace_root)
         deleted = 0
         if target == "inbox":
             deleted = self._delete_files_in_dir(inbox)
         elif target == "outbox":
-            deleted = self._delete_files_in_dir(pending)
+            deleted = self._delete_files_in_dir(outbox_root)
+            deleted += self._delete_files_in_dir(pending)
             deleted += self._delete_files_in_dir(sent)
         elif target == "all":
             deleted = self._delete_files_in_dir(inbox)
+            deleted += self._delete_files_in_dir(outbox_root)
             deleted += self._delete_files_in_dir(pending)
             deleted += self._delete_files_in_dir(sent)
         else:
