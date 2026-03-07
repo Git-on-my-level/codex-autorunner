@@ -50,6 +50,8 @@ from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ...core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
     Completed,
@@ -2158,7 +2160,11 @@ class DiscordBotService:
                     if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
                         continue
                     if (
-                        run_event.delta_type == "assistant_stream"
+                        run_event.delta_type
+                        in {
+                            RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                            RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+                        }
                         and isinstance(run_event.content, str)
                         and run_event.content
                     ):
@@ -2166,7 +2172,25 @@ class DiscordBotService:
                             assistant_stream_fallback, run_event.content
                         )
                     if isinstance(run_event.content, str) and run_event.content.strip():
-                        tracker.note_output(run_event.content)
+                        if (
+                            run_event.delta_type
+                            == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE
+                        ):
+                            latest_output = tracker.latest_output_text().strip()
+                            incoming_output = run_event.content.strip()
+                            if latest_output and (
+                                incoming_output == latest_output
+                                or incoming_output.startswith(latest_output)
+                            ):
+                                tracker.note_output(run_event.content)
+                            else:
+                                tracker.note_output(
+                                    run_event.content,
+                                    new_segment=True,
+                                )
+                            tracker.end_output_segment()
+                        else:
+                            tracker.note_output(run_event.content)
                         await _edit_progress()
                 elif isinstance(run_event, ToolCall):
                     tool_name = (
@@ -2198,6 +2222,8 @@ class DiscordBotService:
                         )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
+                    if final_message.strip():
+                        tracker.drop_terminal_output_if_duplicate(final_message)
                     completed_seen = True
                     tracker.clear_transient_action()
                     tracker.set_label("done")

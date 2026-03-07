@@ -12,11 +12,13 @@ from ..time_utils import now_iso
 # - Backend deltas should use the canonical delta_type set below.
 RUN_EVENT_DELTA_TYPE_USER_MESSAGE = "user_message"
 RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM = "assistant_stream"
+RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE = "assistant_message"
 RUN_EVENT_DELTA_TYPE_LOG_LINE = "log_line"
 RUN_EVENT_DELTA_TYPES = frozenset(
     {
         RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
         RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
         RUN_EVENT_DELTA_TYPE_LOG_LINE,
     }
 )
@@ -97,6 +99,7 @@ def is_terminal_run_event(event: RunEvent) -> bool:
 __all__ = [
     "RUN_EVENT_DELTA_TYPE_USER_MESSAGE",
     "RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM",
+    "RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE",
     "RUN_EVENT_DELTA_TYPE_LOG_LINE",
     "RUN_EVENT_DELTA_TYPES",
     "RunEvent",

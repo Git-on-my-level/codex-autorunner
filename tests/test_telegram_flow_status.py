@@ -32,6 +32,7 @@ from codex_autorunner.integrations.telegram.handlers.commands.flows import FlowC
 from codex_autorunner.integrations.telegram.notifications import (
     TelegramNotificationHandlers,
 )
+from codex_autorunner.integrations.telegram.progress_stream import TurnProgressTracker
 
 
 def _health(tmp_path: Path, status: str = "alive") -> FlowWorkerHealth:
@@ -269,6 +270,54 @@ class _AsyncNoopLock:
         return False
 
 
+class _TurnCompletionProgressHarness(TelegramNotificationHandlers):
+    def __init__(self) -> None:
+        self._config = SimpleNamespace(
+            progress_stream=SimpleNamespace(
+                enabled=True,
+                min_edit_interval_seconds=0.5,
+                max_actions=8,
+                max_output_chars=400,
+            )
+        )
+        self._turn_key = ("turn-1", "thread-1")
+        self._turn_progress_trackers: dict[tuple[str, str], Any] = {
+            self._turn_key: TurnProgressTracker(
+                started_at=0.0,
+                agent="codex",
+                model="mock-model",
+                label="working",
+                max_actions=8,
+                max_output_chars=400,
+            )
+        }
+        self._turn_contexts: dict[tuple[str, str], Any] = {self._turn_key: object()}
+        self.edits: list[tuple[tuple[str, str], bool, str]] = []
+        self.cleared: list[tuple[str, str]] = []
+
+    def _resolve_turn_key(
+        self, turn_id: Optional[str], *, thread_id: Optional[str] = None
+    ) -> Optional[tuple[str, str]]:
+        if turn_id == self._turn_key[0] and thread_id == self._turn_key[1]:
+            return self._turn_key
+        return None
+
+    async def _emit_progress_edit(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: Optional[Any] = None,
+        now: Optional[float] = None,
+        force: bool = False,
+        render_mode: str = "live",
+    ) -> None:
+        _ = (ctx, now)
+        self.edits.append((turn_key, force, render_mode))
+
+    def _clear_turn_progress(self, turn_key: tuple[str, str]) -> None:
+        self.cleared.append(turn_key)
+
+
 @pytest.mark.anyio
 async def test_progress_edit_cadence_emits_when_interval_elapsed(
     monkeypatch: pytest.MonkeyPatch,
@@ -349,6 +398,34 @@ async def test_ensure_turn_progress_lock_returns_same_instance_for_concurrent_ca
     first = locks[0]
     assert all(lock is first for lock in locks)
     assert harness._turn_progress_locks[key] is first
+
+
+@pytest.mark.anyio
+async def test_turn_completed_prunes_duplicate_terminal_output_from_progress() -> None:
+    harness = _TurnCompletionProgressHarness()
+    key = harness._turn_key
+    tracker: TurnProgressTracker = harness._turn_progress_trackers[key]
+    tracker.note_output("intermediate output one")
+    tracker.end_output_segment()
+    tracker.note_output("terminal final answer")
+
+    await harness._note_progress_turn_completed(
+        {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "status": "completed",
+            "finalMessage": "terminal final answer",
+        }
+    )
+
+    output_blocks = [
+        action.text for action in tracker.actions if action.label == "output"
+    ]
+    assert output_blocks == ["intermediate output one"]
+    assert tracker.label == "done"
+    assert tracker.finalized is True
+    assert harness.edits == [(key, True, "final")]
+    assert harness.cleared == [key]
 
 
 @pytest.mark.anyio

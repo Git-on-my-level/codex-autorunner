@@ -8,6 +8,8 @@ from ...core.circuit_breaker import CircuitBreaker
 from ...core.logging_utils import log_event
 from ...core.ports.agent_backend import AgentBackend, AgentEvent, now_iso
 from ...core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     ApprovalRequested,
     Completed,
     Failed,
@@ -566,7 +568,9 @@ class CodexAppServerBackend(AgentBackend):
             if not content:
                 return None
             return OutputDelta(
-                timestamp=now_iso(), content=content, delta_type="assistant_stream"
+                timestamp=now_iso(),
+                content=content,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             )
 
         if method == "turn/streamDelta" or "outputdelta" in method_lower:
@@ -600,7 +604,7 @@ class CodexAppServerBackend(AgentBackend):
                     return OutputDelta(
                         timestamp=now_iso(),
                         content=text,
-                        delta_type="assistant_stream",
+                        delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
                     )
                 return None
             tool_name, tool_input = _normalize_tool_name(params)
@@ -637,7 +641,7 @@ class CodexAppServerBackend(AgentBackend):
             if not content:
                 return AgentEvent.stream_delta(content="", delta_type="unknown_event")
             return AgentEvent.stream_delta(
-                content=content, delta_type="assistant_stream"
+                content=content, delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
             )
 
         if method == "turn/streamDelta" or "outputdelta" in method_lower:
@@ -667,7 +671,8 @@ class CodexAppServerBackend(AgentBackend):
                 text = _extract_agent_message_text(item)
                 if text.strip():
                     return AgentEvent.stream_delta(
-                        content=text, delta_type="assistant_stream"
+                        content=text,
+                        delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
                     )
                 return AgentEvent.stream_delta(content="", delta_type="unknown_event")
             tool_name, tool_input = _normalize_tool_name(params)

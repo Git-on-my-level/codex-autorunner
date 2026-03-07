@@ -45,6 +45,43 @@ def test_note_output_accumulates_across_updates() -> None:
     assert len([a for a in tracker.actions if a.label == "output"]) == 1
 
 
+def test_note_output_does_not_insert_artificial_spaces_between_chunks() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=200,
+    )
+    tracker.note_output("orches")
+    tracker.note_output("tration")
+    tracker.note_output(" isn't")
+    tracker.note_output(" broken")
+
+    rendered = render_progress_text(tracker, max_length=2000, now=1.0)
+
+    assert "orchestration isn't broken" in rendered
+    assert "orches tration" not in rendered
+
+
+def test_note_output_does_not_drop_internal_substring_chunks() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=200,
+    )
+    tracker.note_output("abcdef")
+    tracker.note_output("cd")
+
+    rendered = render_progress_text(tracker, max_length=2000, now=1.0)
+
+    assert "abcdefcd" in rendered
+
+
 def test_note_thinking_is_transient_and_cleared_by_output() -> None:
     tracker = TurnProgressTracker(
         started_at=0.0,
@@ -103,6 +140,27 @@ def test_output_after_transient_events_remains_visible() -> None:
 
     rendered = render_progress_text(tracker, max_length=2000, now=3.0)
     assert "second output" in rendered
+
+
+def test_live_mode_keeps_latest_output_visible_when_window_is_full_of_non_output() -> (
+    None
+):
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=3,
+        max_output_chars=200,
+    )
+    tracker.note_output("important output")
+    tracker.add_action("notice", "notice one", "update")
+    tracker.add_action("notice", "notice two", "update")
+    tracker.add_action("notice", "notice three", "update")
+
+    rendered = render_progress_text(tracker, max_length=2000, now=3.0)
+
+    assert "important output" in rendered
 
 
 def test_render_progress_text_keeps_output_block_when_message_budget_is_tight() -> None:
@@ -226,6 +284,122 @@ def test_final_mode_uses_consolidated_output_after_interleaved_actions() -> None
     assert rendered.count("first output") == 1
     assert rendered.count("second output") == 1
     assert "run_tests" not in rendered
+
+
+def test_final_mode_accumulates_segmented_outputs() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=500,
+    )
+    tracker.note_output("intermediate output one")
+    tracker.note_output("intermediate output two", new_segment=True)
+
+    rendered = render_progress_text(
+        tracker, max_length=2000, now=1.0, render_mode="final"
+    )
+
+    assert "intermediate output one" in rendered
+    assert "intermediate output two" in rendered
+    assert "\n\n" in rendered
+
+
+def test_end_output_segment_forces_next_output_into_new_block() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=500,
+    )
+    tracker.note_output("output one")
+    tracker.end_output_segment()
+    tracker.note_output("output two")
+
+    rendered = render_progress_text(
+        tracker, max_length=2000, now=1.0, render_mode="final"
+    )
+
+    assert "output one" in rendered
+    assert "output two" in rendered
+    assert "\n\n" in rendered
+
+
+def test_drop_terminal_output_if_duplicate_removes_matching_final_block() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=500,
+    )
+    tracker.note_output("intermediate output")
+    tracker.end_output_segment()
+    tracker.note_output("final answer")
+
+    dropped = tracker.drop_terminal_output_if_duplicate("final answer")
+    rendered = render_progress_text(
+        tracker, max_length=2000, now=1.0, render_mode="final"
+    )
+
+    assert dropped is True
+    assert "intermediate output" in rendered
+    assert "final answer" not in rendered
+
+
+def test_drop_terminal_output_if_duplicate_matches_truncated_tail() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=20,
+    )
+    final_text = "this is a very long final answer that gets truncated"
+    tracker.note_output("intermediate output")
+    tracker.end_output_segment()
+    tracker.note_output(final_text)
+
+    dropped = tracker.drop_terminal_output_if_duplicate(final_text)
+    rendered = render_progress_text(
+        tracker, max_length=2000, now=1.0, render_mode="final"
+    )
+
+    assert dropped is True
+    assert "intermediate output" in rendered
+    assert "final answer" not in rendered
+
+
+def test_drop_terminal_output_if_duplicate_scans_past_newer_nonmatching_outputs() -> (
+    None
+):
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=500,
+    )
+    tracker.note_output("intermediate output")
+    tracker.end_output_segment()
+    tracker.note_output("terminal final answer")
+    tracker.end_output_segment()
+    tracker.note_output("post-final notice")
+
+    dropped = tracker.drop_terminal_output_if_duplicate("terminal final answer")
+    output_blocks = [
+        action.text for action in tracker.actions if action.label == "output"
+    ]
+
+    assert dropped is True
+    assert output_blocks == ["intermediate output", "post-final notice"]
 
 
 def test_final_mode_output_truncates_from_tail() -> None:

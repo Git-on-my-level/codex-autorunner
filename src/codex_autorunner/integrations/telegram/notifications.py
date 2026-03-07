@@ -361,8 +361,18 @@ class TelegramNotificationHandlers:
             tool = item.get("name") or item.get("tool") or item.get("id") or "Tool call"
             tracker.note_tool(str(tool))
         elif item_type == "agentMessage":
-            text = item.get("text") or "Agent message"
-            tracker.add_action("agent", str(text), "done")
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                latest_output = tracker.latest_output_text().strip()
+                incoming_output = text.strip()
+                if latest_output and (
+                    incoming_output == latest_output
+                    or incoming_output.startswith(latest_output)
+                ):
+                    tracker.note_output(text)
+                else:
+                    tracker.note_output(text, new_segment=True)
+                tracker.end_output_segment()
         else:
             text = item.get("text") or item.get("message") or "Item completed"
             tracker.add_action("item", str(text), "done")
@@ -435,6 +445,9 @@ class TelegramNotificationHandlers:
             tracker.set_label("failed")
         else:
             tracker.set_label("done")
+        final_text = _extract_turn_completed_final_text(params)
+        if final_text:
+            tracker.drop_terminal_output_if_duplicate(final_text)
         tracker.clear_transient_action()
         tracker.finalized = True
         await self._emit_progress_edit(turn_key, force=True, render_mode="final")
@@ -581,4 +594,25 @@ def _extract_error_message(params: dict[str, Any]) -> str:
         return err
     if isinstance(params.get("message"), str):
         return params["message"]
+    return ""
+
+
+def _extract_turn_completed_final_text(params: dict[str, Any]) -> str:
+    direct_keys = (
+        "finalMessage",
+        "final_message",
+        "message",
+        "output",
+        "text",
+    )
+    for key in direct_keys:
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    result = params.get("result")
+    if isinstance(result, dict):
+        for key in direct_keys:
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
     return ""

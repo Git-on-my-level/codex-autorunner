@@ -96,12 +96,19 @@ class DefaultAgentPool:
             return
 
         if isinstance(event, OutputDelta):
-            if event.delta_type == "assistant_stream" and event.content:
+            if (
+                event.delta_type in {"assistant_stream", "assistant_message"}
+                and event.content
+            ):
                 emit_event(
                     FlowEventType.AGENT_STREAM_DELTA,
                     {"delta": event.content, "turn_id": turn_id},
                 )
-            if event.delta_type in {"assistant_stream", "log_line"} and event.content:
+            if (
+                event.delta_type
+                in {"assistant_stream", "assistant_message", "log_line"}
+                and event.content
+            ):
                 emit_event(
                     FlowEventType.APP_SERVER_EVENT,
                     {
@@ -173,7 +180,10 @@ class DefaultAgentPool:
                     if event.turn_id:
                         turn_id = event.turn_id
                 elif isinstance(event, OutputDelta):
-                    if event.delta_type == "assistant_stream" and event.content:
+                    if (
+                        event.delta_type in {"assistant_stream", "assistant_message"}
+                        and event.content
+                    ):
                         assistant_parts.append(event.content)
                     elif event.delta_type == "log_line" and event.content:
                         log_lines.append(event.content)

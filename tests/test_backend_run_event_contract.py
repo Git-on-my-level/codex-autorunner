@@ -173,7 +173,8 @@ async def test_codex_backend_run_turn_events_keeps_completion_event_when_wait_an
     assistant_deltas = [
         event.content
         for event in events
-        if isinstance(event, OutputDelta) and event.delta_type == "assistant_stream"
+        if isinstance(event, OutputDelta)
+        and event.delta_type in {"assistant_stream", "assistant_message"}
     ]
     assert streamed_completion_text in assistant_deltas
     assert isinstance(events[-1], Completed)
@@ -392,6 +393,7 @@ def test_codex_notification_parser_supports_outputdelta_reasoning_and_item_compl
 
     assert isinstance(events[6], OutputDelta)
     assert events[6].content == "done"
+    assert events[6].delta_type == "assistant_message"
 
     assert isinstance(events[7], TokenUsage)
     assert events[7].usage["input_tokens"] == 10
