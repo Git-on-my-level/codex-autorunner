@@ -104,3 +104,20 @@ def test_output_after_transient_events_remains_visible() -> None:
     rendered = render_progress_text(tracker, max_length=2000, now=3.0)
     assert "output:" in rendered
     assert "second output" in rendered
+
+
+def test_render_progress_text_keeps_output_block_when_message_budget_is_tight() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=10_000,
+    )
+    tracker.note_output("prefix " + ("x" * 600) + " tail")
+
+    rendered = render_progress_text(tracker, max_length=160, now=1.0)
+
+    assert "output:" in rendered
+    assert "tail" in rendered

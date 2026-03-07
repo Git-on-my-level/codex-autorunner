@@ -16,7 +16,7 @@
     "build": "tsc -p tsconfig.json",
     "postbuild": "node scripts/add-static-banner.js && node scripts/generate-asset-manifest.mjs",
     "test:dom": "node scripts/check_dom_structure.mjs",
-    "test:markdown": "node --test tests/js/markdown_render.test.js"
+    "test:markdown": "node --test tests/js/*.test.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

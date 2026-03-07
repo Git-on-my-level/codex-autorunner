@@ -254,7 +254,17 @@ def render_progress_text(
     message = "\n".join(lines)
     if len(message) <= max_length:
         return message
-    while blocks and len("\n".join(_render_lines(blocks))) > max_length:
+
+    def _truncate_last_line(line: str, limit: int) -> str:
+        if line.startswith(f"{STATUS_ICONS['update']} output: "):
+            prefix = f"{STATUS_ICONS['update']} output: "
+            content = line[len(prefix) :]
+            if limit <= len(prefix):
+                return _truncate_text(line, limit)
+            return f"{prefix}{_truncate_tail(content, limit - len(prefix))}"
+        return _truncate_text(line, limit)
+
+    while len(blocks) > 1 and len("\n".join(_render_lines(blocks))) > max_length:
         blocks.pop(0)
     lines = _render_lines(blocks)
     message = "\n".join(lines)
@@ -264,5 +274,5 @@ def render_progress_text(
         header = lines[0]
         remaining = max_length - len(header) - 1
         if remaining > 0:
-            return f"{header}\n{_truncate_text(lines[-1], remaining)}"
+            return f"{header}\n{_truncate_last_line(lines[-1], remaining)}"
     return _truncate_text(message, max_length)

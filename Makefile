@@ -92,7 +92,7 @@ test-integration:
 check:
 	./scripts/check.sh
 	@if [ -d node_modules ]; then \
-		pnpm lint:html && pnpm test:dom; \
+		pnpm lint:html && pnpm test:dom && pnpm test:markdown; \
 	else \
 		echo "Skipping frontend checks (node_modules missing). Run 'make npm-install' first." >&2; \
 	fi

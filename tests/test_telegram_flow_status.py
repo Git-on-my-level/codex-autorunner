@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     build_model_keyboard,
     parse_callback_data,
 )
+from codex_autorunner.integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from codex_autorunner.integrations.telegram.handlers.commands import (
     flows as flows_module,
 )
@@ -217,6 +219,47 @@ class _ProgressCadenceHarness(TelegramNotificationHandlers):
         return asyncio.create_task(coro)
 
 
+class _StartTurnProgressHarness(TelegramNotificationHandlers):
+    def __init__(self) -> None:
+        self._config = SimpleNamespace(
+            progress_stream=SimpleNamespace(
+                enabled=True,
+                min_edit_interval_seconds=1.0,
+                max_actions=4,
+                max_output_chars=TELEGRAM_MAX_MESSAGE_LENGTH,
+            )
+        )
+        self._logger = logging.getLogger("test")
+        self._turn_progress_trackers: dict[tuple[str, str], Any] = {}
+        self._turn_progress_rendered: dict[tuple[str, str], str] = {}
+        self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_progress_tasks: dict[tuple[str, str], Any] = {}
+        self._turn_progress_heartbeat_tasks: dict[tuple[str, str], Any] = {}
+        self._turn_progress_locks: dict[tuple[str, str], Any] = {}
+        self._turn_contexts: dict[tuple[str, str], Any] = {}
+        self._pending_context_usage: dict[tuple[str, str], int] = {}
+        self._cache_access: dict[str, dict[tuple[str, str], float]] = {}
+        self.progress_edits: list[tuple[tuple[str, str], bool]] = []
+
+    def _touch_cache_timestamp(self, cache_name: str, key: tuple[str, str]) -> None:
+        self._cache_access.setdefault(cache_name, {})[key] = 0.0
+
+    async def _emit_progress_edit(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: Optional[Any] = None,
+        now: Optional[float] = None,
+        force: bool = False,
+    ) -> None:
+        _ = (ctx, now)
+        self.progress_edits.append((turn_key, force))
+
+    def _spawn_task(self, coro: Any) -> Any:
+        coro.close()
+        return SimpleNamespace(done=lambda: True, cancel=lambda: None)
+
+
 class _AsyncNoopLock:
     async def __aenter__(self) -> "_AsyncNoopLock":
         return self
@@ -306,6 +349,25 @@ async def test_ensure_turn_progress_lock_returns_same_instance_for_concurrent_ca
     first = locks[0]
     assert all(lock is first for lock in locks)
     assert harness._turn_progress_locks[key] is first
+
+
+@pytest.mark.anyio
+async def test_start_turn_progress_uses_full_message_budget_for_persistent_output() -> (
+    None
+):
+    harness = _StartTurnProgressHarness()
+    turn_key = ("turn-1", "thread-1")
+    ctx = SimpleNamespace(chat_id=1, thread_id=2, topic_key="topic-1")
+
+    await harness._start_turn_progress(
+        turn_key,
+        ctx=ctx,
+        agent="codex",
+        model="gpt-5.3-codex",
+    )
+
+    tracker = harness._turn_progress_trackers[turn_key]
+    assert tracker.max_output_chars == TELEGRAM_MAX_MESSAGE_LENGTH
 
 
 class _FlowStatusHandler(FlowCommands):

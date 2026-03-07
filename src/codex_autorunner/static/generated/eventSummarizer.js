@@ -79,7 +79,7 @@ function eventToAction(event, maxTextLength) {
         label = "event";
         status = "update";
     }
-    const text = truncateText(rawText, maxTextLength);
+    const text = label === "output" ? rawText : truncateText(rawText, maxTextLength);
     const icon = label === "thinking" ? STATUS_ICONS.thinking : STATUS_ICONS[status] || STATUS_ICONS.running;
     return { icon, label, text, status };
 }
