@@ -90,7 +90,13 @@ def register_render_commands(app: typer.Typer, raise_exit) -> None:
         except OSError as exc:
             raise_exit(f"Failed to read source markdown: {exc}", cause=exc)
 
-        diagram_formats = [value.lower().strip() for value in diagram_format if value]
+        diagram_formats = list(
+            dict.fromkeys(
+                value.lower().strip()
+                for value in diagram_format
+                if value and value.strip()
+            )
+        )
         if not diagram_formats:
             raise_exit("At least one --diagram-format value is required.")
         invalid_diagram = sorted(set(diagram_formats) - SUPPORTED_DIAGRAM_FORMATS)
@@ -101,7 +107,11 @@ def register_render_commands(app: typer.Typer, raise_exit) -> None:
                 + ". Supported: png, pdf, svg."
             )
 
-        document_formats = [value.lower().strip() for value in doc_format if value]
+        document_formats = list(
+            dict.fromkeys(
+                value.lower().strip() for value in doc_format if value and value.strip()
+            )
+        )
         if not document_formats:
             raise_exit("At least one --doc-format value is required.")
         invalid_doc = sorted(set(document_formats) - SUPPORTED_DOC_FORMATS)
