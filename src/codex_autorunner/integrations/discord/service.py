@@ -1156,7 +1156,7 @@ class DiscordBotService:
                 if response_text.strip():
                     response_text = f"{response_text}\n\n{metrics_text}"
                 else:
-                    response_text = metrics_text
+                    response_text = f"(No response text returned.)\n\n{metrics_text}"
         else:
             response_text = str(turn_result or "")
 
@@ -2084,9 +2084,27 @@ class DiscordBotService:
         )
         known_session = orchestrator.get_thread_id(session_key)
         final_message = ""
+        assistant_stream_fallback = ""
+        completed_seen = False
         token_usage: Optional[dict[str, Any]] = None
         error_message = None
         session_from_events = known_session
+
+        def _merge_assistant_stream(current: str, incoming: str) -> str:
+            if not incoming:
+                return current
+            if not current:
+                return incoming
+            if len(incoming) > len(current) and incoming.startswith(current):
+                return incoming
+            # Collapse only partial overlap between current suffix and incoming prefix.
+            # Full-length overlap is left intact to avoid dropping legitimate repeats.
+            max_overlap = min(len(current), max(len(incoming) - 1, 0))
+            for overlap in range(max_overlap, 0, -1):
+                if current[-overlap:] == incoming[:overlap]:
+                    return f"{current}{incoming[overlap:]}"
+            return f"{current}{incoming}"
+
         try:
             async for run_event in orchestrator.run_turn(
                 agent_id=agent,
@@ -2105,6 +2123,14 @@ class DiscordBotService:
                 elif isinstance(run_event, OutputDelta):
                     if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
                         continue
+                    if (
+                        run_event.delta_type == "assistant_stream"
+                        and isinstance(run_event.content, str)
+                        and run_event.content
+                    ):
+                        assistant_stream_fallback = _merge_assistant_stream(
+                            assistant_stream_fallback, run_event.content
+                        )
                     if isinstance(run_event.content, str) and run_event.content.strip():
                         tracker.note_output(run_event.content)
                         await _edit_progress()
@@ -2138,11 +2164,28 @@ class DiscordBotService:
                         )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
+                    completed_seen = True
                     tracker.clear_transient_action()
                     tracker.set_label("done")
                     await _edit_progress(force=True, remove_components=True)
                 elif isinstance(run_event, Failed):
-                    error_message = run_event.error_message or "Turn failed"
+                    failed_message = run_event.error_message or "Turn failed"
+                    if completed_seen:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.turn.failed_late_ignored",
+                            channel_id=progress_channel_id,
+                            session_key=session_key,
+                            error_message=failed_message,
+                            final_message_length=len(final_message),
+                            fallback_stream_length=len(assistant_stream_fallback),
+                        )
+                        tracker.clear_transient_action()
+                        tracker.set_label("done")
+                        await _edit_progress(force=True, remove_components=True)
+                        continue
+                    error_message = failed_message
                     tracker.note_error(error_message)
                     tracker.clear_transient_action()
                     tracker.set_label("failed")
@@ -2163,6 +2206,16 @@ class DiscordBotService:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
             raise RuntimeError(error_message)
+        if not final_message.strip() and assistant_stream_fallback.strip():
+            final_message = assistant_stream_fallback
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.turn.final_message.fallback_stream",
+                channel_id=progress_channel_id,
+                session_key=session_key,
+                fallback_length=len(final_message),
+            )
         elapsed_seconds = max(0.0, time.monotonic() - tracker.started_at)
         return DiscordMessageTurnResult(
             final_message=final_message,
@@ -8327,18 +8380,6 @@ class DiscordBotService:
                         message_id=preview_message_id,
                         payload={"content": chunks[0]},
                     )
-                    await self._flush_outbox_files(
-                        workspace_root=workspace_root,
-                        channel_id=channel_id,
-                    )
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.review.completed",
-                        channel_id=channel_id,
-                        target_type=target_type,
-                    )
-                    return
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -8348,6 +8389,30 @@ class DiscordBotService:
                         message_id=preview_message_id,
                         exc=exc,
                     )
+                else:
+                    try:
+                        await self._flush_outbox_files(
+                            workspace_root=workspace_root,
+                            channel_id=channel_id,
+                        )
+                    except Exception as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.review.outbox_flush_failed",
+                            channel_id=channel_id,
+                            target_type=target_type,
+                            message_id=preview_message_id,
+                            exc=exc,
+                        )
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.review.completed",
+                        channel_id=channel_id,
+                        target_type=target_type,
+                    )
+                    return
             try:
                 await self._rest.delete_channel_message(
                     channel_id=channel_id,
