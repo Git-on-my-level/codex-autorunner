@@ -130,6 +130,7 @@ from ..telegram.helpers import (
     _coerce_thread_list,
     _extract_context_usage_percent,
     _extract_thread_list_cursor,
+    _extract_thread_preview_parts,
     _format_turn_metrics,
     _parse_review_commit_log,
 )
@@ -328,6 +329,43 @@ def _flow_run_matches_action(record: FlowRunRecord, action: str) -> bool:
     if action == "recover":
         return not record.status.is_terminal()
     return True
+
+
+def _truncate_picker_text(text: str, *, limit: int) -> str:
+    value = " ".join(text.split()).strip()
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    return f"{value[: limit - 3]}..."
+
+
+def _format_session_thread_picker_label(
+    thread_id: str, entry: dict[str, Any], *, is_current: bool
+) -> str:
+    max_label_len = 100
+    current_suffix = " (current)" if is_current else ""
+    max_base_len = max_label_len - len(current_suffix)
+    user_preview, assistant_preview = _extract_thread_preview_parts(entry)
+    user_preview = _truncate_picker_text(user_preview or "", limit=72) or None
+    assistant_preview = _truncate_picker_text(assistant_preview or "", limit=72) or None
+    preview_label: Optional[str] = None
+    if user_preview and assistant_preview:
+        preview_label = f"U: {user_preview} | A: {assistant_preview}"
+    elif user_preview:
+        preview_label = f"U: {user_preview}"
+    elif assistant_preview:
+        preview_label = f"A: {assistant_preview}"
+    if preview_label:
+        short_id = thread_id[:8]
+        id_prefix = f"[{short_id}] "
+        preview_budget = max(1, max_base_len - len(id_prefix))
+        base = (
+            f"{id_prefix}{_truncate_picker_text(preview_label, limit=preview_budget)}"
+        )
+    else:
+        base = _truncate_picker_text(thread_id, limit=max_base_len)
+    return f"{base}{current_suffix}"
 
 
 @dataclass(frozen=True)
@@ -1707,9 +1745,11 @@ class DiscordBotService:
             if thread_id in seen_ids:
                 continue
             seen_ids.add(thread_id)
-            label = thread_id
-            if thread_id == current_thread_id:
-                label = f"{thread_id} (current)"
+            label = _format_session_thread_picker_label(
+                thread_id,
+                entry,
+                is_current=thread_id == current_thread_id,
+            )
             items.append((thread_id, label))
             if len(items) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
                 break
@@ -1720,7 +1760,14 @@ class DiscordBotService:
         ):
             if len(items) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
                 items.pop()
-            items.append((current_thread_id, f"{current_thread_id} (current)"))
+            items.append(
+                (
+                    current_thread_id,
+                    _format_session_thread_picker_label(
+                        current_thread_id, {"id": current_thread_id}, is_current=True
+                    ),
+                )
+            )
         return items
 
     async def _list_recent_commits_for_picker(

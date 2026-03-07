@@ -337,6 +337,31 @@ def test_model_picker_items_are_deduplicated_and_labeled() -> None:
     ]
 
 
+def test_session_thread_picker_label_prefers_preview_and_marks_current() -> None:
+    label = discord_service_module._format_session_thread_picker_label(
+        "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
+        {
+            "id": "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
+            "last_user_message": "Fix resume picker so the options show summaries",
+            "last_assistant_message": "I will update labels to include preview text",
+        },
+        is_current=True,
+    )
+    assert "(current)" in label
+    assert "[019cc7c1]" in label
+    assert "Fix resume picker so the options show summaries" in label
+
+
+def test_session_thread_picker_label_falls_back_to_thread_id() -> None:
+    thread_id = "019cc738-5168-7ca1-9d80-ab180b4b31dd"
+    label = discord_service_module._format_session_thread_picker_label(
+        thread_id,
+        {"id": thread_id},
+        is_current=False,
+    )
+    assert label == thread_id
+
+
 @pytest.mark.anyio
 async def test_model_list_with_agent_compat_retries_without_agent() -> None:
     class _FakeClient:
