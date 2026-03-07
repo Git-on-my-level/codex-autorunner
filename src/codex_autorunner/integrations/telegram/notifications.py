@@ -28,6 +28,8 @@ from .helpers import (
 )
 from .progress_stream import TurnProgressTracker, render_progress_text
 
+_ACTIVE_PROGRESS_LABELS = {"working", "queued", "running", "review"}
+
 
 class TelegramNotificationHandlers:
     def _cache_token_usage(
@@ -545,8 +547,8 @@ class TelegramNotificationHandlers:
         )
         if not force and rendered == self._turn_progress_rendered.get(turn_key):
             return
-        reply_markup = None
-        if tracker.label in {"working", "queued", "running"}:
+        reply_markup: Optional[dict[str, Any]] = {"inline_keyboard": []}
+        if tracker.label in _ACTIVE_PROGRESS_LABELS:
             try:
                 reply_markup = self._interrupt_keyboard()
             except Exception:

@@ -2023,6 +2023,7 @@ class DiscordBotService:
         progress_last_updated = 0.0
         progress_failure_count = 0
         progress_heartbeat_task: Optional[asyncio.Task[None]] = None
+        active_progress_labels = {"working", "queued", "running", "review"}
 
         async def _edit_progress(
             *,
@@ -2054,8 +2055,10 @@ class DiscordBotService:
             payload: dict[str, Any] = {"content": content}
             if remove_components:
                 payload["components"] = []
-            else:
+            elif tracker.label in active_progress_labels:
                 payload["components"] = [build_cancel_turn_button()]
+            else:
+                payload["components"] = []
             try:
                 await self._rest.edit_channel_message(
                     channel_id=progress_channel_id,
@@ -2270,6 +2273,14 @@ class DiscordBotService:
                 progress_heartbeat_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await progress_heartbeat_task
+        if not error_message and not completed_seen:
+            tracker.clear_transient_action()
+            tracker.set_label("done")
+            await _edit_progress(
+                force=True,
+                remove_components=True,
+                render_mode="final",
+            )
         if session_from_events:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:

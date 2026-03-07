@@ -28,6 +28,7 @@ from codex_autorunner.core.ports.run_event import (
     Completed,
     Failed,
     OutputDelta,
+    RunNotice,
     Started,
     TokenUsage,
     ToolCall,
@@ -2189,6 +2190,58 @@ async def test_message_create_streaming_turn_completion_sends_final_and_keeps_pr
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_keeps_components_cleared_after_completion(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message="done"),
+            RunNotice(
+                timestamp="2026-01-01T00:00:03Z",
+                kind="notice",
+                message="late notice",
+            ),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert rest.edited_channel_messages
+        assert rest.edited_channel_messages[-1]["payload"].get("components") == []
     finally:
         await store.close()
 

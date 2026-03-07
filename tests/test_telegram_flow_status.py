@@ -318,6 +318,62 @@ class _TurnCompletionProgressHarness(TelegramNotificationHandlers):
         self.cleared.append(turn_key)
 
 
+class _ProgressMarkupHarness(TelegramNotificationHandlers):
+    def __init__(self, *, label: str) -> None:
+        self._turn_key = ("turn-1", "thread-1")
+        self._turn_progress_trackers: dict[tuple[str, str], Any] = {
+            self._turn_key: TurnProgressTracker(
+                started_at=0.0,
+                agent="codex",
+                model="mock-model",
+                label=label,
+                max_actions=4,
+                max_output_chars=400,
+            )
+        }
+        self._turn_progress_rendered: dict[tuple[str, str], str] = {}
+        self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_contexts: dict[tuple[str, str], Any] = {
+            self._turn_key: SimpleNamespace(
+                chat_id=1,
+                thread_id=2,
+                placeholder_message_id=99,
+            )
+        }
+        self._cache_access: dict[str, dict[tuple[str, str], float]] = {}
+        self.edits: list[dict[str, Any]] = []
+
+    def _touch_cache_timestamp(self, cache_name: str, key: tuple[str, str]) -> None:
+        self._cache_access.setdefault(cache_name, {})[key] = 0.0
+
+    def _interrupt_keyboard(self) -> dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [{"text": "Cancel", "callback_data": "cancel:interrupt"}]
+            ]
+        }
+
+    async def _edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        message_thread_id: Optional[int] = None,
+        reply_markup: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        _ = message_thread_id
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "reply_markup": reply_markup,
+            }
+        )
+        return True
+
+
 @pytest.mark.anyio
 async def test_progress_edit_cadence_emits_when_interval_elapsed(
     monkeypatch: pytest.MonkeyPatch,
@@ -445,6 +501,26 @@ async def test_start_turn_progress_uses_full_message_budget_for_persistent_outpu
 
     tracker = harness._turn_progress_trackers[turn_key]
     assert tracker.max_output_chars == TELEGRAM_MAX_MESSAGE_LENGTH
+
+
+@pytest.mark.anyio
+async def test_emit_progress_edit_keeps_cancel_button_for_active_review_label() -> None:
+    harness = _ProgressMarkupHarness(label="review")
+    await harness._emit_progress_edit(harness._turn_key, force=True)
+
+    assert harness.edits
+    markup = harness.edits[-1]["reply_markup"]
+    assert isinstance(markup, dict)
+    assert markup["inline_keyboard"][0][0]["text"] == "Cancel"
+
+
+@pytest.mark.anyio
+async def test_emit_progress_edit_clears_keyboard_for_terminal_label() -> None:
+    harness = _ProgressMarkupHarness(label="done")
+    await harness._emit_progress_edit(harness._turn_key, force=True)
+
+    assert harness.edits
+    assert harness.edits[-1]["reply_markup"] == {"inline_keyboard": []}
 
 
 class _FlowStatusHandler(FlowCommands):
