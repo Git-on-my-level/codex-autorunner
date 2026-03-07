@@ -1,0 +1,21 @@
+version: 1
+steps:
+  - action: goto
+    url: /form
+  - action: fill
+    label: Email
+    value: demo@example.com
+  - action: fill
+    label: Password
+    value: secret
+  - action: click
+    role: button
+    name: Submit
+  - action: wait_for_url
+    url: /dashboard?email=demo%40example.com
+  - action: wait_for_text
+    text: Dashboard
+  - action: screenshot
+    output: demo-dashboard.png
+  - action: snapshot_a11y
+    output: demo-dashboard-a11y.json

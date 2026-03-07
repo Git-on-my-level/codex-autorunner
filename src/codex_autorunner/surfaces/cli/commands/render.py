@@ -123,7 +123,7 @@ def register_render_commands(
         serve_cmd: Optional[str] = typer.Option(
             None,
             "--serve-cmd",
-            help="Command used to start a local app before capture.",
+            help="Command used to start a local app before capture. CAR tears it down on every exit path.",
         ),
         ready_url: Optional[str] = typer.Option(
             None,
@@ -174,7 +174,7 @@ def register_render_commands(
             None, "--hub", "--hub-path", help="Hub root or config path."
         ),
     ) -> None:
-        """Capture a screenshot artifact."""
+        """Capture a screenshot from URL mode or serve mode with guaranteed serve cleanup."""
         _require_render_feature(require_optional_feature)
         ctx = require_repo_config(repo, hub)
         repo_root = _repo_root_from_context(ctx)
@@ -242,7 +242,9 @@ def register_render_commands(
             None, "--url", help="Run demo against an already-running URL."
         ),
         serve_cmd: Optional[str] = typer.Option(
-            None, "--serve-cmd", help="Command used to start a local app before demo."
+            None,
+            "--serve-cmd",
+            help="Command used to start a local app before demo. CAR tears it down on every exit path.",
         ),
         ready_url: Optional[str] = typer.Option(
             None,
@@ -298,7 +300,7 @@ def register_render_commands(
             None, "--hub", "--hub-path", help="Hub root or config path."
         ),
     ) -> None:
-        """Run a scripted browser demo manifest and capture evidence artifacts."""
+        """Run a deterministic demo manifest from URL or serve mode with guaranteed serve cleanup."""
         _require_render_feature(require_optional_feature)
         ctx = require_repo_config(repo, hub)
         repo_root = _repo_root_from_context(ctx)
@@ -376,7 +378,7 @@ def register_render_commands(
         serve_cmd: Optional[str] = typer.Option(
             None,
             "--serve-cmd",
-            help="Command used to start a local app before observe.",
+            help="Command used to start a local app before observe. CAR tears it down on every exit path.",
         ),
         ready_url: Optional[str] = typer.Option(
             None,
@@ -422,7 +424,7 @@ def register_render_commands(
             None, "--hub", "--hub-path", help="Hub root or config path."
         ),
     ) -> None:
-        """Capture deterministic, accessibility-first page observation artifacts."""
+        """Capture deterministic, accessibility-first observations from URL or serve mode with guaranteed cleanup."""
         _require_render_feature(require_optional_feature)
         ctx = require_repo_config(repo, hub)
         repo_root = _repo_root_from_context(ctx)

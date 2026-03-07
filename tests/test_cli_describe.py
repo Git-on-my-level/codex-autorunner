@@ -62,6 +62,18 @@ def test_describe_json_output_matches_schema_keys(repo):
         assert key in parsed, f"Missing required key: {key}"
 
 
+def test_describe_browser_feature_flags_present(repo):
+    result = runner.invoke(app, ["describe", "--repo", str(repo), "--json"])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    features = parsed["features"]
+    assert "render_cli_available" in features
+    assert "browser_automation_available" in features
+    assert isinstance(features["render_cli_available"], bool)
+    assert isinstance(features["browser_automation_available"], bool)
+
+
 def test_describe_json_does_not_contain_secrets(repo):
     """Test that JSON output does not contain known secret patterns."""
     result = runner.invoke(app, ["describe", "--repo", str(repo), "--json"])

@@ -28,11 +28,13 @@ All durable artifacts must live under one of these roots:
 - `bin/` - Generated helper scripts
 - `workspace/` - Workspace directory
 - `app_server_workspaces/` - App-server supervisor/workspace state when the effective destination is `docker`
+- `filebox/` - Shared inbox/outbox attachment root (`filebox/inbox`, `filebox/outbox`)
 
 **Notable repo-local artifacts**:
 - `flows/<run_id>/chat/inbound.jsonl` - Mirrored inbound chat events for a flow run
 - `flows/<run_id>/chat/outbound.jsonl` - Mirrored outbound chat events for a flow run
 - `tickets/ingest_state.json` - Canonical ticket-ingest receipt (`ingested`, `ingested_at`, `source`)
+- `filebox/outbox/` - Agent-produced artifacts, including `car render` screenshot/observe/demo outputs
 
 **Resolution**: `resolve_repo_state_root(repo_root)` in `core/state_roots.py`
 

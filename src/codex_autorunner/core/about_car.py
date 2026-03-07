@@ -117,6 +117,7 @@ def build_about_car_markdown(
         "- Repo FileBox root: `.codex-autorunner/filebox/`.\n"
         "- User uploads: `.codex-autorunner/filebox/inbox/`.\n"
         "- Files to send back: `.codex-autorunner/filebox/outbox/`.\n"
+        "- Browser render outputs from `car render` are written to outbox by default.\n"
         "- Note: ticket_flow uses per-run dispatch directories; do not confuse dispatch with FileBox.\n\n"
         "## Critical rules\n"
         "- Do **not** create new copies of contextspace docs elsewhere in the repo.\n"
