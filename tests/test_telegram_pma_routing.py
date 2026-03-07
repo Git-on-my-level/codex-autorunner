@@ -19,6 +19,7 @@ from codex_autorunner.integrations.app_server.client import (
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramDocument,
     TelegramMessage,
+    TelegramPhotoSize,
     TelegramVoice,
 )
 from codex_autorunner.integrations.telegram.handlers.commands import (
@@ -423,6 +424,99 @@ async def test_pma_voice_uses_hub_root(tmp_path: Path) -> None:
     assert captured["workspace_path"] == str(hub_root)
     assert captured["caption"] == "voice note"
     assert captured["kind"] == "voice"
+
+
+@pytest.mark.anyio
+async def test_pma_image_uses_hub_root(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    record = TelegramTopicRecord(pma_enabled=True, workspace_path=None)
+    sent: list[str] = []
+    captured: dict[str, object] = {}
+
+    class _ImageRouterStub:
+        async def get_topic(self, _key: str) -> TelegramTopicRecord:
+            return record
+
+    class _ImageHandlerStub:
+        def __init__(self) -> None:
+            self._hub_root = hub_root
+            self._router = _ImageRouterStub()
+            self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace(
+                media=SimpleNamespace(
+                    enabled=True,
+                    images=True,
+                    voice=True,
+                    files=True,
+                    max_image_bytes=10_000_000,
+                    max_voice_bytes=10_000_000,
+                    max_file_bytes=10_000_000,
+                ),
+                ticket_flow_auto_resume=False,
+            )
+            self._ticket_flow_pause_targets = {}
+            self._ticket_flow_bridge = SimpleNamespace(
+                auto_resume_run=lambda *_, **__: None
+            )
+            self._bot_username = None
+
+        async def _resolve_topic_key(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> str:
+            return f"{chat_id}:{thread_id}"
+
+        async def _send_message(
+            self,
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int],
+            reply_to: Optional[int],
+        ) -> None:
+            sent.append(text)
+
+        def _get_paused_ticket_flow(
+            self, _workspace_root: Path, *, preferred_run_id: Optional[str]
+        ) -> Optional[tuple[str, object]]:
+            return None
+
+        async def _handle_image_message(
+            self,
+            message: TelegramMessage,
+            runtime: object,
+            record_arg: TelegramTopicRecord,
+            candidate: object,
+            caption_text: str,
+            *,
+            placeholder_id: Optional[int] = None,
+        ) -> None:
+            _ = message, runtime, candidate, placeholder_id
+            captured["workspace_path"] = record_arg.workspace_path
+            captured["caption"] = caption_text
+            captured["kind"] = "image"
+
+    handler = _ImageHandlerStub()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=111,
+        thread_id=222,
+        from_user_id=333,
+        text=None,
+        date=None,
+        is_topic_message=True,
+        photos=(TelegramPhotoSize("photo-1", None, 1024, 768, 100),),
+        caption="please inspect",
+    )
+    await handle_media_message(
+        handler, message, runtime=object(), caption_text="please inspect"
+    )
+
+    assert not sent  # no "Topic not bound" error
+    assert captured["workspace_path"] == str(hub_root)
+    assert captured["caption"] == "please inspect"
+    assert captured["kind"] == "image"
 
 
 class _TurnResult:
