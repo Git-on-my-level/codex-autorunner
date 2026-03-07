@@ -52,6 +52,7 @@ from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_DELTA_TYPE_LOG_LINE,
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
     Completed,
@@ -2152,6 +2153,14 @@ class DiscordBotService:
                     return f"{current}{incoming[overlap:]}"
             return f"{current}{incoming}"
 
+        def _progress_item_id_for_log_line(content: str) -> Optional[str]:
+            normalized = " ".join(content.split()).strip().lower()
+            if normalized.startswith("tokens used"):
+                return "opencode:token-usage"
+            if normalized.startswith("context window:"):
+                return "opencode:context-window"
+            return None
+
         try:
             async for run_event in orchestrator.run_turn(
                 agent_id=agent,
@@ -2200,6 +2209,28 @@ class DiscordBotService:
                                     new_segment=True,
                                 )
                             tracker.end_output_segment()
+                        elif run_event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
+                            item_id = _progress_item_id_for_log_line(run_event.content)
+                            if item_id:
+                                if not tracker.update_action_by_item_id(
+                                    item_id,
+                                    run_event.content,
+                                    "update",
+                                    label="output",
+                                ):
+                                    tracker.add_action(
+                                        "output",
+                                        run_event.content,
+                                        "update",
+                                        item_id=item_id,
+                                        normalize_text=False,
+                                    )
+                            else:
+                                tracker.note_output(
+                                    run_event.content,
+                                    new_segment=True,
+                                )
+                                tracker.end_output_segment()
                         else:
                             tracker.note_output(run_event.content)
                         await _edit_progress()

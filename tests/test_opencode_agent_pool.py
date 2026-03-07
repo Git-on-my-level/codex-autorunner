@@ -97,6 +97,12 @@ async def test_run_turn_maps_events_to_result_and_emits(tmp_path: Path):
         FlowEventType.APP_SERVER_EVENT,
         FlowEventType.TOKEN_USAGE,
     ]
+    first_output_event = emitted[1][1]["message"]
+    second_output_event = emitted[2][1]["message"]
+    assert first_output_event["method"] == "outputDelta"
+    assert first_output_event["params"]["deltaType"] == "assistant_stream"
+    assert second_output_event["method"] == "outputDelta"
+    assert second_output_event["params"]["deltaType"] == "log_line"
 
 
 @pytest.mark.asyncio
