@@ -7,11 +7,13 @@ import subprocess
 import sys
 import textwrap
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from codex_autorunner.browser import BrowserServeSession, ReadinessTimeoutError
 from codex_autorunner.browser.runtime import BrowserRunResult
 from codex_autorunner.cli import app
 from codex_autorunner.core import optional_dependencies
@@ -343,3 +345,171 @@ def test_render_observe_serve_mode_uses_shared_cleanup(
     assert str(run_manifest_path) in result.output
     pid = int(pid_file.read_text(encoding="utf-8").strip())
     _wait_process_gone(pid)
+
+
+def test_render_screenshot_serve_mode_wires_project_context_flags(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    _patch_playwright_present(monkeypatch)
+
+    capture_path = tmp_path / "capture-project-context.png"
+    capture_path.write_bytes(b"png")
+    captured = {}
+
+    def fake_capture_screenshot(self, **_kwargs):  # type: ignore[no-untyped-def]
+        return BrowserRunResult(
+            ok=True,
+            mode="screenshot",
+            target_url="http://127.0.0.1:1234",
+            artifacts={"capture": capture_path},
+        )
+
+    @contextmanager
+    def fake_supervised_server(config):  # type: ignore[no-untyped-def]
+        captured["config"] = config
+        yield BrowserServeSession(
+            pid=123,
+            pgid=None,
+            ready_source="ready_url",
+            target_url="http://127.0.0.1:1234",
+            ready_url="http://127.0.0.1:1234/health",
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.BrowserRuntime.capture_screenshot",
+        fake_capture_screenshot,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.supervised_server",
+        fake_supervised_server,
+    )
+
+    requested_project_root = tmp_path / "project-context-root"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "screenshot",
+            "--serve-cmd",
+            "python -c \"print('ok')\"",
+            "--ready-url",
+            "http://127.0.0.1:4321/health",
+            "--project-root",
+            str(requested_project_root),
+            "--env",
+            "CAR_TEST_ENV=cli",
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(capture_path) in result.output
+    config = captured["config"]
+    assert config.project_context_enabled is True
+    assert config.project_root == requested_project_root.resolve()
+    assert config.env_overrides["CAR_TEST_ENV"] == "cli"
+
+
+def test_render_screenshot_serve_mode_no_project_context_wires_disable_flag(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    _patch_playwright_present(monkeypatch)
+
+    capture_path = tmp_path / "capture-no-project-context.png"
+    capture_path.write_bytes(b"png")
+    captured = {}
+
+    def fake_capture_screenshot(self, **_kwargs):  # type: ignore[no-untyped-def]
+        return BrowserRunResult(
+            ok=True,
+            mode="screenshot",
+            target_url="http://127.0.0.1:1234",
+            artifacts={"capture": capture_path},
+        )
+
+    @contextmanager
+    def fake_supervised_server(config):  # type: ignore[no-untyped-def]
+        captured["config"] = config
+        yield BrowserServeSession(
+            pid=123,
+            pgid=None,
+            ready_source="ready_url",
+            target_url="http://127.0.0.1:1234",
+            ready_url="http://127.0.0.1:1234/health",
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.BrowserRuntime.capture_screenshot",
+        fake_capture_screenshot,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.supervised_server",
+        fake_supervised_server,
+    )
+
+    requested_project_root = tmp_path / "project-context-root-disabled"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "screenshot",
+            "--serve-cmd",
+            "python -c \"print('ok')\"",
+            "--ready-url",
+            "http://127.0.0.1:4321/health",
+            "--project-root",
+            str(requested_project_root),
+            "--no-project-context",
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(capture_path) in result.output
+    config = captured["config"]
+    assert config.project_context_enabled is False
+    assert config.project_root is None
+
+
+def test_render_screenshot_serve_mode_failure_includes_project_context_details(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    _patch_playwright_present(monkeypatch)
+
+    @contextmanager
+    def failing_supervised_server(_config):  # type: ignore[no-untyped-def]
+        raise ReadinessTimeoutError("simulated readiness timeout")
+        yield
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.supervised_server",
+        failing_supervised_server,
+    )
+
+    requested_project_root = tmp_path / "project-context-root-failure"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "screenshot",
+            "--serve-cmd",
+            "python -c \"print('ok')\"",
+            "--ready-url",
+            "http://127.0.0.1:4321/health",
+            "--project-root",
+            str(requested_project_root),
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "project_context=enabled" in result.output
+    resolved_root = str(requested_project_root.resolve())
+    assert f"project_root={resolved_root}" in result.output
+    assert f"cwd={resolved_root}" in result.output

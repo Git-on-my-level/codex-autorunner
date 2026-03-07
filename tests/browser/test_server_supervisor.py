@@ -58,7 +58,11 @@ def _write_fixture_server_script(tmp_path: Path) -> Path:
 
             if args.marker:
                 Path(args.marker).write_text(
-                    f"{os.getcwd()}\\n{os.environ.get('CAR_TEST_ENV', '')}\\n",
+                    (
+                        f"{os.getcwd()}\\n"
+                        f"{os.environ.get('CAR_TEST_ENV', '')}\\n"
+                        f"{os.environ.get('PATH', '')}\\n"
+                    ),
                     encoding="utf-8",
                 )
 
@@ -83,6 +87,16 @@ def _write_fixture_server_script(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return script_path
+
+
+def _expected_project_bin_entries(project_root: Path) -> list[str]:
+    venv_bin = "Scripts" if os.name == "nt" else "bin"
+    return [
+        str(project_root / "node_modules" / ".bin"),
+        str(project_root / ".venv" / venv_bin),
+        str(project_root / ".codex-autorunner" / "bin"),
+        str(project_root / "bin"),
+    ]
 
 
 def test_supervised_server_ready_url_happy_path_applies_cwd_and_env(
@@ -125,6 +139,150 @@ def test_supervised_server_ready_url_happy_path_applies_cwd_and_env(
     marker_text = marker_path.read_text(encoding="utf-8").splitlines()
     assert marker_text[0] == str(cwd_dir)
     assert marker_text[1] == "applied"
+
+
+def test_supervised_server_project_context_applies_path_and_default_cwd(
+    tmp_path: Path,
+) -> None:
+    script_path = _write_fixture_server_script(tmp_path)
+    marker_path = tmp_path / "marker-project-context.txt"
+    project_root = tmp_path / "project-root"
+    for rel_path in (
+        Path("node_modules/.bin"),
+        Path(".venv") / ("Scripts" if os.name == "nt" else "bin"),
+        Path(".codex-autorunner/bin"),
+        Path("bin"),
+    ):
+        (project_root / rel_path).mkdir(parents=True, exist_ok=True)
+    port = _free_port()
+    ready_url = f"http://127.0.0.1:{port}/health"
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script_path)),
+            "--port",
+            str(port),
+            "--marker",
+            shlex.quote(str(marker_path)),
+        ]
+    )
+
+    session_pid = None
+    with supervised_server(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_url=ready_url,
+            env_overrides={"CAR_TEST_ENV": "project-context"},
+            project_root=project_root,
+            project_context_enabled=True,
+            timeout_seconds=10.0,
+        )
+    ) as session:
+        session_pid = session.pid
+        assert session.ready_source == "ready_url"
+        assert session.target_url == f"http://127.0.0.1:{port}"
+        assert httpx.get(ready_url, timeout=1.0).status_code == 200
+
+    assert session_pid is not None
+    _wait_process_gone(session_pid)
+    marker_text = marker_path.read_text(encoding="utf-8").splitlines()
+    expected_root = str(project_root.resolve())
+    assert marker_text[0] == expected_root
+    assert marker_text[1] == "project-context"
+    path_entries = [entry for entry in marker_text[2].split(os.pathsep) if entry]
+    expected_prefixes = _expected_project_bin_entries(project_root.resolve())
+    assert path_entries[: len(expected_prefixes)] == expected_prefixes
+
+
+def test_supervised_server_no_project_context_keeps_default_cwd_and_path(
+    tmp_path: Path,
+) -> None:
+    script_path = _write_fixture_server_script(tmp_path)
+    marker_path = tmp_path / "marker-no-project-context.txt"
+    project_root = tmp_path / "project-root-disabled"
+    port = _free_port()
+    ready_url = f"http://127.0.0.1:{port}/health"
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script_path)),
+            "--port",
+            str(port),
+            "--marker",
+            shlex.quote(str(marker_path)),
+        ]
+    )
+
+    session_pid = None
+    with supervised_server(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_url=ready_url,
+            env_overrides={"CAR_TEST_ENV": "no-project-context"},
+            project_root=project_root,
+            project_context_enabled=False,
+            timeout_seconds=10.0,
+        )
+    ) as session:
+        session_pid = session.pid
+        assert session.ready_source == "ready_url"
+        assert session.target_url == f"http://127.0.0.1:{port}"
+        assert httpx.get(ready_url, timeout=1.0).status_code == 200
+
+    assert session_pid is not None
+    _wait_process_gone(session_pid)
+    marker_text = marker_path.read_text(encoding="utf-8").splitlines()
+    assert marker_text[0] != str(project_root.resolve())
+    assert marker_text[1] == "no-project-context"
+    path_entries = set(marker_text[2].split(os.pathsep))
+    for expected_prefix in _expected_project_bin_entries(project_root):
+        assert expected_prefix not in path_entries
+
+
+def test_supervised_server_explicit_env_override_beats_project_context_path(
+    tmp_path: Path,
+) -> None:
+    script_path = _write_fixture_server_script(tmp_path)
+    marker_path = tmp_path / "marker-env-precedence.txt"
+    project_root = tmp_path / "project-root-override"
+    project_root.mkdir(parents=True, exist_ok=True)
+    port = _free_port()
+    ready_url = f"http://127.0.0.1:{port}/health"
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script_path)),
+            "--port",
+            str(port),
+            "--marker",
+            shlex.quote(str(marker_path)),
+        ]
+    )
+
+    session_pid = None
+    with supervised_server(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_url=ready_url,
+            env_overrides={
+                "CAR_TEST_ENV": "path-override",
+                "PATH": "EXPLICIT_PATH_VALUE",
+            },
+            project_root=project_root,
+            project_context_enabled=True,
+            timeout_seconds=10.0,
+        )
+    ) as session:
+        session_pid = session.pid
+        assert session.ready_source == "ready_url"
+        assert session.target_url == f"http://127.0.0.1:{port}"
+        assert httpx.get(ready_url, timeout=1.0).status_code == 200
+
+    assert session_pid is not None
+    _wait_process_gone(session_pid)
+    marker_text = marker_path.read_text(encoding="utf-8").splitlines()
+    assert marker_text[1] == "path-override"
+    assert marker_text[2] == "EXPLICIT_PATH_VALUE"
 
 
 def test_supervisor_readiness_timeout_still_cleans_up(tmp_path: Path) -> None:

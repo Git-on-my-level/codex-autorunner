@@ -88,6 +88,34 @@ def _repo_root_from_context(context: Any) -> Path:
     return Path.cwd()
 
 
+def _resolve_project_root(
+    *,
+    repo_root: Path,
+    project_root: Optional[Path],
+    project_context: bool,
+) -> Optional[Path]:
+    if not project_context:
+        return None
+    candidate = project_root or repo_root
+    return candidate.expanduser().resolve()
+
+
+def _format_serve_context_details(
+    *,
+    project_context: bool,
+    project_root: Optional[Path],
+    cwd: Optional[Path],
+) -> str:
+    context_value = "enabled" if project_context else "disabled"
+    root_value = str(project_root) if project_root is not None else "<none>"
+    cwd_value = str(cwd) if cwd is not None else "<inherit>"
+    return (
+        f"project_context={context_value}, "
+        f"project_root={root_value}, "
+        f"cwd={cwd_value}"
+    )
+
+
 def _resolve_out_dir_and_name(
     *,
     repo_root: Path,
@@ -147,10 +175,13 @@ def _prune_non_media_artifacts(
 def _resolve_target_base_url(
     *,
     target: Any,
+    repo_root: Path,
     ready_url: Optional[str],
     ready_log_pattern: Optional[str],
     cwd: Optional[Path],
     env: Optional[list[str]],
+    project_root: Optional[Path],
+    project_context: bool,
     ready_timeout_seconds: float,
 ) -> Iterator[Tuple[str, str]]:
     if target.mode == "url":
@@ -163,6 +194,19 @@ def _resolve_target_base_url(
     if target.mode != "serve" or not target.serve_cmd:
         raise ValueError("Serve mode target is missing command.")
 
+    resolved_project_root = _resolve_project_root(
+        repo_root=repo_root,
+        project_root=project_root,
+        project_context=project_context,
+    )
+    resolved_cwd = cwd
+    if resolved_cwd is None and resolved_project_root is not None:
+        resolved_cwd = resolved_project_root
+    context_details = _format_serve_context_details(
+        project_context=project_context,
+        project_root=resolved_project_root,
+        cwd=resolved_cwd,
+    )
     env_overrides = parse_env_overrides(env or [])
     config = BrowserServeConfig(
         serve_cmd=target.serve_cmd,
@@ -170,16 +214,22 @@ def _resolve_target_base_url(
         ready_log_pattern=ready_log_pattern,
         cwd=cwd,
         env_overrides=env_overrides,
+        project_root=resolved_project_root,
+        project_context_enabled=project_context,
         timeout_seconds=ready_timeout_seconds,
     )
-    with supervised_server(config) as session:
-        if not session.target_url:
-            raise ServeModeError(
-                "Serve readiness succeeded, but target URL could not be derived. "
-                "Provide --ready-url or use a --ready-log-pattern with a named "
-                "group (?P<url>http://...)."
-            )
-        yield session.target_url, session.ready_source
+    try:
+        with supervised_server(config) as session:
+            if not session.target_url:
+                raise ServeModeError(
+                    "Serve readiness succeeded, but target URL could not be derived. "
+                    "Provide --ready-url or use a --ready-log-pattern with a named "
+                    "group (?P<url>http://...)."
+                )
+            yield session.target_url, session.ready_source
+    except ServeModeError as exc:
+        detail = str(exc) or "Unknown serve-mode error."
+        raise type(exc)(f"{detail} (serve context: {context_details})") from exc
 
 
 def register_render_commands(
@@ -367,6 +417,16 @@ def register_render_commands(
             "--env",
             help="Repeat KEY=VALUE overrides passed to the serve command environment.",
         ),
+        project_root: Optional[Path] = typer.Option(
+            None,
+            "--project-root",
+            help="Project root for serve-mode context (defaults to repo root).",
+        ),
+        project_context: bool = typer.Option(
+            True,
+            "--project-context/--no-project-context",
+            help="Enable project-aware serve context (PATH bin injection + cwd fallback).",
+        ),
         ready_timeout_seconds: float = typer.Option(
             30.0,
             "--ready-timeout-seconds",
@@ -425,10 +485,13 @@ def register_render_commands(
         try:
             with _resolve_target_base_url(
                 target=target,
+                repo_root=repo_root,
                 ready_url=ready_url,
                 ready_log_pattern=ready_log_pattern,
                 cwd=cwd,
                 env=env,
+                project_root=project_root,
+                project_context=project_context,
                 ready_timeout_seconds=ready_timeout_seconds,
             ) as (base_url, _ready_source):
                 result = BrowserRuntime().capture_screenshot(
@@ -494,6 +557,16 @@ def register_render_commands(
             None,
             "--env",
             help="Repeat KEY=VALUE overrides passed to the serve command environment.",
+        ),
+        project_root: Optional[Path] = typer.Option(
+            None,
+            "--project-root",
+            help="Project root for serve-mode context (defaults to repo root).",
+        ),
+        project_context: bool = typer.Option(
+            True,
+            "--project-context/--no-project-context",
+            help="Enable project-aware serve context (PATH bin injection + cwd fallback).",
         ),
         ready_timeout_seconds: float = typer.Option(
             30.0,
@@ -571,10 +644,13 @@ def register_render_commands(
         try:
             with _resolve_target_base_url(
                 target=target,
+                repo_root=repo_root,
                 ready_url=ready_url,
                 ready_log_pattern=ready_log_pattern,
                 cwd=cwd,
                 env=env,
+                project_root=project_root,
+                project_context=project_context,
                 ready_timeout_seconds=ready_timeout_seconds,
             ) as (base_url, _ready_source):
                 result = BrowserRuntime().capture_demo(
@@ -650,6 +726,16 @@ def register_render_commands(
             "--env",
             help="Repeat KEY=VALUE overrides passed to the serve command environment.",
         ),
+        project_root: Optional[Path] = typer.Option(
+            None,
+            "--project-root",
+            help="Project root for serve-mode context (defaults to repo root).",
+        ),
+        project_context: bool = typer.Option(
+            True,
+            "--project-context/--no-project-context",
+            help="Enable project-aware serve context (PATH bin injection + cwd fallback).",
+        ),
         ready_timeout_seconds: float = typer.Option(
             30.0,
             "--ready-timeout-seconds",
@@ -698,10 +784,13 @@ def register_render_commands(
         try:
             with _resolve_target_base_url(
                 target=target,
+                repo_root=repo_root,
                 ready_url=ready_url,
                 ready_log_pattern=ready_log_pattern,
                 cwd=cwd,
                 env=env,
+                project_root=project_root,
+                project_context=project_context,
                 ready_timeout_seconds=ready_timeout_seconds,
             ) as (base_url, _ready_source):
                 result = BrowserRuntime().capture_observe(

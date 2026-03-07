@@ -41,6 +41,8 @@ class BrowserServeConfig:
     ready_log_pattern: Optional[str] = None
     cwd: Optional[Path] = None
     env_overrides: Dict[str, str] = field(default_factory=dict)
+    project_root: Optional[Path] = None
+    project_context_enabled: bool = False
     timeout_seconds: float = 30.0
     poll_interval_seconds: float = 0.2
     grace_seconds: float = 0.4
@@ -66,6 +68,41 @@ def parse_env_overrides(entries: list[str]) -> dict[str, str]:
             )
         parsed[key.strip()] = value
     return parsed
+
+
+def _project_bin_entries(project_root: Path) -> list[str]:
+    venv_bin_dir = "Scripts" if os.name == "nt" else "bin"
+    return [
+        str(project_root / "node_modules" / ".bin"),
+        str(project_root / ".venv" / venv_bin_dir),
+        str(project_root / ".codex-autorunner" / "bin"),
+        str(project_root / "bin"),
+    ]
+
+
+def _prepend_path_entries(entries: list[str], existing: Optional[str]) -> str:
+    merged: list[str] = []
+    for entry in [*entries, *((existing or "").split(os.pathsep))]:
+        if entry and entry not in merged:
+            merged.append(entry)
+    return os.pathsep.join(merged)
+
+
+def _build_launch_env_and_cwd(
+    config: BrowserServeConfig,
+) -> tuple[dict[str, str], Optional[Path]]:
+    env = dict(os.environ)
+    resolved_cwd = config.cwd
+    if config.project_context_enabled and config.project_root is not None:
+        resolved_project_root = config.project_root.expanduser().resolve()
+        if resolved_cwd is None:
+            resolved_cwd = resolved_project_root
+        env["PATH"] = _prepend_path_entries(
+            _project_bin_entries(resolved_project_root),
+            env.get("PATH"),
+        )
+    env.update(config.env_overrides)
+    return env, resolved_cwd
 
 
 def _parse_ready_url(url: str) -> tuple[str, str]:
@@ -119,10 +156,9 @@ class BrowserServerSupervisor:
         cmd = shlex.split(self._config.serve_cmd or "")
         if not cmd:
             raise ValueError("Serve command is empty.")
-        env = dict(os.environ)
-        env.update(self._config.env_overrides)
+        env, resolved_cwd = _build_launch_env_and_cwd(self._config)
         popen_kwargs: dict[str, Any] = {
-            "cwd": str(self._config.cwd) if self._config.cwd else None,
+            "cwd": str(resolved_cwd) if resolved_cwd else None,
             "env": env,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,

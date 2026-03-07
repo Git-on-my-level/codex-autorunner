@@ -44,8 +44,15 @@ Serve mode supports:
 - `--ready-log-pattern` (fallback)
 - `--cwd`
 - repeatable `--env KEY=VALUE`
+- `--project-root PATH`
+- `--project-context/--no-project-context` (defaults to enabled)
 
 CAR always tears down the spawned serve process tree on success, timeout, failure, and interruption.
+
+When project context is enabled, CAR resolves project root from `--project-root` or repo root, adds
+project bins to `PATH` (`node_modules/.bin`, `.venv/bin` or `.venv/Scripts`, `.codex-autorunner/bin`, `bin`),
+and uses project root as serve command cwd when `--cwd` is not set. Use `--no-project-context` to preserve
+legacy inherited cwd/PATH behavior.
 
 ## Outbox Artifact Behavior
 
