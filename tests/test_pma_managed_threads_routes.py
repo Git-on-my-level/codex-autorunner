@@ -206,3 +206,99 @@ def test_managed_thread_routes_respect_pma_enabled_flag(hub_env) -> None:
 
     assert list_resp.status_code == 404
     assert create_resp.status_code == 404
+
+
+def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.resume_calls: list[str] = []
+            self.thread_start_calls = 0
+            self.turn_start_calls: list[dict[str, str]] = []
+
+        async def thread_resume(self, thread_id: str) -> None:
+            self.resume_calls.append(thread_id)
+
+        async def thread_start(self, root: str) -> dict[str, str]:
+            _ = root
+            self.thread_start_calls += 1
+            return {"id": f"backend-thread-{self.thread_start_calls}"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = approval_policy, sandbox_policy, turn_kwargs
+            self.turn_start_calls.append({"thread_id": thread_id, "prompt": prompt})
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    fake_supervisor = FakeSupervisor()
+    app.state.app_server_supervisor = fake_supervisor
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        archive_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/archive")
+        assert archive_resp.status_code == 200
+
+        resumed_backend_id = "backend-thread-manual"
+        resume_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/resume",
+            json={"backend_thread_id": resumed_backend_id},
+        )
+        assert resume_resp.status_code == 200
+        resumed_thread = resume_resp.json()["thread"]
+        assert resumed_thread["status"] == "active"
+        assert resumed_thread["backend_thread_id"] == resumed_backend_id
+
+        send_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "message after resume"},
+        )
+        assert send_resp.status_code == 200
+        payload = send_resp.json()
+        assert payload["status"] == "ok"
+        assert payload["backend_thread_id"] == resumed_backend_id
+
+        get_resp = client.get(f"/hub/pma/threads/{managed_thread_id}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["thread"]["status"] == "active"
+
+    assert fake_supervisor.client.resume_calls == [resumed_backend_id]
+    assert fake_supervisor.client.thread_start_calls == 0
+    assert len(fake_supervisor.client.turn_start_calls) == 1

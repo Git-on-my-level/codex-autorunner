@@ -1622,6 +1622,111 @@ def test_pma_automation_timer_endpoints(hub_env) -> None:
     assert fake_store.cancelled == [("timer-1", {"reason": "done"})]
 
 
+def test_pma_automation_subscription_alias_endpoint_supports_kwargs_only_store(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.create_calls: list[dict[str, Any]] = []
+            self.deleted_ids: list[str] = []
+
+        def create_subscription(
+            self, *, thread_id: Optional[str] = None, lane_id: Optional[str] = None
+        ) -> dict[str, Any]:
+            self.create_calls.append({"thread_id": thread_id, "lane_id": lane_id})
+            return {
+                "subscription_id": "sub-alias-1",
+                "thread_id": thread_id,
+                "lane_id": lane_id,
+            }
+
+        def delete_subscription(self, subscription_id: str) -> bool:
+            self.deleted_ids.append(subscription_id)
+            return True
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/automation/subscriptions",
+            json={"thread_id": "thread-alias", "lane_id": "pma:lane-alias"},
+        )
+        assert create_resp.status_code == 200
+        subscription = create_resp.json()["subscription"]
+        assert subscription["subscription_id"] == "sub-alias-1"
+        assert subscription["thread_id"] == "thread-alias"
+        assert subscription["lane_id"] == "pma:lane-alias"
+
+        delete_resp = client.delete("/hub/pma/automation/subscriptions/sub-alias-1")
+        assert delete_resp.status_code == 200
+        delete_payload = delete_resp.json()
+        assert delete_payload["status"] == "ok"
+        assert delete_payload["subscription_id"] == "sub-alias-1"
+
+    assert fake_store.create_calls == [
+        {"thread_id": "thread-alias", "lane_id": "pma:lane-alias"}
+    ]
+    assert fake_store.deleted_ids == ["sub-alias-1"]
+
+
+def test_pma_automation_timer_alias_endpoint_supports_fallback_method_signatures(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.create_calls: list[dict[str, Any]] = []
+            self.cancelled_ids: list[str] = []
+
+        def create_timer(
+            self,
+            *,
+            timer_type: Optional[str] = None,
+            idle_seconds: Optional[int] = None,
+        ) -> dict[str, Any]:
+            self.create_calls.append(
+                {"timer_type": timer_type, "idle_seconds": idle_seconds}
+            )
+            return {
+                "timer_id": "timer-alias-1",
+                "timer_type": timer_type,
+                "idle_seconds": idle_seconds,
+            }
+
+        def cancel_timer(self, timer_id: str) -> bool:
+            self.cancelled_ids.append(timer_id)
+            return True
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/automation/timers",
+            json={"timer_type": "watchdog", "idle_seconds": 45},
+        )
+        assert create_resp.status_code == 200
+        timer = create_resp.json()["timer"]
+        assert timer["timer_id"] == "timer-alias-1"
+        assert timer["timer_type"] == "watchdog"
+        assert timer["idle_seconds"] == 45
+
+        cancel_resp = client.delete("/hub/pma/automation/timers/timer-alias-1")
+        assert cancel_resp.status_code == 200
+        cancel_payload = cancel_resp.json()
+        assert cancel_payload["status"] == "ok"
+        assert cancel_payload["timer_id"] == "timer-alias-1"
+
+    assert fake_store.create_calls == [{"timer_type": "watchdog", "idle_seconds": 45}]
+    assert fake_store.cancelled_ids == ["timer-alias-1"]
+
+
 def test_pma_automation_watchdog_timer_create(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
