@@ -202,6 +202,48 @@ def test_render_progress_text_prefers_subagent_thinking_content_in_fallback() ->
     assert not rendered.endswith("\n---")
 
 
+def test_live_fallback_reserves_trace_lines_and_keeps_output_tail() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=10_000,
+    )
+    tracker.note_tool("run_tests --all")
+    tracker.note_thinking("investigating truncation behavior")
+    tracker.note_output("prefix " + ("x" * 800) + " tail")
+
+    rendered = render_progress_text(tracker, max_length=200, now=1.0)
+
+    assert "tail" in rendered
+    assert "🧠 investigating truncation behavior" in rendered
+    assert "tool: run_tests --all" in rendered
+    assert len(rendered) <= 200
+
+
+def test_live_fallback_can_use_persisted_traces_after_transient_clears() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=10_000,
+    )
+    tracker.note_tool("run_tests")
+    tracker.note_thinking("checking parser edge cases")
+    # This clears transient_action; fallback should still use persisted traces.
+    tracker.note_output("start " + ("y" * 900) + " done")
+
+    rendered = render_progress_text(tracker, max_length=180, now=1.0)
+
+    assert "done" in rendered
+    assert "checking parser edge cases" in rendered
+    assert "tool: run_tests" in rendered
+
+
 def test_render_progress_text_final_mode_keeps_only_output_when_available() -> None:
     tracker = TurnProgressTracker(
         started_at=0.0,

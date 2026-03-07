@@ -89,6 +89,8 @@ class TurnProgressTracker:
     finalized: bool = False
     output_buffer: str = ""
     transient_action: Optional[ProgressAction] = None
+    last_thinking_trace: Optional[ProgressAction] = None
+    last_tool_trace: Optional[ProgressAction] = None
 
     def set_label(self, label: str) -> None:
         if label:
@@ -117,13 +119,18 @@ class TurnProgressTracker:
         if not normalized.strip():
             return
         if label in {"thinking", "tool", "command"}:
-            self.transient_action = ProgressAction(
+            trace_action = ProgressAction(
                 label=label,
                 text=normalized,
                 status=status,
                 item_id=item_id,
                 subagent_label=subagent_label,
             )
+            self.transient_action = trace_action
+            if label == "thinking":
+                self.last_thinking_trace = trace_action
+            else:
+                self.last_tool_trace = trace_action
             # Force the next output delta to create a fresh trailing output slot.
             self.last_output_index = None
             self.step += 1
@@ -408,6 +415,26 @@ def render_progress_text(
     def _truncate_line_for_fallback(line: str, limit: int) -> str:
         return _truncate_text(line, limit)
 
+    def _format_trace_line(action: Optional[ProgressAction]) -> str:
+        if action is None or not action.text.strip():
+            return ""
+        if action.label == "thinking":
+            if action.subagent_label:
+                return f"🤖 {action.subagent_label} thinking: {action.text}"
+            return f"🧠 {action.text}"
+        icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
+        return f"{icon} {action.label}: {action.text}"
+
+    def _reserved_live_trace_lines() -> list[str]:
+        lines: list[str] = []
+        thinking_line = _format_trace_line(tracker.last_thinking_trace)
+        if thinking_line:
+            lines.append(thinking_line)
+        tool_line = _format_trace_line(tracker.last_tool_trace)
+        if tool_line:
+            lines.append(tool_line)
+        return lines
+
     def _select_fallback_line(lines_with_header: list[str]) -> str:
         for line in reversed(lines_with_header[1:]):
             stripped = line.strip()
@@ -427,6 +454,26 @@ def render_progress_text(
         remaining = max_length - len(header) - 1
         if remaining > 0:
             latest_output_text = tracker.latest_output_text()
+            if not is_final_mode and latest_output_text.strip():
+                trace_lines = _reserved_live_trace_lines()
+                if trace_lines:
+                    for trace_limit in (240, 180, 140, 100, 80, 60, 45, 30, 20, 12):
+                        trimmed_traces = [
+                            _truncate_line_for_fallback(line, trace_limit)
+                            for line in trace_lines
+                        ]
+                        traces_chunk = "\n".join(trimmed_traces)
+                        output_budget = remaining - len(traces_chunk) - 1
+                        if output_budget <= 0:
+                            continue
+                        output_lines = latest_output_text.splitlines()
+                        focus_line = (
+                            output_lines[-1] if output_lines else latest_output_text
+                        )
+                        output_tail = _truncate_tail(focus_line, output_budget)
+                        candidate = f"{header}\n{output_tail}\n{traces_chunk}"
+                        if len(candidate) <= max_length:
+                            return candidate
             if latest_output_text.strip():
                 output_lines = latest_output_text.splitlines()
                 focus_line = output_lines[-1] if output_lines else latest_output_text
