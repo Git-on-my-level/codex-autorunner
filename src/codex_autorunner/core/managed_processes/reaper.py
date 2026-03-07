@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Final
+from typing import Final, Mapping
 
+from ..force_attestation import enforce_force_attestation
 from ..locks import process_command_matches
 from ..process_termination import terminate_record
 from .registry import ProcessRecord, delete_process_record, list_process_records
+
+logger = logging.getLogger("codex_autorunner.managed_processes.reaper")
 
 REAPER_GRACE_SECONDS: Final = 0.2
 REAPER_KILL_SECONDS: Final = 0.2
@@ -140,7 +144,14 @@ def reap_managed_processes(
     dry_run: bool = False,
     max_record_age_seconds: int = DEFAULT_MAX_RECORD_AGE_SECONDS,
     force: bool = False,
+    force_attestation: Mapping[str, object] | None = None,
 ) -> ReapSummary:
+    enforce_force_attestation(
+        force=force,
+        force_attestation=force_attestation,
+        logger=logger,
+        action="reap_managed_processes",
+    )
     summary = ReapSummary()
     for record in list_process_records(repo_root):
         owner_running = _pid_is_running(record.owner_pid)

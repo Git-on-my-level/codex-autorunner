@@ -20,6 +20,7 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.destinations import default_car_docker_container_name
+from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -706,11 +707,66 @@ def test_hub_remove_repo_with_worktrees(tmp_path: Path):
 
     remove_resp = client.post(
         "/hub/repos/base/remove",
-        json={"force": True, "delete_dir": True, "delete_worktrees": True},
+        json={
+            "force": True,
+            "force_attestation": "REMOVE base",
+            "delete_dir": True,
+            "delete_worktrees": True,
+        },
     )
     assert remove_resp.status_code == 200
     assert not base.path.exists()
     assert not worktree.path.exists()
+
+
+def test_hub_remove_repo_route_forwards_force_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    app = create_hub_app(hub_root)
+    captured: dict[str, object] = {}
+
+    def _fake_remove_repo(
+        repo_id: str,
+        *,
+        force: bool = False,
+        delete_dir: bool = True,
+        delete_worktrees: bool = False,
+        force_attestation: Optional[dict[str, str]] = None,
+    ) -> None:
+        captured["repo_id"] = repo_id
+        captured["force"] = force
+        captured["delete_dir"] = delete_dir
+        captured["delete_worktrees"] = delete_worktrees
+        captured["force_attestation"] = force_attestation
+
+    monkeypatch.setattr(app.state.hub_supervisor, "remove_repo", _fake_remove_repo)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/repos/base/remove",
+        json={
+            "force": True,
+            "force_attestation": "REMOVE base",
+            "delete_dir": True,
+            "delete_worktrees": False,
+        },
+    )
+    assert resp.status_code == 200
+    assert captured == {
+        "repo_id": "base",
+        "force": True,
+        "delete_dir": True,
+        "delete_worktrees": False,
+        "force_attestation": {
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "REMOVE base",
+            "target_scope": "hub.remove_repo:base",
+        },
+    }
 
 
 def test_sync_main_raises_when_local_default_diverges_from_origin(tmp_path: Path):
@@ -1265,6 +1321,71 @@ def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
     ]
 
 
+def test_hub_api_cleanup_worktree_forwards_force_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    app = create_hub_app(hub_root)
+    captured: dict[str, object] = {}
+
+    def _fake_cleanup_worktree(
+        *,
+        worktree_repo_id: str,
+        delete_branch: bool = False,
+        delete_remote: bool = False,
+        archive: bool = True,
+        force: bool = False,
+        force_archive: bool = False,
+        archive_note: Optional[str] = None,
+        force_attestation: Optional[dict[str, str]] = None,
+    ) -> dict[str, object]:
+        captured["worktree_repo_id"] = worktree_repo_id
+        captured["delete_branch"] = delete_branch
+        captured["delete_remote"] = delete_remote
+        captured["archive"] = archive
+        captured["force"] = force
+        captured["force_archive"] = force_archive
+        captured["archive_note"] = archive_note
+        captured["force_attestation"] = force_attestation
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        app.state.hub_supervisor, "cleanup_worktree", _fake_cleanup_worktree
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/worktrees/cleanup",
+        json={
+            "worktree_repo_id": "base--feature",
+            "archive": False,
+            "force": True,
+            "force_archive": False,
+            "archive_note": "cleanup",
+            "force_attestation": "REMOVE base--feature",
+        },
+    )
+    assert resp.status_code == 200
+    assert captured == {
+        "worktree_repo_id": "base--feature",
+        "delete_branch": False,
+        "delete_remote": False,
+        "archive": False,
+        "force": True,
+        "force_archive": False,
+        "archive_note": "cleanup",
+        "force_attestation": {
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "REMOVE base--feature",
+            "target_scope": "hub.worktree.cleanup:base--feature",
+        },
+    }
+
+
 def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -1314,7 +1435,16 @@ def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
         hub_root, channel_id="discord-chan-force", repo_id=worktree.id
     )
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True, force=True)
+    supervisor.cleanup_worktree(
+        worktree_repo_id=worktree.id,
+        archive=True,
+        force=True,
+        force_attestation={
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "cleanup mixed chat-bound worktree",
+            "target_scope": f"hub.worktree.cleanup:{worktree.id}",
+        },
+    )
     assert not worktree.path.exists()
 
 
@@ -1412,8 +1542,49 @@ def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
 
     monkeypatch.setattr(supervisor, "_has_active_chat_binding", _raise_lookup_error)
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True, force=True)
+    supervisor.cleanup_worktree(
+        worktree_repo_id=worktree.id,
+        archive=True,
+        force=True,
+        force_attestation={
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "cleanup chat-bound worktree",
+            "target_scope": f"hub.worktree.cleanup:{worktree.id}",
+        },
+    )
     assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_force_requires_attestation(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/force-attestation-required",
+        start_point="HEAD",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="--force requires --force-attestation for dangerous actions.",
+    ):
+        supervisor.cleanup_worktree(
+            worktree_repo_id=worktree.id,
+            archive=True,
+            force=True,
+        )
+
+    assert worktree.path.exists()
 
 
 def test_hub_api_marks_chat_bound_worktrees_from_discord_binding_db(tmp_path: Path):

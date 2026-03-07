@@ -27,6 +27,7 @@ from ....core.destinations import (
     validate_destination_write_payload,
 )
 from ....core.flows import FlowEventType, FlowStore
+from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.git_utils import git_is_clean
 from ....core.logging_utils import safe_log
 from ....core.pma_context import (
@@ -297,6 +298,17 @@ def build_hub_repo_routes(
     mount_manager: HubMountManager,
 ) -> APIRouter:
     router = APIRouter()
+
+    def _build_force_attestation_payload(
+        attestation: Optional[str], *, target_scope: str
+    ) -> Optional[dict[str, str]]:
+        if attestation is None:
+            return None
+        return {
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": attestation,
+            "target_scope": target_scope,
+        }
 
     def _active_chat_binding_counts() -> dict[str, int]:
         try:
@@ -1835,21 +1847,30 @@ def build_hub_repo_routes(
     async def remove_repo(repo_id: str, payload: Optional[HubRemoveRepoRequest] = None):
         payload = payload or HubRemoveRepoRequest()
         force = payload.force
+        force_attestation = payload.force_attestation
         delete_dir = payload.delete_dir
         delete_worktrees = payload.delete_worktrees
         safe_log(
             context.logger,
             logging.INFO,
-            "Hub remove repo id=%s force=%s delete_dir=%s delete_worktrees=%s"
-            % (repo_id, force, delete_dir, delete_worktrees),
+            "Hub remove repo id=%s force=%s delete_dir=%s delete_worktrees=%s force_attestation=%s"
+            % (repo_id, force, delete_dir, delete_worktrees, bool(force_attestation)),
         )
+        remove_kwargs: dict[str, Any] = {
+            "force": force,
+            "delete_dir": delete_dir,
+            "delete_worktrees": delete_worktrees,
+        }
+        if force_attestation is not None:
+            remove_kwargs["force_attestation"] = _build_force_attestation_payload(
+                force_attestation,
+                target_scope=f"hub.remove_repo:{repo_id}",
+            )
         try:
             await asyncio.to_thread(
                 context.supervisor.remove_repo,
                 repo_id,
-                force=force,
-                delete_dir=delete_dir,
-                delete_worktrees=delete_worktrees,
+                **remove_kwargs,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1864,14 +1885,22 @@ def build_hub_repo_routes(
         repo_id: str, payload: Optional[HubRemoveRepoRequest] = None
     ):
         payload = payload or HubRemoveRepoRequest()
+        remove_kwargs: dict[str, Any] = {
+            "force": payload.force,
+            "delete_dir": payload.delete_dir,
+            "delete_worktrees": payload.delete_worktrees,
+        }
+        if payload.force_attestation is not None:
+            remove_kwargs["force_attestation"] = _build_force_attestation_payload(
+                payload.force_attestation,
+                target_scope=f"hub.remove_repo:{repo_id}",
+            )
 
         async def _run_remove_repo():
             await asyncio.to_thread(
                 context.supervisor.remove_repo,
                 repo_id,
-                force=payload.force,
-                delete_dir=payload.delete_dir,
-                delete_worktrees=payload.delete_worktrees,
+                **remove_kwargs,
             )
             snapshots = await asyncio.to_thread(
                 context.supervisor.list_repos, use_cache=False
@@ -1934,12 +1963,13 @@ def build_hub_repo_routes(
         delete_remote = payload.delete_remote
         archive = payload.archive
         force = payload.force
+        force_attestation = payload.force_attestation
         force_archive = payload.force_archive
         archive_note = payload.archive_note
         safe_log(
             context.logger,
             logging.INFO,
-            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s archive=%s force=%s force_archive=%s"
+            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s archive=%s force=%s force_archive=%s force_attestation=%s"
             % (
                 worktree_repo_id,
                 delete_branch,
@@ -1947,18 +1977,27 @@ def build_hub_repo_routes(
                 archive,
                 force,
                 force_archive,
+                bool(force_attestation),
             ),
         )
+        cleanup_kwargs: dict[str, Any] = {
+            "worktree_repo_id": str(worktree_repo_id),
+            "delete_branch": delete_branch,
+            "delete_remote": delete_remote,
+            "archive": archive,
+            "force": force,
+            "force_archive": force_archive,
+            "archive_note": archive_note,
+        }
+        if force_attestation is not None:
+            cleanup_kwargs["force_attestation"] = _build_force_attestation_payload(
+                force_attestation,
+                target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
+            )
         try:
             result = await asyncio.to_thread(
                 context.supervisor.cleanup_worktree,
-                worktree_repo_id=str(worktree_repo_id),
-                delete_branch=delete_branch,
-                delete_remote=delete_remote,
-                archive=archive,
-                force=force,
-                force_archive=force_archive,
-                archive_note=archive_note,
+                **cleanup_kwargs,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1968,16 +2007,23 @@ def build_hub_repo_routes(
 
     @router.post("/hub/jobs/worktrees/cleanup", response_model=HubJobResponse)
     async def cleanup_worktree_job(payload: HubCleanupWorktreeRequest):
-        def _run_cleanup_worktree():
-            result = context.supervisor.cleanup_worktree(
-                worktree_repo_id=str(payload.worktree_repo_id),
-                delete_branch=payload.delete_branch,
-                delete_remote=payload.delete_remote,
-                archive=payload.archive,
-                force=payload.force,
-                force_archive=payload.force_archive,
-                archive_note=payload.archive_note,
+        cleanup_kwargs: dict[str, Any] = {
+            "worktree_repo_id": str(payload.worktree_repo_id),
+            "delete_branch": payload.delete_branch,
+            "delete_remote": payload.delete_remote,
+            "archive": payload.archive,
+            "force": payload.force,
+            "force_archive": payload.force_archive,
+            "archive_note": payload.archive_note,
+        }
+        if payload.force_attestation is not None:
+            cleanup_kwargs["force_attestation"] = _build_force_attestation_payload(
+                payload.force_attestation,
+                target_scope=f"hub.worktree.cleanup:{payload.worktree_repo_id}",
             )
+
+        def _run_cleanup_worktree():
+            result = context.supervisor.cleanup_worktree(**cleanup_kwargs)
             if isinstance(result, dict):
                 return result
             return {"status": "ok"}

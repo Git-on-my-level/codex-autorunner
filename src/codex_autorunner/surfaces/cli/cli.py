@@ -115,7 +115,7 @@ repos_app = typer.Typer(
     add_completion=False, help="Manage trusted/untrusted template repositories."
 )
 render_app = typer.Typer(
-    add_completion=False, help="Browser rendering and capture commands."
+    add_completion=False, help="Rendering, export, and browser capture commands."
 )
 cleanup_app = typer.Typer(
     add_completion=False, help="Cleanup managed processes and report artifacts."

@@ -6,6 +6,7 @@ from typing import Callable, List, Optional
 import typer
 
 from ....core.config import HubConfig
+from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.hub import HubSupervisor
 
 
@@ -53,6 +54,18 @@ def _emit_cleanup_status(result: object) -> None:
     if isinstance(message, str) and message.strip():
         parts.append(f"detail={message.strip()}")
     typer.echo(" ".join(parts))
+
+
+def _build_force_attestation(
+    force_attestation: Optional[str], *, target_scope: str
+) -> Optional[dict[str, str]]:
+    if force_attestation is None:
+        return None
+    return {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": force_attestation,
+        "target_scope": target_scope,
+    }
 
 
 def register_worktree_commands(
@@ -183,6 +196,11 @@ def register_worktree_commands(
             "--force",
             help="Allow cleanup of a worktree bound to an active chat thread",
         ),
+        force_attestation: Optional[str] = typer.Option(
+            None,
+            "--force-attestation",
+            help="Attestation text required with --force/--force-archive for dangerous actions.",
+        ),
         archive_note: Optional[str] = typer.Option(
             None, "--archive-note", help="Optional archive note"
         ),
@@ -196,15 +214,23 @@ def register_worktree_commands(
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         try:
-            result = supervisor.cleanup_worktree(
-                worktree_repo_id=worktree_repo_id,
-                delete_branch=delete_branch,
-                delete_remote=delete_remote,
-                archive=archive,
-                force_archive=force_archive,
-                archive_note=archive_note,
-                force=force,
-            )
+            cleanup_kwargs = {
+                "worktree_repo_id": worktree_repo_id,
+                "delete_branch": delete_branch,
+                "delete_remote": delete_remote,
+                "archive": archive,
+                "force_archive": force_archive,
+                "archive_note": archive_note,
+                "force": force,
+            }
+            force_attestation_payload: Optional[dict[str, str]] = None
+            if force or force_archive:
+                force_attestation_payload = _build_force_attestation(
+                    force_attestation,
+                    target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
+                )
+                cleanup_kwargs["force_attestation"] = force_attestation_payload
+            result = supervisor.cleanup_worktree(**cleanup_kwargs)
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
         _emit_cleanup_status(result)
@@ -229,6 +255,11 @@ def register_worktree_commands(
             "--force",
             help="Allow archive+cleanup of a worktree bound to an active chat thread",
         ),
+        force_attestation: Optional[str] = typer.Option(
+            None,
+            "--force-attestation",
+            help="Attestation text required with --force/--force-archive for dangerous actions.",
+        ),
         archive_note: Optional[str] = typer.Option(
             None, "--archive-note", help="Optional archive note"
         ),
@@ -242,15 +273,23 @@ def register_worktree_commands(
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         try:
-            result = supervisor.cleanup_worktree(
-                worktree_repo_id=worktree_repo_id,
-                delete_branch=delete_branch,
-                delete_remote=delete_remote,
-                archive=True,
-                force_archive=force_archive,
-                archive_note=archive_note,
-                force=force,
-            )
+            cleanup_kwargs = {
+                "worktree_repo_id": worktree_repo_id,
+                "delete_branch": delete_branch,
+                "delete_remote": delete_remote,
+                "archive": True,
+                "force_archive": force_archive,
+                "archive_note": archive_note,
+                "force": force,
+            }
+            force_attestation_payload: Optional[dict[str, str]] = None
+            if force or force_archive:
+                force_attestation_payload = _build_force_attestation(
+                    force_attestation,
+                    target_scope=f"hub.worktree.archive:{worktree_repo_id}",
+                )
+                cleanup_kwargs["force_attestation"] = force_attestation_payload
+            result = supervisor.cleanup_worktree(**cleanup_kwargs)
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
         _emit_cleanup_status(result)

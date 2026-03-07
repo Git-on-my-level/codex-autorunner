@@ -9,6 +9,7 @@ from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.cli import app
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_ERROR
 
 runner = CliRunner()
 
@@ -127,6 +128,102 @@ def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
     assert payload["archived_runs"] is False
     assert payload["deleted_run"] is False
     assert run_dir.exists()
+
+
+def test_ticket_flow_archive_force_requires_attestation(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    run_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.PAUSED)
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "ticket_flow",
+            "archive",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+            "--force",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert FORCE_ATTESTATION_REQUIRED_ERROR in result.output
+
+
+def test_ticket_flow_archive_force_with_attestation_succeeds(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    run_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.PAUSED)
+
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "ticket_flow",
+            "archive",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+            "--force",
+            "--force-attestation",
+            "archive paused run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["run_id"] == run_id
+    assert payload["archived_runs"] is True
+    assert payload["deleted_run"] is True
+
+
+def test_ticket_flow_archive_alias_inherits_force_attestation(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    run_id = "abababab-abab-abab-abab-abababababab"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.PAUSED)
+
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "ticket-flow",
+            "archive",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+            "--force",
+            "--force-attestation",
+            "archive paused run via alias",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["run_id"] == run_id
 
 
 def test_ticket_flow_status_outputs_human_readable_status(tmp_path: Path) -> None:

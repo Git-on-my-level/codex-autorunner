@@ -16,6 +16,7 @@ def test_render_subcommands_are_registered() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["render", "--help"])
     assert result.exit_code == 0
+    assert "markdown" in result.stdout
     assert "screenshot" in result.stdout
     assert "demo" in result.stdout
     assert "observe" in result.stdout

@@ -109,6 +109,7 @@ class _ExecutionStub(ExecutionCommands):
     ) -> _TurnRunResult:
         self._captured["prompt_text"] = prompt_text
         self._captured["workspace_path"] = record.workspace_path
+        self._captured["input_items"] = input_items
         return _TurnRunResult(
             record=record,
             thread_id=thread_id,
@@ -183,6 +184,55 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     assert "PMA File Inbox:" in snapshot_text
     assert "- inbox: [input.txt]" in snapshot_text
     assert "- outbox: [output.txt]" in snapshot_text
+
+
+@pytest.mark.anyio
+async def test_pma_prompt_routing_preserves_native_input_items(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    image_path = hub_root / "image.png"
+    image_path.write_bytes(b"png-bytes")
+
+    class _LifecycleStoreStub:
+        def get_unprocessed(self, limit: int = 20) -> list:
+            return []
+
+    class _HubSupervisorStub:
+        def __init__(self) -> None:
+            self.hub_config = SimpleNamespace(pma=None)
+            self.lifecycle_store = _LifecycleStoreStub()
+
+        def list_repos(self) -> list:
+            return []
+
+    record = TelegramTopicRecord(pma_enabled=True, workspace_path=None)
+    handler = _ExecutionStub(record, hub_root)
+    handler._hub_supervisor = _HubSupervisorStub()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=123,
+        thread_id=None,
+        from_user_id=456,
+        text="review this image",
+        date=None,
+        is_topic_message=False,
+    )
+    input_items = [
+        {"type": "text", "text": "review this image"},
+        {"type": "localImage", "path": str(image_path)},
+    ]
+
+    result = await handler._run_turn_and_collect_result(
+        message,
+        runtime=SimpleNamespace(),
+        input_items=input_items,
+        send_placeholder=False,
+    )
+
+    assert isinstance(result, _TurnRunResult)
+    captured = handler._captured.get("input_items")
+    assert captured == input_items
 
 
 @pytest.mark.anyio

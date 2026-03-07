@@ -26,11 +26,24 @@ from ....core.flows.worker_process import (
     write_worker_crash_info,
     write_worker_exit_info,
 )
+from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.managed_processes import reap_managed_processes
 from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
 from ....tickets import AgentPool
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
+
+
+def _build_force_attestation(
+    force_attestation: Optional[str], *, target_scope: str
+) -> Optional[dict[str, str]]:
+    if force_attestation is None:
+        return None
+    return {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": force_attestation,
+        "target_scope": target_scope,
+    }
 
 
 def _stale_terminal_runs(records: list[FlowRunRecord]) -> list[FlowRunRecord]:
@@ -1033,6 +1046,11 @@ You are the first ticket in a new ticket_flow run.
         force: bool = typer.Option(
             False, "--force", help="Allow archiving paused/stopping runs"
         ),
+        force_attestation: Optional[str] = typer.Option(
+            None,
+            "--force-attestation",
+            help="Attestation text required with --force for dangerous actions.",
+        ),
         delete_run: str = typer.Option(
             "true",
             "--delete-run",
@@ -1061,14 +1079,22 @@ You are the first ticket in a new ticket_flow run.
                 raise_exit(f"Flow run not found: {normalized_run_id}")
             assert record is not None
             try:
-                summary = archive_flow_run_artifacts(
-                    repo_root=engine.repo_root,
-                    store=store,
-                    record=record,
-                    force=force,
-                    delete_run=parsed_delete_run,
-                    dry_run=dry_run,
-                )
+                archive_kwargs = {
+                    "repo_root": engine.repo_root,
+                    "store": store,
+                    "record": record,
+                    "force": force,
+                    "delete_run": parsed_delete_run,
+                    "dry_run": dry_run,
+                }
+                force_attestation_payload: Optional[dict[str, str]] = None
+                if force:
+                    force_attestation_payload = _build_force_attestation(
+                        force_attestation,
+                        target_scope=f"flow.ticket_flow.archive:{run_id_str}",
+                    )
+                    archive_kwargs["force_attestation"] = force_attestation_payload
+                summary = archive_flow_run_artifacts(**archive_kwargs)
             except ValueError as exc:
                 raise_exit(str(exc), cause=exc)
         finally:

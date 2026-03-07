@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import shlex
 import socket
-import subprocess
 import sys
 import textwrap
 import time
@@ -12,6 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import codex_autorunner.browser.server as server_mod
 from codex_autorunner.browser.server import (
     BrowserServeConfig,
     BrowserServerSupervisor,
@@ -35,18 +35,6 @@ def _wait_process_gone(pid: int, *, timeout: float = 6.0) -> None:
         except ProcessLookupError:
             return
         except PermissionError:
-            return
-        try:
-            status = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "stat="],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            fields = status.stdout.strip().split()
-            if fields and fields[0].startswith("Z"):
-                return
-        except (OSError, subprocess.SubprocessError):
             return
         time.sleep(0.05)
     pytest.fail(f"process {pid} still running")
@@ -160,6 +148,45 @@ def test_supervisor_readiness_timeout_still_cleans_up(tmp_path: Path) -> None:
         supervisor.stop()
     assert pid is not None
     _wait_process_gone(pid)
+
+
+def test_supervisor_honors_small_ready_timeout_when_probe_is_slow(
+    tmp_path: Path,
+) -> None:
+    script = tmp_path / "sleep_forever.py"
+    script.write_text("import time\nprint('booting', flush=True)\ntime.sleep(300)\n")
+    cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+    supervisor = BrowserServerSupervisor(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_url=f"http://127.0.0.1:{_free_port()}/health",
+            timeout_seconds=0.2,
+            poll_interval_seconds=0.05,
+        )
+    )
+
+    def _slow_probe(*_args, **kwargs):
+        timeout = float(kwargs.get("timeout", kwargs.get("timeout_seconds", 0.0)))
+        time.sleep(timeout)
+        raise httpx.ConnectTimeout("simulated timeout")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(server_mod.httpx, "get", _slow_probe)
+
+    supervisor.start()
+    started = time.monotonic()
+    elapsed_wait = None
+    try:
+        with pytest.raises(ReadinessTimeoutError):
+            supervisor.wait_until_ready()
+        elapsed_wait = time.monotonic() - started
+    finally:
+        supervisor.stop()
+        monkeypatch.undo()
+    assert elapsed_wait is not None
+    assert (
+        elapsed_wait < 0.6
+    ), f"timeout should be near configured deadline, got {elapsed_wait:.3f}s"
 
 
 def test_supervisor_reports_early_process_exit(tmp_path: Path) -> None:

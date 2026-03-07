@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import typer
 
@@ -15,9 +15,25 @@ from ....core.flows.archive_helpers import (
     archive_flow_run_artifacts as _archive_flow_run_artifacts_core,
 )
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
+from ....core.force_attestation import (
+    FORCE_ATTESTATION_REQUIRED_PHRASE,
+    validate_force_attestation,
+)
 from ....manifest import load_manifest
 from ....tickets.outbox import resolve_outbox_paths
 from .utils import parse_bool_text, parse_duration
+
+
+def _build_force_attestation(
+    force_attestation: Optional[str], *, target_scope: str
+) -> Optional[dict[str, str]]:
+    if force_attestation is None:
+        return None
+    return {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": force_attestation,
+        "target_scope": target_scope,
+    }
 
 
 def _resolve_run_paths(record: FlowRunRecord, repo_root: Path):
@@ -113,14 +129,19 @@ def _archive_flow_run_artifacts(
     force: bool,
     delete_run: bool,
     dry_run: bool,
+    force_attestation: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
+    if force:
+        validate_force_attestation(force_attestation)
     if not dry_run:
-        return _archive_flow_run_artifacts_core(
-            repo_root,
-            run_id=record.id,
-            force=force,
-            delete_run=delete_run,
-        )
+        archive_kwargs = {
+            "run_id": record.id,
+            "force": force,
+            "delete_run": delete_run,
+        }
+        if force:
+            archive_kwargs["force_attestation"] = force_attestation
+        return _archive_flow_run_artifacts_core(repo_root, **archive_kwargs)
 
     status = record.status
     terminal = status.is_terminal()
@@ -194,6 +215,11 @@ def register_hub_runs_commands(
         force: bool = typer.Option(
             False, "--force", help="Allow archiving paused/stopping runs"
         ),
+        force_attestation: Optional[str] = typer.Option(
+            None,
+            "--force-attestation",
+            help="Attestation text required with --force for dangerous actions.",
+        ),
         path: Optional[Path] = typer.Option(
             None, "--path", "--hub", help="Hub root path"
         ),
@@ -218,6 +244,17 @@ def register_hub_runs_commands(
         if older_than:
             cutoff = datetime.now(timezone.utc) - parse_duration_func(older_than)
         parsed_delete_run = parse_bool_text_func(delete_run, flag="--delete-run")
+        force_attestation_payload: Optional[dict[str, str]] = None
+        if force:
+            force_attestation_payload = _build_force_attestation(
+                force_attestation,
+                target_scope="hub.runs.cleanup",
+            )
+            try:
+                validate_force_attestation(force_attestation_payload)
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(code=1) from exc
 
         results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
@@ -264,13 +301,20 @@ def register_hub_runs_commands(
                         if ts is None or ts > cutoff:
                             continue
                     try:
+                        archive_kwargs = {
+                            "repo_root": repo_root,
+                            "store": store,
+                            "record": record,
+                            "force": force,
+                            "delete_run": parsed_delete_run,
+                            "dry_run": dry_run,
+                        }
+                        if force:
+                            archive_kwargs["force_attestation"] = (
+                                force_attestation_payload
+                            )
                         summary = _archive_flow_run_artifacts(
-                            repo_root=repo_root,
-                            store=store,
-                            record=record,
-                            force=force,
-                            delete_run=parsed_delete_run,
-                            dry_run=dry_run,
+                            **archive_kwargs,
                         )
                         summary["repo_id"] = entry.id
                         results.append(summary)

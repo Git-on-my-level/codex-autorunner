@@ -292,6 +292,10 @@ def act_step(
     if action == "wait_ms":
         ms_raw = step_data.get("ms", 0)
         ms = int(ms_raw) if isinstance(ms_raw, int) else 0
+        if ms > step_timeout:
+            raise ValueError(
+                f"wait_ms step requested {ms}ms but timeout is {step_timeout}ms."
+            )
         time.sleep(ms / 1000.0)
         return {}
 

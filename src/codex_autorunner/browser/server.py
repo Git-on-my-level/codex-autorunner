@@ -146,8 +146,17 @@ class BrowserServerSupervisor:
         poll_interval = max(0.05, float(self._config.poll_interval_seconds))
         deadline = time.monotonic() + timeout
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ReadinessTimeoutError(
+                    "Timed out waiting for serve-mode readiness. "
+                    f"Recent output: {self._tail_preview()}"
+                )
             if self._ready_url:
-                if self._probe_ready_url(self._ready_url):
+                probe_timeout = min(1.0, max(0.05, remaining))
+                if self._probe_ready_url(
+                    self._ready_url, timeout_seconds=probe_timeout
+                ):
                     return BrowserServeSession(
                         pid=self._process.pid,
                         pgid=self._pgid,
@@ -170,12 +179,7 @@ class BrowserServerSupervisor:
                     f"Serve command exited early with code {return_code}. "
                     f"Recent output: {self._tail_preview()}"
                 )
-            if time.monotonic() >= deadline:
-                raise ReadinessTimeoutError(
-                    "Timed out waiting for serve-mode readiness. "
-                    f"Recent output: {self._tail_preview()}"
-                )
-            time.sleep(poll_interval)
+            time.sleep(min(poll_interval, max(0.0, remaining)))
 
     def stop(self) -> None:
         proc = self._process
@@ -187,6 +191,14 @@ class BrowserServerSupervisor:
                 kill_seconds=self._config.kill_seconds,
                 event_prefix="browser_server",
             )
+        if proc is not None:
+            try:
+                wait_timeout = max(
+                    0.1, self._config.grace_seconds + self._config.kill_seconds + 0.5
+                )
+                proc.wait(timeout=wait_timeout)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
         if proc is not None:
             for stream in (proc.stdout, proc.stderr):
                 if stream is None:
@@ -203,11 +215,11 @@ class BrowserServerSupervisor:
             return "<no output>"
         return " | ".join(self._tail)
 
-    def _probe_ready_url(self, ready_url: str) -> bool:
+    def _probe_ready_url(self, ready_url: str, *, timeout_seconds: float) -> bool:
         try:
             response = httpx.get(
                 ready_url,
-                timeout=1.0,
+                timeout=timeout_seconds,
                 follow_redirects=True,
             )
             return 200 <= response.status_code < 300

@@ -262,3 +262,22 @@ def test_a11y_snapshot_fallback_is_structured_when_runtime_returns_null(
         demo_a11y_artifacts["a11y_snapshot"].read_text(encoding="utf-8")
     )
     assert demo_snapshot["status"] == "unavailable"
+
+
+def test_wait_ms_step_enforces_step_timeout(tmp_path: Path) -> None:
+    page = _FakePage()
+    try:
+        act_step(
+            page=page,
+            action="wait_ms",
+            step_data={"ms": 1500, "timeout_ms": 250},
+            step_index=1,
+            base_url="http://127.0.0.1:9000",
+            initial_path="/settings",
+            out_dir=tmp_path / "outbox",
+            timeout_ms=1000,
+        )
+    except ValueError as exc:
+        assert "wait_ms step requested 1500ms but timeout is 250ms" in str(exc)
+    else:
+        raise AssertionError("Expected wait_ms timeout validation to fail")
