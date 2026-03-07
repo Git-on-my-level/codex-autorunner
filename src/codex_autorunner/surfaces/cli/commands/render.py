@@ -7,8 +7,9 @@ import typer
 
 from ....browser import (
     DEFAULT_VIEWPORT_TEXT,
+    BrowserRuntime,
     parse_viewport,
-    resolve_output_path,
+    resolve_out_dir,
     select_render_target,
 )
 
@@ -26,6 +27,22 @@ def _repo_root_from_context(context: Any) -> Path:
     if isinstance(repo_root, Path):
         return repo_root
     return Path.cwd()
+
+
+def _resolve_out_dir_and_name(
+    *,
+    repo_root: Path,
+    out_dir: Optional[Path],
+    output: Optional[Path],
+) -> tuple[Path, Optional[str]]:
+    base_dir = resolve_out_dir(repo_root, out_dir)
+    if output is None:
+        return base_dir, None
+    if output.is_absolute():
+        return output.parent, output.name
+    if output.parent != Path("."):
+        return base_dir / output.parent, output.name
+    return base_dir, output.name
 
 
 def register_render_commands(
@@ -69,7 +86,7 @@ def register_render_commands(
             None, "--hub", "--hub-path", help="Hub root or config path."
         ),
     ) -> None:
-        """Capture a screenshot artifact (stub)."""
+        """Capture a screenshot artifact."""
         _require_render_feature(require_optional_feature)
         ctx = require_repo_config(repo, hub)
         repo_root = _repo_root_from_context(ctx)
@@ -81,18 +98,32 @@ def register_render_commands(
         normalized_format = (format or "").strip().lower()
         if normalized_format not in {"png", "pdf"}:
             raise_exit("Invalid --format value. Expected one of: png, pdf.")
-        output_path = resolve_output_path(
+        if target.mode != "url" or not target.url:
+            raise_exit("Serve mode is not implemented yet for `car render screenshot`.")
+        target_url = target.url
+        assert target_url is not None
+        final_out_dir, output_name = _resolve_out_dir_and_name(
             repo_root=repo_root,
-            output=output,
             out_dir=out_dir,
-            default_name=f"screenshot.{normalized_format}",
+            output=output,
         )
-        typer.echo(
-            "render screenshot stub: "
-            f"mode={target.mode} target_path={target.path} "
-            f"viewport={parsed_viewport.width}x{parsed_viewport.height} "
-            f"output={output_path}"
+        result = BrowserRuntime().capture_screenshot(
+            base_url=target_url,
+            path=target.path,
+            out_dir=final_out_dir,
+            viewport=parsed_viewport,
+            output_name=output_name,
+            output_format=normalized_format,
         )
+        if not result.ok:
+            raise_exit(
+                f"Render screenshot failed ({result.error_type or 'Error'}): "
+                f"{result.error_message or 'Unknown error.'}"
+            )
+        capture = result.artifacts.get("capture")
+        if capture is None:
+            raise_exit("Render screenshot did not produce an artifact.")
+        typer.echo(str(capture))
 
     @app.command("demo")
     def render_demo(
@@ -150,18 +181,15 @@ def register_render_commands(
             raise_exit(
                 "Invalid --trace value. Expected one of: off, on, retain-on-failure."
             )
-        output_path = resolve_output_path(
-            repo_root=repo_root,
-            output=output,
-            out_dir=out_dir,
-            default_name="demo.mp4" if record_video else "demo.json",
+        output_dir, output_name = _resolve_out_dir_and_name(
+            repo_root=repo_root, out_dir=out_dir, output=output
         )
         typer.echo(
             "render demo stub: "
             f"mode={target.mode} target_path={target.path} "
             f"script={script} "
             f"viewport={parsed_viewport.width}x{parsed_viewport.height} "
-            f"trace={normalized_trace} output={output_path}"
+            f"trace={normalized_trace} out_dir={output_dir} output={output_name}"
         )
 
     @app.command("observe")
@@ -193,7 +221,7 @@ def register_render_commands(
             None, "--hub", "--hub-path", help="Hub root or config path."
         ),
     ) -> None:
-        """Capture a structured page observation artifact (stub)."""
+        """Capture a structured page observation artifact."""
         _require_render_feature(require_optional_feature)
         ctx = require_repo_config(repo, hub)
         repo_root = _repo_root_from_context(ctx)
@@ -202,15 +230,30 @@ def register_render_commands(
             parsed_viewport = parse_viewport(viewport)
         except ValueError as exc:
             raise_exit(str(exc), cause=exc)
-        output_path = resolve_output_path(
+        if target.mode != "url" or not target.url:
+            raise_exit("Serve mode is not implemented yet for `car render observe`.")
+        target_url = target.url
+        assert target_url is not None
+        final_out_dir, output_name = _resolve_out_dir_and_name(
             repo_root=repo_root,
-            output=output,
             out_dir=out_dir,
-            default_name="observe-a11y.json",
+            output=output,
         )
-        typer.echo(
-            "render observe stub: "
-            f"mode={target.mode} target_path={target.path} "
-            f"viewport={parsed_viewport.width}x{parsed_viewport.height} "
-            f"output={output_path}"
+        result = BrowserRuntime().capture_observe(
+            base_url=target_url,
+            path=target.path,
+            out_dir=final_out_dir,
+            viewport=parsed_viewport,
+            output_name=output_name,
         )
+        if not result.ok:
+            raise_exit(
+                f"Render observe failed ({result.error_type or 'Error'}): "
+                f"{result.error_message or 'Unknown error.'}"
+            )
+        snapshot = result.artifacts.get("snapshot")
+        metadata = result.artifacts.get("metadata")
+        if snapshot is None or metadata is None:
+            raise_exit("Render observe did not produce required artifacts.")
+        typer.echo(str(snapshot))
+        typer.echo(str(metadata))
