@@ -147,6 +147,11 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
+                    "name": "tickets",
+                    "description": "Manage tickets via modal",
+                },
+                {
+                    "type": SUB_COMMAND,
                     "name": "mcp",
                     "description": "Show MCP server status",
                 },

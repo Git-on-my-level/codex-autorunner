@@ -35,9 +35,12 @@ from .interactions import (
     extract_guild_id,
     extract_interaction_id,
     extract_interaction_token,
+    extract_modal_custom_id,
+    extract_modal_values,
     extract_user_id,
     is_autocomplete_interaction,
     is_component_interaction,
+    is_modal_submit_interaction,
 )
 from .rendering import (
     chunk_discord_message,
@@ -349,6 +352,10 @@ class DiscordChatAdapter(ChatAdapter):
                 if isinstance(values, list):
                     payload_data["values"] = values
             payload_data["type"] = "component"
+        elif is_modal_submit_interaction(payload):
+            payload_data["custom_id"] = extract_modal_custom_id(payload)
+            payload_data["values"] = extract_modal_values(payload)
+            payload_data["type"] = "modal_submit"
         elif is_autocomplete_interaction(payload):
             command_path, options, focused_name, focused_value = (
                 extract_autocomplete_command_context(payload)

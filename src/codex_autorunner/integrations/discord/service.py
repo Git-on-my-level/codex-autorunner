@@ -16,6 +16,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from ...agents.opencode.harness import OpenCodeHarness
 from ...core.config import load_repo_config, resolve_env_for_root
+from ...bootstrap import seed_hub_files, seed_repo_files
+from ...core.config import ConfigError, find_nearest_hub_config_path
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_prompt_writing_hint,
@@ -136,7 +138,13 @@ from ...integrations.github.service import (
     GitHubService,
 )
 from ...manifest import load_manifest
-from ...tickets.files import read_ticket
+from ...tickets.files import (
+    list_ticket_paths,
+    read_ticket,
+    read_ticket_frontmatter,
+    safe_relpath,
+)
+
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ..telegram.helpers import (
@@ -166,6 +174,8 @@ from .components import (
     build_model_picker,
     build_review_commit_picker,
     build_session_threads_picker,
+    build_ticket_filter_picker,
+    build_ticket_picker,
     build_update_target_picker,
 )
 from .config import DiscordBotConfig
@@ -180,9 +190,12 @@ from .interactions import (
     extract_guild_id,
     extract_interaction_id,
     extract_interaction_token,
+    extract_modal_custom_id,
+    extract_modal_values,
     extract_user_id,
     is_autocomplete_interaction,
     is_component_interaction,
+    is_modal_submit_interaction,
 )
 from .outbox import DiscordOutboxManager
 from .rendering import (
@@ -225,6 +238,10 @@ MODEL_EFFORT_SELECT_ID = "model_effort_select"
 BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
+TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
+TICKETS_SELECT_ID = "tickets_select"
+TICKETS_MODAL_PREFIX = "tickets_modal"
+TICKETS_BODY_INPUT_ID = "ticket_body"
 FLOW_ACTIONS_WITH_RUN_PICKER = {
     "status",
     "restart",
@@ -549,6 +566,8 @@ class DiscordBotService:
             )
         self._pending_model_effort: dict[str, str] = {}
         self._pending_flow_reply_text: dict[str, str] = {}
+        self._pending_ticket_context: dict[str, dict[str, str]] = {}
+        self._pending_ticket_filters: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",
@@ -750,6 +769,22 @@ class DiscordBotService:
                 values=payload_data.get("values"),
                 guild_id=payload_data.get("guild_id"),
                 user_id=event.from_user_id,
+            )
+            return
+
+        if payload_data.get("type") == "modal_submit":
+            custom_id_raw = payload_data.get("custom_id")
+            modal_values_raw = payload_data.get("values")
+            custom_id = custom_id_raw if isinstance(custom_id_raw, str) else ""
+            modal_values = (
+                modal_values_raw if isinstance(modal_values_raw, dict) else {}
+            )
+            await self._handle_ticket_modal_submit(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                custom_id=custom_id,
+                values=modal_values,
             )
             return
 
@@ -2738,6 +2773,19 @@ class DiscordBotService:
                 workspace_root=workspace_root,
             )
             return
+        if command_path == ("car", "tickets"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root is None:
+                return
+            await self._handle_tickets(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                workspace_root=workspace_root,
+            )
+            return
         if command_path == ("car", "mcp"):
             workspace_root = await self._require_bound_workspace(
                 interaction_id, interaction_token, channel_id=channel_id
@@ -3538,6 +3586,9 @@ class DiscordBotService:
         return None
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
+        if is_modal_submit_interaction(interaction_payload):
+            await self._handle_modal_submit_interaction(interaction_payload)
+            return
         if is_component_interaction(interaction_payload):
             await self._handle_component_interaction(interaction_payload)
             return
@@ -3807,6 +3858,65 @@ class DiscordBotService:
             )
 
         return prompt, components
+
+    def _ticket_dir(self, workspace_root: Path) -> Path:
+        return workspace_root / ".codex-autorunner" / "tickets"
+
+    def _list_ticket_choices(
+        self,
+        workspace_root: Path,
+        *,
+        status_filter: str,
+    ) -> list[tuple[str, str, str]]:
+        ticket_dir = self._ticket_dir(workspace_root)
+        choices: list[tuple[str, str, str]] = []
+        normalized_filter = status_filter.strip().lower()
+        if normalized_filter not in {"all", "open", "done"}:
+            normalized_filter = "open"
+        for path in list_ticket_paths(ticket_dir):
+            frontmatter, errors = read_ticket_frontmatter(path)
+            is_done = bool(frontmatter and frontmatter.done and not errors)
+            if normalized_filter == "open" and is_done:
+                continue
+            if normalized_filter == "done" and not is_done:
+                continue
+            title = frontmatter.title if frontmatter and frontmatter.title else ""
+            label = f"{path.name}{' - ' + title if title else ''}"
+            description = "done" if is_done else "open"
+            rel_path = safe_relpath(path, workspace_root)
+            choices.append((rel_path, label, description))
+        return choices
+
+    def _build_ticket_components(
+        self,
+        workspace_root: Path,
+        *,
+        status_filter: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            build_ticket_filter_picker(current_filter=status_filter),
+            build_ticket_picker(self._list_ticket_choices(workspace_root, status_filter=status_filter)),
+        ]
+
+    async def _handle_tickets(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        workspace_root: Path,
+    ) -> None:
+        status_filter = self._pending_ticket_filters.get(channel_id, "all")
+        normalized_filter = status_filter.strip().lower() if status_filter else "all"
+        if normalized_filter not in {"all", "open", "done"}:
+            normalized_filter = "all"
+        self._pending_ticket_filters[channel_id] = normalized_filter
+        await self._open_ticket_modal(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            status_filter=normalized_filter,
+        )
 
     def _repo_autocomplete_value(self, repo_id: str) -> str:
         normalized_id = repo_id.strip()
@@ -4485,6 +4595,398 @@ class DiscordBotService:
             "This command is not yet available in Discord.",
         )
 
+    async def _handle_modal_submit_interaction(
+        self, interaction_payload: dict[str, Any]
+    ) -> None:
+        interaction_id = extract_interaction_id(interaction_payload)
+        interaction_token = extract_interaction_token(interaction_payload)
+        channel_id = extract_channel_id(interaction_payload)
+
+        if not interaction_id or not interaction_token or not channel_id:
+            self._logger.warning(
+                "handle_modal_submit_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
+                bool(interaction_id),
+                bool(interaction_token),
+                bool(channel_id),
+            )
+            return
+
+        if not allowlist_allows(interaction_payload, self._allowlist):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This Discord interaction is not authorized.",
+            )
+            return
+
+        custom_id = extract_modal_custom_id(interaction_payload)
+        if not custom_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not identify this modal submission. Please retry.",
+            )
+            return
+
+        values = extract_modal_values(interaction_payload)
+        await self._handle_ticket_modal_submit(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            custom_id=custom_id,
+            values=values,
+        )
+
+    async def _handle_ticket_modal_submit(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        custom_id: str,
+        values: dict[str, Any],
+    ) -> None:
+        if not custom_id.startswith(f"{TICKETS_MODAL_PREFIX}:"):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Unknown modal submission.",
+            )
+            return
+
+        token = custom_id.split(":", 1)[1].strip()
+        context = self._pending_ticket_context.pop(token, None)
+        if not context:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This ticket modal has expired. Re-open it and try again.",
+            )
+            return
+
+        status_filter_raw = self._extract_modal_single_select(
+            values, TICKETS_FILTER_SELECT_ID
+        )
+        status_filter = (
+            status_filter_raw
+            if isinstance(status_filter_raw, str)
+            else context.get("status_filter", "all")
+        )
+        normalized_filter = status_filter.strip().lower() if status_filter else "all"
+        if normalized_filter not in {"all", "open", "done"}:
+            normalized_filter = "all"
+        self._pending_ticket_filters[channel_id] = normalized_filter
+
+        ticket_rel_raw = self._extract_modal_single_select(values, TICKETS_SELECT_ID)
+        ticket_rel = (
+            ticket_rel_raw if isinstance(ticket_rel_raw, str) else context.get("ticket_rel")
+        )
+        if not isinstance(ticket_rel, str) or not ticket_rel or ticket_rel == "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No ticket selected. Re-run `/car tickets` and choose one.",
+            )
+            return
+
+        ticket_body_raw = values.get(TICKETS_BODY_INPUT_ID)
+        ticket_body = ticket_body_raw if isinstance(ticket_body_raw, str) else None
+        if ticket_body is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket content is missing. Please try again.",
+            )
+            return
+
+        workspace_root = Path(context.get("workspace_root", "")).expanduser()
+        ticket_dir = self._ticket_dir(workspace_root).resolve()
+        candidate = (workspace_root / ticket_rel).resolve()
+        try:
+            candidate.relative_to(ticket_dir)
+        except ValueError:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket path is invalid. Re-open the ticket and try again.",
+            )
+            return
+
+        try:
+            candidate.write_text(ticket_body, encoding="utf-8")
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to save ticket: {exc}",
+            )
+            return
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Saved {safe_relpath(candidate, workspace_root)}.",
+        )
+
+    @staticmethod
+    def _extract_modal_single_select(
+        values: dict[str, Any], custom_id: str
+    ) -> Optional[str]:
+        raw = values.get(custom_id)
+        if isinstance(raw, str):
+            normalized = raw.strip()
+            return normalized or None
+        if isinstance(raw, list):
+            for value in raw:
+                if isinstance(value, (str, int, float)):
+                    normalized = str(value).strip()
+                    if normalized:
+                        return normalized
+        return None
+
+    async def _handle_ticket_filter_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        values: Optional[list[str]],
+    ) -> None:
+        if not values:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a filter and try again.",
+            )
+            return
+        workspace_root = await self._require_bound_workspace(
+            interaction_id, interaction_token, channel_id=channel_id
+        )
+        if not workspace_root:
+            return
+        status_filter = values[0].strip().lower()
+        if status_filter not in {"all", "open", "done"}:
+            status_filter = "all"
+        self._pending_ticket_filters[channel_id] = status_filter
+        await self._update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            text="Select a ticket to view or edit.",
+            components=self._build_ticket_components(
+                workspace_root,
+                status_filter=status_filter,
+            ),
+        )
+
+    async def _handle_ticket_select_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        values: Optional[list[str]],
+    ) -> None:
+        if not values:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a ticket and try again.",
+            )
+            return
+        if values[0] == "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No tickets available for this filter.",
+            )
+            return
+        workspace_root = await self._require_bound_workspace(
+            interaction_id, interaction_token, channel_id=channel_id
+        )
+        if not workspace_root:
+            return
+        status_filter = self._pending_ticket_filters.get(channel_id, "all")
+        await self._open_ticket_modal(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            ticket_rel=values[0],
+            status_filter=status_filter,
+        )
+
+    async def _open_ticket_modal(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        ticket_rel: Optional[str] = None,
+        status_filter: str = "all",
+    ) -> None:
+        normalized_filter = status_filter.strip().lower() if status_filter else "all"
+        if normalized_filter not in {"all", "open", "done"}:
+            normalized_filter = "all"
+        choices = self._list_ticket_choices(
+            workspace_root,
+            status_filter=normalized_filter,
+        )
+        selected_ticket = ticket_rel or (choices[0][0] if choices else "none")
+        selected_paths = {path for path, _label, _description in choices}
+        if selected_ticket not in selected_paths:
+            selected_ticket = choices[0][0] if choices else "none"
+
+        ticket_text = ""
+        if selected_ticket != "none":
+            ticket_dir = self._ticket_dir(workspace_root).resolve()
+            candidate = (workspace_root / selected_ticket).resolve()
+            try:
+                candidate.relative_to(ticket_dir)
+            except ValueError:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Ticket path is invalid. Re-open the ticket list and try again.",
+                )
+                return
+            if not candidate.exists() or not candidate.is_file():
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Ticket file not found. Re-open the ticket list and try again.",
+                )
+                return
+            try:
+                ticket_text = candidate.read_text(encoding="utf-8")
+            except Exception as exc:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    f"Failed to read ticket: {exc}",
+                )
+                return
+        max_len = 4000
+        if len(ticket_text) > max_len:
+            ticket_text = ticket_text[: max_len - 20] + "\n\n...TRUNCATED..."
+
+        token = uuid.uuid4().hex[:12]
+        self._pending_ticket_context[token] = {
+            "workspace_root": str(workspace_root),
+            "ticket_rel": selected_ticket,
+            "status_filter": normalized_filter,
+        }
+
+        title = "Edit ticket"
+        await self._respond_modal(
+            interaction_id,
+            interaction_token,
+            custom_id=f"{TICKETS_MODAL_PREFIX}:{token}",
+            title=title,
+            field_label="Ticket",
+            field_value=ticket_text,
+            status_filter=normalized_filter,
+            ticket_choices=choices,
+            selected_ticket=selected_ticket,
+        )
+
+    async def _respond_modal(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        custom_id: str,
+        title: str,
+        field_label: str,
+        field_value: str,
+        status_filter: str,
+        ticket_choices: list[tuple[str, str, str]],
+        selected_ticket: str,
+    ) -> None:
+        filter_options = [
+            {"label": "all", "value": "all", "default": status_filter == "all"},
+            {"label": "open", "value": "open", "default": status_filter == "open"},
+            {"label": "done", "value": "done", "default": status_filter == "done"},
+        ]
+        ticket_options = [
+            {
+                "label": label[:100],
+                "value": ticket_id[:100],
+                "description": description[:100] if description else None,
+                "default": ticket_id == selected_ticket,
+            }
+            for ticket_id, label, description in ticket_choices[
+                :DISCORD_SELECT_OPTION_MAX_OPTIONS
+            ]
+        ]
+        if not ticket_options:
+            ticket_options = [
+                {
+                    "label": "No tickets found",
+                    "value": "none",
+                    "description": "Create tickets first",
+                    "default": True,
+                }
+            ]
+        for option in ticket_options:
+            if option.get("description") is None:
+                option.pop("description", None)
+        payload = {
+            "type": 9,
+            "data": {
+                "custom_id": custom_id[:100],
+                "title": title[:45],
+                "components": [
+                    {
+                        "type": 18,
+                        "label": "Filter",
+                        "component": {
+                            "type": 3,
+                            "custom_id": TICKETS_FILTER_SELECT_ID,
+                            "options": filter_options,
+                            "min_values": 1,
+                            "max_values": 1,
+                            "placeholder": "Filter tickets...",
+                        },
+                    },
+                    {
+                        "type": 18,
+                        "label": "Ticket",
+                        "component": {
+                            "type": 3,
+                            "custom_id": TICKETS_SELECT_ID,
+                            "options": ticket_options,
+                            "min_values": 1,
+                            "max_values": 1,
+                            "placeholder": "Select a ticket...",
+                        },
+                    },
+                    {
+                        "type": 18,
+                        "label": field_label[:45],
+                        "component": {
+                            "type": 4,
+                            "custom_id": TICKETS_BODY_INPUT_ID,
+                            "style": 2,
+                            "value": field_value[:4000],
+                            "required": True,
+                            "max_length": 4000,
+                        },
+                    }
+                ],
+            },
+        }
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload=payload,
+            )
+        except DiscordAPIError as exc:
+            self._logger.error(
+                "Failed to send modal response: %s (interaction_id=%s)",
+                exc,
+                interaction_id,
+            )
+
     async def _handle_mcp(
         self,
         interaction_id: str,
@@ -4506,11 +5008,47 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
+        target_root = canonicalize_path(workspace_root)
+        ca_dir = target_root / ".codex-autorunner"
+
+        try:
+            await asyncio.to_thread(
+                seed_repo_files,
+                target_root,
+                False,
+                False,
+            )
+            hub_initialized = False
+            if find_nearest_hub_config_path(target_root) is None:
+                await asyncio.to_thread(
+                    seed_hub_files,
+                    target_root,
+                    False,
+                )
+                hub_initialized = True
+        except ConfigError as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Init failed: {exc}",
+            )
+            return
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Init failed: {exc}",
+            )
+            return
+
+        lines = [f"Initialized repo at {ca_dir}"]
+        if hub_initialized:
+            lines.append(f"Initialized hub at {ca_dir}")
+        lines.append("Init complete")
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "AGENTS.md generation requires the app server client. "
-            "This command is not yet available in Discord.",
+            "\n".join(lines),
         )
 
     async def _handle_repos(
@@ -7763,6 +8301,26 @@ class DiscordBotService:
             return
 
         try:
+            if custom_id == TICKETS_FILTER_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                await self._handle_ticket_filter_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
+            if custom_id == TICKETS_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                await self._handle_ticket_select_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
             if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
                 page_token = custom_id.split(":", 1)[1].strip()
                 await self._handle_bind_page_component(
@@ -8095,6 +8653,24 @@ class DiscordBotService:
         user_id: Optional[str] = None,
     ) -> None:
         try:
+            if custom_id == TICKETS_FILTER_SELECT_ID:
+                await self._handle_ticket_filter_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
+            if custom_id == TICKETS_SELECT_ID:
+                await self._handle_ticket_select_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
             if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
                 page_token = custom_id.split(":", 1)[1].strip()
                 await self._handle_bind_page_component(
