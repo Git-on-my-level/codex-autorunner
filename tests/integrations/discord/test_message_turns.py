@@ -25,6 +25,7 @@ from codex_autorunner.core.filebox import (
 )
 from codex_autorunner.core.ports.run_event import (
     Completed,
+    Failed,
     OutputDelta,
     Started,
     TokenUsage,
@@ -2051,6 +2052,172 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
 
 
 @pytest.mark.anyio
+async def test_message_create_streaming_turn_ignores_late_failed_after_completed_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "done before late failure"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+            Failed(
+                timestamp="2026-01-01T00:00:03Z",
+                error_message="late failure after completion",
+            ),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    logged_events: list[dict[str, Any]] = []
+
+    def _capture_log_event(
+        logger: logging.Logger,
+        level: int,
+        event: str,
+        *,
+        exc: Optional[Exception] = None,
+        **fields: Any,
+    ) -> None:
+        _ = logger
+        logged_events.append({"level": level, "event": event, "exc": exc, **fields})
+
+    monkeypatch.setattr(
+        service, "_orchestrator_for_workspace", _fake_orchestrator_for_workspace
+    )
+    monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
+
+    try:
+        await service.run_forever()
+        assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "Turn failed:" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert any(
+            event["event"] == "discord.turn.failed_late_ignored"
+            and event["level"] == logging.WARNING
+            for event in logged_events
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    streamed_text = "fallback streamed answer survives"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=streamed_text,
+                delta_type="assistant_stream",
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
+            Failed(
+                timestamp="2026-01-01T00:00:03Z",
+                error_message="late failure after streamed fallback",
+            ),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    logged_events: list[dict[str, Any]] = []
+
+    def _capture_log_event(
+        logger: logging.Logger,
+        level: int,
+        event: str,
+        *,
+        exc: Optional[Exception] = None,
+        **fields: Any,
+    ) -> None:
+        _ = logger
+        logged_events.append({"level": level, "event": event, "exc": exc, **fields})
+
+    monkeypatch.setattr(
+        service, "_orchestrator_for_workspace", _fake_orchestrator_for_workspace
+    )
+    monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
+
+    try:
+        await service.run_forever()
+        assert any(
+            streamed_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "(No response text returned.)" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "Turn failed:" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert any(
+            event["event"] == "discord.turn.failed_late_ignored"
+            and event["level"] == logging.WARNING
+            for event in logged_events
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sends_chunks(
     tmp_path: Path,
 ) -> None:
@@ -3639,6 +3806,107 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
         assert outbox
         assert any(
             "queued reply" in item.payload_json.get("content", "") for item in outbox
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_review_single_chunk_preview_edit_does_not_fallback_when_flush_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=200),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return DiscordMessageTurnResult(
+            final_message="single chunk review response",
+            preview_message_id="preview-1",
+        )
+
+    async def _failing_flush_outbox_files(
+        *, workspace_root: Path, channel_id: str
+    ) -> None:
+        _ = (workspace_root, channel_id)
+        raise RuntimeError("simulated flush failure")
+
+    logged_events: list[dict[str, Any]] = []
+
+    def _capture_log_event(
+        logger: logging.Logger,
+        level: int,
+        event: str,
+        *,
+        exc: Optional[Exception] = None,
+        **fields: Any,
+    ) -> None:
+        _ = logger
+        logged_events.append({"level": level, "event": event, "exc": exc, **fields})
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _fake_run_turn)
+    monkeypatch.setattr(service, "_flush_outbox_files", _failing_flush_outbox_files)
+    monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
+
+    try:
+        await service._handle_car_review(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            workspace_root=workspace.resolve(),
+            options={},
+        )
+        assert rest.edited_channel_messages
+        assert rest.edited_channel_messages[-1]["message_id"] == "preview-1"
+        assert (
+            rest.edited_channel_messages[-1]["payload"].get("content")
+            == "single chunk review response"
+        )
+        assert rest.deleted_channel_messages == []
+        assert rest.channel_messages == []
+        assert any(
+            event["event"] == "discord.review.outbox_flush_failed"
+            and event["level"] == logging.WARNING
+            for event in logged_events
+        )
+        assert not any(
+            event["event"] == "discord.review.preview_edit_failed"
+            for event in logged_events
         )
     finally:
         await store.close()

@@ -2128,7 +2128,23 @@ class DiscordBotService:
                     tracker.set_label("done")
                     await _edit_progress(force=True, remove_components=True)
                 elif isinstance(run_event, Failed):
-                    error_message = run_event.error_message or "Turn failed"
+                    failed_message = run_event.error_message or "Turn failed"
+                    if final_message.strip() or assistant_stream_fallback.strip():
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.turn.failed_late_ignored",
+                            channel_id=progress_channel_id,
+                            session_key=session_key,
+                            error_message=failed_message,
+                            final_message_length=len(final_message),
+                            fallback_stream_length=len(assistant_stream_fallback),
+                        )
+                        tracker.clear_transient_action()
+                        tracker.set_label("done")
+                        await _edit_progress(force=True, remove_components=True)
+                        continue
+                    error_message = failed_message
                     tracker.note_error(error_message)
                     tracker.clear_transient_action()
                     tracker.set_label("failed")
@@ -8323,18 +8339,6 @@ class DiscordBotService:
                         message_id=preview_message_id,
                         payload={"content": chunks[0]},
                     )
-                    await self._flush_outbox_files(
-                        workspace_root=workspace_root,
-                        channel_id=channel_id,
-                    )
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.review.completed",
-                        channel_id=channel_id,
-                        target_type=target_type,
-                    )
-                    return
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -8344,6 +8348,30 @@ class DiscordBotService:
                         message_id=preview_message_id,
                         exc=exc,
                     )
+                else:
+                    try:
+                        await self._flush_outbox_files(
+                            workspace_root=workspace_root,
+                            channel_id=channel_id,
+                        )
+                    except Exception as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.review.outbox_flush_failed",
+                            channel_id=channel_id,
+                            target_type=target_type,
+                            message_id=preview_message_id,
+                            exc=exc,
+                        )
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.review.completed",
+                        channel_id=channel_id,
+                        target_type=target_type,
+                    )
+                    return
             try:
                 await self._rest.delete_channel_message(
                     channel_id=channel_id,
