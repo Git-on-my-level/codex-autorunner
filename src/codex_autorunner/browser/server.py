@@ -150,15 +150,25 @@ def load_render_session(
     try:
         payload = json.loads(record_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        raise RenderSessionError(
-            f"Render session '{session_id}' metadata is unreadable: {exc}"
+        remove_render_session(repo_root=repo_root, session_id=session_id)
+        raise StaleRenderSessionError(
+            (
+                f"Render session '{session_id}' metadata is unreadable and was removed: "
+                f"{exc}"
+            )
         ) from exc
 
-    metadata = _decode_render_session_payload(
-        payload=payload,
-        session_id=session_id,
-        record_path=record_path,
-    )
+    try:
+        metadata = _decode_render_session_payload(
+            payload=payload,
+            session_id=session_id,
+            record_path=record_path,
+        )
+    except RenderSessionError as exc:
+        remove_render_session(repo_root=repo_root, session_id=session_id)
+        raise StaleRenderSessionError(
+            f"Render session '{session_id}' metadata is invalid and was removed: {exc}"
+        ) from exc
 
     if not require_live:
         return metadata
