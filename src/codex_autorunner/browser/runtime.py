@@ -16,6 +16,14 @@ from .models import DEFAULT_VIEWPORT, Viewport
 PlaywrightLoader = Callable[[], Any]
 
 
+class BrowserNavigationError(RuntimeError):
+    """Page navigation failed before capture could run."""
+
+
+class BrowserArtifactError(RuntimeError):
+    """Artifact capture/write failed after navigation."""
+
+
 @dataclass(frozen=True)
 class BrowserRunResult:
     ok: bool
@@ -225,8 +233,16 @@ class BrowserRuntime:
                 viewport={"width": viewport.width, "height": viewport.height}
             )
             page = context.new_page()
-            page.goto(nav_url, timeout=timeout_ms, wait_until=wait_until)
-            artifacts, skipped = action(page)
+            try:
+                page.goto(nav_url, timeout=timeout_ms, wait_until=wait_until)
+            except Exception as exc:
+                raise BrowserNavigationError(str(exc) or "Navigation failed.") from exc
+            try:
+                artifacts, skipped = action(page)
+            except Exception as exc:
+                raise BrowserArtifactError(
+                    str(exc) or "Artifact capture failed."
+                ) from exc
             return BrowserRunResult(
                 ok=True,
                 mode=mode,

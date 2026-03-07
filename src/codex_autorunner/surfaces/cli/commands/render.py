@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional, Tuple
 
 import typer
 
 from ....browser import (
     DEFAULT_VIEWPORT_TEXT,
     BrowserRuntime,
+    BrowserServeConfig,
+    ServeModeError,
+    parse_env_overrides,
     parse_viewport,
     resolve_out_dir,
     select_render_target,
+    supervised_server,
 )
 
 
@@ -45,6 +50,53 @@ def _resolve_out_dir_and_name(
     return base_dir, output.name
 
 
+def _runtime_error_category(error_type: Optional[str]) -> str:
+    if error_type == "BrowserNavigationError":
+        return "navigation_failure"
+    if error_type == "BrowserArtifactError":
+        return "artifact_write_failure"
+    return "capture_failure"
+
+
+@contextmanager
+def _resolve_target_base_url(
+    *,
+    target: Any,
+    ready_url: Optional[str],
+    ready_log_pattern: Optional[str],
+    cwd: Optional[Path],
+    env: Optional[list[str]],
+    ready_timeout_seconds: float,
+) -> Iterator[Tuple[str, str]]:
+    if target.mode == "url":
+        if not target.url:
+            raise ValueError("URL target is missing URL value.")
+        with nullcontext((target.url, "url")) as resolved:
+            yield resolved
+        return
+
+    if target.mode != "serve" or not target.serve_cmd:
+        raise ValueError("Serve mode target is missing command.")
+
+    env_overrides = parse_env_overrides(env or [])
+    config = BrowserServeConfig(
+        serve_cmd=target.serve_cmd,
+        ready_url=ready_url,
+        ready_log_pattern=ready_log_pattern,
+        cwd=cwd,
+        env_overrides=env_overrides,
+        timeout_seconds=ready_timeout_seconds,
+    )
+    with supervised_server(config) as session:
+        if not session.target_url:
+            raise ServeModeError(
+                "Serve readiness succeeded, but target URL could not be derived. "
+                "Provide --ready-url or use a --ready-log-pattern with a named "
+                "group (?P<url>http://...)."
+            )
+        yield session.target_url, session.ready_source
+
+
 def register_render_commands(
     app: typer.Typer,
     *,
@@ -61,6 +113,31 @@ def register_render_commands(
             None,
             "--serve-cmd",
             help="Command used to start a local app before capture.",
+        ),
+        ready_url: Optional[str] = typer.Option(
+            None,
+            "--ready-url",
+            help="Readiness URL polled until healthy (preferred in serve mode).",
+        ),
+        ready_log_pattern: Optional[str] = typer.Option(
+            None,
+            "--ready-log-pattern",
+            help="Regex matched against serve stdout/stderr when --ready-url is absent.",
+        ),
+        cwd: Optional[Path] = typer.Option(
+            None,
+            "--cwd",
+            help="Working directory for the serve command.",
+        ),
+        env: Optional[list[str]] = typer.Option(
+            None,
+            "--env",
+            help="Repeat KEY=VALUE overrides passed to the serve command environment.",
+        ),
+        ready_timeout_seconds: float = typer.Option(
+            30.0,
+            "--ready-timeout-seconds",
+            help="Serve readiness timeout in seconds.",
         ),
         path: str = typer.Option("/", "--path", help="Relative path to open."),
         viewport: str = typer.Option(
@@ -95,30 +172,48 @@ def register_render_commands(
             parsed_viewport = parse_viewport(viewport)
         except ValueError as exc:
             raise_exit(str(exc), cause=exc)
+
         normalized_format = (format or "").strip().lower()
         if normalized_format not in {"png", "pdf"}:
             raise_exit("Invalid --format value. Expected one of: png, pdf.")
-        if target.mode != "url" or not target.url:
-            raise_exit("Serve mode is not implemented yet for `car render screenshot`.")
-        target_url = target.url
-        assert target_url is not None
+
         final_out_dir, output_name = _resolve_out_dir_and_name(
             repo_root=repo_root,
             out_dir=out_dir,
             output=output,
         )
-        result = BrowserRuntime().capture_screenshot(
-            base_url=target_url,
-            path=target.path,
-            out_dir=final_out_dir,
-            viewport=parsed_viewport,
-            output_name=output_name,
-            output_format=normalized_format,
-        )
-        if not result.ok:
+        try:
+            with _resolve_target_base_url(
+                target=target,
+                ready_url=ready_url,
+                ready_log_pattern=ready_log_pattern,
+                cwd=cwd,
+                env=env,
+                ready_timeout_seconds=ready_timeout_seconds,
+            ) as (base_url, _ready_source):
+                result = BrowserRuntime().capture_screenshot(
+                    base_url=base_url,
+                    path=target.path,
+                    out_dir=final_out_dir,
+                    viewport=parsed_viewport,
+                    output_name=output_name,
+                    output_format=normalized_format,
+                )
+        except ServeModeError as exc:
             raise_exit(
-                f"Render screenshot failed ({result.error_type or 'Error'}): "
-                f"{result.error_message or 'Unknown error.'}"
+                f"Render screenshot failed ({exc.category}): {str(exc) or 'Unknown serve-mode error.'}",
+                cause=exc,
+            )
+        except ValueError as exc:
+            raise_exit(str(exc), cause=exc)
+        except KeyboardInterrupt:
+            raise_exit("Render screenshot interrupted; serve process was terminated.")
+
+        if not result.ok:
+            category = _runtime_error_category(result.error_type)
+            raise_exit(
+                f"Render screenshot failed ({category}): "
+                f"{result.error_message or 'Unknown capture error.'}"
             )
         capture = result.artifacts.get("capture")
         if capture is None:
@@ -137,6 +232,31 @@ def register_render_commands(
         ),
         serve_cmd: Optional[str] = typer.Option(
             None, "--serve-cmd", help="Command used to start a local app before demo."
+        ),
+        ready_url: Optional[str] = typer.Option(
+            None,
+            "--ready-url",
+            help="Readiness URL polled until healthy (preferred in serve mode).",
+        ),
+        ready_log_pattern: Optional[str] = typer.Option(
+            None,
+            "--ready-log-pattern",
+            help="Regex matched against serve stdout/stderr when --ready-url is absent.",
+        ),
+        cwd: Optional[Path] = typer.Option(
+            None,
+            "--cwd",
+            help="Working directory for the serve command.",
+        ),
+        env: Optional[list[str]] = typer.Option(
+            None,
+            "--env",
+            help="Repeat KEY=VALUE overrides passed to the serve command environment.",
+        ),
+        ready_timeout_seconds: float = typer.Option(
+            30.0,
+            "--ready-timeout-seconds",
+            help="Serve readiness timeout in seconds.",
         ),
         path: str = typer.Option("/", "--path", help="Relative path to open."),
         viewport: str = typer.Option(
@@ -181,16 +301,38 @@ def register_render_commands(
             raise_exit(
                 "Invalid --trace value. Expected one of: off, on, retain-on-failure."
             )
+
         output_dir, output_name = _resolve_out_dir_and_name(
-            repo_root=repo_root, out_dir=out_dir, output=output
+            repo_root=repo_root,
+            out_dir=out_dir,
+            output=output,
         )
-        typer.echo(
-            "render demo stub: "
-            f"mode={target.mode} target_path={target.path} "
-            f"script={script} "
-            f"viewport={parsed_viewport.width}x{parsed_viewport.height} "
-            f"trace={normalized_trace} out_dir={output_dir} output={output_name}"
-        )
+        try:
+            with _resolve_target_base_url(
+                target=target,
+                ready_url=ready_url,
+                ready_log_pattern=ready_log_pattern,
+                cwd=cwd,
+                env=env,
+                ready_timeout_seconds=ready_timeout_seconds,
+            ) as (base_url, ready_source):
+                typer.echo(
+                    "render demo stub: "
+                    f"base_url={base_url} ready_source={ready_source} "
+                    f"target_path={target.path} script={script} "
+                    f"viewport={parsed_viewport.width}x{parsed_viewport.height} "
+                    f"trace={normalized_trace} record_video={record_video} "
+                    f"out_dir={output_dir} output={output_name}"
+                )
+        except ServeModeError as exc:
+            raise_exit(
+                f"Render demo failed ({exc.category}): {str(exc) or 'Unknown serve-mode error.'}",
+                cause=exc,
+            )
+        except ValueError as exc:
+            raise_exit(str(exc), cause=exc)
+        except KeyboardInterrupt:
+            raise_exit("Render demo interrupted; serve process was terminated.")
 
     @app.command("observe")
     def render_observe(
@@ -247,9 +389,10 @@ def register_render_commands(
             output_name=output_name,
         )
         if not result.ok:
+            category = _runtime_error_category(result.error_type)
             raise_exit(
-                f"Render observe failed ({result.error_type or 'Error'}): "
-                f"{result.error_message or 'Unknown error.'}"
+                f"Render observe failed ({category}): "
+                f"{result.error_message or 'Unknown capture error.'}"
             )
         snapshot = result.artifacts.get("snapshot")
         metadata = result.artifacts.get("metadata")

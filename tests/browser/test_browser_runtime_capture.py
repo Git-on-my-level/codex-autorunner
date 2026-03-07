@@ -199,7 +199,7 @@ def test_runtime_failure_still_closes_page_context_browser(tmp_path: Path) -> No
     )
 
     assert result.ok is False
-    assert result.error_type == "RuntimeError"
+    assert result.error_type == "BrowserNavigationError"
     assert fake.page.closed is True
     assert fake.context.closed is True
     assert fake.browser.closed is True

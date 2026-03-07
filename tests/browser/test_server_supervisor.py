@@ -1,0 +1,240 @@
+from __future__ import annotations
+
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import textwrap
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+
+from codex_autorunner.browser.server import (
+    BrowserServeConfig,
+    BrowserServerSupervisor,
+    ProcessExitedEarlyError,
+    ReadinessTimeoutError,
+    supervised_server,
+)
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_process_gone(pid: int, *, timeout: float = 6.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            return
+        try:
+            status = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "stat="],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            fields = status.stdout.strip().split()
+            if fields and fields[0].startswith("Z"):
+                return
+        except (OSError, subprocess.SubprocessError):
+            return
+        time.sleep(0.05)
+    pytest.fail(f"process {pid} still running")
+
+
+def _write_fixture_server_script(tmp_path: Path) -> Path:
+    script_path = tmp_path / "fixture_server.py"
+    script_path.write_text(
+        textwrap.dedent(
+            """
+            import argparse
+            import http.server
+            import os
+            from pathlib import Path
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--port", type=int, required=True)
+            parser.add_argument("--marker", default="")
+            parser.add_argument("--ready-line", default="")
+            args = parser.parse_args()
+
+            if args.marker:
+                Path(args.marker).write_text(
+                    f"{os.getcwd()}\\n{os.environ.get('CAR_TEST_ENV', '')}\\n",
+                    encoding="utf-8",
+                )
+
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):  # noqa: N802
+                    body = b"ok"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_args, **_kwargs):
+                    return
+
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+            ready_line = args.ready_line or f"READY http://127.0.0.1:{args.port}/health"
+            print(ready_line, flush=True)
+            server.serve_forever()
+            """
+        ),
+        encoding="utf-8",
+    )
+    return script_path
+
+
+def test_supervised_server_ready_url_happy_path_applies_cwd_and_env(
+    tmp_path: Path,
+) -> None:
+    script_path = _write_fixture_server_script(tmp_path)
+    marker_path = tmp_path / "marker.txt"
+    cwd_dir = tmp_path / "workdir"
+    cwd_dir.mkdir()
+    port = _free_port()
+    ready_url = f"http://127.0.0.1:{port}/health"
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script_path)),
+            "--port",
+            str(port),
+            "--marker",
+            shlex.quote(str(marker_path)),
+        ]
+    )
+
+    session_pid = None
+    with supervised_server(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_url=ready_url,
+            cwd=cwd_dir,
+            env_overrides={"CAR_TEST_ENV": "applied"},
+            timeout_seconds=10.0,
+        )
+    ) as session:
+        session_pid = session.pid
+        assert session.ready_source == "ready_url"
+        assert session.target_url == f"http://127.0.0.1:{port}"
+        assert httpx.get(ready_url, timeout=1.0).status_code == 200
+
+    assert session_pid is not None
+    _wait_process_gone(session_pid)
+    marker_text = marker_path.read_text(encoding="utf-8").splitlines()
+    assert marker_text[0] == str(cwd_dir)
+    assert marker_text[1] == "applied"
+
+
+def test_supervisor_readiness_timeout_still_cleans_up(tmp_path: Path) -> None:
+    script = tmp_path / "sleep_forever.py"
+    script.write_text("import time\nprint('booting', flush=True)\ntime.sleep(300)\n")
+    cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+    supervisor = BrowserServerSupervisor(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_url=f"http://127.0.0.1:{_free_port()}/health",
+            timeout_seconds=0.4,
+            poll_interval_seconds=0.05,
+        )
+    )
+    supervisor.start()
+    pid = supervisor.process_pid
+    try:
+        with pytest.raises(ReadinessTimeoutError):
+            supervisor.wait_until_ready()
+    finally:
+        supervisor.stop()
+    assert pid is not None
+    _wait_process_gone(pid)
+
+
+def test_supervisor_reports_early_process_exit(tmp_path: Path) -> None:
+    script = tmp_path / "exit_early.py"
+    script.write_text("import sys\nprint('bye', flush=True)\nsys.exit(7)\n")
+    cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+    supervisor = BrowserServerSupervisor(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_log_pattern="READY",
+            timeout_seconds=2.0,
+            poll_interval_seconds=0.05,
+        )
+    )
+    supervisor.start()
+    pid = supervisor.process_pid
+    try:
+        with pytest.raises(ProcessExitedEarlyError):
+            supervisor.wait_until_ready()
+    finally:
+        supervisor.stop()
+    assert pid is not None
+    _wait_process_gone(pid)
+
+
+def test_supervised_server_log_pattern_ready_with_url_group(tmp_path: Path) -> None:
+    script_path = _write_fixture_server_script(tmp_path)
+    port = _free_port()
+    ready_line = f"SERVICE url=http://127.0.0.1:{port}/health"
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script_path)),
+            "--port",
+            str(port),
+            "--ready-line",
+            shlex.quote(ready_line),
+        ]
+    )
+    session_pid = None
+    with supervised_server(
+        BrowserServeConfig(
+            serve_cmd=cmd,
+            ready_log_pattern=r"url=(?P<url>http://127\.0\.0\.1:\d+/health)",
+            timeout_seconds=10.0,
+        )
+    ) as session:
+        session_pid = session.pid
+        assert session.ready_source == "ready_log_pattern"
+        assert session.target_url == f"http://127.0.0.1:{port}"
+    assert session_pid is not None
+    _wait_process_gone(session_pid)
+
+
+def test_supervised_server_interrupt_path_still_cleans_up(tmp_path: Path) -> None:
+    script_path = _write_fixture_server_script(tmp_path)
+    port = _free_port()
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script_path)),
+            "--port",
+            str(port),
+        ]
+    )
+    pid_holder = {"pid": None}
+    with pytest.raises(KeyboardInterrupt):
+        with supervised_server(
+            BrowserServeConfig(
+                serve_cmd=cmd,
+                ready_url=f"http://127.0.0.1:{port}/health",
+                timeout_seconds=10.0,
+            )
+        ) as session:
+            pid_holder["pid"] = session.pid
+            raise KeyboardInterrupt()
+    assert pid_holder["pid"] is not None
+    _wait_process_gone(int(pid_holder["pid"]))

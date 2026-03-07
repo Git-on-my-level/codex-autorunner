@@ -18,15 +18,41 @@ from .models import (
     resolve_output_path,
     select_render_target,
 )
-from .runtime import BrowserRunResult, BrowserRuntime, build_navigation_url
+from .runtime import (
+    BrowserArtifactError,
+    BrowserNavigationError,
+    BrowserRunResult,
+    BrowserRuntime,
+    build_navigation_url,
+)
+from .server import (
+    BadReadyUrlError,
+    BrowserServeConfig,
+    BrowserServerSupervisor,
+    BrowserServeSession,
+    ProcessExitedEarlyError,
+    ReadinessTimeoutError,
+    ServeModeError,
+    parse_env_overrides,
+    supervised_server,
+)
 
 __all__ = [
     "ArtifactWriteResult",
     "BrowserRunResult",
+    "BrowserServeConfig",
+    "BrowserServeSession",
+    "BrowserServerSupervisor",
     "BrowserRuntime",
+    "BrowserArtifactError",
+    "BrowserNavigationError",
     "DEFAULT_VIEWPORT",
     "DEFAULT_VIEWPORT_TEXT",
     "RenderTarget",
+    "BadReadyUrlError",
+    "ProcessExitedEarlyError",
+    "ReadinessTimeoutError",
+    "ServeModeError",
     "TargetMode",
     "Viewport",
     "build_navigation_url",
@@ -36,6 +62,8 @@ __all__ = [
     "resolve_out_dir",
     "resolve_output_path",
     "select_render_target",
+    "parse_env_overrides",
+    "supervised_server",
     "write_json_artifact",
     "write_text_artifact",
 ]
