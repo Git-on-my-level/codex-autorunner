@@ -724,6 +724,85 @@ async def test_message_create_flush_outbox_skips_symlink_outside_pending(
 
 
 @pytest.mark.anyio
+async def test_message_create_flush_outbox_preserves_root_file_when_pending_symlink_points_to_it(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    root_outbox = outbox_dir(workspace.resolve())
+    root_outbox.mkdir(parents=True, exist_ok=True)
+    pending_dir = outbox_pending_dir(workspace.resolve())
+    pending_dir.mkdir(parents=True, exist_ok=True)
+
+    root_file = root_outbox / "result.txt"
+    root_file.write_text("artifact payload\n", encoding="utf-8")
+    symlink_path = pending_dir / "result-link.txt"
+    try:
+        symlink_path.symlink_to(root_file)
+    except OSError:
+        pytest.skip("symlinks not supported in this test environment")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.attachment_messages
+        assert len(rest.attachment_messages) == 1
+        assert rest.attachment_messages[0]["filename"] == "result.txt"
+        sent_files = list(outbox_sent_dir(workspace.resolve()).glob("result*.txt"))
+        assert sent_files
+        assert sent_files[0].read_text(encoding="utf-8") == "artifact payload\n"
+        assert not root_file.exists()
+        assert os.path.lexists(symlink_path)
+        assert symlink_path.is_symlink()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_non_pma_injects_prompt_context_hints(
     tmp_path: Path,
 ) -> None:

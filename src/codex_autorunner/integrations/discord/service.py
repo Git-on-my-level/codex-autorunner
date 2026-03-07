@@ -6455,7 +6455,19 @@ class DiscordBotService:
             key = str(path)
             with contextlib.suppress(Exception):
                 key = str(canonicalize_path(path))
-            deduped[key] = (source_dir, path)
+            existing = deduped.get(key)
+            if existing is None:
+                deduped[key] = (source_dir, path)
+                continue
+            existing_source, _existing_path = existing
+            existing_is_root = existing_source == outbox_root
+            current_is_root = source_dir == outbox_root
+            # Preserve outbox-root candidates over pending aliases that resolve
+            # to the same canonical target (e.g., pending symlink to root file).
+            if existing_is_root and not current_is_root:
+                continue
+            if current_is_root and not existing_is_root:
+                deduped[key] = (source_dir, path)
 
         def _mtime(item: tuple[Path, Path]) -> float:
             _source, path = item
