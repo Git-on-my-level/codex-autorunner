@@ -106,7 +106,11 @@ from ..services.pma.common import (
     pma_config_from_raw,
 )
 from .agents import _available_agents, _serialize_model_catalog
-from .pma_routes import build_automation_routes, build_managed_thread_crud_routes
+from .pma_routes import (
+    build_automation_routes,
+    build_managed_thread_crud_routes,
+    build_managed_thread_tail_routes,
+)
 from .pma_routes.runtime_state import PmaRuntimeState
 from .shared import SSE_HEADERS
 
@@ -2183,55 +2187,6 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         return {"thread": updated}
 
-    @router.get("/threads/{managed_thread_id}/turns")
-    def list_managed_thread_turns(
-        managed_thread_id: str,
-        request: Request,
-        limit: int = 50,
-    ) -> dict[str, Any]:
-        if limit <= 0:
-            raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        limit = min(limit, 200)
-
-        store = PmaThreadStore(request.app.state.config.root)
-        thread = store.get_thread(managed_thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="Managed thread not found")
-
-        turns = store.list_turns(managed_thread_id, limit=limit)
-        return {
-            "turns": [
-                {
-                    "managed_turn_id": turn.get("managed_turn_id"),
-                    "status": turn.get("status"),
-                    "prompt_preview": _truncate_text(turn.get("prompt") or "", 120),
-                    "assistant_preview": _truncate_text(
-                        turn.get("assistant_text") or "", 120
-                    ),
-                    "started_at": turn.get("started_at"),
-                    "finished_at": turn.get("finished_at"),
-                    "error": turn.get("error"),
-                }
-                for turn in turns
-            ]
-        }
-
-    @router.get("/threads/{managed_thread_id}/turns/{managed_turn_id}")
-    def get_managed_thread_turn(
-        managed_thread_id: str,
-        managed_turn_id: str,
-        request: Request,
-    ) -> dict[str, Any]:
-        store = PmaThreadStore(request.app.state.config.root)
-        thread = store.get_thread(managed_thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="Managed thread not found")
-
-        turn = store.get_turn(managed_thread_id, managed_turn_id)
-        if turn is None:
-            raise HTTPException(status_code=404, detail="Managed turn not found")
-        return {"turn": turn}
-
     async def _build_managed_thread_tail_snapshot(
         *,
         request: Request,
@@ -4259,6 +4214,7 @@ def build_pma_routes() -> APIRouter:
 
     build_automation_routes(router, _get_runtime_state)
     build_managed_thread_crud_routes(router, _get_runtime_state)
+    build_managed_thread_tail_routes(router, _get_runtime_state)
 
     return router
 
