@@ -26,6 +26,7 @@ from .models import (
     resolve_output_path,
     select_render_target,
 )
+from .primitives import ObservePageResult, act_step, capture_artifact, observe_page
 from .runtime import (
     BrowserArtifactError,
     BrowserNavigationError,
@@ -62,6 +63,7 @@ __all__ = [
     "BrowserRuntime",
     "BrowserArtifactError",
     "BrowserNavigationError",
+    "ObservePageResult",
     "DEFAULT_VIEWPORT",
     "DEFAULT_VIEWPORT_TEXT",
     "RenderTarget",
@@ -75,6 +77,9 @@ __all__ = [
     "deterministic_artifact_name",
     "execute_demo_manifest",
     "load_demo_manifest",
+    "act_step",
+    "capture_artifact",
+    "observe_page",
     "parse_viewport",
     "reserve_artifact_path",
     "resolve_out_dir",

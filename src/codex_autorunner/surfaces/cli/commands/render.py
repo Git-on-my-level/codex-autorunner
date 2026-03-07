@@ -378,6 +378,31 @@ def register_render_commands(
             "--serve-cmd",
             help="Command used to start a local app before observe.",
         ),
+        ready_url: Optional[str] = typer.Option(
+            None,
+            "--ready-url",
+            help="Readiness URL polled until healthy (preferred in serve mode).",
+        ),
+        ready_log_pattern: Optional[str] = typer.Option(
+            None,
+            "--ready-log-pattern",
+            help="Regex matched against serve stdout/stderr when --ready-url is absent.",
+        ),
+        cwd: Optional[Path] = typer.Option(
+            None,
+            "--cwd",
+            help="Working directory for the serve command.",
+        ),
+        env: Optional[list[str]] = typer.Option(
+            None,
+            "--env",
+            help="Repeat KEY=VALUE overrides passed to the serve command environment.",
+        ),
+        ready_timeout_seconds: float = typer.Option(
+            30.0,
+            "--ready-timeout-seconds",
+            help="Serve readiness timeout in seconds.",
+        ),
         path: str = typer.Option("/", "--path", help="Relative path to open."),
         viewport: str = typer.Option(
             DEFAULT_VIEWPORT_TEXT,
@@ -397,7 +422,7 @@ def register_render_commands(
             None, "--hub", "--hub-path", help="Hub root or config path."
         ),
     ) -> None:
-        """Capture a structured page observation artifact."""
+        """Capture deterministic, accessibility-first page observation artifacts."""
         _require_render_feature(require_optional_feature)
         ctx = require_repo_config(repo, hub)
         repo_root = _repo_root_from_context(ctx)
@@ -406,22 +431,37 @@ def register_render_commands(
             parsed_viewport = parse_viewport(viewport)
         except ValueError as exc:
             raise_exit(str(exc), cause=exc)
-        if target.mode != "url" or not target.url:
-            raise_exit("Serve mode is not implemented yet for `car render observe`.")
-        target_url = target.url
-        assert target_url is not None
         final_out_dir, output_name = _resolve_out_dir_and_name(
             repo_root=repo_root,
             out_dir=out_dir,
             output=output,
         )
-        result = BrowserRuntime().capture_observe(
-            base_url=target_url,
-            path=target.path,
-            out_dir=final_out_dir,
-            viewport=parsed_viewport,
-            output_name=output_name,
-        )
+        try:
+            with _resolve_target_base_url(
+                target=target,
+                ready_url=ready_url,
+                ready_log_pattern=ready_log_pattern,
+                cwd=cwd,
+                env=env,
+                ready_timeout_seconds=ready_timeout_seconds,
+            ) as (base_url, _ready_source):
+                result = BrowserRuntime().capture_observe(
+                    base_url=base_url,
+                    path=target.path,
+                    out_dir=final_out_dir,
+                    viewport=parsed_viewport,
+                    output_name=output_name,
+                )
+        except ServeModeError as exc:
+            raise_exit(
+                f"Render observe failed ({exc.category}): {str(exc) or 'Unknown serve-mode error.'}",
+                cause=exc,
+            )
+        except ValueError as exc:
+            raise_exit(str(exc), cause=exc)
+        except KeyboardInterrupt:
+            raise_exit("Render observe interrupted; serve process was terminated.")
+
         if not result.ok:
             category = _runtime_error_category(result.error_type)
             raise_exit(
@@ -432,5 +472,5 @@ def register_render_commands(
         metadata = result.artifacts.get("metadata")
         if snapshot is None or metadata is None:
             raise_exit("Render observe did not produce required artifacts.")
-        typer.echo(str(snapshot))
-        typer.echo(str(metadata))
+        for artifact_key in sorted(result.artifacts):
+            typer.echo(str(result.artifacts[artifact_key]))

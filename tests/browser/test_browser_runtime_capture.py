@@ -182,11 +182,24 @@ def test_runtime_observe_writes_snapshot_and_metadata(
     assert result.ok is True
     snapshot_path = result.artifacts["snapshot"]
     metadata_path = result.artifacts["metadata"]
+    locator_refs_path = result.artifacts["locator_refs"]
+    run_manifest_path = result.artifacts["run_manifest"]
     snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
     metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    locator_refs_payload = json.loads(locator_refs_path.read_text(encoding="utf-8"))
+    run_manifest_payload = json.loads(run_manifest_path.read_text(encoding="utf-8"))
     assert isinstance(snapshot_payload, dict)
+    assert metadata_payload["schema_version"] == 1
     assert metadata_payload["title"] == "Fixture Page"
     assert metadata_payload["captured_url"].startswith(fixture_server_url)
+    assert metadata_payload["viewport"] == {"width": 1200, "height": 800}
+    assert locator_refs_payload["schema_version"] == 1
+    assert isinstance(locator_refs_payload["refs"], list)
+    assert run_manifest_payload["schema_version"] == 1
+    assert run_manifest_payload["mode"] == "observe"
+    assert run_manifest_payload["runtime_profile"]["deterministic"] is True
+    assert run_manifest_payload["runtime_profile"]["accessibility_first"] is True
+    assert run_manifest_payload["runtime_profile"]["prompt_driven"] is False
 
 
 def test_runtime_failure_still_closes_page_context_browser(tmp_path: Path) -> None:

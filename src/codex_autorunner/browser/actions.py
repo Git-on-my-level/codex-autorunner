@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import json
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
-from .artifacts import (
-    deterministic_artifact_name,
-    reserve_artifact_path,
-    write_json_artifact,
-)
+from .primitives import act_step
 
 SUPPORTED_V1_ACTIONS = {
     "goto",
@@ -120,9 +114,10 @@ def execute_demo_manifest(
     for idx, step in enumerate(manifest.steps, start=1):
         step_artifacts: list[str] = []
         try:
-            produced = _execute_step(
+            produced = act_step(
                 page=page,
-                step=step,
+                action=step.action,
+                step_data=step.data,
                 step_index=idx,
                 base_url=base_url,
                 initial_path=initial_path,
@@ -165,20 +160,20 @@ def execute_demo_manifest(
 
 def _validate_step(index: int, action: str, step: dict[str, Any]) -> None:
     if action == "goto":
-        _require_str(step, "url", index=index, action=action)
+        _require_non_empty_str(step, "url", index=index, action=action)
         return
     if action == "click":
         _require_locator(step, index=index, action=action)
         return
     if action == "fill":
         _require_locator(step, index=index, action=action)
-        _require_str(step, "value", index=index, action=action)
+        _require_non_empty_str(step, "value", index=index, action=action)
         return
     if action == "press":
-        _require_str(step, "key", index=index, action=action)
+        _require_non_empty_str(step, "key", index=index, action=action)
         return
     if action == "wait_for_url":
-        _require_str(step, "url", index=index, action=action)
+        _require_non_empty_str(step, "url", index=index, action=action)
         return
     if action == "wait_for_text":
         _require_locator(step, index=index, action=action)
@@ -194,7 +189,13 @@ def _validate_step(index: int, action: str, step: dict[str, Any]) -> None:
         return
 
 
-def _require_str(step: dict[str, Any], key: str, *, index: int, action: str) -> str:
+def _require_non_empty_str(
+    step: dict[str, Any],
+    key: str,
+    *,
+    index: int,
+    action: str,
+) -> str:
     value = step.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Step {index} ({action}) requires non-empty '{key}'.")
@@ -203,196 +204,12 @@ def _require_str(step: dict[str, Any], key: str, *, index: int, action: str) -> 
 
 def _require_locator(step: dict[str, Any], *, index: int, action: str) -> None:
     locator_keys = ("role", "name", "label", "text", "test_id", "selector")
-    has_locator = False
     for key in locator_keys:
         value = step.get(key)
         if isinstance(value, str) and value.strip():
-            has_locator = True
-            break
+            return
 
-    if not has_locator:
-        keys = ", ".join(locator_keys)
-        raise ValueError(
-            f"Step {index} ({action}) requires a locator. " f"Provide one of: {keys}."
-        )
-
-
-def _step_timeout_ms(step: dict[str, Any], default_timeout_ms: int) -> int:
-    raw = step.get("timeout_ms")
-    if raw is None:
-        return default_timeout_ms
-    if not isinstance(raw, int) or raw <= 0:
-        raise ValueError("timeout_ms must be a positive integer.")
-    return raw
-
-
-def _resolve_locator(page: Any, step: dict[str, Any]) -> Any:
-    exact = bool(step.get("exact", False))
-
-    role = step.get("role")
-    if isinstance(role, str) and role.strip():
-        kwargs: dict[str, Any] = {}
-        name = step.get("name")
-        if isinstance(name, str) and name.strip():
-            kwargs["name"] = name
-            kwargs["exact"] = exact
-        return page.get_by_role(role.strip(), **kwargs)
-
-    label = step.get("label")
-    if isinstance(label, str) and label.strip():
-        return page.get_by_label(label.strip(), exact=exact)
-
-    text = step.get("text")
-    if isinstance(text, str) and text.strip():
-        return page.get_by_text(text.strip(), exact=exact)
-
-    test_id = step.get("test_id")
-    if isinstance(test_id, str) and test_id.strip():
-        return page.get_by_test_id(test_id.strip())
-
-    selector = step.get("selector")
-    if isinstance(selector, str) and selector.strip():
-        return page.locator(selector.strip())
-
-    raise ValueError("Step is missing locator fields.")
-
-
-def _resolve_step_url(base_url: str, raw_url: str, initial_path: str) -> str:
-    if raw_url.startswith("http://") or raw_url.startswith("https://"):
-        return raw_url
-    if raw_url.startswith("/"):
-        return _build_navigation_url(base_url, raw_url)
-    if raw_url.strip() == "":
-        return _build_navigation_url(base_url, initial_path)
-    return _build_navigation_url(base_url, f"/{raw_url}")
-
-
-def _build_navigation_url(base_url: str, path: str = "/") -> str:
-    normalized_base = base_url.strip()
-    normalized_path = (path or "/").strip() or "/"
-    if not normalized_path.startswith("/"):
-        normalized_path = f"/{normalized_path}"
-    base = urlsplit(normalized_base)
-    override = urlsplit(normalized_path)
-    return urlunsplit(
-        (
-            base.scheme,
-            base.netloc,
-            override.path or "/",
-            override.query,
-            override.fragment,
-        )
+    keys = ", ".join(locator_keys)
+    raise ValueError(
+        f"Step {index} ({action}) requires a locator. Provide one of: {keys}."
     )
-
-
-def _execute_step(
-    *,
-    page: Any,
-    step: DemoStep,
-    step_index: int,
-    base_url: str,
-    initial_path: str,
-    out_dir: Path,
-    timeout_ms: int,
-) -> dict[str, Path]:
-    action = step.action
-    data = step.data
-    step_timeout = _step_timeout_ms(data, timeout_ms)
-
-    if action == "goto":
-        target = _resolve_step_url(
-            base_url,
-            _require_str(data, "url", index=step_index, action=action),
-            initial_path,
-        )
-        wait_until = data.get("wait_until")
-        wait_value = wait_until if isinstance(wait_until, str) and wait_until else None
-        page.goto(target, timeout=step_timeout, wait_until=wait_value or "networkidle")
-        return {}
-
-    if action == "click":
-        locator = _resolve_locator(page, data)
-        locator.click(timeout=step_timeout)
-        return {}
-
-    if action == "fill":
-        locator = _resolve_locator(page, data)
-        locator.fill(
-            _require_str(data, "value", index=step_index, action=action),
-            timeout=step_timeout,
-        )
-        return {}
-
-    if action == "press":
-        key = _require_str(data, "key", index=step_index, action=action)
-        has_locator = False
-        for field in ("role", "name", "label", "text", "test_id", "selector"):
-            value = data.get(field)
-            if isinstance(value, str) and value.strip():
-                has_locator = True
-                break
-        if has_locator:
-            locator = _resolve_locator(page, data)
-            locator.press(key, timeout=step_timeout)
-        else:
-            keyboard = getattr(page, "keyboard", None)
-            if keyboard is None or not hasattr(keyboard, "press"):
-                raise ValueError(
-                    "Page keyboard interface is unavailable for press step."
-                )
-            keyboard.press(key)
-        return {}
-
-    if action == "wait_for_url":
-        target = _resolve_step_url(
-            base_url,
-            _require_str(data, "url", index=step_index, action=action),
-            initial_path,
-        )
-        page.wait_for_url(target, timeout=step_timeout)
-        return {}
-
-    if action == "wait_for_text":
-        locator = _resolve_locator(page, data)
-        locator.wait_for(state="visible", timeout=step_timeout)
-        return {}
-
-    if action == "wait_ms":
-        ms = int(data.get("ms", 0))
-        time.sleep(ms / 1000.0)
-        return {}
-
-    if action == "screenshot":
-        output_name = data.get("output")
-        explicit_name = output_name if isinstance(output_name, str) else None
-        filename = deterministic_artifact_name(
-            kind=f"demo-step-{step_index:02d}-screenshot",
-            extension="png",
-            url=getattr(page, "url", None),
-            output_name=explicit_name,
-        )
-        target_path, _collision = reserve_artifact_path(out_dir, filename)
-        full_page = data.get("full_page")
-        full_page_flag = bool(full_page) if full_page is not None else True
-        page.screenshot(path=str(target_path), full_page=full_page_flag)
-        return {"screenshot": target_path}
-
-    if action == "snapshot_a11y":
-        output_name = data.get("output")
-        explicit_name = output_name if isinstance(output_name, str) else None
-        filename = deterministic_artifact_name(
-            kind=f"demo-step-{step_index:02d}-a11y",
-            extension="json",
-            url=getattr(page, "url", None),
-            output_name=explicit_name,
-        )
-        accessibility = getattr(page, "accessibility", None)
-        payload = None
-        if accessibility is not None and hasattr(accessibility, "snapshot"):
-            payload = accessibility.snapshot()
-        result = write_json_artifact(
-            out_dir=out_dir, filename=filename, payload=payload
-        )
-        return {"a11y_snapshot": result.path}
-
-    raise ValueError(f"Unsupported action {action!r}")

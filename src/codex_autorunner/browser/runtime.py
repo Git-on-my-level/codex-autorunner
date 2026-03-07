@@ -12,9 +12,9 @@ from .artifacts import (
     deterministic_artifact_name,
     reserve_artifact_path,
     write_json_artifact,
-    write_text_artifact,
 )
 from .models import DEFAULT_VIEWPORT, Viewport
+from .primitives import capture_artifact, observe_page
 
 PlaywrightLoader = Callable[[], Any]
 
@@ -109,20 +109,21 @@ class BrowserRuntime:
             )
 
         nav_url = build_navigation_url(base_url, path)
-        filename = deterministic_artifact_name(
-            kind="screenshot",
-            extension=fmt,
-            url=nav_url,
-            path_hint=path,
-            output_name=output_name,
-        )
-        artifact_path, _collision = reserve_artifact_path(out_dir, filename)
 
         def _action(page: Any) -> tuple[dict[str, Path], dict[str, str]]:
-            if fmt == "pdf":
-                page.pdf(path=str(artifact_path))
-            else:
-                page.screenshot(path=str(artifact_path), full_page=full_page)
+            artifact_path = capture_artifact(
+                out_dir=out_dir,
+                kind="screenshot",
+                extension=fmt,
+                url=nav_url,
+                path_hint=path,
+                output_name=output_name,
+                writer=(
+                    (lambda p: page.pdf(path=str(p)))
+                    if fmt == "pdf"
+                    else (lambda p: page.screenshot(path=str(p), full_page=full_page))
+                ),
+            )
             return {"capture": artifact_path}, {}
 
         return self._run_page_action(
@@ -148,71 +149,19 @@ class BrowserRuntime:
         wait_until: str = "networkidle",
     ) -> BrowserRunResult:
         nav_url = build_navigation_url(base_url, path)
-        snapshot_name = deterministic_artifact_name(
-            kind="observe-a11y",
-            extension="json",
-            url=nav_url,
-            path_hint=path,
-            output_name=output_name,
-        )
-        metadata_name = deterministic_artifact_name(
-            kind="observe-meta",
-            extension="json",
-            url=nav_url,
-            path_hint=path,
-        )
-        html_name = deterministic_artifact_name(
-            kind="observe-dom",
-            extension="html",
-            url=nav_url,
-            path_hint=path,
-        )
 
         def _action(page: Any) -> tuple[dict[str, Path], dict[str, str]]:
-            artifacts: dict[str, Path] = {}
-            skipped: dict[str, str] = {}
-
-            snapshot_payload = None
-            accessibility = getattr(page, "accessibility", None)
-            if accessibility is not None and hasattr(accessibility, "snapshot"):
-                snapshot_payload = accessibility.snapshot()
-            snapshot_result = write_json_artifact(
+            observation = observe_page(
+                page=page,
                 out_dir=out_dir,
-                filename=snapshot_name,
-                payload=snapshot_payload,
+                target_url=nav_url,
+                path_hint=path,
+                viewport=viewport,
+                output_name=output_name,
+                include_html=include_html,
+                max_html_bytes=max_html_bytes,
             )
-            artifacts["snapshot"] = snapshot_result.path
-
-            title_text = ""
-            if hasattr(page, "title"):
-                title_text = str(page.title() or "")
-            current_url = str(getattr(page, "url", "") or nav_url)
-            metadata_result = write_json_artifact(
-                out_dir=out_dir,
-                filename=metadata_name,
-                payload={
-                    "captured_url": current_url,
-                    "title": title_text,
-                    "snapshot_file": snapshot_result.path.name,
-                },
-            )
-            artifacts["metadata"] = metadata_result.path
-
-            if include_html and hasattr(page, "content"):
-                html = str(page.content() or "")
-                html_size = len(html.encode("utf-8"))
-                if html_size <= max_html_bytes:
-                    html_result = write_text_artifact(
-                        out_dir=out_dir,
-                        filename=html_name,
-                        content=html,
-                    )
-                    artifacts["html"] = html_result.path
-                else:
-                    skipped["html"] = (
-                        f"Skipped HTML snapshot ({html_size} bytes > {max_html_bytes} bytes)."
-                    )
-            return artifacts, skipped
+            return observation.artifacts, observation.skipped
 
         return self._run_page_action(
             mode="observe",
@@ -359,16 +308,14 @@ class BrowserRuntime:
 
             if not run_ok and page is not None:
                 try:
-                    failure_name = deterministic_artifact_name(
+                    failure_path = capture_artifact(
+                        out_dir=out_dir,
                         kind="demo-failure-screenshot",
                         extension="png",
                         url=nav_url,
                         path_hint=path,
+                        writer=lambda p: page.screenshot(path=str(p), full_page=True),
                     )
-                    failure_path, _collision = reserve_artifact_path(
-                        out_dir, failure_name
-                    )
-                    page.screenshot(path=str(failure_path), full_page=True)
                     artifacts["failure_screenshot"] = failure_path
                 except Exception as exc:
                     skipped["failure_screenshot"] = (

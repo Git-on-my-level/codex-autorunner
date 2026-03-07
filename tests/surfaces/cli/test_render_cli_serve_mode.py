@@ -212,3 +212,68 @@ def test_render_demo_serve_mode_uses_shared_cleanup(
     assert str(summary_path) in result.output
     pid = int(pid_file.read_text(encoding="utf-8").strip())
     _wait_process_gone(pid)
+
+
+def test_render_observe_serve_mode_uses_shared_cleanup(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    _patch_playwright_present(monkeypatch)
+
+    snapshot_path = tmp_path / "observe-a11y.json"
+    metadata_path = tmp_path / "observe-meta.json"
+    run_manifest_path = tmp_path / "observe-run-manifest.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    metadata_path.write_text("{}", encoding="utf-8")
+    run_manifest_path.write_text("{}", encoding="utf-8")
+
+    def fake_capture_observe(self, **_kwargs):  # type: ignore[no-untyped-def]
+        return BrowserRunResult(
+            ok=True,
+            mode="observe",
+            target_url="http://127.0.0.1:1234",
+            artifacts={
+                "snapshot": snapshot_path,
+                "metadata": metadata_path,
+                "run_manifest": run_manifest_path,
+            },
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.BrowserRuntime.capture_observe",
+        fake_capture_observe,
+    )
+
+    port = _free_port()
+    pid_file = tmp_path / "pid.txt"
+    script = _write_server_script(tmp_path)
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script)),
+            "--port",
+            str(port),
+            "--pid-file",
+            shlex.quote(str(pid_file)),
+        ]
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "observe",
+            "--serve-cmd",
+            cmd,
+            "--ready-url",
+            f"http://127.0.0.1:{port}/health",
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(snapshot_path) in result.output
+    assert str(metadata_path) in result.output
+    assert str(run_manifest_path) in result.output
+    pid = int(pid_file.read_text(encoding="utf-8").strip())
+    _wait_process_gone(pid)
