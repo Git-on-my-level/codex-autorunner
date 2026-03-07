@@ -161,14 +161,16 @@ def test_render_demo_serve_mode_uses_shared_cleanup(
     _patch_playwright_present(monkeypatch)
 
     summary_path = tmp_path / "demo-summary.json"
+    screenshot_path = tmp_path / "demo-step.png"
     summary_path.write_text("{}", encoding="utf-8")
+    screenshot_path.write_bytes(b"png")
 
     def fake_capture_demo(self, **_kwargs):  # type: ignore[no-untyped-def]
         return BrowserRunResult(
             ok=True,
             mode="demo",
             target_url="http://127.0.0.1:1234",
-            artifacts={"summary": summary_path},
+            artifacts={"summary": summary_path, "step_1.screenshot": screenshot_path},
         )
 
     monkeypatch.setattr(
@@ -209,6 +211,70 @@ def test_render_demo_serve_mode_uses_shared_cleanup(
     )
 
     assert result.exit_code == 0
+    assert str(screenshot_path) in result.output
+    assert str(summary_path) not in result.output
+    pid = int(pid_file.read_text(encoding="utf-8").strip())
+    _wait_process_gone(pid)
+
+
+def test_render_demo_full_artifacts_keeps_structured_outputs(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    _patch_playwright_present(monkeypatch)
+
+    summary_path = tmp_path / "demo-summary.json"
+    screenshot_path = tmp_path / "demo-step.png"
+    summary_path.write_text("{}", encoding="utf-8")
+    screenshot_path.write_bytes(b"png")
+
+    def fake_capture_demo(self, **_kwargs):  # type: ignore[no-untyped-def]
+        return BrowserRunResult(
+            ok=True,
+            mode="demo",
+            target_url="http://127.0.0.1:1234",
+            artifacts={"summary": summary_path, "step_1.screenshot": screenshot_path},
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.BrowserRuntime.capture_demo",
+        fake_capture_demo,
+    )
+
+    port = _free_port()
+    pid_file = tmp_path / "pid.txt"
+    script = _write_server_script(tmp_path)
+    demo_script = tmp_path / "demo.yaml"
+    demo_script.write_text("version: 1\nsteps: []\n", encoding="utf-8")
+    cmd = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(script)),
+            "--port",
+            str(port),
+            "--pid-file",
+            shlex.quote(str(pid_file)),
+        ]
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "demo",
+            "--script",
+            str(demo_script),
+            "--serve-cmd",
+            cmd,
+            "--ready-url",
+            f"http://127.0.0.1:{port}/health",
+            "--full-artifacts",
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(screenshot_path) in result.output
     assert str(summary_path) in result.output
     pid = int(pid_file.read_text(encoding="utf-8").strip())
     _wait_process_gone(pid)

@@ -30,7 +30,7 @@ Use `screenshot` when you need a single page capture (PNG/PDF).
 
 Use `observe` when you need agent-readable page state artifacts (a11y snapshot, metadata, locator references, run manifest).
 
-Use `demo` when you need deterministic, step-by-step interactions from a manifest plus evidence artifacts (summary, optional video, optional trace).
+Use `demo` when you need deterministic, step-by-step interactions from a manifest plus evidence artifacts (screenshots/video by default, optional structured artifacts).
 
 ## URL Mode vs Serve Mode
 
@@ -138,6 +138,9 @@ car render demo \
   --record-video \
   --trace on
 ```
+
+`car render demo` defaults to `--media-only`, which keeps outbox output focused on screenshots/video for end users.
+Use `--full-artifacts` when you also want structured JSON/HTML/trace outputs.
 
 ## Self-Describe Signals
 

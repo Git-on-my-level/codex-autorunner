@@ -26,6 +26,7 @@ def test_render_demo_help_mentions_manifest_and_artifacts_options() -> None:
     assert "Locator priority" in result.stdout
     assert "--record-video" in result.stdout
     assert "--trace" in result.stdout
+    assert "--full-artifacts" in result.stdout
 
 
 def test_render_observe_help_mentions_serve_mode_readiness_and_cleanup() -> None:

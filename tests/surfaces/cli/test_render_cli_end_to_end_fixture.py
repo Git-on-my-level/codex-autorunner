@@ -282,7 +282,6 @@ def test_render_commands_end_to_end_with_fixture_app(
         ],
     )
     assert demo_result.exit_code == 0
-    assert "fixture-demo-summary.json" in demo_result.output
     assert "fixture-demo-step.png" in demo_result.output
     pid_three = int(pid_file_three.read_text(encoding="utf-8").strip())
     _wait_process_gone(pid_three)

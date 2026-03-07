@@ -28,6 +28,17 @@ from ....core.utils import resolve_executable
 
 SUPPORTED_DIAGRAM_FORMATS = {"png", "pdf", "svg"}
 SUPPORTED_DOC_FORMATS = {"html", "pdf", "docx"}
+MEDIA_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".pdf",
+    ".webm",
+    ".mp4",
+    ".mov",
+}
 
 _DEMO_SCRIPT_HELP = (
     "Path to YAML/JSON demo manifest. Format: version: 1 and steps: [..]. "
@@ -103,6 +114,33 @@ def _runtime_error_category(error_type: Optional[str]) -> str:
     if error_type == "DemoStepError":
         return "step_failure"
     return "capture_failure"
+
+
+def _is_media_artifact(path: Path) -> bool:
+    return path.suffix.lower() in MEDIA_EXTENSIONS
+
+
+def _prune_non_media_artifacts(
+    *,
+    artifacts: dict[str, Path],
+    output_dir: Path,
+) -> dict[str, Path]:
+    filtered: dict[str, Path] = {}
+    output_root = output_dir.resolve()
+    for key, artifact_path in artifacts.items():
+        if _is_media_artifact(artifact_path):
+            filtered[key] = artifact_path
+            continue
+
+        try:
+            resolved = artifact_path.resolve()
+            is_within_output = resolved.is_relative_to(output_root)
+        except Exception:
+            is_within_output = False
+        if is_within_output and artifact_path.exists():
+            artifact_path.unlink(missing_ok=True)
+
+    return filtered
 
 
 @contextmanager
@@ -471,6 +509,14 @@ def register_render_commands(
             "--trace",
             help="Trace mode: off, on, or retain-on-failure.",
         ),
+        full_artifacts: bool = typer.Option(
+            False,
+            "--full-artifacts/--media-only",
+            help=(
+                "Emit full structured artifacts (JSON/HTML/trace) or keep only "
+                "end-user media artifacts (screenshots/video)."
+            ),
+        ),
         output: Optional[Path] = typer.Option(
             None, "--output", help="Output filename or absolute path."
         ),
@@ -544,15 +590,21 @@ def register_render_commands(
                 f"{result.error_message or 'Unknown demo capture error.'}"
             )
 
-        summary = result.artifacts.get("summary")
-        if summary is None:
-            raise_exit("Render demo did not produce a summary artifact.")
+        artifacts_to_emit = result.artifacts
+        if not full_artifacts:
+            artifacts_to_emit = _prune_non_media_artifacts(
+                artifacts=result.artifacts,
+                output_dir=output_dir,
+            )
+            if not artifacts_to_emit:
+                raise_exit(
+                    "Render demo completed but media-only mode found no media "
+                    "artifacts. Add a screenshot step and/or --record-video, or "
+                    "rerun with --full-artifacts."
+                )
 
-        typer.echo(str(summary))
-        for artifact_key in sorted(result.artifacts):
-            if artifact_key == "summary":
-                continue
-            typer.echo(str(result.artifacts[artifact_key]))
+        for artifact_key in sorted(artifacts_to_emit):
+            typer.echo(str(artifacts_to_emit[artifact_key]))
 
     @app.command("observe")
     def render_observe(
