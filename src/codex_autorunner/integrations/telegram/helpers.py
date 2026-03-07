@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ...core.coercion import coerce_int
+from ...core.injected_context import strip_injected_context_blocks
 from ...core.redaction import redact_text
 from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
@@ -1379,6 +1380,7 @@ def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return text
     stripped = _strip_dispatch_begin(text)
+    stripped = strip_injected_context_blocks(stripped)
     if _is_ignored_first_user_preview(stripped):
         return None
     return stripped
@@ -1679,9 +1681,9 @@ def _extract_rollout_first_user_preview(path: Path) -> Optional[str]:
             continue
         for role, text in _iter_role_texts(payload):
             if role == "user" and text:
-                stripped = _strip_dispatch_begin(text)
-                if stripped and not _is_ignored_first_user_preview(stripped):
-                    return stripped
+                sanitized = _sanitize_user_preview(text)
+                if sanitized:
+                    return sanitized
     return None
 
 
@@ -1739,9 +1741,9 @@ def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
             for item in iterable:
                 for role, text in _iter_role_texts(item):
                     if role == "user" and text:
-                        stripped = _strip_dispatch_begin(text)
-                        if stripped and not _is_ignored_first_user_preview(stripped):
-                            return stripped
+                        sanitized = _sanitize_user_preview(text)
+                        if sanitized:
+                            return sanitized
     return None
 
 
@@ -1876,10 +1878,9 @@ def _extract_first_user_preview(entry: Any) -> Optional[str]:
         "initial_message",
         "initialMessage",
     )
-    user_preview = _coerce_preview_field(entry, user_preview_keys)
-    user_preview = _strip_dispatch_begin(user_preview)
-    if _is_ignored_first_user_preview(user_preview):
-        user_preview = None
+    user_preview = _sanitize_user_preview(
+        _coerce_preview_field(entry, user_preview_keys)
+    )
     turns = entry.get("turns")
     if not user_preview and turns:
         user_preview = _extract_turns_first_user_preview(turns)
@@ -1935,7 +1936,9 @@ def _format_resume_summary(
 
 
 def _format_summary_preview(summary: ThreadSummary) -> str:
-    user_preview = _preview_from_text(summary.user_preview, RESUME_PREVIEW_USER_LIMIT)
+    user_preview = _preview_from_text(
+        _sanitize_user_preview(summary.user_preview), RESUME_PREVIEW_USER_LIMIT
+    )
     assistant_preview = _preview_from_text(
         summary.assistant_preview, RESUME_PREVIEW_ASSISTANT_LIMIT
     )

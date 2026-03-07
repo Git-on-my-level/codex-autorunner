@@ -362,6 +362,25 @@ def test_session_thread_picker_label_falls_back_to_thread_id() -> None:
     assert label == thread_id
 
 
+def test_session_thread_picker_label_strips_injected_context_from_preview() -> None:
+    thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
+    label = discord_service_module._format_session_thread_picker_label(
+        thread_id,
+        {
+            "id": thread_id,
+            "last_user_message": (
+                "<injected context>\n"
+                "You are operating inside a Codex Autorunner (CAR) managed repo.\n"
+                "</injected context>\n\n"
+                "Resume this thread"
+            ),
+        },
+        is_current=False,
+    )
+    assert "<injected context>" not in label
+    assert "Resume this thread" in label
+
+
 @pytest.mark.anyio
 async def test_model_list_with_agent_compat_retries_without_agent() -> None:
     class _FakeClient:
