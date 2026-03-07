@@ -129,6 +129,7 @@ from ...integrations.github.service import (
     GitHubService,
 )
 from ...manifest import load_manifest
+from ...tickets.files import read_ticket
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ..telegram.helpers import (
@@ -893,95 +894,106 @@ class DiscordBotService:
         if not pma_enabled:
             paused = await self._find_paused_flow_run(workspace_root)
             if paused is not None:
-                reply_text = text
-                if has_attachments:
-                    (
-                        reply_text,
-                        saved_attachments,
-                        failed_attachments,
-                        transcript_message,
-                        _native_input_items,
-                    ) = await self._with_attachment_context(
-                        prompt_text=text,
-                        workspace_root=workspace_root,
-                        attachments=event.attachments,
+                if self._is_user_ticket_pause(workspace_root, paused):
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.flow.reply.skipped_for_user_ticket_pause",
                         channel_id=channel_id,
+                        run_id=paused.id,
                     )
-                    if transcript_message:
+                else:
+                    reply_text = text
+                    if has_attachments:
+                        (
+                            reply_text,
+                            saved_attachments,
+                            failed_attachments,
+                            transcript_message,
+                            _native_input_items,
+                        ) = await self._with_attachment_context(
+                            prompt_text=text,
+                            workspace_root=workspace_root,
+                            attachments=event.attachments,
+                            channel_id=channel_id,
+                        )
+                        if transcript_message:
+                            await self._send_channel_message_safe(
+                                channel_id,
+                                {
+                                    "content": transcript_message,
+                                    "allowed_mentions": {"parse": []},
+                                },
+                            )
+                        if failed_attachments > 0:
+                            warning = (
+                                "Some Discord attachments could not be downloaded. "
+                                "Continuing with available inputs."
+                            )
+                            await self._send_channel_message_safe(
+                                channel_id,
+                                {"content": warning},
+                            )
+                        if not reply_text.strip() and saved_attachments == 0:
+                            await self._send_channel_message_safe(
+                                channel_id,
+                                {
+                                    "content": (
+                                        "Failed to download attachments from Discord. "
+                                        "Please retry."
+                                    ),
+                                },
+                            )
+                            return
+
+                    reply_path = self._write_user_reply(
+                        workspace_root, paused, reply_text
+                    )
+                    run_mirror = self._flow_run_mirror(workspace_root)
+                    run_mirror.mirror_inbound(
+                        run_id=paused.id,
+                        platform="discord",
+                        event_type="flow_reply_message",
+                        kind="command",
+                        actor="user",
+                        text=reply_text,
+                        chat_id=channel_id,
+                        thread_id=event.thread.thread_id,
+                        message_id=event.message.message_id,
+                    )
+                    controller = build_ticket_flow_controller(workspace_root)
+                    try:
+                        updated = await controller.resume_flow(paused.id)
+                    except ValueError as exc:
                         await self._send_channel_message_safe(
                             channel_id,
-                            {
-                                "content": transcript_message,
-                                "allowed_mentions": {"parse": []},
-                            },
-                        )
-                    if failed_attachments > 0:
-                        warning = (
-                            "Some Discord attachments could not be downloaded. "
-                            "Continuing with available inputs."
-                        )
-                        await self._send_channel_message_safe(
-                            channel_id,
-                            {"content": warning},
-                        )
-                    if not reply_text.strip() and saved_attachments == 0:
-                        await self._send_channel_message_safe(
-                            channel_id,
-                            {
-                                "content": (
-                                    "Failed to download attachments from Discord. "
-                                    "Please retry."
-                                ),
-                            },
+                            {"content": f"Failed to resume paused run: {exc}"},
                         )
                         return
-
-                reply_path = self._write_user_reply(workspace_root, paused, reply_text)
-                run_mirror = self._flow_run_mirror(workspace_root)
-                run_mirror.mirror_inbound(
-                    run_id=paused.id,
-                    platform="discord",
-                    event_type="flow_reply_message",
-                    kind="command",
-                    actor="user",
-                    text=reply_text,
-                    chat_id=channel_id,
-                    thread_id=event.thread.thread_id,
-                    message_id=event.message.message_id,
-                )
-                controller = build_ticket_flow_controller(workspace_root)
-                try:
-                    updated = await controller.resume_flow(paused.id)
-                except ValueError as exc:
+                    ensure_result = ensure_worker(
+                        workspace_root,
+                        updated.id,
+                        is_terminal=updated.status.is_terminal(),
+                    )
+                    self._close_worker_handles(ensure_result)
+                    content = format_discord_message(
+                        f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
+                    )
                     await self._send_channel_message_safe(
                         channel_id,
-                        {"content": f"Failed to resume paused run: {exc}"},
+                        {"content": content},
+                    )
+                    run_mirror.mirror_outbound(
+                        run_id=updated.id,
+                        platform="discord",
+                        event_type="flow_reply_notice",
+                        kind="notice",
+                        actor="car",
+                        text=content,
+                        chat_id=channel_id,
+                        thread_id=event.thread.thread_id,
                     )
                     return
-                ensure_result = ensure_worker(
-                    workspace_root,
-                    updated.id,
-                    is_terminal=updated.status.is_terminal(),
-                )
-                self._close_worker_handles(ensure_result)
-                content = format_discord_message(
-                    f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
-                )
-                await self._send_channel_message_safe(
-                    channel_id,
-                    {"content": content},
-                )
-                run_mirror.mirror_outbound(
-                    run_id=updated.id,
-                    platform="discord",
-                    event_type="flow_reply_notice",
-                    kind="notice",
-                    actor="car",
-                    text=content,
-                    chat_id=channel_id,
-                    thread_id=event.thread.thread_id,
-                )
-                return
 
         if text.startswith("!") and not event.attachments:
             await self._handle_bang_shell(
@@ -1564,6 +1576,30 @@ class DiscordBotService:
             return None
         finally:
             store.close()
+
+    def _is_user_ticket_pause(
+        self, workspace_root: Path, record: FlowRunRecord
+    ) -> bool:
+        state = getattr(record, "state", None)
+        if not isinstance(state, dict):
+            return False
+        engine = state.get("ticket_engine")
+        if not isinstance(engine, dict):
+            return False
+        if str(engine.get("reason_code") or "").strip().lower() != "user_pause":
+            return False
+        current_ticket = engine.get("current_ticket")
+        if not isinstance(current_ticket, str) or not current_ticket.strip():
+            return False
+        ticket_path = (workspace_root / current_ticket).resolve()
+        if not ticket_path.is_file() or not is_within(workspace_root, ticket_path):
+            return False
+        ticket_doc, errors = read_ticket(ticket_path)
+        if errors or ticket_doc is None:
+            return False
+        return ticket_doc.frontmatter.agent == "user" and not bool(
+            ticket_doc.frontmatter.done
+        )
 
     async def _maybe_inject_github_context(
         self,

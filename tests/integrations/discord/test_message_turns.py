@@ -3912,6 +3912,114 @@ async def test_message_create_attachment_only_resumes_paused_flow_run(
 
 
 @pytest.mark.anyio
+async def test_message_create_skips_inbox_reply_for_user_ticket_pause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("needs approval"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    paused = SimpleNamespace(id="run-paused")
+
+    async def _fake_find_paused(_: Path):
+        return paused
+
+    def _should_not_write_reply(*args: Any, **kwargs: Any) -> Path:  # pragma: no cover
+        raise AssertionError("should not write USER_REPLY.md for user-ticket pauses")
+
+    captured: dict[str, str] = {}
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: Optional[str] = None,
+        orchestrator_channel_key: Optional[str] = None,
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+            input_items,
+        )
+        captured["prompt_text"] = prompt_text
+        return f"thread:{prompt_text}"
+
+    monkeypatch.setattr(service, "_find_paused_flow_run", _fake_find_paused)
+    monkeypatch.setattr(
+        service,
+        "_is_user_ticket_pause",
+        lambda _workspace_root, _record: True,
+    )
+    monkeypatch.setattr(service, "_write_user_reply", _should_not_write_reply)
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert "needs approval" in captured.get("prompt_text", "")
+        assert rest.channel_messages
+        assert not any(
+            "resumed paused run" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+def test_is_user_ticket_pause_detects_in_workspace_user_ticket(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ticket_path = workspace / "TICKET-490.md"
+    ticket_path.write_text(
+        "---\nagent: user\ndone: false\n---\n\nPlease do thing.\n",
+        encoding="utf-8",
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+    )
+    paused = SimpleNamespace(
+        state={
+            "ticket_engine": {
+                "reason_code": "user_pause",
+                "current_ticket": ticket_path.name,
+            }
+        }
+    )
+
+    assert service._is_user_ticket_pause(workspace, paused) is True
+
+
+@pytest.mark.anyio
 async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
     tmp_path: Path,
 ) -> None:
