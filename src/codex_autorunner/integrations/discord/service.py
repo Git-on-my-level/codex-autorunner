@@ -1160,6 +1160,7 @@ class DiscordBotService:
 
         if isinstance(turn_result, DiscordMessageTurnResult):
             response_text = turn_result.final_message
+            preview_message_id = turn_result.preview_message_id
             metrics_text = _format_turn_metrics(
                 turn_result.token_usage,
                 turn_result.elapsed_seconds,
@@ -1171,6 +1172,7 @@ class DiscordBotService:
                     response_text = f"(No response text returned.)\n\n{metrics_text}"
         else:
             response_text = str(turn_result or "")
+            preview_message_id = None
 
         chunks = chunk_discord_message(
             response_text or "(No response text returned.)",
@@ -1184,6 +1186,12 @@ class DiscordBotService:
                 channel_id,
                 {"content": chunk},
                 record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
+            )
+        if isinstance(preview_message_id, str) and preview_message_id:
+            await self._delete_channel_message_safe(
+                channel_id=channel_id,
+                message_id=preview_message_id,
+                record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
             )
         await self._flush_outbox_files(
             workspace_root=workspace_root,
@@ -8456,6 +8464,14 @@ class DiscordBotService:
                 channel_id,
                 {"content": chunk},
                 record_id=f"review:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
+            )
+        if isinstance(preview_message_id, str) and preview_message_id:
+            await self._delete_channel_message_safe(
+                channel_id=channel_id,
+                message_id=preview_message_id,
+                record_id=(
+                    f"review:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}"
+                ),
             )
 
         try:

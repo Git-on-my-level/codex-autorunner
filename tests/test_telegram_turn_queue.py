@@ -443,7 +443,7 @@ async def test_turns_start_without_queue_when_parallelism_allows() -> None:
 
 
 @pytest.mark.anyio
-async def test_normal_turn_keeps_progress_placeholder_on_success() -> None:
+async def test_normal_turn_deletes_progress_placeholder_on_success() -> None:
     wait = asyncio.Event()
     wait.set()
     client = _ClientStub(turn_wait_events=[wait])
@@ -460,12 +460,12 @@ async def test_normal_turn_keeps_progress_placeholder_on_success() -> None:
     )
 
     assert handler._deliver_calls
-    assert handler._deliver_calls[-1]["delete_placeholder_on_delivery"] is False
+    assert handler._deliver_calls[-1]["delete_placeholder_on_delivery"] is True
     assert handler._delete_calls == []
 
 
 @pytest.mark.anyio
-async def test_normal_turn_append_to_progress_uses_response_text_as_base() -> None:
+async def test_normal_turn_append_to_progress_appends_metrics_to_response() -> None:
     wait = asyncio.Event()
     wait.set()
     client = _ClientStub(turn_wait_events=[wait])
@@ -499,10 +499,9 @@ async def test_normal_turn_append_to_progress_uses_response_text_as_base() -> No
         message, _RuntimeStub(), record=records["10:11"]
     )
 
-    assert captured["message_id"] == handler._placeholder_ids[1]
-    assert captured["metrics"] == "metrics block"
-    assert captured["base_text"] == handler._deliver_calls[-1]["response"]
-    assert captured["base_text"] != PLACEHOLDER_TEXT
+    assert captured == {}
+    assert handler._deliver_calls[-1]["delete_placeholder_on_delivery"] is True
+    assert handler._deliver_calls[-1]["response"].endswith("\n\nmetrics block")
 
 
 @pytest.mark.anyio
@@ -573,7 +572,7 @@ async def test_review_placeholder_sent_while_queued() -> None:
     second_delivery = next(
         call for call in handler._deliver_calls if call["reply_to"] == 2
     )
-    assert second_delivery["delete_placeholder_on_delivery"] is False
+    assert second_delivery["delete_placeholder_on_delivery"] is True
     assert handler._delete_calls == []
 
 

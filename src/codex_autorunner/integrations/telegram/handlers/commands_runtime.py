@@ -364,7 +364,7 @@ class TelegramCommandHandlers(
         )
         metrics_mode = self._metrics_mode()
         response_text = outcome.response
-        if metrics and metrics_mode == "append_to_response":
+        if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
             response_text = f"{response_text}\n\n{metrics}"
         response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
@@ -372,7 +372,6 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
             placeholder_id=outcome.placeholder_id,
             response=response_text,
-            delete_placeholder_on_delivery=False,
         )
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
@@ -393,13 +392,6 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
                 elapsed_seconds=outcome.elapsed_seconds,
                 token_usage=outcome.token_usage,
-            )
-        elif metrics and metrics_mode == "append_to_progress" and response_sent:
-            await self._append_metrics_to_placeholder(
-                message.chat_id,
-                outcome.placeholder_id,
-                metrics,
-                base_text=outcome.response,
             )
         if outcome.turn_id:
             self._token_usage_by_turn.pop(outcome.turn_id, None)

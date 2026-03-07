@@ -341,7 +341,7 @@ async def test_telegram_review_opencode_sends_command(
     assert calls["workspace_path"] == str(tmp_path.resolve())
     assert handler._delivered
     assert handler._delivered[-1]
-    assert handler._delivery_delete_flags[-1] is False
+    assert handler._delivery_delete_flags[-1] is True
     assert handler._deleted == []
 
 

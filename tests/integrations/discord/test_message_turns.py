@@ -2142,7 +2142,7 @@ async def test_message_create_streaming_turn_final_progress_omits_duplicate_term
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_completion_sends_final_and_keeps_preview(
+async def test_message_create_streaming_turn_completion_sends_final_and_deletes_preview(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -2183,7 +2183,8 @@ async def test_message_create_streaming_turn_completion_sends_final_and_keeps_pr
 
     try:
         await service.run_forever()
-        assert rest.deleted_channel_messages == []
+        assert len(rest.deleted_channel_messages) == 1
+        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
         assert rest.edited_channel_messages
         assert rest.edited_channel_messages[-1]["payload"].get("components") == []
         assert any(
@@ -2475,7 +2476,7 @@ async def test_message_create_streaming_turn_failure_before_completion_still_fai
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_multi_chunk_keeps_preview_and_sends_chunks(
+async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sends_chunks(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -2518,7 +2519,8 @@ async def test_message_create_streaming_turn_multi_chunk_keeps_preview_and_sends
 
     try:
         await service.run_forever()
-        assert rest.deleted_channel_messages == []
+        assert len(rest.deleted_channel_messages) == 1
+        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
         final_sends = [
             op
             for op in rest.message_ops
@@ -3096,7 +3098,8 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
     try:
         await service.run_forever()
         assert 1 <= rest.edit_attempts <= 2
-        assert rest.deleted_channel_messages == []
+        assert len(rest.deleted_channel_messages) == 1
+        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
         assert any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
@@ -3106,7 +3109,7 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_does_not_attempt_preview_delete(
+async def test_message_create_streaming_turn_enqueues_preview_delete_when_delete_fails(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -3152,7 +3155,7 @@ async def test_message_create_streaming_turn_does_not_attempt_preview_delete(
             for msg in rest.channel_messages
         )
         pending = await store.list_outbox()
-        assert all(record.operation != "delete" for record in pending)
+        assert any(record.operation == "delete" for record in pending)
     finally:
         await store.close()
 
@@ -4333,7 +4336,7 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
 
 
 @pytest.mark.anyio
-async def test_car_review_single_chunk_keeps_preview_and_sends_chunk_when_flush_fails(
+async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flush_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -4413,7 +4416,8 @@ async def test_car_review_single_chunk_keeps_preview_and_sends_chunk_when_flush_
             options={},
         )
         assert rest.edited_channel_messages == []
-        assert rest.deleted_channel_messages == []
+        assert len(rest.deleted_channel_messages) == 1
+        assert rest.deleted_channel_messages[0]["message_id"] == "preview-1"
         assert any(
             "single chunk review response" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
