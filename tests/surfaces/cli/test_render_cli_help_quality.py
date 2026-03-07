@@ -62,3 +62,15 @@ def test_render_observe_help_mentions_serve_mode_readiness_and_cleanup() -> None
     assert "no-project-conte" in output
     assert "tears it down on" in output
     assert "every exit path." in output
+
+
+def test_render_demo_workflow_help_mentions_workflow_and_outbox_options() -> None:
+    result = runner.invoke(app, ["render", "demo-workflow", "--help"])
+    output = _plain(result.stdout)
+
+    assert result.exit_code == 0
+    assert "--workflow" in output
+    assert "--out-dir" in output
+    assert "--outbox-dir" in output
+    assert "--publish-outbox" in output
+    assert "--no-publish-outbox" in output

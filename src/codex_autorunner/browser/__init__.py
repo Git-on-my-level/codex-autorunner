@@ -29,6 +29,22 @@ from .models import (
     resolve_output_path,
     select_render_target,
 )
+from .orchestration import (
+    DemoWorkflowConfig,
+    DemoWorkflowConfigError,
+    DemoWorkflowError,
+    DemoWorkflowExecutionError,
+    DemoWorkflowRunResult,
+    WorkflowDemoCaptureConfig,
+    WorkflowExportConfig,
+    WorkflowOutboxConfig,
+    WorkflowPublishConfig,
+    WorkflowServiceConfig,
+    WorkflowServiceSession,
+    load_demo_workflow_config,
+    orchestrate_workflow_services,
+    run_demo_workflow,
+)
 from .primitives import ObservePageResult, act_step, capture_artifact, observe_page
 from .runtime import (
     BrowserArtifactError,
@@ -113,4 +129,18 @@ __all__ = [
     "supervised_server",
     "write_json_artifact",
     "write_text_artifact",
+    "DemoWorkflowConfig",
+    "DemoWorkflowConfigError",
+    "DemoWorkflowError",
+    "DemoWorkflowExecutionError",
+    "DemoWorkflowRunResult",
+    "WorkflowDemoCaptureConfig",
+    "WorkflowExportConfig",
+    "WorkflowOutboxConfig",
+    "WorkflowPublishConfig",
+    "WorkflowServiceConfig",
+    "WorkflowServiceSession",
+    "load_demo_workflow_config",
+    "orchestrate_workflow_services",
+    "run_demo_workflow",
 ]

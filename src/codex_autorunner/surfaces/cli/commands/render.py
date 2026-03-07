@@ -15,15 +15,19 @@ from ....browser import (
     BrowserRuntime,
     BrowserServeConfig,
     BrowserServerSupervisor,
+    DemoWorkflowConfigError,
+    DemoWorkflowExecutionError,
     MissingRenderSessionError,
     RenderSessionError,
     ServeModeError,
     StaleRenderSessionError,
+    load_demo_workflow_config,
     load_render_session,
     parse_env_overrides,
     parse_viewport,
     persist_render_session,
     resolve_out_dir,
+    run_demo_workflow,
     select_render_target,
     supervised_server,
 )
@@ -1009,6 +1013,99 @@ def register_render_commands(
             typer.echo(
                 f"Render session kept: {normalized_session_id} ({session_record})"
             )
+
+    @app.command("demo-workflow")
+    def render_demo_workflow(
+        workflow: Path = typer.Option(
+            ...,
+            "--workflow",
+            help="Path to YAML/JSON demo workflow config.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+        out_dir: Optional[Path] = typer.Option(
+            None,
+            "--out-dir",
+            help="Override workflow demo output directory.",
+            resolve_path=True,
+        ),
+        outbox_path: Optional[Path] = typer.Option(
+            None,
+            "--outbox-dir",
+            "--outbox-path",
+            help=(
+                "Override workflow publish outbox destination "
+                "(defaults to .codex-autorunner/filebox/outbox)."
+            ),
+            resolve_path=True,
+        ),
+        publish_outbox: bool = typer.Option(
+            False,
+            "--publish-outbox",
+            help="Force workflow publish.enabled=true for this run.",
+        ),
+        no_publish_outbox: bool = typer.Option(
+            False,
+            "--no-publish-outbox",
+            help="Force workflow publish.enabled=false for this run.",
+        ),
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo root path."),
+        hub: Optional[Path] = typer.Option(
+            None, "--hub", "--hub-path", help="Hub root or config path."
+        ),
+    ) -> None:
+        """Start workflow services in order, capture demo output, export artifacts, and optionally publish to outbox."""
+        _require_render_feature(require_optional_feature)
+        ctx = require_repo_config(repo, hub)
+        repo_root = _repo_root_from_context(ctx)
+        if publish_outbox and no_publish_outbox:
+            raise_exit("Use either --publish-outbox or --no-publish-outbox, not both.")
+        publish_override: Optional[bool] = None
+        if publish_outbox:
+            publish_override = True
+        elif no_publish_outbox:
+            publish_override = False
+
+        try:
+            workflow_config = load_demo_workflow_config(
+                workflow_path=workflow,
+                repo_root=repo_root,
+                out_dir_override=out_dir,
+                outbox_path_override=outbox_path,
+                publish_outbox_override=publish_override,
+            )
+            run_result = run_demo_workflow(workflow_config)
+        except DemoWorkflowConfigError as exc:
+            raise_exit(
+                f"Render demo-workflow failed ({exc.category}): {exc}",
+                cause=exc,
+            )
+        except DemoWorkflowExecutionError as exc:
+            raise_exit(
+                f"Render demo-workflow failed ({exc.category}): {exc}",
+                cause=exc,
+            )
+        except KeyboardInterrupt:
+            raise_exit(
+                "Render demo-workflow interrupted; started services were terminated."
+            )
+
+        typer.echo(f"Workflow config: {run_result.workflow_path}")
+        typer.echo(f"Target base URL: {run_result.target_base_url}")
+        typer.echo(
+            "Primary artifact: "
+            f"{run_result.primary_artifact_key} -> {run_result.primary_artifact_path}"
+        )
+        typer.echo(f"Export manifest: {run_result.export_manifest_path}")
+        if run_result.published_artifacts:
+            typer.echo("Published artifacts:")
+            for artifact in run_result.published_artifacts:
+                typer.echo(f"- {artifact}")
+        else:
+            typer.echo("Published artifacts: disabled")
 
     @app.command("observe")
     def render_observe(

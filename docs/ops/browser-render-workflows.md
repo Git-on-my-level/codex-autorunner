@@ -4,6 +4,7 @@ CAR provides a deterministic, accessibility-first browser capture surface throug
 - `car render screenshot`
 - `car render observe`
 - `car render demo`
+- `car render demo-workflow`
 
 This first browser substrate is intentionally not prompt-driven and does not require
 Node MCP servers, Stagehand, or other external browser orchestration tooling.
@@ -34,6 +35,8 @@ Use `screenshot` when you need a single page capture (PNG/PDF).
 Use `observe` when you need agent-readable page state artifacts (a11y snapshot, metadata, locator references, run manifest).
 
 Use `demo` when you need deterministic, step-by-step interactions from a manifest plus evidence artifacts (screenshots/video by default, optional structured artifacts).
+
+Use `demo-workflow` when you need built-in multi-service startup ordering, readiness checks, demo capture, export manifest generation, and optional outbox publishing.
 
 ## URL Mode vs Serve Mode
 
@@ -213,6 +216,66 @@ car render demo \
 ```
 
 If session metadata is missing or stale, CAR exits with explicit `session_missing` / `session_stale` diagnostics.
+
+## Demo Workflow Orchestration
+
+`car render demo-workflow` provides built-in orchestration for recorded demos:
+
+- start multiple services in order
+- gate each service on readiness (`ready_url` or `ready_log_pattern`)
+- run `capture_demo` against a resolved target
+- generate an export manifest with capture + service metadata
+- optionally publish selected artifacts to FileBox outbox
+
+Run:
+
+```bash
+car render demo-workflow \
+  --workflow .codex-autorunner/demo-workflow.yaml \
+  --publish-outbox
+```
+
+Workflow config schema (YAML/JSON):
+
+```yaml
+services:
+  - name: web
+    serve_cmd: "pnpm run dev --port 4173"
+    ready_url: "http://127.0.0.1:4173/health"
+    cwd: "."
+    env:
+      NODE_ENV: "development"
+  - name: api
+    serve_cmd: "python -m uvicorn app.main:app --port 8000"
+    ready_log_pattern: "Uvicorn running on (?P<url>http://127\\.0\\.0\\.1:8000)"
+
+demo:
+  script: "tests/fixtures/browser_demo_manifest.yaml"
+  service: "web"
+  path: "/form"
+  viewport: "1280x720"
+  record_video: true
+  trace: "on"
+  out_dir: ".codex-autorunner/render/workflow_runs"
+  output: "demo-primary.webm"
+
+export:
+  manifest_name: "demo-workflow-export-manifest.json"
+  primary_artifact: "video"
+
+publish:
+  enabled: true
+  outbox_dir: ".codex-autorunner/filebox/outbox"
+  include:
+    - "video"
+    - "manifest"
+```
+
+CLI overrides:
+
+- `--out-dir`: override `demo.out_dir` for this run
+- `--outbox-dir`: override `publish.outbox_dir` for this run
+- `--publish-outbox` / `--no-publish-outbox`: force publish enable/disable
 
 ## Self-Describe Signals
 

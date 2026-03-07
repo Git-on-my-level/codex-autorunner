@@ -10,6 +10,7 @@ import textwrap
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -20,6 +21,7 @@ from codex_autorunner.browser import (
     BrowserServeSession,
     DemoPreflightResult,
     DemoPreflightStepReport,
+    DemoWorkflowConfigError,
     ReadinessTimeoutError,
     persist_render_session,
 )
@@ -986,3 +988,105 @@ def test_render_demo_attach_session_stale_error(
     assert "session_stale" in result.output
     assert "unreachable" in result.output
     assert metadata_path.exists() is False
+
+
+def test_render_demo_workflow_happy_path_prints_export_and_publish_artifacts(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    _patch_playwright_present(monkeypatch)
+
+    workflow_path = tmp_path / "demo-workflow.yaml"
+    workflow_path.write_text("services: []\ndemo: {}\n", encoding="utf-8")
+    published_one = tmp_path / "outbox" / "demo-video.webm"
+    published_two = tmp_path / "outbox" / "demo-workflow-export-manifest.json"
+    run_result = SimpleNamespace(
+        workflow_path=workflow_path.resolve(),
+        target_base_url="http://127.0.0.1:4200",
+        primary_artifact_key="video",
+        primary_artifact_path=tmp_path / "render" / "demo-video.webm",
+        export_manifest_path=tmp_path / "render" / "demo-workflow-export-manifest.json",
+        published_artifacts=(published_one, published_two),
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_load_demo_workflow_config(*, workflow_path, **kwargs):  # type: ignore[no-untyped-def]
+        seen["workflow_path"] = workflow_path
+        seen.update(kwargs)
+        return object()
+
+    def fake_run_demo_workflow(_workflow_config):  # type: ignore[no-untyped-def]
+        return run_result
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.load_demo_workflow_config",
+        fake_load_demo_workflow_config,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.run_demo_workflow",
+        fake_run_demo_workflow,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "demo-workflow",
+            "--workflow",
+            str(workflow_path),
+            "--publish-outbox",
+            "--outbox-dir",
+            str(tmp_path / "override-outbox"),
+            "--out-dir",
+            str(tmp_path / "override-render"),
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"Workflow config: {workflow_path.resolve()}" in result.output
+    assert "Target base URL: http://127.0.0.1:4200" in result.output
+    assert "Primary artifact: video ->" in result.output
+    assert "Export manifest: " in result.output
+    assert "Published artifacts:" in result.output
+    assert str(published_one) in result.output
+    assert str(published_two) in result.output
+    assert seen["publish_outbox_override"] is True
+    assert seen["outbox_path_override"] == (tmp_path / "override-outbox")
+    assert seen["out_dir_override"] == (tmp_path / "override-render")
+
+
+def test_render_demo_workflow_failure_surfaces_workflow_category(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    _patch_playwright_present(monkeypatch)
+
+    workflow_path = tmp_path / "demo-workflow-failure.yaml"
+    workflow_path.write_text("services: []\ndemo: {}\n", encoding="utf-8")
+
+    def fake_load_demo_workflow_config(**_kwargs):  # type: ignore[no-untyped-def]
+        raise DemoWorkflowConfigError("config parse blew up")
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.load_demo_workflow_config",
+        fake_load_demo_workflow_config,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "demo-workflow",
+            "--workflow",
+            str(workflow_path),
+            "--repo",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Render demo-workflow failed" in result.output
+    assert "workflow_config" in result.output
