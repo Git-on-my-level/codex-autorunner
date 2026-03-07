@@ -19,6 +19,11 @@ class _FakeAccessibility:
         }
 
 
+class _NullAccessibility:
+    def snapshot(self):  # type: ignore[no-untyped-def]
+        return None
+
+
 class _FakeKeyboard:
     def __init__(self) -> None:
         self.presses: list[str] = []
@@ -94,6 +99,12 @@ class _FakePage:
     def screenshot(self, *, path: str, full_page: bool) -> None:
         _ = full_page
         Path(path).write_bytes(b"png")
+
+
+class _FakePageNullA11y(_FakePage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.accessibility = _NullAccessibility()
 
 
 def test_observe_page_schema_keys_are_stable(tmp_path: Path) -> None:
@@ -209,3 +220,45 @@ def test_capture_artifact_is_deterministic_with_collisions(tmp_path: Path) -> No
 
     assert first.name == "observe-run-manifest-settings.json"
     assert second.name == "observe-run-manifest-settings-2.json"
+
+
+def test_a11y_snapshot_fallback_is_structured_when_runtime_returns_null(
+    tmp_path: Path,
+) -> None:
+    page = _FakePageNullA11y()
+
+    observe_result = observe_page(
+        page=page,
+        out_dir=tmp_path / "outbox",
+        target_url="http://127.0.0.1:9000/settings",
+        path_hint="/settings",
+        viewport=Viewport(width=1280, height=720),
+    )
+    observe_snapshot = json.loads(
+        observe_result.artifacts["snapshot"].read_text(encoding="utf-8")
+    )
+    observe_metadata = json.loads(
+        observe_result.artifacts["metadata"].read_text(encoding="utf-8")
+    )
+    observe_run_manifest = json.loads(
+        observe_result.artifacts["run_manifest"].read_text(encoding="utf-8")
+    )
+
+    assert observe_snapshot["status"] == "unavailable"
+    assert observe_metadata["snapshot_status"] == "unavailable"
+    assert observe_run_manifest["snapshot_status"] == "unavailable"
+
+    demo_a11y_artifacts = act_step(
+        page=page,
+        action="snapshot_a11y",
+        step_data={},
+        step_index=7,
+        base_url="http://127.0.0.1:9000",
+        initial_path="/settings",
+        out_dir=tmp_path / "outbox",
+        timeout_ms=1000,
+    )
+    demo_snapshot = json.loads(
+        demo_a11y_artifacts["a11y_snapshot"].read_text(encoding="utf-8")
+    )
+    assert demo_snapshot["status"] == "unavailable"

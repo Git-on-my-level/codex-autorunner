@@ -28,6 +28,34 @@ class ObservePageResult:
     locator_refs: list[dict[str, Any]]
 
 
+def _snapshot_unavailable_payload(reason: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "status": "unavailable",
+        "reason": reason,
+    }
+
+
+def _capture_accessibility_snapshot(page: Any) -> tuple[Any, bool]:
+    accessibility = getattr(page, "accessibility", None)
+    if accessibility is None or not hasattr(accessibility, "snapshot"):
+        return (
+            _snapshot_unavailable_payload(
+                "page.accessibility.snapshot is not available for this page/runtime"
+            ),
+            False,
+        )
+    payload = accessibility.snapshot()
+    if payload is None:
+        return (
+            _snapshot_unavailable_payload(
+                "page.accessibility.snapshot() returned null"
+            ),
+            False,
+        )
+    return payload, True
+
+
 def capture_artifact(
     *,
     out_dir: Path,
@@ -65,10 +93,7 @@ def observe_page(
     artifacts: dict[str, Path] = {}
     skipped: dict[str, str] = {}
 
-    snapshot_payload = None
-    accessibility = getattr(page, "accessibility", None)
-    if accessibility is not None and hasattr(accessibility, "snapshot"):
-        snapshot_payload = accessibility.snapshot()
+    snapshot_payload, snapshot_available = _capture_accessibility_snapshot(page)
 
     current_url = str(getattr(page, "url", "") or target_url)
     title_text = ""
@@ -99,6 +124,7 @@ def observe_page(
         "title": title_text,
         "viewport": {"width": viewport.width, "height": viewport.height},
         "snapshot_file": snapshot_path.name,
+        "snapshot_status": "ok" if snapshot_available else "unavailable",
     }
     metadata_path = capture_artifact(
         out_dir=out_dir,
@@ -156,6 +182,7 @@ def observe_page(
         "target_url": target_url,
         "captured_url": current_url,
         "viewport": {"width": viewport.width, "height": viewport.height},
+        "snapshot_status": "ok" if snapshot_available else "unavailable",
         "artifacts": {key: path.name for key, path in artifacts.items()},
         "skipped": skipped,
     }
@@ -285,10 +312,7 @@ def act_step(
     if action == "snapshot_a11y":
         output_raw = step_data.get("output")
         output_name = output_raw if isinstance(output_raw, str) else None
-        payload = None
-        accessibility = getattr(page, "accessibility", None)
-        if accessibility is not None and hasattr(accessibility, "snapshot"):
-            payload = accessibility.snapshot()
+        payload, _snapshot_available = _capture_accessibility_snapshot(page)
         path = capture_artifact(
             out_dir=out_dir,
             kind=f"demo-step-{step_index:02d}-a11y",
