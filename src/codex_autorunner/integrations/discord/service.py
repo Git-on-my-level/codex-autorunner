@@ -1143,7 +1143,7 @@ class DiscordBotService:
                 if response_text.strip():
                     response_text = f"{response_text}\n\n{metrics_text}"
                 else:
-                    response_text = metrics_text
+                    response_text = f"(No response text returned.)\n\n{metrics_text}"
         else:
             response_text = str(turn_result or "")
 
@@ -2050,9 +2050,26 @@ class DiscordBotService:
         )
         known_session = orchestrator.get_thread_id(session_key)
         final_message = ""
+        assistant_stream_fallback = ""
         token_usage: Optional[dict[str, Any]] = None
         error_message = None
         session_from_events = known_session
+
+        def _merge_assistant_stream(current: str, incoming: str) -> str:
+            if not incoming:
+                return current
+            if not current:
+                return incoming
+            if len(incoming) > len(current) and incoming.startswith(current):
+                return incoming
+            # Collapse only partial overlap between current suffix and incoming prefix.
+            # Full-length overlap is left intact to avoid dropping legitimate repeats.
+            max_overlap = min(len(current), max(len(incoming) - 1, 0))
+            for overlap in range(max_overlap, 0, -1):
+                if current[-overlap:] == incoming[:overlap]:
+                    return f"{current}{incoming[overlap:]}"
+            return f"{current}{incoming}"
+
         try:
             async for run_event in orchestrator.run_turn(
                 agent_id=agent,
@@ -2071,6 +2088,10 @@ class DiscordBotService:
                     if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
                         continue
                     if isinstance(run_event.content, str) and run_event.content.strip():
+                        if run_event.delta_type == "assistant_stream":
+                            assistant_stream_fallback = _merge_assistant_stream(
+                                assistant_stream_fallback, run_event.content
+                            )
                         tracker.note_output(run_event.content)
                         await _edit_progress()
                 elif isinstance(run_event, ToolCall):
@@ -2128,6 +2149,16 @@ class DiscordBotService:
             orchestrator.set_thread_id(session_key, session_from_events)
         if error_message:
             raise RuntimeError(error_message)
+        if not final_message.strip() and assistant_stream_fallback.strip():
+            final_message = assistant_stream_fallback
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.turn.final_message.fallback_stream",
+                channel_id=progress_channel_id,
+                session_key=session_key,
+                fallback_length=len(final_message),
+            )
         elapsed_seconds = max(0.0, time.monotonic() - tracker.started_at)
         return DiscordMessageTurnResult(
             final_message=final_message,

@@ -2173,6 +2173,281 @@ async def test_message_create_streaming_turn_appends_final_metrics(
 
 
 @pytest.mark.anyio
+async def test_message_create_streaming_turn_uses_assistant_stream_when_final_empty(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    streamed_text = "fallback streamed answer"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=streamed_text,
+                delta_type="assistant_stream",
+            ),
+            TokenUsage(
+                timestamp="2026-01-01T00:00:02Z",
+                usage={
+                    "last": {
+                        "totalTokens": 71173,
+                        "inputTokens": 400,
+                        "outputTokens": 245,
+                    },
+                    "modelContextWindow": 203352,
+                },
+            ),
+            Completed(timestamp="2026-01-01T00:00:03Z", final_message=""),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
+        final_content = ""
+        for message in final_candidates:
+            content = str(message.get("payload", {}).get("content", ""))
+            if (
+                streamed_text in content
+                and "Token usage: total 71173 input 400 output 245 ctx 65%" in content
+            ):
+                final_content = content
+                break
+        assert final_content
+        assert streamed_text in final_content
+        assert "Turn time:" in final_content
+        assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
+        assert "(No response text returned.)" not in final_content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_empty_final_includes_text_fallback_with_metrics(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            TokenUsage(
+                timestamp="2026-01-01T00:00:01Z",
+                usage={
+                    "last": {
+                        "totalTokens": 71173,
+                        "inputTokens": 400,
+                        "outputTokens": 245,
+                    },
+                    "modelContextWindow": 203352,
+                },
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
+        final_content = ""
+        for message in final_candidates:
+            content = str(message.get("payload", {}).get("content", ""))
+            if "Token usage: total 71173 input 400 output 245 ctx 65%" in content:
+                final_content = content
+                break
+        assert final_content
+        assert "(No response text returned.)" in final_content
+        assert "Turn time:" in final_content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_fallback_preserves_multichunk_whitespace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    expected_text = "go go \nnext line"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="go ",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:02Z",
+                content="go ",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:03Z",
+                content="\nnext line",
+                delta_type="assistant_stream",
+            ),
+            Completed(timestamp="2026-01-01T00:00:04Z", final_message=""),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
+        final_content = ""
+        for message in final_candidates:
+            content = str(message.get("payload", {}).get("content", ""))
+            if expected_text in content:
+                final_content = content
+                break
+        assert final_content
+        assert expected_text in final_content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_fallback_handles_cumulative_deltas(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    expected_text = "Hello world"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="Hello",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:02Z",
+                content="Hello world",
+                delta_type="assistant_stream",
+            ),
+            Completed(timestamp="2026-01-01T00:00:03Z", final_message=""),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
+        final_content = ""
+        for message in final_candidates:
+            content = str(message.get("payload", {}).get("content", ""))
+            if expected_text in content:
+                final_content = content
+                break
+        assert final_content
+        assert expected_text in final_content
+        assert "HelloHello world" not in final_content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_ignores_user_message_delta(
     tmp_path: Path,
 ) -> None:
