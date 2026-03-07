@@ -28,6 +28,7 @@ from .commands.hub_runs import (
 from .commands.hub_tickets import register_hub_tickets_commands
 from .commands.inbox import register_inbox_commands
 from .commands.protocol import register_protocol_commands
+from .commands.render import register_render_commands
 from .commands.repos import register_repos_commands
 from .commands.root import _resolve_repo_api_path, register_root_commands  # noqa: F401
 from .commands.telegram import register_telegram_commands
@@ -112,6 +113,9 @@ templates_app = typer.Typer(
 )
 repos_app = typer.Typer(
     add_completion=False, help="Manage trusted/untrusted template repositories."
+)
+render_app = typer.Typer(
+    add_completion=False, help="Browser rendering and capture commands."
 )
 cleanup_app = typer.Typer(
     add_completion=False, help="Cleanup managed processes and report artifacts."
@@ -213,6 +217,13 @@ register_discord_commands(
     discord_app,
     raise_exit=_raise_exit,
     require_optional_feature=_require_optional_feature,
+)
+app.add_typer(render_app, name="render")
+register_render_commands(
+    render_app,
+    require_optional_feature=_require_optional_feature,
+    require_repo_config=_require_repo_config,
+    raise_exit=_raise_exit,
 )
 app.add_typer(templates_app, name="templates")
 # UX alias: allow singular form (`car template ...`) in addition to `car templates ...`.

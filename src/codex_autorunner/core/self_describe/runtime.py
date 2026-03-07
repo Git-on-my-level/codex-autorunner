@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import load_hub_config, load_repo_config
+from ..optional_dependencies import missing_optional_dependencies
 from ..state_roots import resolve_hub_templates_root
 from ..templates import index_templates
 from .contract import (
@@ -189,13 +190,29 @@ def _detect_active_surfaces(raw: dict[str, Any]) -> dict[str, bool]:
     return surfaces
 
 
+def _browser_extra_available() -> bool:
+    return (
+        len(
+            missing_optional_dependencies(
+                [
+                    ("playwright", "playwright"),
+                ]
+            )
+        )
+        == 0
+    )
+
+
 def _get_features(raw: dict[str, Any]) -> dict[str, Any]:
+    browser_available = _browser_extra_available()
     return {
         "templates_enabled": raw.get("templates", {}).get("enabled", True),
         "ticket_frontmatter_context_includes": True,
         "telegram_enabled": raw.get("telegram_bot", {}).get("enabled", False),
         "voice_enabled": raw.get("voice", {}).get("enabled", False),
         "review_enabled": raw.get("review", {}).get("enabled", False),
+        "render_cli_available": True,
+        "browser_automation_available": browser_available,
     }
 
 
