@@ -183,15 +183,16 @@ class BackendOrchestrator:
             default_approval_decision=self._config.ticket_flow.default_approval_decision,
         )
 
+        event_stream: AsyncGenerator[RunEvent, None]
         if input_items is None:
-            async for event in backend.run_turn_events(effective_session_id, prompt):
-                yield event
-            return
-        async for event in backend.run_turn_events(
-            effective_session_id,
-            prompt,
-            input_items=input_items,
-        ):
+            event_stream = backend.run_turn_events(effective_session_id, prompt)
+        else:
+            event_stream = backend.run_turn_events(
+                effective_session_id,
+                prompt,
+                input_items=input_items,
+            )
+        async for event in event_stream:
             yield event
 
             # Update context from events
