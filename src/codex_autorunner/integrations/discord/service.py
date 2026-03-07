@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+from ...agents.opencode.harness import OpenCodeHarness
 from ...core.config import load_repo_config, resolve_env_for_root
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
@@ -77,6 +78,9 @@ from ...core.utils import (
 )
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
 from ...integrations.agents.backend_orchestrator import BackendOrchestrator
+from ...integrations.agents.opencode_supervisor_factory import (
+    build_opencode_supervisor_from_repo_config,
+)
 from ...integrations.app_server.client import (
     CodexAppServerClient,
     CodexAppServerResponseError,
@@ -273,6 +277,13 @@ def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
     return options
 
 
+def _is_valid_opencode_model_name(model_name: str) -> bool:
+    if "/" not in model_name:
+        return False
+    provider_id, model_id = model_name.split("/", 1)
+    return bool(provider_id.strip() and model_id.strip())
+
+
 def _path_within(root: Path, target: Path) -> bool:
     try:
         root = canonicalize_path(root)
@@ -452,6 +463,8 @@ class DiscordBotService:
         self._backend_lock = asyncio.Lock()
         self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
         self._app_server_lock = asyncio.Lock()
+        self._opencode_supervisors: dict[str, Any] = {}
+        self._opencode_lock = asyncio.Lock()
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
         self._channel_directory_store = ChannelDirectoryStore(self._config.root)
         self._guild_name_cache: dict[str, str] = {}
@@ -1637,6 +1650,64 @@ class DiscordBotService:
                 await asyncio.sleep(sleep_time)
                 delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
 
+    async def _opencode_supervisor_for_workspace(
+        self, workspace_root: Path
+    ) -> Optional[Any]:
+        key = str(workspace_root)
+        async with self._opencode_lock:
+            existing = self._opencode_supervisors.get(key)
+            if existing is not None:
+                return existing
+            repo_config = load_repo_config(
+                workspace_root,
+                hub_path=self._hub_config_path,
+            )
+            supervisor = build_opencode_supervisor_from_repo_config(
+                repo_config,
+                workspace_root=workspace_root,
+                logger=self._logger,
+                base_env=None,
+            )
+            if supervisor is None:
+                return None
+            self._opencode_supervisors[key] = supervisor
+            return supervisor
+
+    async def _list_opencode_models_for_picker(
+        self,
+        *,
+        workspace_path: Optional[str],
+    ) -> Optional[list[tuple[str, str]]]:
+        if not isinstance(workspace_path, str) or not workspace_path.strip():
+            return None
+        try:
+            workspace_root = canonicalize_path(Path(workspace_path))
+        except Exception:
+            return None
+        if not workspace_root.exists() or not workspace_root.is_dir():
+            return None
+        supervisor = await self._opencode_supervisor_for_workspace(workspace_root)
+        if supervisor is None:
+            raise RuntimeError("OpenCode backend unavailable for this workspace")
+        harness = OpenCodeHarness(supervisor)
+        catalog = await harness.model_catalog(workspace_root)
+        options: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for model in catalog.models:
+            model_id = model.id.strip() if isinstance(model.id, str) else ""
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            label = model_id
+            if (
+                isinstance(model.display_name, str)
+                and model.display_name
+                and not _display_name_is_model_alias(model_id, model.display_name)
+            ):
+                label = f"{model_id} ({model.display_name})"
+            options.append((model_id, label))
+        return options
+
     async def _list_threads_paginated(
         self,
         client: CodexAppServerClient,
@@ -2731,6 +2802,12 @@ class DiscordBotService:
             supervisors = list(self._app_server_supervisors.values())
             self._app_server_supervisors.clear()
         for supervisor in supervisors:
+            with contextlib.suppress(Exception):
+                await supervisor.close_all()
+        async with self._opencode_lock:
+            opencode_supervisors = list(self._opencode_supervisors.values())
+            self._opencode_supervisors.clear()
+        for supervisor in opencode_supervisors:
             with contextlib.suppress(Exception):
                 await supervisor.close_all()
 
@@ -4641,59 +4718,92 @@ class DiscordBotService:
                     text,
                 )
 
-            try:
-                client = await self._client_for_workspace(binding.get("workspace_path"))
-            except AppServerUnavailableError as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.model.list.failed",
-                    channel_id=channel_id,
-                    agent=current_agent,
-                    exc=exc,
-                )
-                await _send_model_picker_or_fallback(
-                    _fallback_model_text(
-                        "Model picker unavailable right now (app server unavailable)."
-                    ),
-                )
-                return
-            if client is None:
-                await _send_model_picker_or_fallback(
-                    _fallback_model_text(
-                        "Workspace unavailable for model picker. Re-bind this channel with `/car bind` and try again."
-                    ),
-                )
-                return
-            try:
-                result = await _model_list_with_agent_compat(
-                    client,
-                    params={
-                        "cursor": None,
-                        "limit": DISCORD_SELECT_OPTION_MAX_OPTIONS,
-                        "agent": current_agent,
-                    },
-                )
-                model_items = _coerce_model_picker_items(result)
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.model.list.failed",
-                    channel_id=channel_id,
-                    agent=current_agent,
-                    exc=exc,
-                )
-                await _send_model_picker_or_fallback(
-                    _fallback_model_text("Failed to list models for picker."),
-                )
-                return
+            if current_agent == "opencode":
+                try:
+                    model_items = await self._list_opencode_models_for_picker(
+                        workspace_path=binding.get("workspace_path")
+                    )
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.model.list.failed",
+                        channel_id=channel_id,
+                        agent=current_agent,
+                        exc=exc,
+                    )
+                    await _send_model_picker_or_fallback(
+                        _fallback_model_text("Failed to list models for picker."),
+                    )
+                    return
+                if model_items is None:
+                    await _send_model_picker_or_fallback(
+                        _fallback_model_text(
+                            "Workspace unavailable for model picker. Re-bind this channel with `/car bind` and try again."
+                        ),
+                    )
+                    return
+                if not model_items and not current_model:
+                    await _send_model_picker_or_fallback(
+                        _fallback_model_text("No models found from OpenCode."),
+                    )
+                    return
+            else:
+                try:
+                    client = await self._client_for_workspace(
+                        binding.get("workspace_path")
+                    )
+                except AppServerUnavailableError as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.model.list.failed",
+                        channel_id=channel_id,
+                        agent=current_agent,
+                        exc=exc,
+                    )
+                    await _send_model_picker_or_fallback(
+                        _fallback_model_text(
+                            "Model picker unavailable right now (app server unavailable)."
+                        ),
+                    )
+                    return
+                if client is None:
+                    await _send_model_picker_or_fallback(
+                        _fallback_model_text(
+                            "Workspace unavailable for model picker. Re-bind this channel with `/car bind` and try again."
+                        ),
+                    )
+                    return
+                try:
+                    result = await _model_list_with_agent_compat(
+                        client,
+                        params={
+                            "cursor": None,
+                            "limit": DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                            "agent": current_agent,
+                        },
+                    )
+                    model_items = _coerce_model_picker_items(result)
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.model.list.failed",
+                        channel_id=channel_id,
+                        agent=current_agent,
+                        exc=exc,
+                    )
+                    await _send_model_picker_or_fallback(
+                        _fallback_model_text("Failed to list models for picker."),
+                    )
+                    return
 
-            if not model_items and not current_model:
-                await _send_model_picker_or_fallback(
-                    _fallback_model_text("No models found from the app server."),
-                )
-                return
+                if not model_items and not current_model:
+                    await _send_model_picker_or_fallback(
+                        _fallback_model_text("No models found from the app server."),
+                    )
+                    return
 
             lines = [
                 f"Current agent: {current_agent}",
@@ -4727,6 +4837,16 @@ class DiscordBotService:
             )
             await self._respond_ephemeral(
                 interaction_id, interaction_token, "Model override cleared."
+            )
+            return
+
+        if current_agent == "opencode" and not _is_valid_opencode_model_name(
+            model_name
+        ):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "OpenCode model must be in `provider/model` format.",
             )
             return
 
