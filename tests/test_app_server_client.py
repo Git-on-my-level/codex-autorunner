@@ -410,6 +410,46 @@ async def test_late_item_completed_within_settle_updates_final_message(
 
 
 @pytest.mark.anyio
+async def test_merging_pending_completed_turn_preserves_settle_finalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_server_client, "_TURN_COMPLETION_SETTLE_SECONDS", 0.02)
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        completed_without_thread = {"turnId": "turn-1", "status": "completed"}
+        await client._handle_notification_turn_completed(
+            {"method": "turn/completed", "params": completed_without_thread},
+            completed_without_thread,
+        )
+
+        keyed_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-1",
+            "item": {"type": "agentMessage", "text": "thread-scoped final"},
+        }
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": keyed_item},
+            keyed_item,
+        )
+
+        assert "turn-1" in client._pending_turns
+        assert ("thread-1", "turn-1") in client._turns
+
+        state = client._register_turn_state("turn-1", "thread-1")
+        assert state is client._turns[("thread-1", "turn-1")]
+        assert "turn-1" not in client._pending_turns
+        assert state.turn_completed_seen is True
+
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
+        assert result.status == "completed"
+        assert result.final_message == "thread-scoped final"
+        assert result.agent_messages == ["thread-scoped final"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_turn_result_can_include_all_agent_messages(tmp_path: Path) -> None:
     client = CodexAppServerClient(
         fixture_command("multi_agent_messages"),

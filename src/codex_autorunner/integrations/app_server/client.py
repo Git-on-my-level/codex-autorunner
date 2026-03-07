@@ -1511,10 +1511,22 @@ class CodexAppServerClient:
             target.errors = list(source.errors)
         else:
             target.errors.extend(source.errors)
+        if source.last_event_at > target.last_event_at:
+            target.last_event_at = source.last_event_at
+            target.last_method = source.last_method
+        elif target.last_method is None and source.last_method is not None:
+            target.last_method = source.last_method
+        target.turn_completed_seen = (
+            target.turn_completed_seen or source.turn_completed_seen
+        )
         if target.status is None and source.status is not None:
             target.status = source.status
         if source.future.done() and not target.future.done():
             self._set_turn_result_if_pending(target)
+            return
+        if source.turn_completed_seen and not target.future.done():
+            self._schedule_turn_completion_settle(target)
+        self._cancel_turn_completion_settle(source)
 
     def _build_turn_result(self, state: _TurnState) -> TurnResult:
         return TurnResult(

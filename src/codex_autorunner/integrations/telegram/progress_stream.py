@@ -102,9 +102,13 @@ class TurnProgressTracker:
                 item_id=item_id,
                 subagent_label=subagent_label,
             )
+            # Force the next output delta to create a fresh trailing output slot.
+            self.last_output_index = None
             self.step += 1
             return
         self.clear_transient_action()
+        if label != "output":
+            self.last_output_index = None
         self.actions.append(
             ProgressAction(
                 label=label,
