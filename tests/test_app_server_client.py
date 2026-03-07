@@ -161,7 +161,7 @@ async def test_turn_result_uses_pending_delta_after_completed_message(
             completed,
         )
 
-        result = state.future.result()
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
         assert result.status == "completed"
         assert result.agent_messages == ["draft reply", "real final reply"]
         assert result.final_message == "real final reply"
@@ -201,7 +201,7 @@ async def test_item_completed_with_text_clears_matching_delta(tmp_path: Path) ->
             completed,
         )
 
-        result = state.future.result()
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
         assert result.status == "completed"
         assert result.agent_messages == ["final reply"]
         assert result.final_message == "final reply"
@@ -242,7 +242,7 @@ async def test_pending_delta_does_not_replace_completed_message(tmp_path: Path) 
             completed,
         )
 
-        result = state.future.result()
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
         assert result.status == "completed"
         assert result.agent_messages == ["hello", "hello world"]
         assert result.final_message == "hello world"
@@ -282,7 +282,7 @@ async def test_pending_delta_matching_last_message_is_deduped(tmp_path: Path) ->
             completed,
         )
 
-        result = state.future.result()
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
         assert result.status == "completed"
         assert result.agent_messages == ["final reply"]
         assert result.final_message == "final reply"
@@ -323,11 +323,88 @@ async def test_item_completed_without_item_id_prunes_matching_stale_delta(
             completed,
         )
 
-        result = state.future.result()
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
         assert result.status == "completed"
         assert result.agent_messages == ["final reply"]
         assert result.final_message == "final reply"
         assert state.agent_message_deltas == {}
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_turn_completed_settles_before_returning_final_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_server_client, "_TURN_COMPLETION_SETTLE_SECONDS", 0.02)
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        completed_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-1",
+            "item": {"type": "agentMessage", "text": "final reply"},
+        }
+        completed = {"turnId": "turn-1", "threadId": "thread-1", "status": "completed"}
+
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": completed_item},
+            completed_item,
+        )
+        await client._handle_notification_turn_completed(
+            {"method": "turn/completed", "params": completed},
+            completed,
+        )
+
+        assert not state.future.done()
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
+        assert result.status == "completed"
+        assert result.final_message == "final reply"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_late_item_completed_within_settle_updates_final_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_server_client, "_TURN_COMPLETION_SETTLE_SECONDS", 0.05)
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        intermediate_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-1",
+            "item": {"type": "agentMessage", "text": "intermediate status"},
+        }
+        late_final_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-2",
+            "item": {"type": "agentMessage", "text": "true final answer"},
+        }
+        completed = {"turnId": "turn-1", "threadId": "thread-1", "status": "completed"}
+
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": intermediate_item},
+            intermediate_item,
+        )
+        await client._handle_notification_turn_completed(
+            {"method": "turn/completed", "params": completed},
+            completed,
+        )
+        await asyncio.sleep(0.01)
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": late_final_item},
+            late_final_item,
+        )
+
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
+        assert result.status == "completed"
+        assert result.final_message == "true final answer"
+        assert result.agent_messages == ["intermediate status", "true final answer"]
     finally:
         await client.close()
 

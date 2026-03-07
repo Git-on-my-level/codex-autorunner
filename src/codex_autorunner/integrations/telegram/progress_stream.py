@@ -23,6 +23,29 @@ def _normalize_text(value: str) -> str:
     return " ".join(value.split()).strip()
 
 
+def _truncate_tail(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[-limit:]
+    return f"...{text[-(limit - 3):]}"
+
+
+def _merge_output_text(current: str, incoming: str) -> str:
+    if not current:
+        return incoming
+    if incoming.startswith(current):
+        return incoming
+    if current.endswith(incoming):
+        return current
+    if incoming in current:
+        return current
+    separator = "" if current.endswith((".", "!", "?", ":", ";", ",")) else " "
+    return f"{current}{separator}{incoming}"
+
+
 @dataclass
 class ProgressAction:
     label: str
@@ -46,6 +69,7 @@ class TurnProgressTracker:
     last_thinking_index: Optional[int] = None
     context_usage_percent: Optional[int] = None
     finalized: bool = False
+    output_buffer: str = ""
 
     def set_label(self, label: str) -> None:
         if label:
@@ -129,15 +153,31 @@ class TurnProgressTracker:
         return False
 
     def note_thinking(self, text: str) -> None:
-        if self.last_thinking_index is None:
-            self.add_action("thinking", text, "update", track_thinking=True)
-            return
-        self.update_action(self.last_thinking_index, text, "update")
-
-    def note_output(self, text: str) -> None:
-        normalized = _truncate_text(_normalize_text(text), self.max_output_chars)
+        normalized = _normalize_text(text)
         if not normalized:
             return
+        if self.last_thinking_index is None:
+            self.add_action("thinking", normalized, "update", track_thinking=True)
+            return
+        current_text = ""
+        if 0 <= self.last_thinking_index < len(self.actions):
+            current_text = _normalize_text(self.actions[self.last_thinking_index].text)
+        if current_text and (
+            normalized.startswith(current_text) or current_text.startswith(normalized)
+        ):
+            self.update_action(self.last_thinking_index, normalized, "update")
+            return
+        self.add_action("thinking", normalized, "update", track_thinking=True)
+
+    def note_output(self, text: str) -> None:
+        normalized_piece = _normalize_text(text)
+        if not normalized_piece:
+            return
+        self.output_buffer = _truncate_tail(
+            _merge_output_text(self.output_buffer, normalized_piece),
+            self.max_output_chars,
+        )
+        normalized = self.output_buffer
         if self.last_output_index is None:
             self.add_action("output", normalized, "update", track_output=True)
             return
@@ -145,11 +185,9 @@ class TurnProgressTracker:
 
     def note_command(self, text: str) -> None:
         self.add_action("command", text, "done")
-        self.last_output_index = None
 
     def note_tool(self, text: str) -> None:
         self.add_action("tool", text, "done")
-        self.last_output_index = None
 
     def note_file_change(self, text: str) -> None:
         self.add_action("files", text, "done")

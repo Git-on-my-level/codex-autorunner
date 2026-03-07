@@ -64,6 +64,7 @@ _TURN_STALL_TIMEOUT_SECONDS = 60.0
 _TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
 _TURN_STALL_MAX_RECOVERY_ATTEMPTS = 8
+_TURN_COMPLETION_SETTLE_SECONDS = 0.25
 _MAX_TURN_RAW_EVENTS = 200
 _INVALID_JSON_PREVIEW_BYTES = 200
 _DEFAULT_OUTPUT_POLICY = "final_only"
@@ -148,6 +149,8 @@ class _TurnState:
     recovery_attempts: int = 0
     last_recovery_at: float = 0.0
     agent_message_deltas: Dict[str, str] = field(default_factory=dict)
+    turn_completed_seen: bool = False
+    completion_settle_task: Optional[asyncio.Task[None]] = None
 
 
 @dataclass
@@ -650,18 +653,7 @@ class CodexAppServerClient:
             state.status = status
 
         if status and _status_is_terminal(status) and not state.future.done():
-            state.future.set_result(
-                TurnResult(
-                    turn_id=state.turn_id,
-                    final_message=_final_message_for_result(
-                        state, policy=self._output_policy
-                    ),
-                    agent_messages=_agent_messages_for_result(state),
-                    errors=list(state.errors),
-                    raw_events=list(state.raw_events),
-                    status=state.status,
-                )
-            )
+            self._set_turn_result_if_pending(state)
             return
 
         self._maybe_fail_stalled_turn(
@@ -728,18 +720,7 @@ class CodexAppServerClient:
             recovery_attempts=state.recovery_attempts,
             max_recovery_attempts=max_attempts,
         )
-        state.future.set_result(
-            TurnResult(
-                turn_id=state.turn_id,
-                status=state.status,
-                final_message=_final_message_for_result(
-                    state, policy=self._output_policy
-                ),
-                agent_messages=_agent_messages_for_result(state),
-                errors=list(state.errors),
-                raw_events=list(state.raw_events),
-            )
-        )
+        self._set_turn_result_if_pending(state)
 
     async def _ensure_process(self) -> None:
         async with self._circuit_breaker.call():
@@ -1373,6 +1354,8 @@ class CodexAppServerClient:
             )
         self._mark_notification_event(state=state, method="item/agentMessage/delta")
         _record_raw_event(state, message)
+        if state.turn_completed_seen and not state.future.done():
+            self._schedule_turn_completion_settle(state)
         return True
 
     async def _handle_notification_item_completed(
@@ -1389,6 +1372,8 @@ class CodexAppServerClient:
             return True
         self._mark_notification_event(state=state, method="item/completed")
         self._apply_item_completed(state, message, params)
+        if state.turn_completed_seen and not state.future.done():
+            self._schedule_turn_completion_settle(state)
         return True
 
     async def _handle_notification_turn_completed(
@@ -1529,18 +1514,51 @@ class CodexAppServerClient:
         if target.status is None and source.status is not None:
             target.status = source.status
         if source.future.done() and not target.future.done():
-            target.future.set_result(
-                TurnResult(
-                    turn_id=target.turn_id,
-                    status=target.status,
-                    final_message=_final_message_for_result(
-                        target, policy=self._output_policy
-                    ),
-                    agent_messages=_agent_messages_for_result(target),
-                    errors=list(target.errors),
-                    raw_events=list(target.raw_events),
-                )
-            )
+            self._set_turn_result_if_pending(target)
+
+    def _build_turn_result(self, state: _TurnState) -> TurnResult:
+        return TurnResult(
+            turn_id=state.turn_id,
+            status=state.status,
+            final_message=_final_message_for_result(state, policy=self._output_policy),
+            agent_messages=_agent_messages_for_result(state),
+            errors=list(state.errors),
+            raw_events=list(state.raw_events),
+        )
+
+    def _cancel_turn_completion_settle(self, state: _TurnState) -> None:
+        settle_task = state.completion_settle_task
+        if settle_task is not None and not settle_task.done():
+            settle_task.cancel()
+        state.completion_settle_task = None
+
+    def _set_turn_result_if_pending(
+        self, state: _TurnState, *, cancel_settle_task: bool = True
+    ) -> None:
+        if state.future.done():
+            return
+        if cancel_settle_task:
+            self._cancel_turn_completion_settle(state)
+        state.future.set_result(self._build_turn_result(state))
+
+    def _schedule_turn_completion_settle(self, state: _TurnState) -> None:
+        if state.future.done():
+            return
+        delay_seconds = max(float(_TURN_COMPLETION_SETTLE_SECONDS), 0.0)
+        if delay_seconds <= 0:
+            self._set_turn_result_if_pending(state)
+            return
+        self._cancel_turn_completion_settle(state)
+
+        async def _finalize_after_settle() -> None:
+            try:
+                await asyncio.sleep(delay_seconds)
+            except asyncio.CancelledError:
+                return
+            state.completion_settle_task = None
+            self._set_turn_result_if_pending(state, cancel_settle_task=False)
+
+        state.completion_settle_task = asyncio.create_task(_finalize_after_settle())
 
     def _register_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
         key = _turn_key(thread_id, turn_id)
@@ -1640,19 +1658,13 @@ class CodexAppServerClient:
             turn_id=state.turn_id,
             status=state.status,
         )
-        if not state.future.done():
-            state.future.set_result(
-                TurnResult(
-                    turn_id=state.turn_id,
-                    status=state.status,
-                    final_message=_final_message_for_result(
-                        state, policy=self._output_policy
-                    ),
-                    agent_messages=_agent_messages_for_result(state),
-                    errors=list(state.errors),
-                    raw_events=list(state.raw_events),
-                )
-            )
+        state.turn_completed_seen = True
+        if _status_prefers_completion_settle(state.status) or not _status_is_terminal(
+            state.status
+        ):
+            self._schedule_turn_completion_settle(state)
+            return
+        self._set_turn_result_if_pending(state)
 
     async def _handle_disconnect(self) -> None:
         self._initialized = False
@@ -1707,11 +1719,13 @@ class CodexAppServerClient:
             self._pending.clear()
         if include_turns:
             for state in list(self._turns.values()):
+                self._cancel_turn_completion_settle(state)
                 if not state.future.done():
                     state.future.set_exception(error)
             self._turns.clear()
         if include_pending_turns:
             for state in list(self._pending_turns.values()):
+                self._cancel_turn_completion_settle(state)
                 if not state.future.done():
                     state.future.set_exception(error)
             self._pending_turns.clear()
@@ -2196,6 +2210,19 @@ def _status_is_terminal(status: Any) -> bool:
         "canceled",
         "interrupted",
         "stopped",
+        "success",
+        "succeeded",
+    }
+
+
+def _status_prefers_completion_settle(status: Any) -> bool:
+    normalized = _extract_status_value(status)
+    if not isinstance(normalized, str):
+        return False
+    return normalized.lower() in {
+        "completed",
+        "complete",
+        "done",
         "success",
         "succeeded",
     }
