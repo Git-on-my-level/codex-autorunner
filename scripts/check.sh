@@ -95,6 +95,9 @@ echo "Linting JS/TS (eslint)..."
 echo "Build static assets (pnpm run build)..."
 pnpm run build
 
+echo "Running frontend JS tests (pnpm test:markdown)..."
+pnpm test:markdown
+
 echo "Checking asset manifest is committed..."
 # Verify the manifest is in sync with the generated assets.
 # The manifest is the source of truth for frontend assets.

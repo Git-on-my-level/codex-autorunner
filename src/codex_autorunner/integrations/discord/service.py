@@ -190,7 +190,6 @@ DEFAULT_UPDATE_REPO_REF = "main"
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
-DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS = 120
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -1828,20 +1827,20 @@ class DiscordBotService:
             if orchestrator_channel_key.startswith("pma:")
             else orchestrator_channel_key
         )
+        max_progress_len = max(int(self._config.max_message_length), 32)
         tracker = TurnProgressTracker(
             started_at=time.monotonic(),
             agent=agent,
             model=model_override or "default",
             label="working",
             max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
-            max_output_chars=DISCORD_TURN_PROGRESS_MAX_OUTPUT_CHARS,
+            max_output_chars=max_progress_len,
         )
         progress_message_id: Optional[str] = None
         progress_rendered: Optional[str] = None
         progress_last_updated = 0.0
         progress_failure_count = 0
         progress_heartbeat_task: Optional[asyncio.Task[None]] = None
-        max_progress_len = max(int(self._config.max_message_length), 32)
 
         async def _edit_progress(
             *, force: bool = False, remove_components: bool = False
