@@ -56,15 +56,35 @@ def load_playwright() -> Any:
     return sync_playwright().start()
 
 
-def build_navigation_url(base_url: str, path: str = "/") -> str:
+def build_navigation_url(base_url: str, path: Optional[str] = None) -> str:
     if not base_url or not base_url.strip():
         raise ValueError("A non-empty base URL is required.")
     normalized_base = base_url.strip()
-    normalized_path = (path or "/").strip() or "/"
+    base = urlsplit(normalized_base)
+    if path is None:
+        return urlunsplit(
+            (
+                base.scheme,
+                base.netloc,
+                base.path or "/",
+                base.query,
+                base.fragment,
+            )
+        )
+    normalized_path = path.strip() or "/"
+    if not normalized_path:
+        return urlunsplit(
+            (
+                base.scheme,
+                base.netloc,
+                base.path or "/",
+                base.query,
+                base.fragment,
+            )
+        )
     if not normalized_path.startswith("/"):
         normalized_path = f"/{normalized_path}"
 
-    base = urlsplit(normalized_base)
     override = urlsplit(normalized_path)
     return urlunsplit(
         (
@@ -89,7 +109,7 @@ class BrowserRuntime:
         self,
         *,
         base_url: str,
-        path: str = "/",
+        path: Optional[str] = None,
         out_dir: Path,
         viewport: Viewport = DEFAULT_VIEWPORT,
         output_name: Optional[str] = None,
@@ -139,7 +159,7 @@ class BrowserRuntime:
         self,
         *,
         base_url: str,
-        path: str = "/",
+        path: Optional[str] = None,
         out_dir: Path,
         viewport: Viewport = DEFAULT_VIEWPORT,
         output_name: Optional[str] = None,
@@ -155,7 +175,7 @@ class BrowserRuntime:
                 page=page,
                 out_dir=out_dir,
                 target_url=nav_url,
-                path_hint=path,
+                path_hint=(path or urlsplit(nav_url).path or "/"),
                 viewport=viewport,
                 output_name=output_name,
                 include_html=include_html,
@@ -176,7 +196,7 @@ class BrowserRuntime:
         self,
         *,
         base_url: str,
-        path: str = "/",
+        path: Optional[str] = None,
         script_path: Path,
         out_dir: Path,
         viewport: Viewport = DEFAULT_VIEWPORT,
@@ -255,7 +275,7 @@ class BrowserRuntime:
                 page=page,
                 manifest=manifest,
                 base_url=base_url,
-                initial_path=path,
+                initial_path=(path or urlsplit(nav_url).path or "/"),
                 out_dir=out_dir,
                 timeout_ms=timeout_ms,
             )
@@ -294,7 +314,7 @@ class BrowserRuntime:
                             kind="demo-trace",
                             default_extension="zip",
                             url=nav_url,
-                            path_hint=path,
+                            path_hint=(path or urlsplit(nav_url).path or "/"),
                             output_name=None,
                         )
                         artifacts["trace"] = trace_artifact
@@ -339,7 +359,7 @@ class BrowserRuntime:
                                 kind="demo-video",
                                 default_extension="webm",
                                 url=nav_url,
-                                path_hint=path,
+                                path_hint=(path or urlsplit(nav_url).path or "/"),
                                 output_name=None,
                             )
                             artifacts["video"] = video_artifact

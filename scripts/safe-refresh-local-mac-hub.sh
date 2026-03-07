@@ -450,13 +450,13 @@ if [[ ! -f "${PLIST_PATH}" ]]; then
 fi
 
 HUB_ROOT="$(_plist_arg_value path)"
-PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}"
+PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[browser]"
 if [[ -n "${HUB_ROOT}" ]]; then
   VOICE_PROVIDER="$(_voice_provider_for_hub_root "${HUB_ROOT}")"
   if [[ "${VOICE_PROVIDER}" == "local_whisper" ]]; then
-    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[voice-local]"
+    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[browser,voice-local]"
   elif [[ "${VOICE_PROVIDER}" == "mlx_whisper" ]]; then
-    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[voice-mlx]"
+    PACKAGE_INSTALL_SPEC="${PACKAGE_SRC}[browser,voice-mlx]"
   fi
 fi
 
@@ -469,6 +469,37 @@ try:
     print(os.path.realpath(sys.argv[1]))
 except Exception:
     pass
+PY
+}
+
+_ensure_playwright_chromium() {
+  local python_bin
+  python_bin="$1"
+  if [[ -z "${python_bin}" || ! -x "${python_bin}" ]]; then
+    return 0
+  fi
+  "${python_bin}" - <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    raise SystemExit(0)
+
+try:
+    playwright = sync_playwright().start()
+    chromium_path = playwright.chromium.executable_path
+    playwright.stop()
+    if chromium_path and Path(chromium_path).exists():
+        print(f"Playwright Chromium available at {chromium_path}")
+        raise SystemExit(0)
+except Exception:
+    pass
+
+print("Installing Playwright Chromium browser...")
+subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
 PY
 }
 
@@ -511,6 +542,7 @@ echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
 
 echo "Installing codex-autorunner from ${PACKAGE_INSTALL_SPEC} into staged venv..."
 "${next_venv}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_INSTALL_SPEC}"
+_ensure_playwright_chromium "${next_venv}/bin/python"
 
 echo "Smoke-checking staged venv imports..."
 "${next_venv}/bin/python" -c "import codex_autorunner; from codex_autorunner.server import create_hub_app; print('ok')"
@@ -1619,6 +1651,7 @@ if [[ "${health_ok}" == "true" ]]; then
   fi
   echo "Updating global car CLI..."
   pipx install --force "${PACKAGE_INSTALL_SPEC}"
+  _ensure_playwright_chromium "${PIPX_VENV}/bin/python"
   ensure_login_shell_path "${LOCAL_BIN}"
   write_status "ok" "${status_msg}"
 else

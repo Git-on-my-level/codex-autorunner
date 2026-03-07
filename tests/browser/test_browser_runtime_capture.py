@@ -10,7 +10,7 @@ from typing import Optional
 import pytest
 
 from codex_autorunner.browser.models import Viewport
-from codex_autorunner.browser.runtime import BrowserRuntime
+from codex_autorunner.browser.runtime import BrowserRuntime, build_navigation_url
 
 
 class _FixtureHandler(http.server.BaseHTTPRequestHandler):
@@ -217,3 +217,19 @@ def test_runtime_failure_still_closes_page_context_browser(tmp_path: Path) -> No
     assert fake.context.closed is True
     assert fake.browser.closed is True
     assert fake.stopped is True
+
+
+def test_build_navigation_url_preserves_base_path_and_query_when_path_omitted() -> None:
+    assert (
+        build_navigation_url("http://127.0.0.1:3000/settings?tab=profile")
+        == "http://127.0.0.1:3000/settings?tab=profile"
+    )
+
+
+def test_build_navigation_url_overrides_path_and_query_when_path_provided() -> None:
+    assert (
+        build_navigation_url(
+            "http://127.0.0.1:3000/settings?tab=profile", "/dashboard?tab=overview"
+        )
+        == "http://127.0.0.1:3000/dashboard?tab=overview"
+    )

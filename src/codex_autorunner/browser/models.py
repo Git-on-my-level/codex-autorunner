@@ -21,7 +21,7 @@ class Viewport:
 @dataclass(frozen=True)
 class RenderTarget:
     mode: TargetMode
-    path: str
+    path: Optional[str]
     url: Optional[str] = None
     serve_cmd: Optional[str] = None
 
@@ -30,8 +30,10 @@ DEFAULT_VIEWPORT = Viewport(width=1280, height=720)
 DEFAULT_VIEWPORT_TEXT = f"{DEFAULT_VIEWPORT.width}x{DEFAULT_VIEWPORT.height}"
 
 
-def normalize_target_path(path: str) -> str:
-    raw = (path or "/").strip()
+def normalize_target_path(path: Optional[str]) -> Optional[str]:
+    if path is None:
+        return None
+    raw = path.strip()
     if not raw:
         return "/"
     if not raw.startswith("/"):
@@ -57,7 +59,7 @@ def select_render_target(
     *,
     url: Optional[str],
     serve_cmd: Optional[str],
-    path: str = "/",
+    path: Optional[str] = None,
 ) -> RenderTarget:
     normalized_path = normalize_target_path(path)
     has_url = bool((url or "").strip())

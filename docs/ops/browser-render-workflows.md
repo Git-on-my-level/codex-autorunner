@@ -24,6 +24,9 @@ python -m playwright install chromium
 
 If the extra is missing, render commands fail with a clear install hint instead of a stack trace.
 
+For launchd/systemd local hub installs, the safe refresh/install scripts provision
+the `browser` extra and install Playwright Chromium automatically.
+
 ## Mode Selection
 
 Use `screenshot` when you need a single page capture (PNG/PDF).

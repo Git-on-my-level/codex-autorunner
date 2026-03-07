@@ -312,6 +312,55 @@ def test_doctor_reports_missing_mlx_voice_runtime_dependency(
     assert "ffmpeg" in voice_check.fix
 
 
+def test_doctor_reports_render_browser_dependency_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.git_utils.run_git",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr("codex_autorunner.core.runtime.find_spec", lambda _name: None)
+
+    report = doctor(hub_root)
+    render_checks = [
+        check
+        for check in report.checks
+        if check.check_id == "render.browser.dependencies"
+    ]
+    assert len(render_checks) == 1
+    render_check = render_checks[0]
+    assert render_check.passed is True
+    assert "Playwright Python package is not installed" in render_check.message
+    assert render_check.fix is not None
+    assert "codex-autorunner[browser]" in render_check.fix
+
+
+def test_doctor_reports_render_markdown_downstream_tool_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.git_utils.run_git",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr("codex_autorunner.core.runtime.find_spec", lambda _name: None)
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.resolve_executable", lambda _name: None
+    )
+
+    report = doctor(hub_root)
+    messages = [check.message for check in report.checks]
+    assert any("Mermaid CLI (mmdc) is not installed" in msg for msg in messages)
+    assert any("Pandoc is not installed" in msg for msg in messages)
+
+
 def test_pma_doctor_checks_invalid_agent():
     """Test PMA doctor checks with invalid default agent."""
     checks = pma_doctor_checks({"pma": {"enabled": True, "default_agent": "invalid"}})

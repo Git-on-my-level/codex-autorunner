@@ -200,9 +200,40 @@ PY
   done
 }
 
+ensure_playwright_chromium() {
+  local python_bin="$1"
+  if [[ -z "${python_bin}" || ! -x "${python_bin}" ]]; then
+    return 0
+  fi
+  "${python_bin}" - <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    raise SystemExit(0)
+
+try:
+    playwright = sync_playwright().start()
+    chromium_path = playwright.chromium.executable_path
+    playwright.stop()
+    if chromium_path and Path(chromium_path).exists():
+        print(f"Playwright Chromium available at {chromium_path}")
+        raise SystemExit(0)
+except Exception:
+    pass
+
+print("Installing Playwright Chromium browser...")
+subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+PY
+}
+
 echo "Installing codex-autorunner from ${PACKAGE_SRC}..."
 "${HELPER_PYTHON}" -m pip -q install --upgrade pip
-"${HELPER_PYTHON}" -m pip -q install --upgrade "${PACKAGE_SRC}"
+"${HELPER_PYTHON}" -m pip -q install --upgrade "${PACKAGE_SRC}[browser]"
+ensure_playwright_chromium "${HELPER_PYTHON}"
 ensure_login_shell_path "${LOCAL_BIN}"
 
 echo "Reloading systemd user manager..."

@@ -227,13 +227,43 @@ print(provider)
 PY
 }
 
+ensure_playwright_chromium() {
+  local python_bin="$1"
+  if [[ -z "${python_bin}" || ! -x "${python_bin}" ]]; then
+    return 0
+  fi
+  "${python_bin}" - <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    raise SystemExit(0)
+
+try:
+    playwright = sync_playwright().start()
+    chromium_path = playwright.chromium.executable_path
+    playwright.stop()
+    if chromium_path and Path(chromium_path).exists():
+        print(f"Playwright Chromium available at {chromium_path}")
+        raise SystemExit(0)
+except Exception:
+    pass
+
+print("Installing Playwright Chromium browser...")
+subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+PY
+}
+
 if ! command -v pipx >/dev/null 2>&1; then
   echo "pipx is required; install via 'python3 -m pip install --user pipx' and re-run." >&2
   exit 1
 fi
 
 echo "Installing codex-autorunner from ${PACKAGE_SRC} via pipx..."
-pipx install --force "${PACKAGE_SRC}"
+pipx install --force "${PACKAGE_SRC}[browser]"
 ensure_login_shell_path "${LOCAL_BIN}"
 
 PIPX_ROOT="${PIPX_ROOT:-$HOME/.local/pipx}"
@@ -370,14 +400,16 @@ PY
   case "${VOICE_PROVIDER}" in
     local_whisper)
       echo "Voice provider is local_whisper; installing local Whisper optional deps..."
-      "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-local]"
+      "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[browser,voice-local]"
       ;;
     mlx_whisper)
       echo "Voice provider is mlx_whisper; installing MLX Whisper optional deps..."
-      "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[voice-mlx]"
+      "${CURRENT_VENV_LINK}/bin/python" -m pip -q install --force-reinstall "${PACKAGE_SRC}[browser,voice-mlx]"
       ;;
   esac
 fi
+
+ensure_playwright_chromium "${CURRENT_VENV_LINK}/bin/python"
 
 echo "Writing launchd plist to ${PLIST_PATH}..."
 mkdir -p "$(dirname "${PLIST_PATH}")"

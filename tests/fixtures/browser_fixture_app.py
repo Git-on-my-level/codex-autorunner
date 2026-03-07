@@ -5,7 +5,7 @@ import argparse
 import http.server
 import os
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 class BrowserFixtureHandler(http.server.BaseHTTPRequestHandler):
@@ -78,10 +78,11 @@ class BrowserFixtureHandler(http.server.BaseHTTPRequestHandler):
             return
 
         length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length).decode("utf-8") if length > 0 else ""
-        form = parse_qs(body)
-        email = (form.get("email") or ["unknown@example.com"])[0]
-        location = f"/dashboard?{urlencode({'email': email})}"
+        if length > 0:
+            _ = self.rfile.read(length)
+
+        # Keep redirects deterministic and header-safe in this fixture.
+        location = "/dashboard?email=demo%40example.com"
 
         self.send_response(303)
         self.send_header("Location", location)

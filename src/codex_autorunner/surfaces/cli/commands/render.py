@@ -372,7 +372,14 @@ def register_render_commands(
             "--ready-timeout-seconds",
             help="Serve readiness timeout in seconds.",
         ),
-        path: str = typer.Option("/", "--path", help="Relative path to open."),
+        path: Optional[str] = typer.Option(
+            None,
+            "--path",
+            help=(
+                "Relative path to open. If omitted in --url mode, preserves "
+                "the URL path/query."
+            ),
+        ),
         viewport: str = typer.Option(
             DEFAULT_VIEWPORT_TEXT,
             "--viewport",
@@ -493,7 +500,14 @@ def register_render_commands(
             "--ready-timeout-seconds",
             help="Serve readiness timeout in seconds.",
         ),
-        path: str = typer.Option("/", "--path", help="Relative path to open."),
+        path: Optional[str] = typer.Option(
+            None,
+            "--path",
+            help=(
+                "Relative path to open. If omitted in --url mode, preserves "
+                "the URL path/query."
+            ),
+        ),
         viewport: str = typer.Option(
             DEFAULT_VIEWPORT_TEXT,
             "--viewport",
@@ -641,7 +655,14 @@ def register_render_commands(
             "--ready-timeout-seconds",
             help="Serve readiness timeout in seconds.",
         ),
-        path: str = typer.Option("/", "--path", help="Relative path to open."),
+        path: Optional[str] = typer.Option(
+            None,
+            "--path",
+            help=(
+                "Relative path to open. If omitted in --url mode, preserves "
+                "the URL path/query."
+            ),
+        ),
         viewport: str = typer.Option(
             DEFAULT_VIEWPORT_TEXT,
             "--viewport",

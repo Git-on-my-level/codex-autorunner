@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -28,7 +29,7 @@ from .optional_dependencies import missing_optional_dependencies
 from .runner_state import LockError, RunnerStateManager
 from .state import now_iso
 from .state_roots import REPO_STATE_DIR, resolve_repo_state_root
-from .utils import RepoNotFoundError, find_repo_root
+from .utils import RepoNotFoundError, find_repo_root, resolve_executable
 
 _logger = logging.getLogger(__name__)
 
@@ -282,6 +283,8 @@ def doctor(
                 )
             )
 
+    _append_render_dependency_checks(checks, check_id=check_id)
+
     return DoctorReport(checks)
 
 
@@ -363,6 +366,131 @@ def _append_local_voice_dependency_check(
             check_id=check_id or "voice.dependencies",
         )
     )
+
+
+def _append_render_dependency_checks(
+    checks: list[DoctorCheck],
+    *,
+    check_id: Optional[str],
+) -> None:
+    render_check_id = check_id or "render.browser.dependencies"
+    has_playwright = find_spec("playwright") is not None
+    if not has_playwright:
+        checks.append(
+            DoctorCheck(
+                name="Render browser dependencies",
+                passed=True,
+                message=(
+                    "Playwright Python package is not installed; browser render "
+                    "commands are unavailable."
+                ),
+                severity="warning",
+                check_id=render_check_id,
+                fix=(
+                    "Install with `pip install codex-autorunner[browser]` (or "
+                    "`pip install -e .[browser]` for local dev), then run "
+                    "`python -m playwright install chromium`."
+                ),
+            )
+        )
+    else:
+        chromium_path: Optional[str] = None
+        chromium_error: Optional[str] = None
+        try:
+            from playwright.sync_api import sync_playwright
+
+            playwright = sync_playwright().start()
+            try:
+                chromium_path = str(playwright.chromium.executable_path or "").strip()
+            finally:
+                playwright.stop()
+        except Exception as exc:
+            chromium_error = str(exc).strip() or repr(exc)
+
+        if chromium_path and Path(chromium_path).exists():
+            checks.append(
+                DoctorCheck(
+                    name="Render browser dependencies",
+                    passed=True,
+                    message=f"Playwright and Chromium are available ({chromium_path}).",
+                    severity="info",
+                    check_id=render_check_id,
+                )
+            )
+        else:
+            detail = (
+                f" ({chromium_error})"
+                if chromium_error
+                else " (Chromium browser binary missing)"
+            )
+            checks.append(
+                DoctorCheck(
+                    name="Render browser dependencies",
+                    passed=True,
+                    message=(
+                        "Playwright is installed but Chromium runtime is unavailable."
+                        f"{detail}"
+                    ),
+                    severity="warning",
+                    check_id=render_check_id,
+                    fix=(
+                        "Install browser runtime with "
+                        "`python -m playwright install chromium`."
+                    ),
+                )
+            )
+
+    mmdc = resolve_executable("mmdc")
+    if mmdc:
+        checks.append(
+            DoctorCheck(
+                name="Render markdown dependencies",
+                passed=True,
+                message=f"Mermaid CLI available at {mmdc}.",
+                severity="info",
+                check_id=check_id or "render.markdown.dependencies",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                name="Render markdown dependencies",
+                passed=True,
+                message=(
+                    "Mermaid CLI (mmdc) is not installed; `car render markdown` "
+                    "diagram exports are unavailable."
+                ),
+                severity="warning",
+                check_id=check_id or "render.markdown.dependencies",
+                fix="Install Mermaid CLI (`npm i -g @mermaid-js/mermaid-cli`).",
+            )
+        )
+
+    pandoc = resolve_executable("pandoc")
+    if pandoc:
+        checks.append(
+            DoctorCheck(
+                name="Render markdown dependencies",
+                passed=True,
+                message=f"Pandoc available at {pandoc}.",
+                severity="info",
+                check_id=check_id or "render.markdown.dependencies",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                name="Render markdown dependencies",
+                passed=True,
+                message=(
+                    "Pandoc is not installed; `car render markdown` document "
+                    "exports are unavailable."
+                ),
+                severity="warning",
+                check_id=check_id or "render.markdown.dependencies",
+                fix="Install Pandoc and ensure it is on PATH.",
+            )
+        )
 
 
 def clear_stale_lock(repo_root: Path) -> bool:
