@@ -18,7 +18,12 @@ from .constants import (
 from .retry import _extract_retry_after_seconds
 from .state import OutboxRecord, TelegramStateStore, topic_key
 
-__all__ = ["_outbox_key", "TelegramOutboxManager"]
+__all__ = [
+    "_outbox_key",
+    "OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER",
+    "OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER",
+    "TelegramOutboxManager",
+]
 
 SendMessageFn = Callable[..., Awaitable[None]]
 EditMessageFn = Callable[..., Awaitable[bool]]
@@ -36,6 +41,17 @@ def _outbox_key(
 
 # Keep a module-level reference so static analysis sees this helper as used in production.
 OUTBOX_KEY_HELPER = _outbox_key
+OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER = "send_delete_placeholder"
+OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER = "send_keep_placeholder"
+
+
+def _should_delete_placeholder_on_delivery(record: OutboxRecord) -> bool:
+    if record.operation == OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER:
+        return False
+    if record.operation == OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER:
+        return True
+    # Backward-compatible default for existing outbox records.
+    return True
 
 
 def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
@@ -317,7 +333,10 @@ class TelegramOutboxManager:
                         await self._store.delete_outbox(r.record_id)
             else:
                 await self._store.delete_outbox(record.record_id)
-            if record.placeholder_message_id is not None:
+            if (
+                record.placeholder_message_id is not None
+                and _should_delete_placeholder_on_delivery(record)
+            ):
                 await self._delete_message(
                     record.chat_id,
                     record.placeholder_message_id,

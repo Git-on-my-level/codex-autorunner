@@ -1293,6 +1293,13 @@ class ExecutionCommands(SharedHelpers):
                                             item_id=buffer_key,
                                             subagent_label=subagent_label,
                                         )
+                        elif part_type == "text":
+                            if delta_text:
+                                tracker.note_output(delta_text)
+                            else:
+                                raw_text = part.get("text")
+                                if isinstance(raw_text, str) and raw_text:
+                                    tracker.note_output(raw_text)
                         elif part_type == "tool":
                             tool_id = part.get("callID") or part.get("id")
                             tool_name = part.get("tool") or part.get("name") or "tool"

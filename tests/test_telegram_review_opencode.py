@@ -13,6 +13,7 @@ from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
+from codex_autorunner.integrations.telegram.progress_stream import TurnProgressTracker
 from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
 
 
@@ -122,6 +123,7 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         self._review_commit_subjects: dict[str, object] = {}
         self._sent_messages: list[str] = []
         self._delivered: list[str] = []
+        self._delivery_delete_flags: list[bool] = []
         self._deleted: list[int] = []
         self._placeholder_counter = 200
 
@@ -201,8 +203,10 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         reply_to: Optional[int],
         placeholder_id: Optional[int],
         response: str,
+        delete_placeholder_on_delivery: bool = True,
     ) -> bool:
         _ = (chat_id, thread_id, reply_to, placeholder_id)
+        self._delivery_delete_flags.append(delete_placeholder_on_delivery)
         self._delivered.append(response)
         return True
 
@@ -337,3 +341,80 @@ async def test_telegram_review_opencode_sends_command(
     assert calls["workspace_path"] == str(tmp_path.resolve())
     assert handler._delivered
     assert handler._delivered[-1]
+    assert handler._delivery_delete_flags[-1] is False
+    assert handler._deleted == []
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_telegram_review_opencode_tracks_text_parts_in_progress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    record = TelegramTopicRecord(
+        workspace_path=str(tmp_path),
+        agent="opencode",
+        active_thread_id="session-123",
+        thread_ids=["session-123"],
+    )
+    client = _OpenCodeClientStub(session_id="session-123")
+    supervisor = _SupervisorStub(client)
+    handler = _ReviewHandlerStub(record=record, supervisor=supervisor)
+    runtime = _RuntimeStub()
+
+    async def _fake_collect_opencode_output(
+        _client: object,
+        *,
+        part_handler=None,
+        session_id: str,
+        **_kwargs: object,
+    ) -> OpenCodeTurnOutput:
+        if part_handler is not None:
+            await part_handler(
+                "text",
+                {"sessionID": session_id, "text": "full output"},
+                "delta output",
+            )
+        return OpenCodeTurnOutput(text="Review output", error=None)
+
+    async def _fake_opencode_missing_env(
+        *_args: object, **_kwargs: object
+    ) -> list[str]:
+        return []
+
+    async def _start_turn_progress(
+        turn_key: tuple[str, str],
+        *,
+        ctx: object,
+        agent: str,
+        model: Optional[str],
+        label: str = "working",
+    ) -> None:
+        _ = ctx
+        handler._turn_progress_trackers[turn_key] = TurnProgressTracker(
+            started_at=0.0,
+            agent=agent,
+            model=model or "default",
+            label=label,
+            max_actions=10,
+            max_output_chars=1000,
+        )
+
+    handler._start_turn_progress = _start_turn_progress
+
+    monkeypatch.setattr(
+        github_commands, "collect_opencode_output", _fake_collect_opencode_output
+    )
+    monkeypatch.setattr(
+        github_commands, "opencode_missing_env", _fake_opencode_missing_env
+    )
+
+    await handler._handle_review(_message(), "", runtime)
+
+    assert handler._turn_progress_trackers
+    output_buffers = [
+        tracker.output_buffer
+        for tracker in handler._turn_progress_trackers.values()
+        if isinstance(tracker, TurnProgressTracker)
+    ]
+    assert output_buffers
+    assert any("delta output" in buffer for buffer in output_buffers)

@@ -570,8 +570,8 @@ class GitHubCommands(SharedHelpers):
             reply_to=message.message_id,
             placeholder_id=turn_context.placeholder_id,
             response=response_text,
+            delete_placeholder_on_delivery=False,
         )
-        placeholder_handled = False
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(
                 chat_id=message.chat_id,
@@ -581,13 +581,14 @@ class GitHubCommands(SharedHelpers):
                 token_usage=token_usage,
             )
         elif metrics and metrics_mode == "append_to_progress" and response_sent:
-            placeholder_handled = await self._append_metrics_to_placeholder(
-                message.chat_id, turn_context.placeholder_id, metrics
+            await self._append_metrics_to_placeholder(
+                message.chat_id,
+                turn_context.placeholder_id,
+                metrics,
+                base_text=response,
             )
         if turn_id:
             self._token_usage_by_turn.pop(turn_id, None)
-        if response_sent and not placeholder_handled:
-            await self._delete_message(message.chat_id, turn_context.placeholder_id)
         await self._flush_outbox_files(
             record,
             chat_id=message.chat_id,
@@ -1014,6 +1015,13 @@ class GitHubCommands(SharedHelpers):
                                         item_id=buffer_key,
                                         subagent_label=subagent_label,
                                     )
+                    elif part_type == "text":
+                        if delta_text:
+                            tracker.note_output(delta_text)
+                        else:
+                            raw_text = part.get("text")
+                            if isinstance(raw_text, str) and raw_text:
+                                tracker.note_output(raw_text)
                     elif part_type == "tool":
                         tool_id = part.get("callID") or part.get("id")
                         tool_name = part.get("tool") or part.get("name") or "tool"
@@ -1417,8 +1425,8 @@ class GitHubCommands(SharedHelpers):
             reply_to=message.message_id,
             placeholder_id=turn_context.placeholder_id,
             response=response_text,
+            delete_placeholder_on_delivery=False,
         )
-        placeholder_handled = False
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(
                 chat_id=message.chat_id,
@@ -1428,13 +1436,14 @@ class GitHubCommands(SharedHelpers):
                 token_usage=token_usage,
             )
         elif metrics and metrics_mode == "append_to_progress" and response_sent:
-            placeholder_handled = await self._append_metrics_to_placeholder(
-                message.chat_id, turn_context.placeholder_id, metrics
+            await self._append_metrics_to_placeholder(
+                message.chat_id,
+                turn_context.placeholder_id,
+                metrics,
+                base_text=output or "No response.",
             )
         if turn_context.turn_id:
             self._token_usage_by_turn.pop(turn_context.turn_id, None)
-        if response_sent and not placeholder_handled:
-            await self._delete_message(message.chat_id, turn_context.placeholder_id)
         await self._flush_outbox_files(
             record,
             chat_id=message.chat_id,

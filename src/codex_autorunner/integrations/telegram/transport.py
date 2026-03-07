@@ -9,6 +9,10 @@ from ...core.state import now_iso
 from .adapter import TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import _format_turn_metrics, _should_trace_message, _with_conversation_id
+from .outbox import (
+    OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER,
+    OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
+)
 from .overflow import split_markdown_message, trim_markdown_message
 from .rendering import _format_telegram_html, _format_telegram_markdown
 from .state import OutboxRecord
@@ -23,7 +27,14 @@ class TelegramMessageTransport:
         thread_id: Optional[int],
         reply_to: Optional[int],
         placeholder_id: Optional[int] = None,
+        delete_placeholder_on_delivery: bool = True,
     ) -> bool:
+        operation: Optional[str] = None
+        if placeholder_id is not None:
+            if delete_placeholder_on_delivery:
+                operation = OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER
+            else:
+                operation = OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER
         record = OutboxRecord(
             record_id=secrets.token_hex(8),
             chat_id=chat_id,
@@ -32,6 +43,7 @@ class TelegramMessageTransport:
             placeholder_message_id=placeholder_id,
             text=text,
             created_at=now_iso(),
+            operation=operation,
         )
         return await self._outbox_manager.send_message_with_outbox(record)
 
@@ -207,6 +219,7 @@ class TelegramMessageTransport:
         reply_to: Optional[int],
         placeholder_id: Optional[int],
         response: str,
+        delete_placeholder_on_delivery: bool = True,
     ) -> bool:
         return await self._send_message_with_outbox(
             chat_id,
@@ -214,6 +227,7 @@ class TelegramMessageTransport:
             thread_id=thread_id,
             reply_to=reply_to,
             placeholder_id=placeholder_id,
+            delete_placeholder_on_delivery=delete_placeholder_on_delivery,
         )
 
     def _format_turn_metrics_text(
@@ -250,10 +264,15 @@ class TelegramMessageTransport:
         chat_id: int,
         message_id: Optional[int],
         metrics: str,
+        *,
+        base_text: Optional[str] = None,
     ) -> bool:
         if message_id is None:
             return False
-        updated = f"{PLACEHOLDER_TEXT}\n\n{metrics}"
+        existing = base_text if isinstance(base_text, str) else ""
+        if not existing.strip():
+            existing = PLACEHOLDER_TEXT
+        updated = f"{existing}\n\n{metrics}"
         edited = await self._edit_message_text(chat_id, message_id, updated)
         return edited
 

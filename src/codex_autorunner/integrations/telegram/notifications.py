@@ -437,7 +437,7 @@ class TelegramNotificationHandlers:
             tracker.set_label("done")
         tracker.clear_transient_action()
         tracker.finalized = True
-        await self._emit_progress_edit(turn_key, force=True)
+        await self._emit_progress_edit(turn_key, force=True, render_mode="final")
         self._clear_turn_progress(turn_key)
 
     async def _ensure_turn_progress_lock(
@@ -513,6 +513,7 @@ class TelegramNotificationHandlers:
         ctx: Optional[Any] = None,
         now: Optional[float] = None,
         force: bool = False,
+        render_mode: str = "live",
     ) -> None:
         tracker = self._turn_progress_trackers.get(turn_key)
         if tracker is None:
@@ -524,7 +525,10 @@ class TelegramNotificationHandlers:
         if now is None:
             now = time.monotonic()
         rendered = render_progress_text(
-            tracker, max_length=TELEGRAM_MAX_MESSAGE_LENGTH, now=now
+            tracker,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+            now=now,
+            render_mode=render_mode,
         )
         if not force and rendered == self._turn_progress_rendered.get(turn_key):
             return

@@ -372,6 +372,7 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
             placeholder_id=outcome.placeholder_id,
             response=response_text,
+            delete_placeholder_on_delivery=False,
         )
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
@@ -385,7 +386,6 @@ class TelegramCommandHandlers(
                 placeholder_id=outcome.placeholder_id,
                 final_response_sent_at=now_iso(),
             )
-        placeholder_handled = False
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(
                 chat_id=message.chat_id,
@@ -395,14 +395,15 @@ class TelegramCommandHandlers(
                 token_usage=outcome.token_usage,
             )
         elif metrics and metrics_mode == "append_to_progress" and response_sent:
-            placeholder_handled = await self._append_metrics_to_placeholder(
-                message.chat_id, outcome.placeholder_id, metrics
+            await self._append_metrics_to_placeholder(
+                message.chat_id,
+                outcome.placeholder_id,
+                metrics,
+                base_text=outcome.response,
             )
         if outcome.turn_id:
             self._token_usage_by_turn.pop(outcome.turn_id, None)
         if response_sent:
-            if not placeholder_handled:
-                await self._delete_message(message.chat_id, outcome.placeholder_id)
             await self._finalize_voice_transcript(
                 message.chat_id, outcome.transcript_message_id, outcome.transcript_text
             )

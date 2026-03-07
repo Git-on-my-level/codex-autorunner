@@ -629,7 +629,16 @@ class _PMAHandler(TelegramCommandHandlers):
         reply_to: Optional[int],
         placeholder_id: Optional[int],
         response: str,
+        delete_placeholder_on_delivery: bool = True,
     ) -> bool:
+        _ = (
+            chat_id,
+            thread_id,
+            reply_to,
+            placeholder_id,
+            response,
+            delete_placeholder_on_delivery,
+        )
         return True
 
     async def _start_turn_progress(

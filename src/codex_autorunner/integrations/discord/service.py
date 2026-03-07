@@ -1144,10 +1144,8 @@ class DiscordBotService:
             )
             return
 
-        preview_message_id: Optional[str] = None
         if isinstance(turn_result, DiscordMessageTurnResult):
             response_text = turn_result.final_message
-            preview_message_id = turn_result.preview_message_id
             metrics_text = _format_turn_metrics(
                 turn_result.token_usage,
                 turn_result.elapsed_seconds,
@@ -1172,12 +1170,6 @@ class DiscordBotService:
                 channel_id,
                 {"content": chunk},
                 record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
-            )
-        if preview_message_id:
-            await self._delete_channel_message_safe(
-                channel_id,
-                preview_message_id,
-                record_id=f"turn-preview-delete:{session_key}:{uuid.uuid4().hex[:8]}",
             )
         await self._flush_outbox_files(
             workspace_root=workspace_root,
@@ -1995,7 +1987,10 @@ class DiscordBotService:
         progress_heartbeat_task: Optional[asyncio.Task[None]] = None
 
         async def _edit_progress(
-            *, force: bool = False, remove_components: bool = False
+            *,
+            force: bool = False,
+            remove_components: bool = False,
+            render_mode: str = "live",
         ) -> None:
             nonlocal progress_rendered
             nonlocal progress_last_updated
@@ -2010,7 +2005,10 @@ class DiscordBotService:
             ):
                 return
             rendered = render_progress_text(
-                tracker, max_length=max_progress_len, now=now
+                tracker,
+                max_length=max_progress_len,
+                now=now,
+                render_mode=render_mode,
             )
             content = truncate_for_discord(rendered, max_len=max_progress_len)
             if not force and content == progress_rendered:
@@ -2167,7 +2165,11 @@ class DiscordBotService:
                     completed_seen = True
                     tracker.clear_transient_action()
                     tracker.set_label("done")
-                    await _edit_progress(force=True, remove_components=True)
+                    await _edit_progress(
+                        force=True,
+                        remove_components=True,
+                        render_mode="final",
+                    )
                 elif isinstance(run_event, Failed):
                     failed_message = run_event.error_message or "Turn failed"
                     if completed_seen:
@@ -2183,7 +2185,11 @@ class DiscordBotService:
                         )
                         tracker.clear_transient_action()
                         tracker.set_label("done")
-                        await _edit_progress(force=True, remove_components=True)
+                        await _edit_progress(
+                            force=True,
+                            remove_components=True,
+                            render_mode="final",
+                        )
                         continue
                     error_message = failed_message
                     tracker.note_error(error_message)
@@ -8372,62 +8378,6 @@ class DiscordBotService:
         if not chunks:
             chunks = ["(Review completed with no output.)"]
 
-        if preview_message_id:
-            if len(chunks) == 1:
-                try:
-                    await self._rest.edit_channel_message(
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        payload={"content": chunks[0]},
-                    )
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.review.preview_edit_failed",
-                        channel_id=channel_id,
-                        message_id=preview_message_id,
-                        exc=exc,
-                    )
-                else:
-                    try:
-                        await self._flush_outbox_files(
-                            workspace_root=workspace_root,
-                            channel_id=channel_id,
-                        )
-                    except Exception as exc:
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "discord.review.outbox_flush_failed",
-                            channel_id=channel_id,
-                            target_type=target_type,
-                            message_id=preview_message_id,
-                            exc=exc,
-                        )
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.review.completed",
-                        channel_id=channel_id,
-                        target_type=target_type,
-                    )
-                    return
-            try:
-                await self._rest.delete_channel_message(
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.review.preview_delete_failed",
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                    exc=exc,
-                )
-
         for idx, chunk in enumerate(chunks, 1):
             await self._send_channel_message_safe(
                 channel_id,
@@ -8435,10 +8385,21 @@ class DiscordBotService:
                 record_id=f"review:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
             )
 
-        await self._flush_outbox_files(
-            workspace_root=workspace_root,
-            channel_id=channel_id,
-        )
+        try:
+            await self._flush_outbox_files(
+                workspace_root=workspace_root,
+                channel_id=channel_id,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.review.outbox_flush_failed",
+                channel_id=channel_id,
+                target_type=target_type,
+                message_id=preview_message_id,
+                exc=exc,
+            )
         log_event(
             self._logger,
             logging.INFO,

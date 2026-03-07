@@ -126,6 +126,8 @@ class _HandlerStub(TelegramCommandHandlers):
         self._placeholder_calls: list[dict[str, object]] = []
         self._placeholder_ids: dict[int, int] = {}
         self._edit_calls: list[tuple[int, str]] = []
+        self._deliver_calls: list[dict[str, object]] = []
+        self._delete_calls: list[tuple[object, object]] = []
         self._placeholder_events = placeholder_events or {}
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
@@ -272,13 +274,35 @@ class _HandlerStub(TelegramCommandHandlers):
     async def _send_message(self, *_args: object, **_kwargs: object) -> None:
         return None
 
-    async def _deliver_turn_response(self, *_args: object, **_kwargs: object) -> bool:
+    async def _deliver_turn_response(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        placeholder_id: Optional[int],
+        response: str,
+        delete_placeholder_on_delivery: bool = True,
+    ) -> bool:
+        self._deliver_calls.append(
+            {
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+                "reply_to": reply_to,
+                "placeholder_id": placeholder_id,
+                "response": response,
+                "delete_placeholder_on_delivery": delete_placeholder_on_delivery,
+            }
+        )
         return True
 
     async def _send_turn_metrics(self, *_args: object, **_kwargs: object) -> bool:
         return True
 
-    async def _delete_message(self, *_args: object, **_kwargs: object) -> bool:
+    async def _delete_message(
+        self, chat_id: object, message_id: object, **_kwargs: object
+    ) -> bool:
+        self._delete_calls.append((chat_id, message_id))
         return True
 
     async def _flush_outbox_files(self, *_args: object, **_kwargs: object) -> None:
@@ -419,6 +443,69 @@ async def test_turns_start_without_queue_when_parallelism_allows() -> None:
 
 
 @pytest.mark.anyio
+async def test_normal_turn_keeps_progress_placeholder_on_success() -> None:
+    wait = asyncio.Event()
+    wait.set()
+    client = _ClientStub(turn_wait_events=[wait])
+    records = {"10:11": _record("thread-1")}
+    handler = _HandlerStub(
+        client=client,
+        max_parallel_turns=1,
+        records=records,
+    )
+
+    message = _message(message_id=1, thread_id=11)
+    await handler._handle_normal_message(
+        message, _RuntimeStub(), record=records["10:11"]
+    )
+
+    assert handler._deliver_calls
+    assert handler._deliver_calls[-1]["delete_placeholder_on_delivery"] is False
+    assert handler._delete_calls == []
+
+
+@pytest.mark.anyio
+async def test_normal_turn_append_to_progress_uses_response_text_as_base() -> None:
+    wait = asyncio.Event()
+    wait.set()
+    client = _ClientStub(turn_wait_events=[wait])
+    records = {"10:11": _record("thread-1")}
+    handler = _HandlerStub(
+        client=client,
+        max_parallel_turns=1,
+        records=records,
+    )
+    captured: dict[str, object] = {}
+
+    async def _append_metrics(
+        chat_id: int,
+        message_id: Optional[int],
+        metrics: str,
+        *,
+        base_text: Optional[str] = None,
+    ) -> bool:
+        captured["chat_id"] = chat_id
+        captured["message_id"] = message_id
+        captured["metrics"] = metrics
+        captured["base_text"] = base_text
+        return True
+
+    handler._metrics_mode = lambda: "append_to_progress"
+    handler._format_turn_metrics_text = lambda *_args, **_kwargs: "metrics block"
+    handler._append_metrics_to_placeholder = _append_metrics
+
+    message = _message(message_id=1, thread_id=11)
+    await handler._handle_normal_message(
+        message, _RuntimeStub(), record=records["10:11"]
+    )
+
+    assert captured["message_id"] == handler._placeholder_ids[1]
+    assert captured["metrics"] == "metrics block"
+    assert captured["base_text"] == handler._deliver_calls[-1]["response"]
+    assert captured["base_text"] != PLACEHOLDER_TEXT
+
+
+@pytest.mark.anyio
 async def test_review_placeholder_sent_while_queued() -> None:
     first_wait = asyncio.Event()
     second_wait = asyncio.Event()
@@ -483,6 +570,11 @@ async def test_review_placeholder_sent_while_queued() -> None:
 
     placeholder_id = handler._placeholder_ids[2]
     assert (placeholder_id, PLACEHOLDER_TEXT) in handler._edit_calls
+    second_delivery = next(
+        call for call in handler._deliver_calls if call["reply_to"] == 2
+    )
+    assert second_delivery["delete_placeholder_on_delivery"] is False
+    assert handler._delete_calls == []
 
 
 @pytest.mark.anyio
