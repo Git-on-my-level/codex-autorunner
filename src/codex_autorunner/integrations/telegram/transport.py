@@ -19,6 +19,16 @@ from .state import OutboxRecord
 
 
 class TelegramMessageTransport:
+    @staticmethod
+    def _truncate_tail_text(text: str, limit: int) -> str:
+        if limit <= 0:
+            return ""
+        if len(text) <= limit:
+            return text
+        if limit <= 3:
+            return text[-limit:]
+        return f"...{text[-(limit - 3):]}"
+
     async def _send_message_with_outbox(
         self,
         chat_id: int,
@@ -272,7 +282,21 @@ class TelegramMessageTransport:
         existing = base_text if isinstance(base_text, str) else ""
         if not existing.strip():
             existing = PLACEHOLDER_TEXT
-        updated = f"{existing}\n\n{metrics}"
+        metrics_block = metrics.strip() or metrics
+        separator = "\n\n"
+        updated = f"{existing}{separator}{metrics_block}"
+        if len(updated) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            reserve = len(separator) + len(metrics_block)
+            if reserve >= TELEGRAM_MAX_MESSAGE_LENGTH:
+                updated = self._truncate_tail_text(
+                    metrics_block, TELEGRAM_MAX_MESSAGE_LENGTH
+                )
+            else:
+                available_for_existing = TELEGRAM_MAX_MESSAGE_LENGTH - reserve
+                trimmed_existing = self._truncate_tail_text(
+                    existing, available_for_existing
+                )
+                updated = f"{trimmed_existing}{separator}{metrics_block}"
         edited = await self._edit_message_text(chat_id, message_id, updated)
         return edited
 
