@@ -26,6 +26,10 @@ from ...app_server.client import _normalize_sandbox_policy
 from ...chat.media import (
     format_media_batch_failure as _format_media_batch_failure,  # noqa: F401
 )
+from ...chat.picker_filter import (
+    filter_picker_items,
+    find_exact_picker_item,
+)
 from ...chat.update_notifier import (
     format_update_status_message,
     mark_update_status_notified,
@@ -806,65 +810,118 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
-        search_query = argv[0].lower() if argv else None
-        cached_result = self._model_catalog_cache.get(cache_key)
-        if cached_result is not None:
-            result, cached_time = cached_result
-            if time.monotonic() - cached_time < MODEL_CATALOG_TTL_SECONDS:
-                options = _coerce_model_options(result, include_efforts=supports_effort)
-                if search_query:
-                    options = [
-                        opt
-                        for opt in options
-                        if search_query in opt.model_id.lower()
-                        or search_query in opt.label.lower()
-                    ]
-                if not options:
-                    await self._send_message(
-                        message.chat_id,
-                        f"No models found matching '{search_query}'.",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                    )
-                    return
-                items = [(option.model_id, option.model_id) for option in options]
-                state = ModelPickerState(
-                    items=items, options={option.model_id: option for option in options}
+        search_query = argv[0].strip() if argv else None
+        search_query_lower = search_query.lower() if search_query else None
+        resolved_model_id: Optional[str] = None
+
+        if search_query and search_query_lower not in {
+            "list",
+            "ls",
+            "clear",
+            "reset",
+            "set",
+        }:
+            result: Any | None = None
+            cached_result = self._model_catalog_cache.get(cache_key)
+            if cached_result is not None:
+                cached_payload, cached_time = cached_result
+                if time.monotonic() - cached_time < MODEL_CATALOG_TTL_SECONDS:
+                    result = cached_payload
+            if result is None:
+                record_for_models = self._record_with_workspace_path(
+                    record, workspace_path
                 )
-                self._model_options[key] = state
-                self._touch_cache_timestamp("model_options", key)
                 try:
-                    keyboard = self._build_model_keyboard(state)
-                except ValueError:
-                    self._model_options.pop(key, None)
+                    result = await self._fetch_model_list(
+                        record_for_models,
+                        agent=agent,
+                        client=client,
+                        list_params=list_params,
+                    )
+                    self._model_catalog_cache[cache_key] = (result, time.monotonic())
+                except OpenCodeSupervisorError as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.model.list.failed",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        agent=agent,
+                        exc=exc,
+                    )
                     await self._send_message(
                         message.chat_id,
-                        _format_model_list(
-                            result,
-                            include_efforts=supports_effort,
-                            set_hint=(
-                                "Use /model <provider/model> to set."
-                                if not supports_effort
-                                else None
-                            ),
-                        ),
+                        "OpenCode backend unavailable; install opencode or switch to /agent codex.",
                         thread_id=message.thread_id,
                         reply_to=message.message_id,
                     )
                     return
-                prompt_text = f"Models matching '{search_query}'"
-                if search_query:
-                    prompt_text = (
-                        f"Search: '{search_query}' (showing {len(options)} results)"
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.model.list.failed",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        agent=agent,
+                        exc=exc,
                     )
-                await self._send_message(
-                    message.chat_id,
-                    prompt_text,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                    reply_markup=keyboard,
-                )
-                return
+                    result = None
+
+            if result is not None:
+                options = _coerce_model_options(result, include_efforts=supports_effort)
+                items = [(option.model_id, option.label) for option in options]
+                exact = find_exact_picker_item(items, search_query)
+                if exact is not None:
+                    resolved_model_id = exact[0]
+                else:
+                    filtered_items = filter_picker_items(
+                        items,
+                        search_query,
+                        limit=DEFAULT_MODEL_LIST_LIMIT,
+                    )
+                    if filtered_items:
+                        filtered_ids = {model_id for model_id, _ in filtered_items}
+                        filtered_options = [
+                            option
+                            for option in options
+                            if option.model_id in filtered_ids
+                        ]
+                        state = ModelPickerState(
+                            items=filtered_items,
+                            options={
+                                option.model_id: option for option in filtered_options
+                            },
+                        )
+                        self._model_options[key] = state
+                        self._touch_cache_timestamp("model_options", key)
+                        try:
+                            keyboard = self._build_model_keyboard(state)
+                        except ValueError:
+                            self._model_options.pop(key, None)
+                            await self._send_message(
+                                message.chat_id,
+                                _format_model_list(
+                                    result,
+                                    include_efforts=supports_effort,
+                                    set_hint=(
+                                        "Use /model <provider/model> to set."
+                                        if not supports_effort
+                                        else None
+                                    ),
+                                ),
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                            )
+                            return
+                        await self._send_message(
+                            message.chat_id,
+                            f"Search: '{search_query}' (showing {len(filtered_items)} results)",
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            reply_markup=keyboard,
+                        )
+                        return
         if not argv:
             record_for_models = self._record_with_workspace_path(record, workspace_path)
             try:
@@ -972,7 +1029,7 @@ class TelegramCommandHandlers(
             model = argv[1]
             effort = argv[2] if len(argv) > 2 else None
         else:
-            model = argv[0]
+            model = resolved_model_id or argv[0]
             effort = argv[1] if len(argv) > 1 else None
         if effort and not supports_effort:
             await self._send_message(

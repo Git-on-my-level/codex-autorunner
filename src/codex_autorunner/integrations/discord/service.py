@@ -115,6 +115,10 @@ from ...integrations.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
+from ...integrations.chat.picker_filter import (
+    filter_picker_items,
+    find_exact_picker_item,
+)
 from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
@@ -211,6 +215,7 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "cannot infer the intention please clarify before proceeding."
 )
 _MODEL_LIST_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
+MODEL_SEARCH_FETCH_LIMIT = 200
 SESSION_RESUME_SELECT_ID = "session_resume_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 UPDATE_TARGET_SELECT_ID = "update_target_select"
@@ -255,11 +260,18 @@ def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
+def _coerce_model_picker_items(
+    result: Any,
+    *,
+    limit: Optional[int] = None,
+) -> list[tuple[str, str]]:
     entries = _coerce_model_entries(result)
     options: list[tuple[str, str]] = []
     seen: set[str] = set()
-    limit = max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1)
+    item_limit = max(
+        1,
+        limit if isinstance(limit, int) else DISCORD_SELECT_OPTION_MAX_OPTIONS - 1,
+    )
     for entry in entries:
         model_id = entry.get("model") or entry.get("id")
         if not isinstance(model_id, str):
@@ -277,7 +289,7 @@ def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
         ):
             label = f"{model_id} ({display_name})"
         options.append((model_id, label))
-        if len(options) >= limit:
+        if len(options) >= item_limit:
             break
     return options
 
@@ -765,6 +777,7 @@ class DiscordBotService:
             await self._handle_command_autocomplete(
                 interaction_id,
                 interaction_token,
+                channel_id=channel_id,
                 command_path=command_path,
                 options=options,
                 focused_name=focused_name,
@@ -1988,6 +2001,84 @@ class DiscordBotService:
                 )
             ],
         )
+
+    async def _resolve_flow_run_input(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        action: str,
+        run_id_opt: Any,
+    ) -> Optional[str]:
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action=action,
+            )
+            return None
+
+        run_id_value = run_id_opt.strip()
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError):
+            return run_id_value
+        try:
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+        except (sqlite3.Error, OSError):
+            return run_id_value
+        finally:
+            store.close()
+
+        matching_runs = [run for run in runs if _flow_run_matches_action(run, action)]
+        if not matching_runs:
+            return run_id_value
+
+        items = [(record.id, record.status.value) for record in matching_runs]
+        search_items = [(record.id, record.id) for record in matching_runs]
+        aliases = {record.id: (record.status.value,) for record in matching_runs}
+        exact_match = find_exact_picker_item(
+            search_items,
+            run_id_value,
+            aliases=aliases,
+        )
+        if exact_match is not None:
+            return exact_match[0]
+
+        filtered_search_items = filter_picker_items(
+            search_items,
+            run_id_value,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+            aliases=aliases,
+        )
+        if not filtered_search_items:
+            return run_id_value
+
+        status_by_run_id = {run_id: status for run_id, status in items}
+        filtered_items = [
+            (run_id, status_by_run_id.get(run_id, ""))
+            for run_id, _label in filtered_search_items
+        ]
+        custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
+        prompt = (
+            f"Matched {len(filtered_items)} runs for `{run_id_value}`. "
+            f"Select a run to {_flow_action_label(action)}:"
+        )
+        await self._respond_with_components(
+            interaction_id,
+            interaction_token,
+            prompt,
+            [
+                build_flow_runs_picker(
+                    filtered_items,
+                    custom_id=custom_id,
+                    placeholder=f"Select run to {_flow_action_label(action)}...",
+                )
+            ],
+        )
+        return None
 
     async def _run_agent_turn_for_message(
         self,
@@ -3526,6 +3617,7 @@ class DiscordBotService:
         await self._handle_command_autocomplete(
             interaction_id,
             interaction_token,
+            channel_id=channel_id,
             command_path=command_path,
             options=options,
             focused_name=focused_name,
@@ -3785,11 +3877,177 @@ class DiscordBotService:
                 break
         return choices
 
+    @staticmethod
+    def _picker_items_to_autocomplete_choices(
+        items: list[tuple[str, str]],
+    ) -> list[dict[str, str]]:
+        seen: set[str] = set()
+        choices: list[dict[str, str]] = []
+        for value, label in items:
+            normalized_value = value.strip()[:100]
+            if not normalized_value or normalized_value in seen:
+                continue
+            seen.add(normalized_value)
+            choices.append(
+                {
+                    "name": (label or value).strip()[:100],
+                    "value": normalized_value,
+                }
+            )
+            if len(choices) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
+                break
+        return choices
+
+    def _normalize_agent(self, value: Any) -> str:
+        agent = value if isinstance(value, str) else self.DEFAULT_AGENT
+        normalized = agent.strip().lower()
+        if normalized not in self.VALID_AGENT_VALUES:
+            return self.DEFAULT_AGENT
+        return normalized
+
+    async def _list_model_items_for_binding(
+        self,
+        *,
+        binding: dict[str, Any],
+        agent: str,
+        limit: int,
+    ) -> Optional[list[tuple[str, str]]]:
+        if agent == "opencode":
+            return await self._list_opencode_models_for_picker(
+                workspace_path=binding.get("workspace_path")
+            )
+        client = await self._client_for_workspace(binding.get("workspace_path"))
+        if client is None:
+            return None
+        result = await _model_list_with_agent_compat(
+            client,
+            params={
+                "cursor": None,
+                "limit": max(1, limit),
+                "agent": agent,
+            },
+        )
+        return _coerce_model_picker_items(result, limit=max(1, limit))
+
+    async def _build_model_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            return []
+        agent = self._normalize_agent(binding.get("agent"))
+        try:
+            model_items = await self._list_model_items_for_binding(
+                binding=binding,
+                agent=agent,
+                limit=MODEL_SEARCH_FETCH_LIMIT,
+            )
+        except Exception:
+            return []
+        if not model_items:
+            return []
+        filtered = filter_picker_items(
+            model_items,
+            query,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+        )
+        return self._picker_items_to_autocomplete_choices(filtered)
+
+    async def _build_session_resume_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            return []
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            if not workspace_root.exists() or not workspace_root.is_dir():
+                workspace_root = None
+        if workspace_root is None:
+            if pma_enabled:
+                workspace_root = canonicalize_path(Path(self._config.root))
+            else:
+                return []
+
+        thread_items = await self._list_session_threads_for_picker(
+            workspace_root=workspace_root,
+            current_thread_id=None,
+        )
+        if not thread_items:
+            return []
+        filtered = filter_picker_items(
+            thread_items,
+            query,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+        )
+        return self._picker_items_to_autocomplete_choices(filtered)
+
+    async def _build_flow_run_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        action: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None or bool(binding.get("pma_enabled", False)):
+            return []
+        workspace_raw = binding.get("workspace_path")
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            return []
+        workspace_root = canonicalize_path(Path(workspace_raw))
+        if not workspace_root.exists() or not workspace_root.is_dir():
+            return []
+
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError):
+            return []
+        try:
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+        except (sqlite3.Error, OSError):
+            return []
+        finally:
+            store.close()
+
+        matching_runs = [run for run in runs if _flow_run_matches_action(run, action)]
+        if not matching_runs:
+            return []
+
+        items = [(record.id, record.status.value) for record in matching_runs]
+        search_items = [(record.id, record.id) for record in matching_runs]
+        aliases = {record.id: (record.status.value,) for record in matching_runs}
+        filtered = filter_picker_items(
+            search_items,
+            query,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+            aliases=aliases,
+        )
+        choices: list[dict[str, str]] = []
+        status_by_run_id = {run_id: status for run_id, status in items}
+        for run_id, _label in filtered:
+            status = status_by_run_id.get(run_id, "")
+            choices.append(
+                {"name": f"{run_id} [{status}]"[:100], "value": run_id[:100]}
+            )
+        return choices
+
     async def _handle_command_autocomplete(
         self,
         interaction_id: str,
         interaction_token: str,
         *,
+        channel_id: str,
         command_path: tuple[str, ...],
         options: dict[str, Any],
         focused_name: Optional[str],
@@ -3799,6 +4057,29 @@ class DiscordBotService:
         choices: list[dict[str, str]] = []
         if command_path == ("car", "bind") and focused_name == "workspace":
             choices = self._build_bind_autocomplete_choices(focused_value)
+        elif command_path == ("car", "model") and focused_name == "name":
+            choices = await self._build_model_autocomplete_choices(
+                channel_id=channel_id,
+                query=focused_value,
+            )
+        elif (
+            command_path == ("car", "session", "resume") and focused_name == "thread_id"
+        ):
+            choices = await self._build_session_resume_autocomplete_choices(
+                channel_id=channel_id,
+                query=focused_value,
+            )
+        elif (
+            len(command_path) == 3
+            and command_path[:2] == ("car", "flow")
+            and command_path[2] in FLOW_ACTIONS_WITH_RUN_PICKER
+            and focused_name == "run_id"
+        ):
+            choices = await self._build_flow_run_autocomplete_choices(
+                channel_id=channel_id,
+                action=command_path[2],
+                query=focused_value,
+            )
         await self._respond_autocomplete(
             interaction_id,
             interaction_token,
@@ -4529,15 +4810,53 @@ class DiscordBotService:
 
         raw_thread_id = options.get("thread_id")
         thread_id = raw_thread_id.strip() if isinstance(raw_thread_id, str) else None
+        current_thread_id = orchestrator.get_thread_id(session_key)
 
         if thread_id:
+            thread_items = await self._list_session_threads_for_picker(
+                workspace_root=workspace_root,
+                current_thread_id=current_thread_id,
+            )
+            if thread_items:
+                exact_match = find_exact_picker_item(thread_items, thread_id)
+                if exact_match is not None:
+                    thread_id = exact_match[0]
+                else:
+                    filtered_items = filter_picker_items(
+                        thread_items,
+                        thread_id,
+                        limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                    )
+                    if filtered_items:
+                        header = (
+                            f"Current thread: `{current_thread_id}`\n\n"
+                            if current_thread_id
+                            else ""
+                        )
+                        await self._send_or_respond_ephemeral(
+                            interaction_id=interaction_id,
+                            interaction_token=interaction_token,
+                            deferred=deferred,
+                            text=format_discord_message(
+                                header
+                                + (
+                                    f"Matched {len(filtered_items)} threads for "
+                                    f"`{thread_id}`. Select a thread to resume:"
+                                )
+                            ),
+                        )
+                        await self._send_followup_ephemeral(
+                            interaction_token=interaction_token,
+                            content="Choose one thread from the filtered picker below.",
+                            components=[build_session_threads_picker(filtered_items)],
+                        )
+                        return
             orchestrator.set_thread_id(session_key, thread_id)
             mode_label = "PMA" if pma_enabled else "repo"
             text = format_discord_message(
                 f"Resumed {mode_label} session for `{agent}` with thread `{thread_id}`."
             )
         else:
-            current_thread_id = orchestrator.get_thread_id(session_key)
             thread_items = await self._list_session_threads_for_picker(
                 workspace_root=workspace_root,
                 current_thread_id=current_thread_id,
@@ -4774,12 +5093,7 @@ class DiscordBotService:
             )
             return
 
-        current_agent = binding.get("agent") or self.DEFAULT_AGENT
-        if not isinstance(current_agent, str):
-            current_agent = self.DEFAULT_AGENT
-        current_agent = current_agent.strip().lower()
-        if current_agent not in self.VALID_AGENT_VALUES:
-            current_agent = self.DEFAULT_AGENT
+        current_agent = self._normalize_agent(binding.get("agent"))
         agent_name = options.get("name")
 
         if not agent_name:
@@ -5043,6 +5357,50 @@ class DiscordBotService:
             )
             return
 
+        available_model_items: Optional[list[tuple[str, str]]] = None
+        try:
+            available_model_items = await self._list_model_items_for_binding(
+                binding=binding,
+                agent=current_agent,
+                limit=MODEL_SEARCH_FETCH_LIMIT,
+            )
+        except Exception:
+            available_model_items = None
+
+        if available_model_items:
+            exact_match = find_exact_picker_item(available_model_items, model_name)
+            if exact_match is not None:
+                model_name = exact_match[0]
+            else:
+                filtered_items = filter_picker_items(
+                    available_model_items,
+                    model_name,
+                    limit=max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1),
+                )
+                if filtered_items:
+                    lines = [
+                        f"Current agent: {current_agent}",
+                        f"Current model: {current_model or '(default)'}",
+                        "",
+                        f"Matched {len(filtered_items)} models for `{model_name}`:",
+                        "Select a model override:",
+                        "(default model) clears the override.",
+                    ]
+                    if isinstance(current_effort, str) and current_effort.strip():
+                        lines.insert(2, f"Reasoning effort: {current_effort}")
+                    await self._respond_with_components(
+                        interaction_id,
+                        interaction_token,
+                        format_discord_message("\n".join(lines)),
+                        [
+                            build_model_picker(
+                                filtered_items,
+                                current_model=current_model,
+                            )
+                        ],
+                    )
+                    return
+
         if current_agent == "opencode" and not _is_valid_opencode_model_name(
             model_name
         ):
@@ -5116,14 +5474,7 @@ class DiscordBotService:
             return
 
         binding = await self._store.get_binding(channel_id=channel_id)
-        current_agent_raw = (
-            binding.get("agent") if binding else None
-        ) or self.DEFAULT_AGENT
-        if not isinstance(current_agent_raw, str):
-            current_agent_raw = self.DEFAULT_AGENT
-        current_agent = current_agent_raw.strip().lower()
-        if current_agent not in self.VALID_AGENT_VALUES:
-            current_agent = self.DEFAULT_AGENT
+        current_agent = self._normalize_agent(binding.get("agent") if binding else None)
 
         if current_agent == "codex":
             pending_key = self._pending_interaction_scope_key(
@@ -5439,14 +5790,14 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         update_message: bool = False,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="status",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="status",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -5851,14 +6202,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="restart",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="restart",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -5963,14 +6314,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="recover",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="recover",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6119,14 +6470,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="resume",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="resume",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6244,14 +6595,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="stop",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="stop",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6362,14 +6713,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="archive",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="archive",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6505,6 +6856,16 @@ class DiscordBotService:
                 action="reply",
             )
             return
+        if isinstance(run_id_opt, str) and run_id_opt.strip():
+            run_id_opt = await self._resolve_flow_run_input(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="reply",
+                run_id_opt=run_id_opt,
+            )
+            if run_id_opt is None:
+                return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
