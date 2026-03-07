@@ -18,6 +18,13 @@ from ....browser import (
     supervised_server,
 )
 
+_DEMO_SCRIPT_HELP = (
+    "Path to YAML/JSON demo manifest. Format: version: 1 and steps: [..]. "
+    "Supported actions: goto, click, fill, press, wait_for_url, wait_for_text, "
+    "wait_ms, screenshot, snapshot_a11y. Locator priority: role+name, label, "
+    "text, test_id, then selector fallback."
+)
+
 
 def _require_render_feature(require_optional_feature: Callable[..., None]) -> None:
     require_optional_feature(
@@ -55,6 +62,10 @@ def _runtime_error_category(error_type: Optional[str]) -> str:
         return "navigation_failure"
     if error_type == "BrowserArtifactError":
         return "artifact_write_failure"
+    if error_type == "ManifestValidationError":
+        return "manifest_validation"
+    if error_type == "DemoStepError":
+        return "step_failure"
     return "capture_failure"
 
 
@@ -225,7 +236,7 @@ def register_render_commands(
         script: Path = typer.Option(
             ...,
             "--script",
-            help="Path to a YAML/JSON action manifest for the scripted demo.",
+            help=_DEMO_SCRIPT_HELP,
         ),
         url: Optional[str] = typer.Option(
             None, "--url", help="Run demo against an already-running URL."
@@ -287,7 +298,7 @@ def register_render_commands(
             None, "--hub", "--hub-path", help="Hub root or config path."
         ),
     ) -> None:
-        """Run a scripted browser demo capture (stub)."""
+        """Run a scripted browser demo manifest and capture evidence artifacts."""
         _require_render_feature(require_optional_feature)
         ctx = require_repo_config(repo, hub)
         repo_root = _repo_root_from_context(ctx)
@@ -301,6 +312,10 @@ def register_render_commands(
             raise_exit(
                 "Invalid --trace value. Expected one of: off, on, retain-on-failure."
             )
+        if not script.exists():
+            raise_exit(f"Demo script not found: {script}")
+        if script.is_dir():
+            raise_exit(f"Demo script must be a file, got directory: {script}")
 
         output_dir, output_name = _resolve_out_dir_and_name(
             repo_root=repo_root,
@@ -315,14 +330,16 @@ def register_render_commands(
                 cwd=cwd,
                 env=env,
                 ready_timeout_seconds=ready_timeout_seconds,
-            ) as (base_url, ready_source):
-                typer.echo(
-                    "render demo stub: "
-                    f"base_url={base_url} ready_source={ready_source} "
-                    f"target_path={target.path} script={script} "
-                    f"viewport={parsed_viewport.width}x{parsed_viewport.height} "
-                    f"trace={normalized_trace} record_video={record_video} "
-                    f"out_dir={output_dir} output={output_name}"
+            ) as (base_url, _ready_source):
+                result = BrowserRuntime().capture_demo(
+                    base_url=base_url,
+                    path=target.path,
+                    script_path=script,
+                    out_dir=output_dir,
+                    viewport=parsed_viewport,
+                    record_video=record_video,
+                    trace_mode=normalized_trace,
+                    output_name=output_name,
                 )
         except ServeModeError as exc:
             raise_exit(
@@ -333,6 +350,23 @@ def register_render_commands(
             raise_exit(str(exc), cause=exc)
         except KeyboardInterrupt:
             raise_exit("Render demo interrupted; serve process was terminated.")
+
+        if not result.ok:
+            category = _runtime_error_category(result.error_type)
+            raise_exit(
+                f"Render demo failed ({category}): "
+                f"{result.error_message or 'Unknown demo capture error.'}"
+            )
+
+        summary = result.artifacts.get("summary")
+        if summary is None:
+            raise_exit("Render demo did not produce a summary artifact.")
+
+        typer.echo(str(summary))
+        for artifact_key in sorted(result.artifacts):
+            if artifact_key == "summary":
+                continue
+            typer.echo(str(result.artifacts[artifact_key]))
 
     @app.command("observe")
     def render_observe(

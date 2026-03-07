@@ -160,11 +160,27 @@ def test_render_demo_serve_mode_uses_shared_cleanup(
 ) -> None:
     _patch_playwright_present(monkeypatch)
 
+    summary_path = tmp_path / "demo-summary.json"
+    summary_path.write_text("{}", encoding="utf-8")
+
+    def fake_capture_demo(self, **_kwargs):  # type: ignore[no-untyped-def]
+        return BrowserRunResult(
+            ok=True,
+            mode="demo",
+            target_url="http://127.0.0.1:1234",
+            artifacts={"summary": summary_path},
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.render.BrowserRuntime.capture_demo",
+        fake_capture_demo,
+    )
+
     port = _free_port()
     pid_file = tmp_path / "pid.txt"
     script = _write_server_script(tmp_path)
     demo_script = tmp_path / "demo.yaml"
-    demo_script.write_text("steps: []\n", encoding="utf-8")
+    demo_script.write_text("version: 1\nsteps: []\n", encoding="utf-8")
     cmd = " ".join(
         [
             shlex.quote(sys.executable),
@@ -193,6 +209,6 @@ def test_render_demo_serve_mode_uses_shared_cleanup(
     )
 
     assert result.exit_code == 0
-    assert "render demo stub:" in result.output
+    assert str(summary_path) in result.output
     pid = int(pid_file.read_text(encoding="utf-8").strip())
     _wait_process_gone(pid)

@@ -1,5 +1,13 @@
 """Typed browser render models and helpers."""
 
+from .actions import (
+    DemoExecutionResult,
+    DemoManifest,
+    DemoStep,
+    DemoStepReport,
+    execute_demo_manifest,
+    load_demo_manifest,
+)
 from .artifacts import (
     ArtifactWriteResult,
     deterministic_artifact_name,
@@ -23,6 +31,8 @@ from .runtime import (
     BrowserNavigationError,
     BrowserRunResult,
     BrowserRuntime,
+    DemoStepError,
+    ManifestValidationError,
     build_navigation_url,
 )
 from .server import (
@@ -39,6 +49,12 @@ from .server import (
 
 __all__ = [
     "ArtifactWriteResult",
+    "DemoExecutionResult",
+    "DemoManifest",
+    "DemoStep",
+    "DemoStepError",
+    "DemoStepReport",
+    "ManifestValidationError",
     "BrowserRunResult",
     "BrowserServeConfig",
     "BrowserServeSession",
@@ -57,6 +73,8 @@ __all__ = [
     "Viewport",
     "build_navigation_url",
     "deterministic_artifact_name",
+    "execute_demo_manifest",
+    "load_demo_manifest",
     "parse_viewport",
     "reserve_artifact_path",
     "resolve_out_dir",

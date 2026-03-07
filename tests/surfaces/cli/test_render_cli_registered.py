@@ -19,3 +19,11 @@ def test_render_subcommands_are_registered() -> None:
     assert "screenshot" in result.stdout
     assert "demo" in result.stdout
     assert "observe" in result.stdout
+
+
+def test_render_demo_help_documents_manifest_steps() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["render", "demo", "--help"])
+    assert result.exit_code == 0
+    assert "version: 1" in result.stdout
+    assert "snapshot_a11y" in result.stdout
