@@ -28,6 +28,7 @@ from .commands.hub_runs import (
 from .commands.hub_tickets import register_hub_tickets_commands
 from .commands.inbox import register_inbox_commands
 from .commands.protocol import register_protocol_commands
+from .commands.render import register_render_commands
 from .commands.repos import register_repos_commands
 from .commands.root import _resolve_repo_api_path, register_root_commands  # noqa: F401
 from .commands.telegram import register_telegram_commands
@@ -112,6 +113,10 @@ templates_app = typer.Typer(
 )
 repos_app = typer.Typer(
     add_completion=False, help="Manage trusted/untrusted template repositories."
+)
+render_app = typer.Typer(
+    add_completion=False,
+    help="Render markdown and diagrams into static export artifacts.",
 )
 cleanup_app = typer.Typer(
     add_completion=False, help="Cleanup managed processes and report artifacts."
@@ -222,6 +227,7 @@ app.add_typer(
     help="Alias of `templates` (canonical form: `car templates ...`).",
 )
 app.add_typer(cleanup_app, name="cleanup")
+app.add_typer(render_app, name="render")
 app.add_typer(chat_app, name="chat")
 register_templates_commands(
     templates_app,
@@ -253,6 +259,10 @@ register_inbox_commands(
 register_cleanup_commands(
     cleanup_app,
     require_repo_config=_require_repo_config,
+)
+register_render_commands(
+    render_app,
+    raise_exit=_raise_exit,
 )
 register_chat_commands(
     chat_app,

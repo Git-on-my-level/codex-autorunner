@@ -72,6 +72,19 @@ If you're working from a fresh clone of this repo, you can run the repo-local CL
 
 The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will bootstrap a local `.venv` and install CAR.
 
+### Markdown + Mermaid export (MVP)
+
+Render Markdown with Mermaid fences into static artifacts:
+
+```bash
+./car render markdown docs/demo.md \
+  --out-dir .codex-autorunner/filebox/outbox \
+  --diagram-format png --diagram-format pdf \
+  --doc-format html
+```
+
+See the scoped design note: [docs/ops/markdown-mermaid-exports.md](docs/ops/markdown-mermaid-exports.md).
+
 ## Architecture docs
 - [Codebase constitution](docs/car_constitution/10_CODEBASE_CONSTITUTION.md)
 - [Architecture map](docs/car_constitution/20_ARCHITECTURE_MAP.md)
