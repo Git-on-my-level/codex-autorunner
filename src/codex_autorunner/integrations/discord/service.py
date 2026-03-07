@@ -1592,7 +1592,7 @@ class DiscordBotService:
         if not isinstance(current_ticket, str) or not current_ticket.strip():
             return False
         ticket_path = (workspace_root / current_ticket).resolve()
-        if not ticket_path.is_file() or not is_within(ticket_path, workspace_root):
+        if not ticket_path.is_file() or not is_within(workspace_root, ticket_path):
             return False
         ticket_doc, errors = read_ticket(ticket_path)
         if errors or ticket_doc is None:

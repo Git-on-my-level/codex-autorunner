@@ -3994,6 +3994,31 @@ async def test_message_create_skips_inbox_reply_for_user_ticket_pause(
         await store.close()
 
 
+def test_is_user_ticket_pause_detects_in_workspace_user_ticket(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ticket_path = workspace / "TICKET-490.md"
+    ticket_path.write_text(
+        "---\nagent: user\ndone: false\n---\n\nPlease do thing.\n",
+        encoding="utf-8",
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+    )
+    paused = SimpleNamespace(
+        state={
+            "ticket_engine": {
+                "reason_code": "user_pause",
+                "current_ticket": ticket_path.name,
+            }
+        }
+    )
+
+    assert service._is_user_ticket_pause(workspace, paused) is True
+
+
 @pytest.mark.anyio
 async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
     tmp_path: Path,
