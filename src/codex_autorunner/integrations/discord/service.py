@@ -2051,6 +2051,7 @@ class DiscordBotService:
         known_session = orchestrator.get_thread_id(session_key)
         final_message = ""
         assistant_stream_fallback = ""
+        completed_seen = False
         token_usage: Optional[dict[str, Any]] = None
         error_message = None
         session_from_events = known_session
@@ -2087,11 +2088,15 @@ class DiscordBotService:
                 elif isinstance(run_event, OutputDelta):
                     if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
                         continue
+                    if (
+                        run_event.delta_type == "assistant_stream"
+                        and isinstance(run_event.content, str)
+                        and run_event.content
+                    ):
+                        assistant_stream_fallback = _merge_assistant_stream(
+                            assistant_stream_fallback, run_event.content
+                        )
                     if isinstance(run_event.content, str) and run_event.content.strip():
-                        if run_event.delta_type == "assistant_stream":
-                            assistant_stream_fallback = _merge_assistant_stream(
-                                assistant_stream_fallback, run_event.content
-                            )
                         tracker.note_output(run_event.content)
                         await _edit_progress()
                 elif isinstance(run_event, ToolCall):
@@ -2124,12 +2129,13 @@ class DiscordBotService:
                         )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
+                    completed_seen = True
                     tracker.clear_transient_action()
                     tracker.set_label("done")
                     await _edit_progress(force=True, remove_components=True)
                 elif isinstance(run_event, Failed):
                     failed_message = run_event.error_message or "Turn failed"
-                    if final_message.strip() or assistant_stream_fallback.strip():
+                    if completed_seen:
                         log_event(
                             self._logger,
                             logging.WARNING,

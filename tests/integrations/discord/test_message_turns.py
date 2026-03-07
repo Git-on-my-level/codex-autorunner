@@ -2218,6 +2218,68 @@ async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fal
 
 
 @pytest.mark.anyio
+async def test_message_create_streaming_turn_failure_before_completion_still_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="partial output before failure",
+                delta_type="assistant_stream",
+            ),
+            Failed(
+                timestamp="2026-01-01T00:00:02Z",
+                error_message="hard failure before completion",
+            ),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert any(
+            "Turn failed:" in msg["payload"].get("content", "")
+            and "hard failure before completion" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "partial output before failure" in msg["payload"].get("content", "")
+            and "Turn failed:" not in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sends_chunks(
     tmp_path: Path,
 ) -> None:
@@ -2522,6 +2584,75 @@ async def test_message_create_streaming_turn_fallback_preserves_multichunk_white
             OutputDelta(
                 timestamp="2026-01-01T00:00:03Z",
                 content="\nnext line",
+                delta_type="assistant_stream",
+            ),
+            Completed(timestamp="2026-01-01T00:00:04Z", final_message=""),
+        ]
+    )
+
+    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        return orchestrator
+
+    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
+        final_content = ""
+        for message in final_candidates:
+            content = str(message.get("payload", {}).get("content", ""))
+            if expected_text in content:
+                final_content = content
+                break
+        assert final_content
+        assert expected_text in final_content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_fallback_preserves_whitespace_only_chunks(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    expected_text = "line 1\n\nline 2"
+    orchestrator = _StreamingFakeOrchestrator(
+        [
+            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="line 1",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:02Z",
+                content="\n\n",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:03Z",
+                content="line 2",
                 delta_type="assistant_stream",
             ),
             Completed(timestamp="2026-01-01T00:00:04Z", final_message=""),
