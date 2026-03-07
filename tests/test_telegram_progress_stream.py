@@ -121,3 +121,26 @@ def test_render_progress_text_keeps_output_block_when_message_budget_is_tight() 
 
     assert "output:" in rendered
     assert "tail" in rendered
+
+
+def test_render_progress_text_prefers_subagent_thinking_content_in_fallback() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=10_000,
+    )
+    tracker.add_action(
+        "thinking",
+        "subagent summary " + ("x" * 600),
+        "update",
+        item_id="subagent:1",
+        subagent_label="@subagent",
+    )
+
+    rendered = render_progress_text(tracker, max_length=90, now=1.0)
+
+    assert "subagent summary" in rendered
+    assert not rendered.endswith("\n---")

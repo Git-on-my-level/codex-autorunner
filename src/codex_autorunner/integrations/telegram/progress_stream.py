@@ -255,7 +255,7 @@ def render_progress_text(
     if len(message) <= max_length:
         return message
 
-    def _truncate_last_line(line: str, limit: int) -> str:
+    def _truncate_line_for_fallback(line: str, limit: int) -> str:
         if line.startswith(f"{STATUS_ICONS['update']} output: "):
             prefix = f"{STATUS_ICONS['update']} output: "
             content = line[len(prefix) :]
@@ -263,6 +263,14 @@ def render_progress_text(
                 return _truncate_text(line, limit)
             return f"{prefix}{_truncate_tail(content, limit - len(prefix))}"
         return _truncate_text(line, limit)
+
+    def _select_fallback_line(lines_with_header: list[str]) -> str:
+        for line in reversed(lines_with_header[1:]):
+            stripped = line.strip()
+            if not stripped or stripped == "---":
+                continue
+            return line
+        return lines_with_header[-1] if len(lines_with_header) > 1 else ""
 
     while len(blocks) > 1 and len("\n".join(_render_lines(blocks))) > max_length:
         blocks.pop(0)
@@ -274,5 +282,6 @@ def render_progress_text(
         header = lines[0]
         remaining = max_length - len(header) - 1
         if remaining > 0:
-            return f"{header}\n{_truncate_last_line(lines[-1], remaining)}"
+            focus_line = _select_fallback_line(lines)
+            return f"{header}\n{_truncate_line_for_fallback(focus_line, remaining)}"
     return _truncate_text(message, max_length)
