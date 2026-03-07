@@ -5,6 +5,7 @@ from typing import Callable, Optional
 
 import typer
 
+from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.managed_processes import reap_managed_processes
 from ....core.report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
@@ -12,6 +13,18 @@ from ....core.report_retention import (
     prune_report_directory,
 )
 from ....core.runtime import RuntimeContext
+
+
+def _build_force_attestation(
+    force_attestation: Optional[str], *, target_scope: str
+) -> Optional[dict[str, str]]:
+    if force_attestation is None:
+        return None
+    return {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": force_attestation,
+        "target_scope": target_scope,
+    }
 
 
 def register_cleanup_commands(
@@ -31,10 +44,26 @@ def register_cleanup_commands(
             "--force",
             help="Terminate managed processes even when owner is still running",
         ),
+        force_attestation: Optional[str] = typer.Option(
+            None,
+            "--force-attestation",
+            help="Attestation text required with --force for dangerous actions.",
+        ),
     ) -> None:
         """Reap stale CAR-managed subprocesses and clean up registry records."""
         engine = require_repo_config(repo, hub)
-        summary = reap_managed_processes(engine.repo_root, dry_run=dry_run, force=force)
+        reap_kwargs = {
+            "dry_run": dry_run,
+            "force": force,
+        }
+        force_attestation_payload: Optional[dict[str, str]] = None
+        if force:
+            force_attestation_payload = _build_force_attestation(
+                force_attestation,
+                target_scope=f"cleanup.processes:{engine.repo_root}",
+            )
+            reap_kwargs["force_attestation"] = force_attestation_payload
+        summary = reap_managed_processes(engine.repo_root, **reap_kwargs)
         prefix = "Dry run: " if dry_run else ""
         typer.echo(
             f"{prefix}killed {summary.killed}, signaled {summary.signaled}, removed {summary.removed} records, skipped {summary.skipped}"

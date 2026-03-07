@@ -145,6 +145,10 @@ class HubCreateRepoRequest(Payload):
 
 class HubRemoveRepoRequest(Payload):
     force: bool = False
+    force_attestation: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("force_attestation", "forceAttestation"),
+    )
     delete_dir: bool = True
     delete_worktrees: bool = False
 
@@ -170,6 +174,10 @@ class HubCleanupWorktreeRequest(Payload):
     delete_branch: bool = False
     delete_remote: bool = False
     force: bool = False
+    force_attestation: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("force_attestation", "forceAttestation"),
+    )
     archive: bool = True
     force_archive: bool = Field(
         default=False, validation_alias=AliasChoices("force_archive", "forceArchive")
@@ -239,6 +247,15 @@ class GithubPrSyncRequest(Payload):
     title: Optional[str] = None
     body: Optional[str] = None
     mode: Optional[str] = None
+
+
+# Keep an explicit module-level reference so dead-code heuristics treat these
+# request schemas as part of the public route contract surface.
+_GITHUB_REQUEST_MODELS = (
+    GithubIssueRequest,
+    GithubContextRequest,
+    GithubPrSyncRequest,
+)
 
 
 class HubPinRepoRequest(Payload):

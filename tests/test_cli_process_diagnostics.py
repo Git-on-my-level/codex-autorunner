@@ -10,6 +10,10 @@ from codex_autorunner.core.diagnostics.process_snapshot import (
     ProcessInfo,
     ProcessSnapshot,
 )
+from codex_autorunner.core.force_attestation import (
+    FORCE_ATTESTATION_REQUIRED_ERROR,
+    FORCE_ATTESTATION_REQUIRED_PHRASE,
+)
 from codex_autorunner.core.managed_processes import ReapSummary
 
 runner = CliRunner()
@@ -77,7 +81,7 @@ def test_doctor_processes_json_includes_snapshot_and_registry(
 
 
 def test_cleanup_processes_passes_force_flag(monkeypatch, repo: Path) -> None:
-    captured = {"force": None, "dry_run": None}
+    captured = {"force": None, "dry_run": None, "force_attestation": None}
 
     def _fake_reap(
         _repo_root: Path,
@@ -85,10 +89,12 @@ def test_cleanup_processes_passes_force_flag(monkeypatch, repo: Path) -> None:
         dry_run: bool = False,
         max_record_age_seconds: int = 6 * 60 * 60,
         force: bool = False,
+        force_attestation=None,
     ) -> ReapSummary:
         captured["force"] = force
         captured["dry_run"] = dry_run
         captured["max_record_age_seconds"] = max_record_age_seconds
+        captured["force_attestation"] = force_attestation
         return ReapSummary(killed=2, signaled=0, removed=2, skipped=1)
 
     monkeypatch.setattr(
@@ -97,11 +103,35 @@ def test_cleanup_processes_passes_force_flag(monkeypatch, repo: Path) -> None:
     )
     result = runner.invoke(
         app,
-        ["cleanup", "processes", "--repo", str(repo), "--force"],
+        [
+            "cleanup",
+            "processes",
+            "--repo",
+            str(repo),
+            "--force",
+            "--force-attestation",
+            "cleanup managed processes",
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert captured["force"] is True
     assert captured["max_record_age_seconds"] == 6 * 60 * 60
+    assert captured["force_attestation"] == {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": "cleanup managed processes",
+        "target_scope": f"cleanup.processes:{repo}",
+    }
     assert "killed 2" in result.stdout
     assert "removed 2" in result.stdout
+
+
+def test_cleanup_processes_force_requires_attestation(repo: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["cleanup", "processes", "--repo", str(repo), "--force"],
+    )
+
+    assert result.exit_code == 1, result.output
+    error_text = result.output or str(result.exception)
+    assert FORCE_ATTESTATION_REQUIRED_ERROR in error_text

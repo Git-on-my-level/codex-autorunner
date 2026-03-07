@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from ...tickets.outbox import resolve_outbox_paths
 from ..config import load_repo_config
+from ..force_attestation import enforce_force_attestation
 from .models import FlowRunStatus
 from .store import FlowStore
+
+logger = logging.getLogger("codex_autorunner.flows.archive_helpers")
 
 
 def archive_flow_run_artifacts(
@@ -16,7 +20,14 @@ def archive_flow_run_artifacts(
     run_id: str,
     force: bool,
     delete_run: bool,
+    force_attestation: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
+    enforce_force_attestation(
+        force=force,
+        force_attestation=force_attestation,
+        logger=logger,
+        action="archive_flow_run_artifacts",
+    )
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     if not db_path.exists():

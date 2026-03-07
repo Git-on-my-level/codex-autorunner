@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
@@ -32,6 +32,7 @@ from .destinations import (
     default_local_destination,
     resolve_effective_repo_destination,
 )
+from .force_attestation import enforce_force_attestation
 from .git_utils import (
     GitError,
     git_available,
@@ -1240,6 +1241,7 @@ class HubSupervisor:
         force_archive: bool = False,
         archive_note: Optional[str] = None,
         force: bool = False,
+        force_attestation: Optional[Mapping[str, object]] = None,
     ) -> Dict[str, object]:
         if self.hub_config.pma.cleanup_require_archive and not archive:
             raise ValueError(
@@ -1247,6 +1249,12 @@ class HubSupervisor:
                 "(pma.cleanup_require_archive is enabled). "
                 "Use archive=True or omit the --no-archive flag."
             )
+        enforce_force_attestation(
+            force=force or force_archive,
+            force_attestation=force_attestation,
+            logger=logger,
+            action="hub.cleanup_worktree",
+        )
         self._invalidate_list_cache()
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         entry = manifest.get(worktree_repo_id)
@@ -1448,15 +1456,26 @@ class HubSupervisor:
         force: bool = False,
         delete_dir: bool = True,
         delete_worktrees: bool = False,
+        force_attestation: Optional[Mapping[str, object]] = None,
     ) -> None:
         self._invalidate_list_cache()
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         repo = manifest.get(repo_id)
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
+        enforce_force_attestation(
+            force=force,
+            force_attestation=force_attestation,
+            logger=logger,
+            action="hub.remove_repo",
+        )
 
         if repo.kind == "worktree":
-            self.cleanup_worktree(worktree_repo_id=repo_id, force=force)
+            self.cleanup_worktree(
+                worktree_repo_id=repo_id,
+                force=force,
+                force_attestation=force_attestation,
+            )
             return
 
         worktrees = [
@@ -1469,7 +1488,11 @@ class HubSupervisor:
             raise ValueError(f"Repo {repo_id} has worktrees: {ids}")
         if worktrees and delete_worktrees:
             for worktree in worktrees:
-                self.cleanup_worktree(worktree_repo_id=worktree.id, force=force)
+                self.cleanup_worktree(
+                    worktree_repo_id=worktree.id,
+                    force=force,
+                    force_attestation=force_attestation,
+                )
             manifest = load_manifest(
                 self.hub_config.manifest_path, self.hub_config.root
             )

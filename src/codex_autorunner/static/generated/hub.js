@@ -1848,17 +1848,24 @@ async function removeRepoWithChecks(repoId) {
     if (!ok)
         return;
     const needsForce = dirty || ahead > 0;
+    const requestBody = {
+        force: needsForce,
+        delete_dir: true,
+        delete_worktrees: worktrees.length > 0,
+    };
     if (needsForce) {
-        const forceOk = await confirmModal("This repo has uncommitted or unpushed changes. Remove anyway?", { confirmText: "Remove anyway", danger: true });
-        if (!forceOk)
+        const requiredAttestation = `REMOVE ${repoId}`;
+        const forceAttestation = await inputModal(`This repo has uncommitted or unpushed changes.\n\nType this confirmation text to force removal:\n${requiredAttestation}`, { placeholder: requiredAttestation, confirmText: "Remove anyway" });
+        if (!forceAttestation)
             return;
+        if (forceAttestation !== requiredAttestation) {
+            flash(`Confirmation text must exactly match: ${requiredAttestation}`, "error");
+            return;
+        }
+        requestBody.force_attestation = forceAttestation;
     }
     await startHubJob(`/hub/jobs/repos/${repoId}/remove`, {
-        body: {
-            force: needsForce,
-            delete_dir: true,
-            delete_worktrees: worktrees.length > 0,
-        },
+        body: requestBody,
         startedMessage: "Repo removal queued",
     });
     flash(`Removed repo: ${repoId}`, "success");

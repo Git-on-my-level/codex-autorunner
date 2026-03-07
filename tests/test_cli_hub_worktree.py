@@ -7,6 +7,10 @@ from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
+from codex_autorunner.core.force_attestation import (
+    FORCE_ATTESTATION_REQUIRED_ERROR,
+    FORCE_ATTESTATION_REQUIRED_PHRASE,
+)
 from codex_autorunner.core.hub import (
     HubSupervisor,
     LockStatus,
@@ -278,9 +282,11 @@ def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> 
         force_archive=False,
         archive_note=None,
         force=False,
+        force_attestation=None,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["force"] = force
+        calls["force_attestation"] = force_attestation
 
     monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
 
@@ -295,11 +301,40 @@ def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> 
             "--path",
             str(hub_root),
             "--force",
+            "--force-attestation",
+            "cleanup active worktree",
         ],
     )
     assert result.exit_code == 0
     assert calls["worktree_repo_id"] == "wt-1"
     assert calls["force"] is True
+    assert calls["force_attestation"] == {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": "cleanup active worktree",
+        "target_scope": "hub.worktree.cleanup:wt-1",
+    }
+
+
+def test_cli_hub_worktree_cleanup_force_requires_attestation(tmp_path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "worktree",
+            "cleanup",
+            "wt-1",
+            "--path",
+            str(hub_root),
+            "--force",
+        ],
+    )
+    assert result.exit_code == 1
+    assert FORCE_ATTESTATION_REQUIRED_ERROR in result.output
 
 
 def test_cli_hub_worktree_cleanup_prints_docker_cleanup_status(
@@ -378,6 +413,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
         force_archive=False,
         archive_note=None,
         force=False,
+        force_attestation=None,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["delete_branch"] = delete_branch
@@ -386,6 +422,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
         calls["force_archive"] = force_archive
         calls["archive_note"] = archive_note
         calls["force"] = force
+        calls["force_attestation"] = force_attestation
         calls["has_backend_orchestrator_builder"] = (
             self._backend_orchestrator_builder is not None
         )
@@ -406,6 +443,8 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
             "--delete-remote",
             "--force",
             "--force-archive",
+            "--force-attestation",
+            "archive forced worktree",
             "--archive-note",
             "save state",
         ],
@@ -418,6 +457,11 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
     assert calls["force_archive"] is True
     assert calls["archive_note"] == "save state"
     assert calls["force"] is True
+    assert calls["force_attestation"] == {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": "archive forced worktree",
+        "target_scope": "hub.worktree.archive:wt-1",
+    }
     assert calls["has_backend_orchestrator_builder"] is True
 
 
