@@ -435,6 +435,7 @@ class TelegramNotificationHandlers:
             tracker.set_label("failed")
         else:
             tracker.set_label("done")
+        tracker.clear_transient_action()
         tracker.finalized = True
         await self._emit_progress_edit(turn_key, force=True)
         self._clear_turn_progress(turn_key)

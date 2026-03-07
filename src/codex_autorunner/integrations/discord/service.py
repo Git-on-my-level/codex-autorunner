@@ -1984,16 +1984,19 @@ class DiscordBotService:
                         )
                 elif isinstance(run_event, Completed):
                     final_message = run_event.final_message or final_message
+                    tracker.clear_transient_action()
                     tracker.set_label("done")
                     await _edit_progress(force=True, remove_components=True)
                 elif isinstance(run_event, Failed):
                     error_message = run_event.error_message or "Turn failed"
                     tracker.note_error(error_message)
+                    tracker.clear_transient_action()
                     tracker.set_label("failed")
                     await _edit_progress(force=True, remove_components=True)
         except Exception as exc:
             error_message = str(exc) or "Turn failed"
             tracker.note_error(error_message)
+            tracker.clear_transient_action()
             tracker.set_label("failed")
             await _edit_progress(force=True, remove_components=True)
             raise

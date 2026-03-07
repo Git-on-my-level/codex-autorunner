@@ -4,7 +4,7 @@ from codex_autorunner.integrations.telegram.progress_stream import (
 )
 
 
-def test_render_progress_text_subagent_thinking_block() -> None:
+def test_render_progress_text_shows_only_latest_transient_thinking() -> None:
     tracker = TurnProgressTracker(
         started_at=0.0,
         agent="opencode",
@@ -23,8 +23,8 @@ def test_render_progress_text_subagent_thinking_block() -> None:
     tracker.note_thinking("Parent thinking")
     rendered = render_progress_text(tracker, max_length=2000, now=0.0)
     assert "🧠 Parent thinking" in rendered
-    assert "🤖 @subagent thinking" in rendered
-    assert "Subagent planning" in rendered
+    assert "🤖 @subagent thinking" not in rendered
+    assert "Subagent planning" not in rendered
 
 
 def test_note_output_accumulates_across_updates() -> None:
@@ -45,7 +45,7 @@ def test_note_output_accumulates_across_updates() -> None:
     assert len([a for a in tracker.actions if a.label == "output"]) == 1
 
 
-def test_note_thinking_keeps_distinct_snapshots() -> None:
+def test_note_thinking_is_transient_and_cleared_by_output() -> None:
     tracker = TurnProgressTracker(
         started_at=0.0,
         agent="codex",
@@ -58,7 +58,29 @@ def test_note_thinking_keeps_distinct_snapshots() -> None:
     tracker.note_thinking("Designing settle window for finalization")
 
     thinking_actions = [a for a in tracker.actions if a.label == "thinking"]
-    assert len(thinking_actions) == 2
+    assert len(thinking_actions) == 0
     rendered = render_progress_text(tracker, max_length=2000, now=2.0)
-    assert "Checking out-of-order completion handling" in rendered
     assert "Designing settle window for finalization" in rendered
+    tracker.note_output("Final response text")
+    rendered_after_output = render_progress_text(tracker, max_length=2000, now=3.0)
+    assert "Designing settle window for finalization" not in rendered_after_output
+    assert "output: Final response text" in rendered_after_output
+
+
+def test_note_tool_streams_without_persisting_history() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=200,
+    )
+    tracker.note_tool("read_file")
+    tracker.note_tool("run_tests")
+
+    tool_actions = [a for a in tracker.actions if a.label == "tool"]
+    assert len(tool_actions) == 0
+    rendered = render_progress_text(tracker, max_length=2000, now=2.0)
+    assert "tool: run_tests" in rendered
+    assert "tool: read_file" not in rendered
