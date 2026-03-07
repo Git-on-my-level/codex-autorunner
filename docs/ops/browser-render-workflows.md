@@ -47,7 +47,9 @@ Serve mode supports:
 - `--project-root PATH`
 - `--project-context/--no-project-context` (defaults to enabled)
 
-CAR always tears down the spawned serve process tree on success, timeout, failure, and interruption.
+By default, CAR tears down the spawned serve process tree on success, timeout, failure, and interruption.
+`car render demo --keep-session` is the explicit exception: it keeps the serve process alive and writes
+session metadata under `.codex-autorunner/render_sessions/`.
 
 When project context is enabled, CAR resolves project root from `--project-root` or repo root, adds
 project bins to `PATH` (`node_modules/.bin`, `.venv/bin` or `.venv/Scripts`, `.codex-autorunner/bin`, `bin`),
@@ -151,6 +153,66 @@ car render demo \
 
 `car render demo` defaults to `--media-only`, which keeps outbox output focused on screenshots/video for end users.
 Use `--full-artifacts` when you also want structured JSON/HTML/trace outputs.
+
+## Demo Preflight
+
+Use demo preflight to validate a manifest against a live target before capture:
+
+- `--preflight`: run preflight, then capture only if preflight passes.
+- `--preflight-only`: run preflight and skip `capture_demo`.
+- `--preflight-report PATH`: write a JSON diagnostics report with per-step status/details.
+
+Example (gate capture on preflight):
+
+```bash
+car render demo \
+  --url http://127.0.0.1:3000 \
+  --script tests/fixtures/browser_demo_manifest.yaml \
+  --preflight \
+  --preflight-report .codex-autorunner/filebox/outbox/demo-preflight.json
+```
+
+Example (preflight-only smoke check):
+
+```bash
+car render demo \
+  --url http://127.0.0.1:3000 \
+  --script tests/fixtures/browser_demo_manifest.yaml \
+  --preflight-only
+```
+
+Preflight output includes actionable per-step diagnostics in stdout and report JSON, including failed step index/action/detail.
+
+## Attachable Demo Sessions
+
+You can keep a serve-mode demo session alive and later attach to it:
+
+- `--session-id TEXT`: required identifier for keep/attach.
+- `--keep-session/--no-keep-session`: serve mode only, default `--no-keep-session`.
+- `--attach-session`: URL mode only, reuses an existing kept session instead of starting `--serve-cmd`.
+
+Start + keep a serve session:
+
+```bash
+car render demo \
+  --serve-cmd "python tests/fixtures/browser_fixture_app.py --port 4173 --pid-file /tmp/browser-fixture.pid" \
+  --ready-url http://127.0.0.1:4173/health \
+  --script tests/fixtures/browser_demo_manifest.yaml \
+  --session-id fixture-4173 \
+  --keep-session
+```
+
+Attach to the kept session later:
+
+```bash
+car render demo \
+  --url http://127.0.0.1:4173 \
+  --script tests/fixtures/browser_demo_manifest.yaml \
+  --session-id fixture-4173 \
+  --attach-session
+```
+
+If session metadata is missing or stale, CAR exits with explicit `session_missing` / `session_stale` diagnostics.
 
 ## Self-Describe Signals
 

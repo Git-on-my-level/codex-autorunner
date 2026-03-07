@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
 from contextlib import contextmanager, nullcontext
@@ -10,11 +11,18 @@ import typer
 
 from ....browser import (
     DEFAULT_VIEWPORT_TEXT,
+    BrowserPreflightResult,
     BrowserRuntime,
     BrowserServeConfig,
+    BrowserServerSupervisor,
+    MissingRenderSessionError,
+    RenderSessionError,
     ServeModeError,
+    StaleRenderSessionError,
+    load_render_session,
     parse_env_overrides,
     parse_viewport,
+    persist_render_session,
     resolve_out_dir,
     select_render_target,
     supervised_server,
@@ -144,6 +152,89 @@ def _runtime_error_category(error_type: Optional[str]) -> str:
     return "capture_failure"
 
 
+def _preflight_error_category(error_type: Optional[str]) -> str:
+    if error_type == "ManifestValidationError":
+        return "manifest_validation"
+    if error_type == "BrowserNavigationError":
+        return "navigation_failure"
+    if error_type == "DemoStepError":
+        return "step_validation_failure"
+    return "preflight_failure"
+
+
+def _write_preflight_report(
+    *,
+    report_path: Path,
+    result: BrowserPreflightResult,
+) -> None:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "ok": result.ok,
+        "mode": result.mode,
+        "target_url": result.target_url,
+        "error_type": result.error_type,
+        "error_message": result.error_message,
+        "steps": [
+            {
+                "index": step.index,
+                "action": step.action,
+                "ok": step.ok,
+                "detail": step.detail,
+            }
+            for step in result.diagnostics.steps
+        ],
+    }
+    report_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _emit_preflight_output(
+    *,
+    result: BrowserPreflightResult,
+    report_path: Optional[Path],
+) -> None:
+    status = "passed" if result.ok else "failed"
+    typer.echo(f"Demo preflight {status}.")
+    if report_path is not None:
+        typer.echo(f"Preflight report: {report_path}")
+    for step in result.diagnostics.steps:
+        step_status = "ok" if step.ok else "fail"
+        typer.echo(f"[{step_status}] step {step.index} {step.action}: {step.detail}")
+    if result.diagnostics.error_message:
+        typer.echo(result.diagnostics.error_message)
+
+
+def _validate_demo_session_flags(
+    *,
+    target: Any,
+    session_id: Optional[str],
+    keep_session: bool,
+    attach_session: bool,
+    raise_exit: Callable[..., None],
+) -> Optional[str]:
+    normalized_session_id = (session_id or "").strip() or None
+    if keep_session and attach_session:
+        raise_exit("Use either --keep-session or --attach-session, not both.")
+    if keep_session and target.mode != "serve":
+        raise_exit("--keep-session is only supported in serve mode.")
+    if attach_session and target.mode != "url":
+        raise_exit(
+            "--attach-session reuses a kept serve session and cannot be combined with --serve-cmd."
+        )
+    if (keep_session or attach_session) and not normalized_session_id:
+        raise_exit(
+            "Provide --session-id when using --keep-session or --attach-session."
+        )
+    if normalized_session_id and not (keep_session or attach_session):
+        raise_exit(
+            "Provide --keep-session or --attach-session when using --session-id."
+        )
+    return normalized_session_id
+
+
 def _is_media_artifact(path: Path) -> bool:
     return path.suffix.lower() in MEDIA_EXTENSIONS
 
@@ -230,6 +321,104 @@ def _resolve_target_base_url(
     except ServeModeError as exc:
         detail = str(exc) or "Unknown serve-mode error."
         raise type(exc)(f"{detail} (serve context: {context_details})") from exc
+
+
+@contextmanager
+def _resolve_demo_target_base_url(
+    *,
+    target: Any,
+    repo_root: Path,
+    ready_url: Optional[str],
+    ready_log_pattern: Optional[str],
+    cwd: Optional[Path],
+    env: Optional[list[str]],
+    project_root: Optional[Path],
+    project_context: bool,
+    ready_timeout_seconds: float,
+    session_id: Optional[str],
+    keep_session: bool,
+    attach_session: bool,
+) -> Iterator[Tuple[str, str]]:
+    if attach_session:
+        assert session_id is not None
+        metadata = load_render_session(
+            repo_root=repo_root,
+            session_id=session_id,
+            require_live=True,
+        )
+        with nullcontext((metadata.target_url, "attached_session")) as resolved:
+            yield resolved
+        return
+
+    if not keep_session:
+        with _resolve_target_base_url(
+            target=target,
+            repo_root=repo_root,
+            ready_url=ready_url,
+            ready_log_pattern=ready_log_pattern,
+            cwd=cwd,
+            env=env,
+            project_root=project_root,
+            project_context=project_context,
+            ready_timeout_seconds=ready_timeout_seconds,
+        ) as resolved:
+            yield resolved
+        return
+
+    if target.mode != "serve" or not target.serve_cmd:
+        raise ServeModeError("--keep-session requires serve mode with --serve-cmd.")
+    assert session_id is not None
+    resolved_project_root = _resolve_project_root(
+        repo_root=repo_root,
+        project_root=project_root,
+        project_context=project_context,
+    )
+    resolved_cwd = cwd
+    if resolved_cwd is None and resolved_project_root is not None:
+        resolved_cwd = resolved_project_root
+    context_details = _format_serve_context_details(
+        project_context=project_context,
+        project_root=resolved_project_root,
+        cwd=resolved_cwd,
+    )
+    config = BrowserServeConfig(
+        serve_cmd=target.serve_cmd,
+        ready_url=ready_url,
+        ready_log_pattern=ready_log_pattern,
+        cwd=cwd,
+        env_overrides=parse_env_overrides(env or []),
+        project_root=resolved_project_root,
+        project_context_enabled=project_context,
+        timeout_seconds=ready_timeout_seconds,
+    )
+    supervisor = BrowserServerSupervisor(config)
+    keep_alive = False
+    try:
+        supervisor.start()
+        session = supervisor.wait_until_ready()
+        if not session.target_url:
+            raise ServeModeError(
+                "Serve readiness succeeded, but target URL could not be derived. "
+                "Provide --ready-url or use a --ready-log-pattern with a named "
+                "group (?P<url>http://...)."
+            )
+        persist_render_session(
+            repo_root=repo_root,
+            session_id=session_id,
+            config=config,
+            session=session,
+        )
+        keep_alive = True
+        with nullcontext((session.target_url, session.ready_source)) as resolved:
+            yield resolved
+    except ServeModeError:
+        raise
+    except Exception as exc:
+        detail = str(exc) or "Unknown serve-mode error."
+        raise ServeModeError(f"{detail} (serve context: {context_details})") from exc
+    finally:
+        if not keep_alive:
+            supervisor.stop()
 
 
 def register_render_commands(
@@ -596,6 +785,42 @@ def register_render_commands(
             "--trace",
             help="Trace mode: off, on, or retain-on-failure.",
         ),
+        preflight: bool = typer.Option(
+            False,
+            "--preflight",
+            help="Run live preflight checks against the demo manifest before capture.",
+        ),
+        preflight_only: bool = typer.Option(
+            False,
+            "--preflight-only",
+            help="Run live preflight checks only and skip demo capture.",
+        ),
+        preflight_report: Optional[Path] = typer.Option(
+            None,
+            "--preflight-report",
+            help="Write preflight diagnostics JSON report to this path.",
+        ),
+        session_id: Optional[str] = typer.Option(
+            None,
+            "--session-id",
+            help="Stable id used with --keep-session or --attach-session.",
+        ),
+        keep_session: bool = typer.Option(
+            False,
+            "--keep-session/--no-keep-session",
+            help=(
+                "Serve mode only: keep the spawned serve process alive and persist "
+                "session metadata for later attachment."
+            ),
+        ),
+        attach_session: bool = typer.Option(
+            False,
+            "--attach-session",
+            help=(
+                "URL mode only: attach to an existing kept session from "
+                ".codex-autorunner/render_sessions."
+            ),
+        ),
         full_artifacts: bool = typer.Option(
             False,
             "--full-artifacts/--media-only",
@@ -624,8 +849,21 @@ def register_render_commands(
         try:
             target = select_render_target(url=url, serve_cmd=serve_cmd, path=path)
             parsed_viewport = parse_viewport(viewport)
+            normalized_session_id = _validate_demo_session_flags(
+                target=target,
+                session_id=session_id,
+                keep_session=keep_session,
+                attach_session=attach_session,
+                raise_exit=raise_exit,
+            )
         except ValueError as exc:
             raise_exit(str(exc), cause=exc)
+        if preflight_only:
+            preflight = True
+        if preflight_report is not None and not preflight:
+            raise_exit(
+                "Use --preflight or --preflight-only when providing --preflight-report."
+            )
         normalized_trace = (trace or "").strip().lower()
         if normalized_trace not in {"off", "on", "retain-on-failure"}:
             raise_exit(
@@ -641,8 +879,16 @@ def register_render_commands(
             out_dir=out_dir,
             output=output,
         )
+        resolved_preflight_report: Optional[Path] = None
+        if preflight_report is not None:
+            resolved_preflight_report = (
+                preflight_report
+                if preflight_report.is_absolute()
+                else (repo_root / preflight_report)
+            )
+        runtime = BrowserRuntime()
         try:
-            with _resolve_target_base_url(
+            with _resolve_demo_target_base_url(
                 target=target,
                 repo_root=repo_root,
                 ready_url=ready_url,
@@ -652,8 +898,48 @@ def register_render_commands(
                 project_root=project_root,
                 project_context=project_context,
                 ready_timeout_seconds=ready_timeout_seconds,
+                session_id=normalized_session_id,
+                keep_session=keep_session,
+                attach_session=attach_session,
             ) as (base_url, _ready_source):
-                result = BrowserRuntime().capture_demo(
+                if preflight:
+                    preflight_result = runtime.preflight_demo(
+                        base_url=base_url,
+                        path=target.path,
+                        script_path=script,
+                        viewport=parsed_viewport,
+                    )
+                    if resolved_preflight_report is not None:
+                        _write_preflight_report(
+                            report_path=resolved_preflight_report,
+                            result=preflight_result,
+                        )
+                    _emit_preflight_output(
+                        result=preflight_result,
+                        report_path=resolved_preflight_report,
+                    )
+                    if not preflight_result.ok:
+                        category = _preflight_error_category(
+                            preflight_result.error_type
+                        )
+                        raise_exit(
+                            f"Render demo preflight failed ({category}): "
+                            f"{preflight_result.error_message or 'Unknown preflight error.'}"
+                        )
+                    if preflight_only:
+                        if keep_session and normalized_session_id is not None:
+                            session_record = (
+                                repo_root
+                                / ".codex-autorunner"
+                                / "render_sessions"
+                                / f"{normalized_session_id}.json"
+                            )
+                            typer.echo(
+                                f"Render session kept: {normalized_session_id} ({session_record})"
+                            )
+                        return
+
+                result = runtime.capture_demo(
                     base_url=base_url,
                     path=target.path,
                     script_path=script,
@@ -663,6 +949,24 @@ def register_render_commands(
                     trace_mode=normalized_trace,
                     output_name=output_name,
                 )
+        except MissingRenderSessionError as exc:
+            raise_exit(
+                f"Render demo failed ({exc.category}): {exc} "
+                "Start one with `car render demo --serve-cmd ... --keep-session --session-id ...`.",
+                cause=exc,
+            )
+        except StaleRenderSessionError as exc:
+            raise_exit(
+                f"Render demo failed ({exc.category}): {exc} "
+                "Restart it with `--keep-session` to refresh metadata.",
+                cause=exc,
+            )
+        except RenderSessionError as exc:
+            raise_exit(
+                f"Render demo failed ({exc.category}): "
+                f"{str(exc) or 'Render session metadata is invalid.'}",
+                cause=exc,
+            )
         except ServeModeError as exc:
             raise_exit(
                 f"Render demo failed ({exc.category}): {str(exc) or 'Unknown serve-mode error.'}",
@@ -695,6 +999,16 @@ def register_render_commands(
 
         for artifact_key in sorted(artifacts_to_emit):
             typer.echo(str(artifacts_to_emit[artifact_key]))
+        if keep_session and normalized_session_id is not None:
+            session_record = (
+                repo_root
+                / ".codex-autorunner"
+                / "render_sessions"
+                / f"{normalized_session_id}.json"
+            )
+            typer.echo(
+                f"Render session kept: {normalized_session_id} ({session_record})"
+            )
 
     @app.command("observe")
     def render_observe(

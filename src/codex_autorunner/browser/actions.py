@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from .primitives import act_step
+from .primitives import act_step, step_has_locator
 
 SUPPORTED_V1_ACTIONS = {
     "goto",
@@ -50,6 +50,21 @@ class DemoExecutionResult:
     artifacts: Dict[str, Path]
     error_message: Optional[str] = None
     failed_step_index: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class DemoPreflightStepReport:
+    index: int
+    action: str
+    ok: bool
+    detail: str
+
+
+@dataclass(frozen=True)
+class DemoPreflightResult:
+    ok: bool
+    steps: list[DemoPreflightStepReport]
+    error_message: Optional[str] = None
 
 
 def load_demo_manifest(path: Path) -> DemoManifest:
@@ -187,6 +202,14 @@ def _validate_step(index: int, action: str, step: dict[str, Any]) -> None:
         return
     if action in {"screenshot", "snapshot_a11y"}:
         return
+
+
+def step_requires_locator_preflight(step: DemoStep) -> bool:
+    if step.action in {"click", "fill", "wait_for_text"}:
+        return True
+    if step.action == "press":
+        return step_has_locator(step.data)
+    return False
 
 
 def _require_non_empty_str(

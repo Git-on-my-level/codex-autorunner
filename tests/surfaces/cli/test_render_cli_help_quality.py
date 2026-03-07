@@ -38,6 +38,12 @@ def test_render_demo_help_mentions_manifest_and_artifacts_options() -> None:
     assert "Locator priority" in output
     assert "--record-video" in output
     assert "--trace" in output
+    assert "--preflight" in output
+    assert "--preflight-only" in output
+    assert "--preflight-report" in output
+    assert "--session-id" in output
+    assert "--keep-session" in output
+    assert "--attach-session" in output
     assert "--full-artifacts" in output
     assert "--project-root" in output
     assert "--project-context" in output

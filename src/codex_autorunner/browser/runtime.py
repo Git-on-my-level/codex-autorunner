@@ -7,14 +7,25 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-from .actions import execute_demo_manifest, load_demo_manifest
+from .actions import (
+    DemoPreflightResult,
+    DemoPreflightStepReport,
+    execute_demo_manifest,
+    load_demo_manifest,
+    step_requires_locator_preflight,
+)
 from .artifacts import (
     deterministic_artifact_name,
     reserve_artifact_path,
     write_json_artifact,
 )
 from .models import DEFAULT_VIEWPORT, Viewport
-from .primitives import capture_artifact, observe_page
+from .primitives import (
+    capture_artifact,
+    describe_step_locator,
+    observe_page,
+    resolve_step_locator,
+)
 
 PlaywrightLoader = Callable[[], Any]
 
@@ -42,6 +53,16 @@ class BrowserRunResult:
     target_url: Optional[str]
     artifacts: Dict[str, Path] = field(default_factory=dict)
     skipped: Dict[str, str] = field(default_factory=dict)
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class BrowserPreflightResult:
+    ok: bool
+    mode: str
+    target_url: Optional[str]
+    diagnostics: DemoPreflightResult
     error_message: Optional[str] = None
     error_type: Optional[str] = None
 
@@ -419,6 +440,180 @@ class BrowserRuntime:
             error_type=error_type,
         )
 
+    def preflight_demo(
+        self,
+        *,
+        base_url: str,
+        path: Optional[str] = None,
+        script_path: Path,
+        viewport: Viewport = DEFAULT_VIEWPORT,
+        timeout_ms: int = 30000,
+        wait_until: str = "networkidle",
+    ) -> BrowserPreflightResult:
+        try:
+            manifest = load_demo_manifest(script_path)
+        except Exception as exc:
+            message = str(exc) or "Demo manifest failed validation."
+            return BrowserPreflightResult(
+                ok=False,
+                mode="demo_preflight",
+                target_url=None,
+                diagnostics=DemoPreflightResult(
+                    ok=False,
+                    steps=[],
+                    error_message=message,
+                ),
+                error_message=message,
+                error_type=ManifestValidationError.__name__,
+            )
+
+        nav_url = build_navigation_url(base_url, path)
+        initial_path = path or urlsplit(nav_url).path or "/"
+
+        playwright = None
+        browser = None
+        context = None
+        page = None
+        reports: list[DemoPreflightStepReport] = []
+        fatal_error: Optional[str] = None
+        try:
+            playwright = self._playwright_loader()
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport={"width": viewport.width, "height": viewport.height}
+            )
+            page = context.new_page()
+            page.goto(nav_url, timeout=timeout_ms, wait_until=wait_until)
+        except Exception as exc:
+            fatal_error = str(exc).strip() or repr(exc)
+        finally:
+            if fatal_error is not None:
+                for resource in (page, context, browser):
+                    self._safe_close(resource)
+                self._safe_stop(playwright)
+        if fatal_error is not None:
+            diagnostics = DemoPreflightResult(
+                ok=False,
+                steps=[],
+                error_message=f"Failed to open preflight target: {fatal_error}",
+            )
+            return BrowserPreflightResult(
+                ok=False,
+                mode="demo_preflight",
+                target_url=nav_url,
+                diagnostics=diagnostics,
+                error_message=diagnostics.error_message,
+                error_type=BrowserNavigationError.__name__,
+            )
+
+        assert page is not None
+        run_ok = True
+        for idx, step in enumerate(manifest.steps, start=1):
+            step_timeout = _step_timeout_value(step.data, timeout_ms)
+            try:
+                if step.action == "goto":
+                    target = _resolve_step_url_for_demo(
+                        base_url=base_url,
+                        raw_url=str(step.data.get("url") or ""),
+                        initial_path=initial_path,
+                    )
+                    step_wait = step.data.get("wait_until")
+                    wait_value = (
+                        step_wait.strip()
+                        if isinstance(step_wait, str) and step_wait.strip()
+                        else wait_until
+                    )
+                    page.goto(target, timeout=step_timeout, wait_until=wait_value)
+                    reports.append(
+                        DemoPreflightStepReport(
+                            index=idx,
+                            action=step.action,
+                            ok=True,
+                            detail=f"goto reachable: {target}",
+                        )
+                    )
+                    continue
+
+                if step_requires_locator_preflight(step):
+                    locator = resolve_step_locator(page, step.data)
+                    _assert_locator_actionable(
+                        locator,
+                        action=step.action,
+                        timeout_ms=step_timeout,
+                    )
+                    reports.append(
+                        DemoPreflightStepReport(
+                            index=idx,
+                            action=step.action,
+                            ok=True,
+                            detail=(
+                                "locator is actionable: "
+                                f"{describe_step_locator(step.data)}"
+                            ),
+                        )
+                    )
+                    continue
+
+                if step.action == "press":
+                    reports.append(
+                        DemoPreflightStepReport(
+                            index=idx,
+                            action=step.action,
+                            ok=True,
+                            detail="keyboard press uses no locator; skipped.",
+                        )
+                    )
+                    continue
+
+                reports.append(
+                    DemoPreflightStepReport(
+                        index=idx,
+                        action=step.action,
+                        ok=True,
+                        detail="no locator assumptions to validate.",
+                    )
+                )
+            except Exception as exc:
+                run_ok = False
+                detail = str(exc).strip() or repr(exc)
+                reports.append(
+                    DemoPreflightStepReport(
+                        index=idx,
+                        action=step.action,
+                        ok=False,
+                        detail=detail,
+                    )
+                )
+
+        failed = [report for report in reports if not report.ok]
+        diagnostics_message: Optional[str] = None
+        if failed:
+            parts = [
+                f"step {report.index} ({report.action}): {report.detail}"
+                for report in failed
+            ]
+            diagnostics_message = (
+                f"Preflight failed for {len(failed)} step(s): " + "; ".join(parts)
+            )
+        diagnostics = DemoPreflightResult(
+            ok=run_ok,
+            steps=reports,
+            error_message=diagnostics_message,
+        )
+        result = BrowserPreflightResult(
+            ok=run_ok,
+            mode="demo_preflight",
+            target_url=nav_url,
+            diagnostics=diagnostics,
+            error_message=diagnostics_message,
+            error_type=None if run_ok else DemoStepError.__name__,
+        )
+
+        for resource in (page, context, browser):
+            self._safe_close(resource)
+        self._safe_stop(playwright)
+        return result
+
     def _run_page_action(
         self,
         *,
@@ -512,3 +707,47 @@ class BrowserRuntime:
         target, _collision = reserve_artifact_path(out_dir, filename)
         shutil.move(str(source), str(target))
         return target
+
+
+def _step_timeout_value(step: Dict[str, Any], default_timeout_ms: int) -> int:
+    raw = step.get("timeout_ms")
+    if raw is None:
+        return default_timeout_ms
+    if not isinstance(raw, int) or raw <= 0:
+        raise ValueError("timeout_ms must be a positive integer.")
+    return raw
+
+
+def _assert_locator_actionable(locator: Any, *, action: str, timeout_ms: int) -> None:
+    probe = locator
+    first = getattr(locator, "first", None)
+    if first is not None:
+        probe = first
+    wait_state = (
+        "visible"
+        if action in {"click", "fill", "wait_for_text", "press"}
+        else "attached"
+    )
+    if hasattr(probe, "wait_for"):
+        probe.wait_for(state=wait_state, timeout=timeout_ms)
+        return
+    if hasattr(locator, "count"):
+        count = int(locator.count())
+        if count <= 0:
+            raise ValueError("Locator resolved to zero elements.")
+        return
+    raise ValueError(
+        "Unable to verify locator; locator API does not support wait_for/count."
+    )
+
+
+def _resolve_step_url_for_demo(
+    *, base_url: str, raw_url: str, initial_path: str
+) -> str:
+    if raw_url.startswith("http://") or raw_url.startswith("https://"):
+        return raw_url
+    if raw_url.startswith("/"):
+        return build_navigation_url(base_url, raw_url)
+    if raw_url.strip() == "":
+        return build_navigation_url(base_url, initial_path)
+    return build_navigation_url(base_url, f"/{raw_url}")

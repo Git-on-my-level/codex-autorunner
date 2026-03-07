@@ -49,6 +49,8 @@ class _FakeLocator:
 
     def wait_for(self, *, state: str, timeout: int) -> None:
         _ = state, timeout
+        if self._identity == "text:missing-target":
+            raise RuntimeError("locator not actionable")
 
 
 class _DemoPage:
@@ -285,3 +287,77 @@ def test_capture_demo_manifest_validation_error(tmp_path: Path) -> None:
     assert result.ok is False
     assert result.error_type == "ManifestValidationError"
     assert "Unsupported demo manifest version" in (result.error_message or "")
+
+
+def test_preflight_demo_reports_actionable_step_diagnostics(tmp_path: Path) -> None:
+    script = tmp_path / "preflight-ok.yaml"
+    script.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "steps:",
+                "  - action: goto",
+                "    url: /login",
+                "  - action: click",
+                "    role: button",
+                "    name: Submit",
+                "  - action: wait_ms",
+                "    ms: 5",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runtime = BrowserRuntime(playwright_loader=lambda: _FakePlaywright())
+    result = runtime.preflight_demo(
+        base_url="http://127.0.0.1:5400",
+        path="/",
+        script_path=script,
+        viewport=Viewport(width=1280, height=720),
+    )
+
+    assert result.ok is True
+    assert result.error_type is None
+    assert result.diagnostics.ok is True
+    assert len(result.diagnostics.steps) == 3
+    assert result.diagnostics.steps[0].detail.startswith("goto reachable:")
+    assert "locator is actionable" in result.diagnostics.steps[1].detail
+    assert "no locator assumptions" in result.diagnostics.steps[2].detail
+
+
+def test_preflight_demo_failure_reports_failed_step_details(tmp_path: Path) -> None:
+    script = tmp_path / "preflight-fail.yaml"
+    script.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "steps:",
+                "  - action: click",
+                "    text: missing-target",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runtime = BrowserRuntime(playwright_loader=lambda: _FakePlaywright())
+    result = runtime.preflight_demo(
+        base_url="http://127.0.0.1:5500",
+        path="/",
+        script_path=script,
+        viewport=Viewport(width=1200, height=800),
+    )
+
+    assert result.ok is False
+    assert result.error_type == "DemoStepError"
+    assert result.diagnostics.ok is False
+    assert len(result.diagnostics.steps) == 1
+    failed = result.diagnostics.steps[0]
+    assert failed.ok is False
+    assert failed.index == 1
+    assert failed.action == "click"
+    assert "locator not actionable" in failed.detail
+    assert "Preflight failed for 1 step(s): step 1 (click)" in (
+        result.error_message or ""
+    )

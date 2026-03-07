@@ -18,6 +18,7 @@ from .models import Viewport
 
 _TEST_ID_RE = re.compile(r"data-testid=[\"']([^\"']+)[\"']", re.IGNORECASE)
 _ARIA_LABEL_RE = re.compile(r"aria-label=[\"']([^\"']+)[\"']", re.IGNORECASE)
+_LOCATOR_FIELDS = ("role", "name", "label", "text", "test_id", "selector")
 
 
 @dataclass(frozen=True)
@@ -235,12 +236,12 @@ def act_step(
         return {}
 
     if action == "click":
-        locator = _resolve_locator(page, step_data)
+        locator = resolve_step_locator(page, step_data)
         locator.click(timeout=step_timeout)
         return {}
 
     if action == "fill":
-        locator = _resolve_locator(page, step_data)
+        locator = resolve_step_locator(page, step_data)
         value = _require_non_empty_str(
             step_data,
             "value",
@@ -257,12 +258,9 @@ def act_step(
             step_index=step_index,
             action=action,
         )
-        has_locator = any(
-            isinstance(step_data.get(field), str) and step_data.get(field, "").strip()
-            for field in ("role", "name", "label", "text", "test_id", "selector")
-        )
+        has_locator = step_has_locator(step_data)
         if has_locator:
-            locator = _resolve_locator(page, step_data)
+            locator = resolve_step_locator(page, step_data)
             locator.press(key, timeout=step_timeout)
         else:
             keyboard = getattr(page, "keyboard", None)
@@ -285,7 +283,7 @@ def act_step(
         return {}
 
     if action == "wait_for_text":
-        locator = _resolve_locator(page, step_data)
+        locator = resolve_step_locator(page, step_data)
         locator.wait_for(state="visible", timeout=step_timeout)
         return {}
 
@@ -410,6 +408,34 @@ def _require_non_empty_str(
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Step {step_index} ({action}) requires non-empty '{key}'.")
     return value.strip()
+
+
+def step_has_locator(step: Mapping[str, Any]) -> bool:
+    for field in _LOCATOR_FIELDS:
+        value = step.get(field)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
+def describe_step_locator(step: Mapping[str, Any]) -> str:
+    role = step.get("role")
+    if isinstance(role, str) and role.strip():
+        name = step.get("name")
+        role_part = role.strip()
+        if isinstance(name, str) and name.strip():
+            return f"role={role_part} name={name.strip()}"
+        return f"role={role_part}"
+
+    for field in ("label", "text", "test_id", "selector"):
+        value = step.get(field)
+        if isinstance(value, str) and value.strip():
+            return f"{field}={value.strip()}"
+    return "<missing-locator>"
+
+
+def resolve_step_locator(page: Any, step: Mapping[str, Any]) -> Any:
+    return _resolve_locator(page, step)
 
 
 def _resolve_locator(page: Any, step: Mapping[str, Any]) -> Any:
