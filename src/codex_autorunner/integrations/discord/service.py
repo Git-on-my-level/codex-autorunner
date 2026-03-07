@@ -101,6 +101,7 @@ from ...integrations.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
     is_audio_mime_or_path,
+    is_image_mime_or_path,
     normalize_mime_type,
 )
 from ...integrations.chat.models import (
@@ -345,6 +346,7 @@ class _SavedDiscordAttachment:
     mime_type: Optional[str]
     size_bytes: int
     is_audio: bool
+    is_image: bool
     transcript_text: Optional[str] = None
     transcript_warning: Optional[str] = None
 
@@ -847,6 +849,7 @@ class DiscordBotService:
                         saved_attachments,
                         failed_attachments,
                         transcript_message,
+                        _native_input_items,
                     ) = await self._with_attachment_context(
                         prompt_text=text,
                         workspace_root=workspace_root,
@@ -944,6 +947,7 @@ class DiscordBotService:
             saved_attachments,
             failed_attachments,
             transcript_message,
+            attachment_input_items,
         ) = await self._with_attachment_context(
             prompt_text=prompt_text,
             workspace_root=workspace_root,
@@ -1046,18 +1050,27 @@ class DiscordBotService:
             pma_enabled=pma_enabled,
             agent=agent,
         )
+        turn_input_items: Optional[list[dict[str, Any]]] = None
+        if attachment_input_items:
+            turn_input_items = [
+                {"type": "text", "text": prompt_text},
+                *attachment_input_items,
+            ]
+        run_turn_kwargs: dict[str, Any] = {
+            "workspace_root": workspace_root,
+            "prompt_text": prompt_text,
+            "agent": agent,
+            "model_override": model_override,
+            "reasoning_effort": reasoning_effort,
+            "session_key": session_key,
+            "orchestrator_channel_key": (
+                channel_id if not pma_enabled else f"pma:{channel_id}"
+            ),
+        }
+        if turn_input_items:
+            run_turn_kwargs["input_items"] = turn_input_items
         try:
-            turn_result = await self._run_agent_turn_for_message(
-                workspace_root=workspace_root,
-                prompt_text=prompt_text,
-                agent=agent,
-                model_override=model_override,
-                reasoning_effort=reasoning_effort,
-                session_key=session_key,
-                orchestrator_channel_key=(
-                    channel_id if not pma_enabled else f"pma:{channel_id}"
-                ),
-            )
+            turn_result = await self._run_agent_turn_for_message(**run_turn_kwargs)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1277,9 +1290,9 @@ class DiscordBotService:
         workspace_root: Path,
         attachments: tuple[Any, ...],
         channel_id: str,
-    ) -> tuple[str, int, int, Optional[str]]:
+    ) -> tuple[str, int, int, Optional[str], Optional[list[dict[str, Any]]]]:
         if not attachments:
-            return prompt_text, 0, 0, None
+            return prompt_text, 0, 0, None, None
 
         inbox = inbox_dir(workspace_root)
         inbox.mkdir(parents=True, exist_ok=True)
@@ -1314,6 +1327,10 @@ class DiscordBotService:
                 is_audio = self._is_audio_attachment(
                     attachment, mime_type if isinstance(mime_type, str) else None
                 )
+                is_image = is_image_mime_or_path(
+                    mime_type if isinstance(mime_type, str) else None,
+                    str(original_name),
+                )
                 transcript_text, transcript_warning = (
                     await self._transcribe_voice_attachment(
                         workspace_root=workspace_root,
@@ -1331,6 +1348,7 @@ class DiscordBotService:
                         mime_type=mime_type if isinstance(mime_type, str) else None,
                         size_bytes=len(data),
                         is_audio=is_audio,
+                        is_image=is_image,
                         transcript_text=transcript_text,
                         transcript_warning=transcript_warning,
                     )
@@ -1347,7 +1365,7 @@ class DiscordBotService:
                 )
 
         if not saved:
-            return prompt_text, 0, failed, None
+            return prompt_text, 0, failed, None, None
 
         transcript_lines: list[str] = []
         transcript_items = [item for item in saved if item.transcript_text]
@@ -1408,6 +1426,14 @@ class DiscordBotService:
                 )
             )
         attachment_context = "\n".join(details)
+        native_input_items = [
+            {"type": "localImage", "path": str(item.path)}
+            for item in saved
+            if item.is_image
+        ]
+        native_input_items_payload: Optional[list[dict[str, Any]]] = (
+            native_input_items if native_input_items else None
+        )
 
         if prompt_text.strip():
             separator = "\n" if prompt_text.endswith("\n") else "\n\n"
@@ -1416,8 +1442,15 @@ class DiscordBotService:
                 len(saved),
                 failed,
                 user_visible_transcript,
+                native_input_items_payload,
             )
-        return attachment_context, len(saved), failed, user_visible_transcript
+        return (
+            attachment_context,
+            len(saved),
+            failed,
+            user_visible_transcript,
+            native_input_items_payload,
+        )
 
     def _build_attachment_filename(self, attachment: Any, *, index: int) -> str:
         raw_name = getattr(attachment, "file_name", None) or f"attachment-{index}"
@@ -1813,6 +1846,7 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         prompt_text: str,
+        input_items: Optional[list[dict[str, Any]]] = None,
         agent: str,
         model_override: Optional[str],
         reasoning_effort: Optional[str],
@@ -1940,6 +1974,7 @@ class DiscordBotService:
                 agent_id=agent,
                 state=state,
                 prompt=prompt_text,
+                input_items=input_items,
                 model=model_override,
                 reasoning=reasoning_effort,
                 session_key=session_key,

@@ -273,6 +273,7 @@ class _StreamingFakeOrchestrator:
         state: Any,
         prompt: str,
         *,
+        input_items: Optional[list[dict[str, Any]]] = None,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -283,6 +284,7 @@ class _StreamingFakeOrchestrator:
             agent_id,
             state,
             prompt,
+            input_items,
             model,
             reasoning,
             session_key,
@@ -304,6 +306,7 @@ class _RaisingStreamingFakeOrchestrator(_StreamingFakeOrchestrator):
         state: Any,
         prompt: str,
         *,
+        input_items: Optional[list[dict[str, Any]]] = None,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -314,6 +317,7 @@ class _RaisingStreamingFakeOrchestrator(_StreamingFakeOrchestrator):
             agent_id,
             state,
             prompt,
+            input_items,
             model,
             reasoning,
             session_key,
@@ -921,6 +925,7 @@ async def test_message_create_non_pma_uses_raw_message_for_github_link_source(
         agent: str,
         model_override: Optional[str],
         reasoning_effort: Optional[str],
+        input_items: Optional[list[dict[str, Any]]] = None,
         session_key: str,
         orchestrator_channel_key: str,
     ) -> str:
@@ -1008,6 +1013,7 @@ async def test_message_create_attachment_only_downloads_to_inbox_and_runs_turn(
         agent: str,
         model_override: Optional[str],
         reasoning_effort: Optional[str],
+        input_items: Optional[list[dict[str, Any]]] = None,
         session_key: str,
         orchestrator_channel_key: str,
     ) -> str:
@@ -1090,6 +1096,7 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
     )
 
     captured_prompts: list[str] = []
+    captured_input_items: list[Optional[list[dict[str, Any]]]] = []
 
     async def _fake_run_turn(
         self,
@@ -1099,6 +1106,7 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
         agent: str,
         model_override: Optional[str],
         reasoning_effort: Optional[str],
+        input_items: Optional[list[dict[str, Any]]] = None,
         session_key: str,
         orchestrator_channel_key: str,
     ) -> str:
@@ -1111,6 +1119,7 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
             orchestrator_channel_key,
         )
         captured_prompts.append(prompt_text)
+        captured_input_items.append(input_items)
         return "Done with text+attachment"
 
     service._run_agent_turn_for_message = _fake_run_turn.__get__(
@@ -1125,6 +1134,10 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
         assert CAR_AWARENESS_BLOCK in prompt
         assert "Inbound Discord attachments:" in prompt
         assert "screen.png" in prompt
+        assert captured_input_items and isinstance(captured_input_items[0], list)
+        items = captured_input_items[0] or []
+        assert items and items[0].get("type") == "text"
+        assert any(item.get("type") == "localImage" for item in items[1:])
     finally:
         await store.close()
 
@@ -2934,6 +2947,97 @@ async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapsho
             "PMA zip reply" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_image_attachment_in_pma_mode_adds_native_local_image_item(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+    )
+
+    attachment_url = "https://cdn.discordapp.com/attachments/pma-image-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"png-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="Please review image",
+                    attachments=[
+                        {
+                            "id": "att-image-1",
+                            "filename": "screen.png",
+                            "content_type": "image/png",
+                            "size": 9,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_items: list[Optional[list[dict[str, Any]]]] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        input_items: Optional[list[dict[str, Any]]] = None,
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_items.append(input_items)
+        return "PMA image reply"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_items and isinstance(captured_items[0], list)
+        items = captured_items[0] or []
+        assert items and items[0].get("type") == "text"
+        assert any(item.get("type") == "localImage" for item in items[1:])
     finally:
         await store.close()
 

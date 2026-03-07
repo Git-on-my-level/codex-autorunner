@@ -123,7 +123,11 @@ class AgentBackend:
         raise NotImplementedError
 
     def run_turn(
-        self, session_id: str, message: str
+        self,
+        session_id: str,
+        message: str,
+        *,
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[AgentEvent, None]:
         raise NotImplementedError
 
@@ -131,7 +135,11 @@ class AgentBackend:
         raise NotImplementedError
 
     def run_turn_events(
-        self, session_id: str, message: str
+        self,
+        session_id: str,
+        message: str,
+        *,
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[Any, None]:
         raise NotImplementedError
 

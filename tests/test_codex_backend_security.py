@@ -169,3 +169,48 @@ async def test_multiple_secrets_not_leaked_in_logs():
         assert payload["event"] == "agent.turn_started"
         assert payload["message_length"] == len(test_message)
         assert len(payload["message_hash"]) == 16
+
+
+@pytest.mark.asyncio
+async def test_run_turn_events_forwards_input_items_to_app_server():
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=Path.cwd(),
+        logger=logging.getLogger("test.codex_backend.security.input_items"),
+    )
+
+    with patch.object(
+        backend,
+        "_ensure_client",
+        new_callable=AsyncMock,
+    ) as mock_ensure_client:
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.turn_id = "turn-900"
+        mock_handle.wait = AsyncMock(
+            return_value=MagicMock(
+                agent_messages=["Response"],
+                raw_events=[],
+            )
+        )
+        mock_client.turn_start = AsyncMock(return_value=mock_handle)
+        mock_ensure_client.return_value = mock_client
+        backend._thread_id = "thread-900"
+
+        input_items = [
+            {"type": "text", "text": "please review image"},
+            {"type": "localImage", "path": "/tmp/screen.png"},
+        ]
+
+        async for _ in backend.run_turn_events(
+            session_id="thread-900",
+            message="please review image",
+            input_items=input_items,
+        ):
+            pass
+
+        assert mock_client.turn_start.await_count == 1
+        call = mock_client.turn_start.await_args
+        assert call is not None
+        kwargs = dict(call.kwargs)
+        assert kwargs.get("input_items") == input_items

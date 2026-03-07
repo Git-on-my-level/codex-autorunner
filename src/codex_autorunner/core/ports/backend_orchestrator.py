@@ -14,6 +14,7 @@ class BackendOrchestrator(Protocol):
         state: Any,
         prompt: str,
         *,
+        input_items: Optional[list[dict[str, Any]]] = None,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         session_key: Optional[str] = None,

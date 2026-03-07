@@ -137,6 +137,7 @@ class BackendOrchestrator:
         state: RunnerState,
         prompt: str,
         *,
+        input_items: Optional[list[dict[str, Any]]] = None,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -182,7 +183,15 @@ class BackendOrchestrator:
             default_approval_decision=self._config.ticket_flow.default_approval_decision,
         )
 
-        async for event in backend.run_turn_events(effective_session_id, prompt):
+        if input_items is None:
+            async for event in backend.run_turn_events(effective_session_id, prompt):
+                yield event
+            return
+        async for event in backend.run_turn_events(
+            effective_session_id,
+            prompt,
+            input_items=input_items,
+        ):
             yield event
 
             # Update context from events

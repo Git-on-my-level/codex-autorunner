@@ -20,6 +20,7 @@ from codex_autorunner.integrations.agents.backend_orchestrator import (
 class _RecordingBackend(AgentBackend):
     def __init__(self) -> None:
         self.configure_calls: list[dict[str, Any]] = []
+        self.turn_input_items: Optional[list[dict[str, Any]]] = None
 
     def configure(self, **options: Any) -> None:
         self.configure_calls.append(dict(options))
@@ -44,9 +45,14 @@ class _RecordingBackend(AgentBackend):
             yield None
 
     async def run_turn_events(
-        self, session_id: str, message: str
+        self,
+        session_id: str,
+        message: str,
+        *,
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[RunEvent, None]:
         _ = message
+        self.turn_input_items = input_items
         yield Completed(timestamp=now_iso(), final_message=f"ok:{session_id}")
 
     async def interrupt(self, session_id: str) -> None:
@@ -120,6 +126,55 @@ async def test_backend_orchestrator_uses_generic_backend_configure(
     assert configure_call["reasoning_effort"] == "high"
     assert configure_call["turn_timeout_seconds"] == 321.0
     assert configure_call["default_approval_decision"] == "cancel"
+
+
+@pytest.mark.asyncio
+async def test_backend_orchestrator_forwards_input_items_when_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    backend = _RecordingBackend()
+
+    def _fake_factory(*_args: Any, **_kwargs: Any):
+        def _build_backend(
+            agent_id: str, state: RunnerState, notification_handler: Any
+        ) -> AgentBackend:
+            _ = agent_id, state, notification_handler
+            return backend
+
+        return _build_backend
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        _fake_factory,
+    )
+
+    config = SimpleNamespace(
+        autorunner_reuse_session=False,
+        app_server=SimpleNamespace(turn_timeout_seconds=321.0),
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="cancel",
+            include_previous_ticket_context=False,
+        ),
+    )
+    orchestrator = BackendOrchestrator(repo_root=tmp_path, config=config)
+    state = RunnerState(None, "idle", None, None, None)
+    input_items = [
+        {"type": "text", "text": "hello"},
+        {"type": "localImage", "path": str(tmp_path / "screen.png")},
+    ]
+
+    _ = [
+        event
+        async for event in orchestrator.run_turn(
+            "fake-agent",
+            state,
+            "hello",
+            input_items=input_items,
+        )
+    ]
+
+    assert backend.turn_input_items == input_items
 
 
 def test_backend_orchestrator_run_turn_has_no_backend_isinstance_checks() -> None:

@@ -122,8 +122,13 @@ class OpenCodeBackend(AgentBackend):
         return self._session_id
 
     async def run_turn(
-        self, session_id: str, message: str
+        self,
+        session_id: str,
+        message: str,
+        *,
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[AgentEvent, None]:
+        _ = input_items
         client = await self._ensure_client()
         if session_id:
             self._session_id = session_id
@@ -146,8 +151,13 @@ class OpenCodeBackend(AgentBackend):
             yield event
 
     async def run_turn_events(
-        self, session_id: str, message: str
+        self,
+        session_id: str,
+        message: str,
+        *,
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[RunEvent, None]:
+        _ = input_items
         client = await self._ensure_client()
         workspace_root = self._workspace_root or Path(".")
         self._last_token_total = None
