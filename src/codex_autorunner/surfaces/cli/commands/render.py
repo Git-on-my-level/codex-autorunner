@@ -69,14 +69,20 @@ def register_render_commands(app: typer.Typer, raise_exit) -> None:
             help="Pandoc command used for document exports.",
         ),
         diagram_format: list[str] = typer.Option(
-            ["png", "pdf"],
+            ["png"],
             "--diagram-format",
-            help="Diagram output format(s): png, pdf, svg. Repeat to set multiple.",
+            help=(
+                "Diagram output format(s): png, pdf, svg. "
+                "Repeat to set multiple (default: png)."
+            ),
         ),
         doc_format: list[str] = typer.Option(
             ["html"],
             "--doc-format",
-            help="Document output format(s): html, pdf, docx. Repeat to set multiple.",
+            help=(
+                "Document output format(s): html, pdf, docx. "
+                "Repeat to set multiple (default: html)."
+            ),
         ),
         keep_intermediate: bool = typer.Option(
             False,

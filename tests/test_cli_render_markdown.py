@@ -50,7 +50,7 @@ def test_render_markdown_generates_mermaid_and_doc_exports(monkeypatch, tmp_path
 
     assert result.exit_code == 0, result.output
     assert (out_dir / "deck.diagram-01.png").exists()
-    assert (out_dir / "deck.diagram-01.pdf").exists()
+    assert not (out_dir / "deck.diagram-01.pdf").exists()
     assert (out_dir / "deck.html").exists()
     rendered = out_dir / "deck.rendered.md"
     assert rendered.exists()
@@ -136,3 +136,62 @@ def test_render_markdown_deduplicates_repeated_diagram_formats(
     )
     png_runs = [cmd for cmd in invoked if cmd[-1].endswith("deck.diagram-01.png")]
     assert len(png_runs) == 1
+
+
+def test_render_markdown_supports_explicit_format_overrides(
+    monkeypatch, tmp_path: Path
+):
+    source = tmp_path / "deck.md"
+    source.write_text(
+        "# Demo\n\n```mermaid\nflowchart TD\n  A-->B\n```\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "outbox"
+
+    from codex_autorunner.surfaces.cli.commands import render as render_cmd
+
+    monkeypatch.setattr(
+        render_cmd, "resolve_executable", lambda binary: f"/usr/bin/{binary}"
+    )
+
+    def _fake_run(cmd: list[str], capture_output: bool, text: bool):
+        _ = capture_output, text
+        if "-o" in cmd:
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("ok\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(render_cmd.subprocess, "run", _fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "render",
+            "markdown",
+            str(source),
+            "--out-dir",
+            str(out_dir),
+            "--diagram-format",
+            "png",
+            "--diagram-format",
+            "pdf",
+            "--diagram-format",
+            "svg",
+            "--doc-format",
+            "html",
+            "--doc-format",
+            "pdf",
+            "--doc-format",
+            "docx",
+            "--keep-intermediate",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (out_dir / "deck.diagram-01.png").exists()
+    assert (out_dir / "deck.diagram-01.pdf").exists()
+    assert (out_dir / "deck.diagram-01.svg").exists()
+    assert (out_dir / "deck.html").exists()
+    assert (out_dir / "deck.pdf").exists()
+    assert (out_dir / "deck.docx").exists()

@@ -2,16 +2,18 @@
 
 ## Goal
 
-Add a minimal CLI flow to export Markdown documents that contain Mermaid code fences into shareable artifacts, with a preference for `PNG` + `PDF`.
+Add a minimal CLI flow to export Markdown documents that contain Mermaid code fences into shareable artifacts, with defaults tuned for low-noise output (`PNG` diagram + `HTML` document).
 
 ## Proposed CLI surface
 
 - Command: `car render markdown <input.md>`
 - Default output dir: `.codex-autorunner/filebox/outbox/`
 - Default outputs:
-  - Mermaid diagrams: `PNG` and `PDF`
+  - Mermaid diagrams: `PNG`
   - Document: `HTML` (portable baseline)
-- Optional document export: `PDF` via `pandoc` when a PDF engine is available.
+- Optional format overrides:
+  - Mermaid diagrams: add `--diagram-format pdf` and/or `--diagram-format svg`
+  - Documents: add repeated `--doc-format` flags (for example `pdf`, `docx`)
 
 ## Architecture
 

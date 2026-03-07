@@ -78,10 +78,10 @@ Render Markdown with Mermaid fences into static artifacts:
 
 ```bash
 ./car render markdown docs/demo.md \
-  --out-dir .codex-autorunner/filebox/outbox \
-  --diagram-format png --diagram-format pdf \
-  --doc-format html
+  --out-dir .codex-autorunner/filebox/outbox
 ```
+
+Defaults are `--diagram-format png` and `--doc-format html`; add repeated format flags when you also want `pdf`/`svg` diagrams or additional document formats.
 
 See the scoped design note: [docs/ops/markdown-mermaid-exports.md](docs/ops/markdown-mermaid-exports.md).
 
