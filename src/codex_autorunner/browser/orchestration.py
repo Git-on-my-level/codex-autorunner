@@ -311,6 +311,19 @@ def run_demo_workflow(
                 primary_artifact_path=primary_path,
                 published=published_artifacts,
             )
+            for manifest_publish_index, key in enumerate(publish_keys):
+                if key != "manifest":
+                    continue
+                published_manifest = published_artifacts[manifest_publish_index]
+                if _same_path(manifest_path, published_manifest):
+                    continue
+                try:
+                    shutil.copy2(manifest_path, published_manifest)
+                except OSError as exc:
+                    raise DemoWorkflowExecutionError(
+                        f"Failed publishing artifact 'manifest' to outbox: {exc}",
+                        category="publish_failure",
+                    ) from exc
 
         return DemoWorkflowRunResult(
             workflow_path=config.workflow_path,
@@ -823,13 +836,25 @@ def _resolve_repo_path(
     candidate = path or default
     if candidate is None:
         raise DemoWorkflowConfigError("Internal error: missing path value.")
+    try:
+        candidate = candidate.expanduser()
+    except RuntimeError as exc:
+        raise DemoWorkflowConfigError(
+            f"Unable to expand path '{candidate}': {exc}"
+        ) from exc
     if not candidate.is_absolute():
         candidate = repo_root / candidate
-    return candidate.expanduser().resolve()
+    return candidate.resolve()
 
 
 def _resolve_path(value: str, *, base_dir: Path) -> Path:
-    candidate = Path(value).expanduser()
+    candidate = Path(value)
+    try:
+        candidate = candidate.expanduser()
+    except RuntimeError as exc:
+        raise DemoWorkflowConfigError(
+            f"Unable to expand path '{value}': {exc}"
+        ) from exc
     if not candidate.is_absolute():
         candidate = base_dir / candidate
     return candidate.resolve()
