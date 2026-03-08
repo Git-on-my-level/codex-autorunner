@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from ...agents.opencode.client import OpenCodeClient
+from ...agents.opencode.event_decoder import decode_sse_event
 from ...agents.opencode.events import SSEEvent
 from ...agents.opencode.logging import OpenCodeEventFormatter
 from ...agents.opencode.runtime import (
@@ -19,6 +20,7 @@ from ...agents.opencode.runtime import (
     split_model_id,
 )
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...agents.opencode.usage_decoder import extract_usage
 from ...core.ports.agent_backend import (
     AgentBackend,
     AgentEvent,
@@ -451,10 +453,15 @@ class OpenCodeBackend(AgentBackend):
         except json.JSONDecodeError:
             return events
 
+        decoded = decode_sse_event(sse)
         payload_type = payload.get("type", "")
 
         if payload_type == "textDelta":
             text = payload.get("text", "")
+            if decoded is not None and hasattr(decoded, "content"):
+                decoded_content = getattr(decoded, "content", None)
+                if isinstance(decoded_content, str):
+                    text = decoded_content
             events.append(
                 OutputDelta(
                     timestamp=now_iso(), content=text, delta_type="assistant_stream"
@@ -475,20 +482,29 @@ class OpenCodeBackend(AgentBackend):
 
         elif payload_type == "usage":
             usage = payload.get("usage")
+            if usage is None and decoded is not None:
+                usage = getattr(decoded, "usage", None)
+            if usage is None:
+                usage = extract_usage(payload)
             if isinstance(usage, dict):
                 events.append(TokenUsage(timestamp=now_iso(), usage=dict(usage)))
 
         elif payload_type == "messageEnd":
-            final_message = payload.get("message", "")
+            final_message = parse_message_response(payload).text or payload.get(
+                "message", ""
+            )
             events.append(Completed(timestamp=now_iso(), final_message=final_message))
 
         elif payload_type == "error":
-            error_message = payload.get("message", "Unknown error")
+            error_message = parse_message_response(payload).error or payload.get(
+                "message", "Unknown error"
+            )
             events.append(Failed(timestamp=now_iso(), error_message=error_message))
 
         elif payload_type == "sessionEnd":
-            # Prefer messageEnd content if we already saw it; otherwise treat as failure.
-            final_message = payload.get("message") or ""
+            final_message = (
+                parse_message_response(payload).text or payload.get("message") or ""
+            )
             if final_message:
                 events.append(
                     Completed(timestamp=now_iso(), final_message=final_message)
@@ -541,14 +557,18 @@ class OpenCodeBackend(AgentBackend):
             events.append(event)
 
         elif payload_type == "messageEnd":
-            final_message = payload.get("message", "")
+            final_message = parse_message_response(payload).text or payload.get(
+                "message", ""
+            )
             event = AgentEvent.message_complete(final_message=final_message)
             if session_id:
                 event.data["session_id"] = session_id
             events.append(event)
 
         elif payload_type == "error":
-            error_message = payload.get("message", "Unknown error")
+            error_message = parse_message_response(payload).error or payload.get(
+                "message", "Unknown error"
+            )
             event = AgentEvent.error(error_message=error_message)
             if session_id:
                 event.data["session_id"] = session_id

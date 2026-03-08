@@ -232,6 +232,10 @@ def parse_message_response(payload: Any) -> dict[str, Any]:
 
     text = payload.get("text")
     if not isinstance(text, str):
+        message = payload.get("message")
+        if isinstance(message, str):
+            text = message
+    if not isinstance(text, str):
         content = payload.get("content")
         if isinstance(content, list):
             text_parts = []

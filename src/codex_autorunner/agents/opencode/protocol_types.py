@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
@@ -54,11 +54,7 @@ class MessageEvent:
     message_id: Optional[str] = None
     role: Optional[str] = None
     content: Optional[str] = None
-    parts: list[Any] = None
-
-    def __post_init__(self):
-        if self.parts is None:
-            self.parts = []
+    parts: list[Any] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -39,6 +39,7 @@ from ...core.managed_processes.registry import (
     write_process_record,
 )
 from ...core.retry import retry_transient
+from .event_decoder import decode_notification
 from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 
 ApprovalDecision = Union[str, Dict[str, Any]]
@@ -1224,16 +1225,22 @@ class CodexAppServerClient:
     async def _handle_server_request(self, message: Dict[str, Any]) -> None:
         method = message.get("method")
         req_id = message.get("id")
+        decoded_request = decode_notification(message)
         if isinstance(method, str) and method in APPROVAL_METHODS:
             params_raw = message.get("params")
             params: Dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+            turn_id = (
+                getattr(decoded_request, "turn_id", None)
+                if decoded_request is not None
+                else None
+            )
             log_event(
                 self._logger,
                 logging.INFO,
                 "app_server.approval.requested",
                 request_id=req_id,
                 method=method,
-                turn_id=params.get("turnId"),
+                turn_id=turn_id or params.get("turnId"),
             )
             decision: ApprovalDecision = self._default_approval_decision
             if self._approval_handler is not None:
@@ -1279,12 +1286,13 @@ class CodexAppServerClient:
     async def _handle_notification(self, message: Dict[str, Any]) -> None:
         method = message.get("method")
         params = message.get("params") or {}
+        decoded_notification = decode_notification(message)
         handled = False
         if isinstance(method, str):
             await self._mark_notification_turn_hint(method=method, params=params)
         handler = self._resolve_notification_handler(method)
         if handler is not None:
-            handled = await handler(message, params)
+            handled = await handler(message, params, decoded_notification)
         if self._notification_handler is not None:
             try:
                 await _maybe_await(self._notification_handler(message))
@@ -1335,19 +1343,29 @@ class CodexAppServerClient:
         state.last_method = method
 
     async def _handle_notification_agent_message_delta(
-        self, message: Dict[str, Any], params: dict[str, Any]
+        self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
     ) -> bool:
-        turn_id = extract_turn_id(params)
+        turn_id = getattr(decoded, "turn_id", None) or extract_turn_id(params)
         if not turn_id:
             return True
-        thread_id = extract_thread_id_for_turn(params)
+        thread_id = getattr(decoded, "thread_id", None) or extract_thread_id_for_turn(
+            params
+        )
         state = await self._resolve_notification_turn_state(
             turn_id, thread_id, create_pending=True
         )
         if state is None:
             return True
-        item_id = params.get("itemId")
-        delta = params.get("delta") or params.get("text")
+        if decoded is not None:
+            item_id = getattr(decoded, "item_id", None) or params.get("itemId")
+            content = getattr(decoded, "content", None)
+            if isinstance(content, str):
+                delta: Optional[str] = content
+            else:
+                delta = params.get("delta") or params.get("text")
+        else:
+            item_id = params.get("itemId")
+            delta = params.get("delta") or params.get("text")
         if isinstance(item_id, str) and isinstance(delta, str):
             state.agent_message_deltas[item_id] = (
                 state.agent_message_deltas.get(item_id, "") + delta
@@ -1359,66 +1377,74 @@ class CodexAppServerClient:
         return True
 
     async def _handle_notification_item_completed(
-        self, message: Dict[str, Any], params: dict[str, Any]
+        self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
     ) -> bool:
-        turn_id = extract_turn_id(params) or extract_turn_id(params.get("item"))
+        turn_id = (
+            getattr(decoded, "turn_id", None)
+            or extract_turn_id(params)
+            or extract_turn_id(params.get("item"))
+        )
         if not turn_id:
             return True
-        thread_id = extract_thread_id_for_turn(params)
+        thread_id = getattr(decoded, "thread_id", None) or extract_thread_id_for_turn(
+            params
+        )
         state = await self._resolve_notification_turn_state(
             turn_id, thread_id, create_pending=True
         )
         if state is None:
             return True
         self._mark_notification_event(state=state, method="item/completed")
-        self._apply_item_completed(state, message, params)
+        self._apply_item_completed(state, message, params, decoded)
         if state.turn_completed_seen and not state.future.done():
             self._schedule_turn_completion_settle(state)
         return True
 
     async def _handle_notification_turn_completed(
-        self, message: Dict[str, Any], params: dict[str, Any]
+        self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
     ) -> bool:
-        turn_id = extract_turn_id(params)
+        turn_id = getattr(decoded, "turn_id", None) or extract_turn_id(params)
         if not turn_id:
             return True
-        thread_id = extract_thread_id_for_turn(params)
+        thread_id = getattr(decoded, "thread_id", None) or extract_thread_id_for_turn(
+            params
+        )
         state = await self._resolve_notification_turn_state(
             turn_id, thread_id, create_pending=True
         )
         if state is None:
             return True
         self._mark_notification_event(state=state, method="turn/completed")
-        self._apply_turn_completed(state, message, params)
+        self._apply_turn_completed(state, message, params, decoded)
         return True
 
     async def _handle_notification_error(
-        self, message: Dict[str, Any], params: dict[str, Any]
+        self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
     ) -> bool:
-        turn_id = extract_turn_id(params)
+        turn_id = getattr(decoded, "turn_id", None) or extract_turn_id(params)
         if not turn_id:
             return True
-        thread_id = extract_thread_id_for_turn(params)
+        thread_id = getattr(decoded, "thread_id", None) or extract_thread_id_for_turn(
+            params
+        )
         state = await self._resolve_notification_turn_state(
             turn_id, thread_id, create_pending=True
         )
         if state is None:
             return True
         self._mark_notification_event(state=state, method="error")
-        self._apply_error(state, message, params)
+        self._apply_error(state, message, params, decoded)
         return True
 
     def _resolve_notification_handler(
         self, method: object
-    ) -> Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[bool]]]:
-        handlers: dict[
-            str,
-            Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[bool]],
-        ] = {
+    ) -> Optional[Callable[..., Awaitable[bool]]]:
+        handlers: dict[str, Callable[..., Awaitable[bool]]] = {
             "item/agentMessage/delta": self._handle_notification_agent_message_delta,
             "item/completed": self._handle_notification_item_completed,
             "turn/completed": self._handle_notification_turn_completed,
             "error": self._handle_notification_error,
+            "turn/error": self._handle_notification_error,
         }
         if not isinstance(method, str):
             return None
@@ -1590,7 +1616,11 @@ class CodexAppServerClient:
         return state
 
     def _apply_item_completed(
-        self, state: _TurnState, message: Dict[str, Any], params: Any
+        self,
+        state: _TurnState,
+        message: Dict[str, Any],
+        params: Any,
+        decoded: Any = None,
     ) -> None:
         item = params.get("item") if isinstance(params, dict) else None
         text: Optional[str] = None
@@ -1600,13 +1630,8 @@ class CodexAppServerClient:
             delta_text: Optional[str] = None
             text = _extract_agent_message_text(item)
             if isinstance(item_id, str):
-                # Drop any accumulated deltas once this item completes so
-                # unresolved delta-only items remain distinguishable.
                 delta_text = state.agent_message_deltas.pop(item_id, None)
             elif text:
-                # Some item/completed payloads omit itemId even after streaming deltas.
-                # In that case, drop an unambiguous matching partial delta so the
-                # completed text remains the final message.
                 _prune_unambiguous_stale_delta(
                     state.agent_message_deltas, completed_text=text
                 )
@@ -1627,16 +1652,26 @@ class CodexAppServerClient:
         _record_raw_event(state, message)
 
     def _apply_error(
-        self, state: _TurnState, message: Dict[str, Any], params: Any
+        self,
+        state: _TurnState,
+        message: Dict[str, Any],
+        params: Any,
+        decoded: Any = None,
     ) -> None:
-        error_message = _extract_error_message(params)
+        error_message = getattr(decoded, "message", None) or _extract_error_message(
+            params
+        )
         if error_message:
             state.errors.append(error_message)
         error_payload = params.get("error") if isinstance(params, dict) else None
-        error_code = (
-            error_payload.get("code") if isinstance(error_payload, dict) else None
-        )
-        will_retry = params.get("willRetry") if isinstance(params, dict) else None
+        error_code = getattr(decoded, "code", None)
+        if error_code is None:
+            error_code = (
+                error_payload.get("code") if isinstance(error_payload, dict) else None
+            )
+        will_retry = getattr(decoded, "will_retry", None)
+        if will_retry is None and isinstance(params, dict):
+            will_retry = params.get("willRetry")
         log_event(
             self._logger,
             logging.WARNING,
@@ -1650,11 +1685,15 @@ class CodexAppServerClient:
         _record_raw_event(state, message)
 
     def _apply_turn_completed(
-        self, state: _TurnState, message: Dict[str, Any], params: Any
+        self,
+        state: _TurnState,
+        message: Dict[str, Any],
+        params: Any,
+        decoded: Any = None,
     ) -> None:
         _record_raw_event(state, message)
-        status = None
-        if isinstance(params, dict):
+        status = getattr(decoded, "status", None)
+        if status is None and isinstance(params, dict):
             status = params.get("status")
             if status is None and isinstance(params.get("turn"), dict):
                 turn_status = params["turn"].get("status")

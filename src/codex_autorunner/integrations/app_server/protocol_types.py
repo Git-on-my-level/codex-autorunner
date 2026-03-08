@@ -12,6 +12,7 @@ class OutputDeltaNotification:
     content: str
     item_id: Optional[str] = None
     turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class ReasoningSummaryDeltaNotification:
     delta: str
     item_id: Optional[str] = None
     turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class ItemCompletedNotification:
     item: dict[str, Any]
     item_id: Optional[str] = None
     turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,7 @@ class ToolCallNotification:
     tool_input: Optional[dict[str, Any]] = None
     item_id: Optional[str] = None
     turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,7 @@ class TokenUsageNotification:
     method: str
     usage: dict[str, Any]
     turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,8 @@ class TurnCompletedNotification:
     method: str
     turn_id: Optional[str] = None
     result: Optional[dict[str, Any]] = None
+    status: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,8 @@ class ErrorNotification:
     message: str
     code: Optional[int] = None
     turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    will_retry: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,7 @@ class ApprovalRequest:
     approval_type: str
     item_id: Optional[str] = None
     turn_id: Optional[str] = None
+    thread_id: Optional[str] = None
     context: Optional[dict[str, Any]] = None
 
 

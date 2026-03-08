@@ -32,7 +32,9 @@ from .constants import (
     OPENCODE_USAGE_REASONING_KEYS,
     OPENCODE_USAGE_TOTAL_KEYS,
 )
+from .event_decoder import parse_message_response as decode_message_response
 from .events import SSEEvent
+from .usage_decoder import extract_usage
 
 PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
@@ -175,10 +177,15 @@ def _extract_model_ids(payload: Any) -> tuple[Optional[str], Optional[str]]:
 
 
 def parse_message_response(payload: Any) -> OpenCodeMessageResult:
+    decoded = decode_message_response(payload)
+    text = decoded.get("text")
+    error = decoded.get("error")
+    if isinstance(text, str) and text:
+        return OpenCodeMessageResult(text=text.strip(), error=error)
     if not isinstance(payload, dict):
         return OpenCodeMessageResult(text="")
     info = payload.get("info")
-    error = _extract_error_text(info) or _extract_error_text(payload)
+    error = error or _extract_error_text(info) or _extract_error_text(payload)
     parts_raw = payload.get("parts")
     text_parts: list[str] = []
     if isinstance(parts_raw, list):
@@ -491,6 +498,9 @@ def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]
 
 
 def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
+    decoded_usage = extract_usage(payload)
+    if decoded_usage is not None:
+        return decoded_usage
     if not isinstance(payload, dict):
         return None
     containers = [payload]
@@ -545,6 +555,9 @@ def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
 
 
 def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
+    decoded_usage = extract_usage(usage)
+    if decoded_usage is not None:
+        usage = decoded_usage
     total = _extract_usage_field(usage, OPENCODE_USAGE_TOTAL_KEYS)
     if total is not None:
         return total
@@ -558,6 +571,9 @@ def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
 
 
 def _extract_usage_details(usage: dict[str, Any]) -> dict[str, int]:
+    decoded_usage = extract_usage(usage)
+    if decoded_usage is not None:
+        usage = decoded_usage
     details: dict[str, int] = {}
     input_tokens = _extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS)
     if input_tokens is not None:
@@ -1001,6 +1017,8 @@ async def collect_opencode_output_from_events(
         if not is_primary_session:
             return
         usage = _extract_usage_payload(payload)
+        if usage is None:
+            usage = extract_usage(payload)
         if usage is None:
             return
         provider_id, model_id = _extract_model_ids(payload)

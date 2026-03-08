@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from .ids import extract_thread_id_for_turn, extract_turn_id
 from .protocol_types import (
     ApprovalRequest,
     ErrorNotification,
@@ -25,7 +26,7 @@ def decode_notification(message: dict[str, Any]) -> NotificationResult:
     method = message.get("method", "")
     params = message.get("params", {}) or {}
 
-    if not isinstance(method, str):
+    if not isinstance(method, str) or not isinstance(params, dict):
         return None
 
     if method in APPROVAL_METHODS:
@@ -55,7 +56,7 @@ def decode_notification(message: dict[str, Any]) -> NotificationResult:
     if method == "turn/completed":
         return _decode_turn_completed(method, params)
 
-    if method == "turn/error":
+    if method in {"turn/error", "error"}:
         return _decode_error(method, params)
 
     return None
@@ -71,7 +72,8 @@ def _decode_reasoning_summary_delta(
         method=method,
         delta=delta,
         item_id=params.get("itemId"),
-        turn_id=params.get("turnId"),
+        turn_id=_extract_turn_id(params),
+        thread_id=_extract_thread_id(params),
     )
 
 
@@ -85,7 +87,8 @@ def _decode_output_delta(
         method=method,
         content=content,
         item_id=params.get("itemId"),
-        turn_id=params.get("turnId"),
+        turn_id=_extract_turn_id(params),
+        thread_id=_extract_thread_id(params),
     )
 
 
@@ -119,7 +122,8 @@ def _decode_tool_call(
         tool_name=tool_name,
         tool_input=tool_input,
         item_id=params.get("itemId"),
-        turn_id=params.get("turnId"),
+        turn_id=_extract_turn_id(params),
+        thread_id=_extract_thread_id(params),
     )
 
 
@@ -148,7 +152,8 @@ def _decode_item_completed(
         method=method,
         item=item,
         item_id=params.get("itemId"),
-        turn_id=params.get("turnId"),
+        turn_id=_extract_turn_id(params) or _extract_turn_id(item),
+        thread_id=_extract_thread_id(params),
     )
 
 
@@ -161,26 +166,46 @@ def _decode_token_usage(
     return TokenUsageNotification(
         method=method,
         usage=usage,
-        turn_id=params.get("turnId"),
+        turn_id=_extract_turn_id(params),
+        thread_id=_extract_thread_id(params),
     )
 
 
 def _decode_turn_completed(
     method: str, params: dict[str, Any]
 ) -> Optional[TurnCompletedNotification]:
+    status = params.get("status")
+    if status is None and isinstance(params.get("turn"), dict):
+        turn_status = params["turn"].get("status")
+        if isinstance(turn_status, dict):
+            status = turn_status.get("type") or turn_status.get("status")
+        elif isinstance(turn_status, str):
+            status = turn_status
     return TurnCompletedNotification(
         method=method,
-        turn_id=params.get("turnId"),
+        turn_id=_extract_turn_id(params),
         result=params.get("result"),
+        status=status if isinstance(status, str) else None,
+        thread_id=_extract_thread_id(params),
     )
 
 
 def _decode_error(method: str, params: dict[str, Any]) -> ErrorNotification:
+    error_payload = params.get("error")
+    code = params.get("code")
+    if code is None and isinstance(error_payload, dict):
+        code = error_payload.get("code")
     return ErrorNotification(
         method=method,
-        message=params.get("message", "Unknown error"),
-        code=params.get("code"),
-        turn_id=params.get("turnId"),
+        message=_extract_error_message(params),
+        code=code if isinstance(code, int) else None,
+        turn_id=_extract_turn_id(params),
+        thread_id=_extract_thread_id(params),
+        will_retry=(
+            params.get("willRetry")
+            if isinstance(params.get("willRetry"), bool)
+            else None
+        ),
     )
 
 
@@ -190,6 +215,29 @@ def _decode_approval_request(method: str, params: dict[str, Any]) -> ApprovalReq
         method=method,
         approval_type=approval_type,
         item_id=params.get("itemId"),
-        turn_id=params.get("turnId"),
+        turn_id=_extract_turn_id(params),
+        thread_id=_extract_thread_id(params),
         context=params,
     )
+
+
+def _extract_turn_id(params: dict[str, Any]) -> Optional[str]:
+    return extract_turn_id(params) or extract_turn_id(params.get("turn"))
+
+
+def _extract_thread_id(params: dict[str, Any]) -> Optional[str]:
+    return extract_thread_id_for_turn(params)
+
+
+def _extract_error_message(params: dict[str, Any]) -> str:
+    error_payload = params.get("error")
+    if isinstance(error_payload, dict):
+        for key in ("message", "detail", "error"):
+            value = error_payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+    for key in ("message", "detail", "reason"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "Unknown error"

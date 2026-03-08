@@ -21,6 +21,7 @@ from ...core.ports.run_event import (
     ToolCall,
 )
 from ...integrations.app_server.client import CodexAppServerClient, CodexAppServerError
+from ...integrations.app_server.event_decoder import decode_notification
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 
 _logger = logging.getLogger(__name__)
@@ -521,6 +522,7 @@ class CodexAppServerBackend(AgentBackend):
                 self._logger.debug("Notification handler failed: %s", exc)
         method = notification.get("method", "")
         params = notification.get("params", {}) or {}
+        decoded = decode_notification(notification)
         thread_id = params.get("threadId") or params.get("thread_id")
         turn_id = params.get("turnId") or params.get("turn_id")
         if self._thread_id and thread_id and thread_id != self._thread_id:
@@ -535,24 +537,27 @@ class CodexAppServerBackend(AgentBackend):
                     and turn_id
                     and turn_id != self._turn_id
                 ):
-                    # Ignore delayed completions from other turns on this thread.
                     pass
                 else:
                     latest_text = _extract_agent_message_text(item)
                     if latest_text.strip():
                         self._latest_completed_agent_message = latest_text
         _logger.debug("Received notification: %s", method)
-        run_event = self._map_to_run_event(notification)
+        run_event = self._map_to_run_event(notification, decoded)
         if run_event:
             await self._event_queue.put(run_event)
 
-    def _map_to_run_event(self, event_data: Dict[str, Any]) -> Optional[RunEvent]:
+    def _map_to_run_event(
+        self, event_data: Dict[str, Any], decoded: Any = None
+    ) -> Optional[RunEvent]:
         method = event_data.get("method", "")
         params = event_data.get("params", {}) or {}
         method_lower = method.lower() if isinstance(method, str) else ""
 
         if method == "item/reasoning/summaryTextDelta":
             delta = params.get("delta")
+            if decoded is not None:
+                delta = getattr(decoded, "delta", None) or delta
             if isinstance(delta, str):
                 message = self._accumulate_reasoning_delta(params, delta)
                 if message.strip():
@@ -565,6 +570,10 @@ class CodexAppServerBackend(AgentBackend):
 
         if method == "item/agentMessage/delta":
             content = _extract_output_delta(params)
+            if decoded is not None:
+                decoded_content = getattr(decoded, "content", None)
+                if isinstance(decoded_content, str):
+                    content = decoded_content
             if not content:
                 return None
             return OutputDelta(
@@ -575,6 +584,10 @@ class CodexAppServerBackend(AgentBackend):
 
         if method == "turn/streamDelta" or "outputdelta" in method_lower:
             content = _extract_output_delta(params)
+            if decoded is not None:
+                decoded_content = getattr(decoded, "content", None)
+                if isinstance(decoded_content, str):
+                    content = decoded_content
             if not content:
                 return None
             delta_type = _output_delta_type_for_method(method)
@@ -584,6 +597,13 @@ class CodexAppServerBackend(AgentBackend):
 
         if method == "item/toolCall/start":
             tool_name, tool_input = _normalize_tool_name(params)
+            if decoded is not None:
+                decoded_tool_name = getattr(decoded, "tool_name", None)
+                decoded_tool_input = getattr(decoded, "tool_input", None)
+                if decoded_tool_name:
+                    tool_name = decoded_tool_name
+                if decoded_tool_input:
+                    tool_input = decoded_tool_input
             return ToolCall(
                 timestamp=now_iso(),
                 tool_name=tool_name or "toolCall",
