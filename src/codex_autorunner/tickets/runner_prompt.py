@@ -136,6 +136,7 @@ def build_prompt(
     requested_context: Optional[str] = None,
     previous_ticket_content: Optional[str] = None,
     prior_no_change_turns: int = 0,
+    prompt_max_bytes: int = 5 * 1024 * 1024,
 ) -> str:
     """Build the full prompt for an agent turn."""
     rel_ticket = safe_relpath(ticket_path, workspace_root)
@@ -321,7 +322,7 @@ def build_prompt(
         )
 
     prompt = _shrink_prompt(
-        max_bytes=5 * 1024 * 1024,
+        max_bytes=prompt_max_bytes,
         render=render,
         sections=sections,
         order=[

@@ -7,6 +7,7 @@ from typing import Any, Callable, Optional
 from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
+from . import runner_prompt
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
@@ -25,172 +26,25 @@ from .replies import (
     parse_user_reply,
     resolve_reply_paths,
 )
+from .runner_execution import is_network_error
+from .runner_prompt import (
+    TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
+    _build_car_hud,
+    _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
+    _shrink_prompt,
+    _truncate_text_by_bytes,
+)
+
+_is_network_error = is_network_error
 
 _logger = logging.getLogger(__name__)
 
 WORKSPACE_DOC_MAX_CHARS = 4000
-TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
 LOOP_NO_CHANGE_THRESHOLD = 2
 CAR_HUD_MAX_LINES = 14
 CAR_HUD_MAX_CHARS = 900
 TICKET_CONTEXT_DEFAULT_MAX_BYTES = 4096
 TICKET_CONTEXT_TOTAL_MAX_BYTES = 16384
-
-
-def _truncate_text_by_bytes(text: str, max_bytes: int) -> str:
-    """Truncate text to fit within max_bytes UTF-8 encoded size."""
-    if max_bytes <= 0:
-        return ""
-    normalized = text or ""
-    encoded = normalized.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return normalized
-    marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
-    if max_bytes <= marker_bytes:
-        return TRUNCATION_MARKER.encode("utf-8")[:max_bytes].decode(
-            "utf-8", errors="ignore"
-        )
-    target_bytes = max_bytes - marker_bytes
-    truncated = encoded[:target_bytes].decode("utf-8", errors="ignore")
-    return truncated + TRUNCATION_MARKER
-
-
-def _is_network_error(error_message: str) -> bool:
-    """Check if an error message indicates a transient network issue.
-
-    Returns True if the error appears to be network-related and retryable.
-    This includes connection errors, timeouts, and transport failures.
-    """
-    if not error_message:
-        return False
-    error_lower = error_message.lower()
-    network_indicators = [
-        "network error",
-        "connection",
-        "timeout",
-        "transport error",
-        "disconnected",
-        "unreachable",
-        "reconnecting",
-        "connection refused",
-        "connection reset",
-        "connection broken",
-        "temporary failure",
-    ]
-    return any(indicator in error_lower for indicator in network_indicators)
-
-
-def _preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
-    """Truncate ticket block while preserving prefix and ticket frontmatter.
-
-    ticket_block format:
-        "\\n\\n<CAR_CURRENT_TICKET_FILE>\\nPATH: ...\\n<TICKET_MARKDOWN>\\n"
-        "{ticket_raw_content}\\n</TICKET_MARKDOWN>\\n</CAR_CURRENT_TICKET_FILE>\\n"
-    where ticket_raw_content itself contains markdown frontmatter.
-    """
-    if len(ticket_block.encode("utf-8")) <= max_bytes:
-        return ticket_block
-
-    # ticket_block structure:
-    #   "<CAR_CURRENT_TICKET_FILE>\n"
-    #   "PATH: {rel_ticket}\n"
-    #   "<TICKET_MARKDOWN>\n"
-    #   "---\n" - ticket frontmatter start
-    #   "agent: ...\n"
-    #   "done: ...\n"
-    #   "title: ...\n"
-    #   "goal: ...\n"
-    #   "---\n" - ticket frontmatter end (what we want to preserve)
-    #   ticket body...
-    #   "</TICKET_MARKDOWN>\n"
-    #   "</CAR_CURRENT_TICKET_FILE>\n"
-
-    # Find the frontmatter markers after <TICKET_MARKDOWN>.
-    marker = "\n---\n"
-    ticket_md_idx = ticket_block.find("<TICKET_MARKDOWN>")
-    if ticket_md_idx == -1:
-        return _truncate_text_by_bytes(ticket_block, max_bytes)
-
-    first_marker_idx = ticket_block.find(marker, ticket_md_idx)
-    if first_marker_idx == -1:
-        return _truncate_text_by_bytes(ticket_block, max_bytes)
-
-    second_marker_idx = ticket_block.find(marker, first_marker_idx + 1)
-    if second_marker_idx == -1:
-        return _truncate_text_by_bytes(ticket_block, max_bytes)
-
-    # Preserve everything up to and including the second marker
-    preserve_end = second_marker_idx + len(marker)
-    preserved_part = ticket_block[:preserve_end]
-
-    # Check if we still have room (account for truncation marker that will be added)
-    preserved_bytes = len(preserved_part.encode("utf-8"))
-    marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
-    remaining_bytes = max(max_bytes - preserved_bytes, 0)
-
-    if remaining_bytes > 0:
-        body = ticket_block[preserve_end:]
-        # Account for marker in the body budget
-        body_budget = max(remaining_bytes - marker_bytes, 0)
-        truncated_body = _truncate_text_by_bytes(body, body_budget)
-        return preserved_part + truncated_body
-
-    # Not enough room even for preserved part, fall back to simple truncation
-    return _truncate_text_by_bytes(ticket_block, max_bytes)
-
-
-def _shrink_prompt(
-    *,
-    max_bytes: int,
-    render: Callable[[], str],
-    sections: dict[str, str],
-    order: list[str],
-) -> str:
-    """Shrink prompt by truncating sections in order of priority."""
-    prompt = render()
-    if len(prompt.encode("utf-8")) <= max_bytes:
-        return prompt
-
-    for key in order:
-        if len(prompt.encode("utf-8")) <= max_bytes:
-            break
-        value = sections.get(key, "")
-        if not value:
-            continue
-        overflow = len(prompt.encode("utf-8")) - max_bytes
-        value_bytes = len(value.encode("utf-8"))
-        new_limit = max(value_bytes - overflow, 0)
-
-        if key == "ticket_block":
-            sections[key] = _preserve_ticket_structure(value, new_limit)
-        else:
-            sections[key] = _truncate_text_by_bytes(value, new_limit)
-        prompt = render()
-
-    if len(prompt.encode("utf-8")) > max_bytes:
-        prompt = _truncate_text_by_bytes(prompt, max_bytes)
-
-    return prompt
-
-
-def _build_car_hud() -> str:
-    """Return a compact, deterministic CAR self-description block."""
-
-    lines = [
-        "CAR HUD (stable, bounded, non-secret-bearing):",
-        "- Runtime root: `.codex-autorunner/`",
-        "- Ticket flow semantics: process `TICKET-###*.md` in ascending index order; run the first ticket where frontmatter `done` is not `true`.",
-        "- Self-description command: `car describe --json`",
-        "- Canonical self-description docs: `.codex-autorunner/docs/self-description-contract.md`",
-        "- Canonical self-description schema: `.codex-autorunner/docs/car-describe.schema.json`",
-        "- Template discovery: `car templates repos list --json`",
-        "- Template apply: `car templates apply <repo_id>:<path>[@<ref>]`",
-    ]
-    clipped_lines = lines[:CAR_HUD_MAX_LINES]
-    hud = "\n".join(clipped_lines)
-    if len(hud) > CAR_HUD_MAX_CHARS:
-        hud = hud[: CAR_HUD_MAX_CHARS - 3] + "..."
-    return hud
 
 
 def _load_ticket_context_block(
@@ -621,8 +475,9 @@ class TicketRunner:
             except Exception:
                 pass
 
-        prompt = self._build_prompt(
+        prompt = runner_prompt.build_prompt(
             ticket_path=current_path,
+            workspace_root=self._workspace_root,
             ticket_doc=ticket_doc,
             last_agent_output=(
                 state.get("last_agent_output")
@@ -645,6 +500,7 @@ class TicketRunner:
             prior_no_change_turns=self._prior_no_change_turns(
                 state, safe_relpath(current_path, self._workspace_root)
             ),
+            prompt_max_bytes=self._config.prompt_max_bytes,
         )
 
         # Execute turn.
