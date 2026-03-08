@@ -98,8 +98,6 @@ from ..schemas import (
 )
 from ..services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
-)
-from ..services.pma.common import (
     normalize_optional_text as service_normalize_optional_text,
 )
 from ..services.pma.common import (
@@ -110,6 +108,9 @@ from .pma_routes import (
     build_automation_routes,
     build_managed_thread_crud_routes,
     build_managed_thread_tail_routes,
+)
+from .pma_routes.automation_adapter import (
+    normalize_optional_text as _normalize_optional_text,
 )
 from .pma_routes.publish import PMA_PUBLISH_RETRY_DELAYS_SECONDS
 from .pma_routes.runtime_state import PmaRuntimeState
@@ -156,8 +157,7 @@ def build_pma_routes() -> APIRouter:
     lane_workers: dict[str, PmaLaneWorker] = {}
     item_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
-    def _normalize_optional_text(value: Any) -> Optional[str]:
-        return service_normalize_optional_text(value)
+    # _normalize_optional_text imported from automation_adapter.py
 
     def _get_pma_config(request: Request) -> dict[str, Any]:
         raw = getattr(request.app.state.config, "raw", {})
