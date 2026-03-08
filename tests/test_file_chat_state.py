@@ -111,3 +111,26 @@ def test_file_chat_active_and_interrupt_routes_share_app_state(tmp_path) -> None
         "detail": "File chat interrupted",
     }
     assert interrupt_event.is_set() is True
+
+
+def test_ticket_chat_interrupt_wrapper_shares_file_chat_app_state(tmp_path) -> None:
+    app = FastAPI()
+    app.include_router(build_file_chat_routes())
+    app.state.engine = SimpleNamespace(repo_root=tmp_path)
+
+    target = file_chat_routes._parse_target(tmp_path, "ticket:1")
+    interrupt_event = asyncio.Event()
+
+    state = FileChatRoutesState()
+    state.active_chats[target.state_key] = interrupt_event
+    app.state.file_chat_routes_state = state
+
+    client = TestClient(app)
+
+    interrupt_res = client.post("/api/tickets/1/chat/interrupt")
+    assert interrupt_res.status_code == 200
+    assert interrupt_res.json() == {
+        "status": "interrupted",
+        "detail": "Ticket chat interrupted",
+    }
+    assert interrupt_event.is_set() is True

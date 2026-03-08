@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.surfaces.web.routes import flows as flow_routes
 
 
@@ -227,3 +228,81 @@ def test_stream_flow_events_uses_last_event_id_as_resume_cursor(tmp_path, monkey
     assert "id: 2" in resp.text
     assert f"data: {json.dumps({'seq': 2, 'event_type': 'progress'})}" in resp.text
     assert "id: 3" in resp.text
+
+
+def test_dispatch_history_includes_diff_stats_and_serves_attachments(
+    tmp_path, monkeypatch
+):
+    repo_root = Path(tmp_path)
+    run_id = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: repo_root)
+
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+        store.create_event(
+            event_id=f"{run_id}-diff-1",
+            run_id=run_id,
+            event_type=FlowEventType.DIFF_UPDATED,
+            data={
+                "dispatch_seq": 1,
+                "insertions": 2,
+                "deletions": 1,
+                "files_changed": 1,
+            },
+        )
+
+    entry_dir = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / run_id
+        / "dispatch_history"
+        / "0001"
+    )
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    (entry_dir / "DISPATCH.md").write_text(
+        "---\nmode: pause\ntitle: Review\n---\n\nPlease review.\n",
+        encoding="utf-8",
+    )
+    (entry_dir / "notes.txt").write_text("artifact payload\n", encoding="utf-8")
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        history_res = client.get(f"/api/flows/{run_id}/dispatch_history")
+
+        assert history_res.status_code == 200
+        payload = history_res.json()
+        assert payload["run_id"] == run_id
+        assert len(payload["history"]) == 1
+
+        entry = payload["history"][0]
+        assert entry["seq"] == "0001"
+        assert entry["dispatch"]["title"] == "Review"
+        assert entry["dispatch"]["diff_stats"] == {
+            "insertions": 2,
+            "deletions": 1,
+            "files_changed": 1,
+        }
+        assert len(entry["attachments"]) == 1
+        attachment = entry["attachments"][0]
+        assert attachment["name"] == "notes.txt"
+        assert attachment["url"] == f"api/flows/{run_id}/dispatch_history/0001/notes.txt"
+
+        file_res = client.get(f"/api/flows/{run_id}/dispatch_history/0001/notes.txt")
+
+    assert file_res.status_code == 200
+    assert file_res.text == "artifact payload\n"
