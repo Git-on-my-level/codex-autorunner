@@ -10,6 +10,7 @@ import pytest
 from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPES,
+    ApprovalRequested,
     Completed,
     Failed,
     OutputDelta,
@@ -121,6 +122,38 @@ async def test_codex_backend_run_turn_events_timeout_emits_failed_terminal(
     )
     assert isinstance(events[-1], Failed)
     assert "timeout" in events[-1].error_message.lower()
+
+
+@pytest.mark.asyncio
+async def test_codex_backend_approval_handler_emits_canonical_run_event(
+    tmp_path: Path,
+) -> None:
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=tmp_path,
+        default_approval_decision="accept",
+    )
+
+    decision = await backend._handle_approval_request(
+        {
+            "id": "approval-1",
+            "method": "turn/approvalRequested",
+            "params": {
+                "type": "command",
+                "command": ["rm", "-rf", "tmp"],
+                "sandboxPolicy": "workspace-write",
+            },
+        }
+    )
+
+    event = await backend._event_queue.get()
+
+    assert decision == {"approve": True}
+    assert isinstance(event, ApprovalRequested)
+    assert event.request_id == "approval-1"
+    assert event.description == "turn/approvalRequested"
+    assert event.context["command"] == ["rm", "-rf", "tmp"]
+    assert event.context["sandboxPolicy"] == "workspace-write"
 
 
 @pytest.mark.asyncio

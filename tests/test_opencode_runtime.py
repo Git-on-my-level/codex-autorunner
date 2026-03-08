@@ -121,6 +121,31 @@ async def test_collect_output_auto_replies_question() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_auto_responds_permission_request() -> None:
+    replies = []
+
+    async def _respond(request_id: str, reply: str) -> None:
+        replies.append((request_id, reply))
+
+    events = [
+        SSEEvent(
+            event="permission.asked",
+            data='{"sessionID":"s1","properties":{"id":"perm-1","tool":"shell","command":"rm -rf tmp"}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        respond_permission=_respond,
+    )
+
+    assert output.text == ""
+    assert output.error is None
+    assert replies == [("perm-1", "once")]
+
+
+@pytest.mark.anyio
 async def test_collect_output_question_deduplicates() -> None:
     replies = []
 
