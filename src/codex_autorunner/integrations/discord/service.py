@@ -3896,7 +3896,9 @@ class DiscordBotService:
     ) -> list[dict[str, Any]]:
         return [
             build_ticket_filter_picker(current_filter=status_filter),
-            build_ticket_picker(self._list_ticket_choices(workspace_root, status_filter=status_filter)),
+            build_ticket_picker(
+                self._list_ticket_choices(workspace_root, status_filter=status_filter)
+            ),
         ]
 
     async def _handle_tickets(
@@ -4755,7 +4757,9 @@ class DiscordBotService:
 
         ticket_rel_raw = self._extract_modal_single_select(values, TICKETS_SELECT_ID)
         ticket_rel = (
-            ticket_rel_raw if isinstance(ticket_rel_raw, str) else context.get("ticket_rel")
+            ticket_rel_raw
+            if isinstance(ticket_rel_raw, str)
+            else context.get("ticket_rel")
         )
         if not isinstance(ticket_rel, str) or not ticket_rel or ticket_rel == "none":
             await self._respond_ephemeral(
@@ -5046,7 +5050,7 @@ class DiscordBotService:
                             "required": True,
                             "max_length": 4000,
                         },
-                    }
+                    },
                 ],
             },
         }
