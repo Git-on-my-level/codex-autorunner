@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .....core.pma_audit import PmaAuditLog
 from .....core.pma_lane_worker import PmaLaneWorker
 from .....core.pma_queue import PmaQueue
-from .....core.pma_safety import PmaSafetyChecker
+from .....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .....core.pma_state import PmaStateStore
+
+if TYPE_CHECKING:
+    from fastapi import Request
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -48,3 +55,155 @@ class PmaRuntimeState:
             self.pma_event = asyncio.Event()
             self.pma_event_loop = loop
         return self.pma_event
+
+    async def get_pma_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        return self.get_lock(loop)
+
+    async def get_interrupt_event(self) -> asyncio.Event:
+        loop = asyncio.get_running_loop()
+        async with await self.get_pma_lock():
+            if (
+                self.pma_event is None
+                or self.pma_event.is_set()
+                or self.pma_event_loop is None
+                or self.pma_event_loop is not loop
+                or self.pma_event_loop.is_closed()
+            ):
+                self.pma_event = asyncio.Event()
+                self.pma_event_loop = loop
+            return self.pma_event
+
+    async def clear_interrupt_event(self) -> None:
+        async with await self.get_pma_lock():
+            self.pma_event = None
+            self.pma_event_loop = None
+
+    def get_state_store(self, hub_root: Path) -> PmaStateStore:
+        if self.pma_state_store is None or self.pma_state_root != hub_root:
+            self.pma_state_store = PmaStateStore(hub_root)
+            self.pma_state_root = hub_root
+        return self.pma_state_store
+
+    def get_safety_checker(
+        self, hub_root: Path, request: Optional["Request"] = None
+    ) -> PmaSafetyChecker:
+        supervisor = None
+        if request is not None:
+            supervisor = getattr(request.app.state, "hub_supervisor", None)
+        if supervisor is not None:
+            try:
+                checker = supervisor.get_pma_safety_checker()
+                if isinstance(checker, PmaSafetyChecker):
+                    return checker
+            except Exception:
+                pass
+
+        if self.pma_safety_checker is None or self.pma_safety_root != hub_root:
+            raw = getattr(request.app.state.config, "raw", {}) if request else {}
+            pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
+            safety_config = PmaSafetyConfig(
+                dedup_window_seconds=pma_config.get("dedup_window_seconds", 300),
+                max_duplicate_actions=pma_config.get("max_duplicate_actions", 3),
+                rate_limit_window_seconds=pma_config.get(
+                    "rate_limit_window_seconds", 60
+                ),
+                max_actions_per_window=pma_config.get("max_actions_per_window", 20),
+                circuit_breaker_threshold=pma_config.get(
+                    "circuit_breaker_threshold", 5
+                ),
+                circuit_breaker_cooldown_seconds=pma_config.get(
+                    "circuit_breaker_cooldown_seconds", 600
+                ),
+                enable_dedup=pma_config.get("enable_dedup", True),
+                enable_rate_limit=pma_config.get("enable_rate_limit", True),
+                enable_circuit_breaker=pma_config.get("enable_circuit_breaker", True),
+            )
+            self.pma_audit_log = PmaAuditLog(hub_root)
+            self.pma_safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
+            self.pma_safety_root = hub_root
+        return self.pma_safety_checker
+
+    def get_pma_queue(self, hub_root: Path) -> PmaQueue:
+        if self.pma_queue is None or self.pma_queue_root != hub_root:
+            self.pma_queue = PmaQueue(hub_root)
+            self.pma_queue_root = hub_root
+        return self.pma_queue
+
+    async def set_active(
+        self, active: bool, *, store: Optional[PmaStateStore] = None
+    ) -> None:
+        async with await self.get_pma_lock():
+            self.pma_active = active
+        if store is not None:
+            await self._persist_state(store)
+
+    async def begin_turn(
+        self,
+        client_turn_id: Optional[str],
+        *,
+        store: Optional[PmaStateStore] = None,
+        lane_id: Optional[str] = None,
+    ) -> bool:
+        async with await self.get_pma_lock():
+            if self.pma_active:
+                return False
+            self.pma_active = True
+            self.pma_current = {
+                "client_turn_id": client_turn_id or "",
+                "status": "starting",
+                "agent": None,
+                "thread_id": None,
+                "turn_id": None,
+                "lane_id": lane_id or "",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+        if store is not None:
+            await self._persist_state(store)
+        return True
+
+    async def update_current(
+        self, *, store: Optional[PmaStateStore] = None, **updates: Any
+    ) -> None:
+        async with await self.get_pma_lock():
+            if self.pma_current is None:
+                self.pma_current = {}
+            self.pma_current.update(updates)
+        if store is not None:
+            await self._persist_state(store)
+
+    async def get_current_snapshot(self) -> dict[str, Any]:
+        async with await self.get_pma_lock():
+            return dict(self.pma_current or {})
+
+    async def _persist_state(self, store: PmaStateStore) -> None:
+        from .....core.time_utils import now_iso
+
+        async with await self.get_pma_lock():
+            state = {
+                "version": 1,
+                "active": bool(self.pma_active),
+                "current": dict(self.pma_current or {}),
+                "last_result": dict(self.pma_last_result or {}),
+                "updated_at": now_iso(),
+            }
+        try:
+            store.save(state)
+        except Exception:
+            logger.exception("Failed to persist PMA state")
+
+    def cancel_background_task(self, task: asyncio.Task[Any], *, name: str) -> None:
+        def consume_result(fut: asyncio.Future[Any]) -> None:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception("PMA task failed: %s", name)
+
+        if task.done():
+            consume_result(task)
+            return
+
+        task.add_done_callback(consume_result)
+        task.cancel()

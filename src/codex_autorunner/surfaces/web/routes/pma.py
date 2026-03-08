@@ -104,7 +104,9 @@ from ..services.pma.common import (
 from .agents import _available_agents, _serialize_model_catalog
 from .pma_routes import (
     build_automation_routes,
+    build_history_files_docs_router,
     build_managed_thread_crud_routes,
+    build_managed_thread_runtime_routes,
     build_managed_thread_tail_routes,
 )
 from .pma_routes.automation_adapter import (
@@ -117,7 +119,9 @@ from .pma_routes.automation_adapter import (
     normalize_optional_text as _normalize_optional_text,
 )
 from .pma_routes.managed_threads import _truncate_text
-from .pma_routes.publish import PMA_PUBLISH_RETRY_DELAYS_SECONDS
+from .pma_routes.publish import (
+    PMA_PUBLISH_RETRY_DELAYS_SECONDS,
+)
 from .pma_routes.runtime_state import PmaRuntimeState
 from .pma_routes.tail_stream import (
     coerce_dict as _coerce_dict,
@@ -4125,6 +4129,8 @@ def build_pma_routes() -> APIRouter:
     build_automation_routes(router, _get_runtime_state)
     build_managed_thread_crud_routes(router, _get_runtime_state)
     build_managed_thread_tail_routes(router, _get_runtime_state)
+    build_managed_thread_runtime_routes(router, _get_runtime_state)
+    build_history_files_docs_router(router, _get_runtime_state)
 
     return router
 

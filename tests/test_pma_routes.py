@@ -16,6 +16,7 @@ from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
+from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
@@ -294,6 +295,51 @@ def test_pma_chat_response_omits_legacy_delivery_fields(hub_env) -> None:
     assert "delivery_status" not in payload
 
 
+def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id="turn-transcript",
+        message="assistant transcript payload",
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/pma/chat",
+        json={"message": "persist transcript", "client_turn_id": "client-transcript"},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+
+    active_payload = client.get("/hub/pma/active").json()
+    last_result = active_payload["last_result"]
+    transcript_pointer = last_result.get("transcript") or {}
+    transcript_turn_id = str(transcript_pointer.get("turn_id") or "")
+    assert transcript_turn_id
+
+    transcript = PmaTranscriptStore(hub_env.hub_root).read_transcript(
+        transcript_turn_id
+    )
+    assert transcript is not None
+    assert transcript["content"].strip() == "assistant transcript payload"
+    metadata = transcript["metadata"]
+    assert metadata["client_turn_id"] == "client-transcript"
+    assert metadata["trigger"] == "user_prompt"
+    assert metadata["lane_id"] == "pma:default"
+
+    history_payload = client.get("/hub/pma/history").json()
+    assert any(
+        entry.get("turn_id") == transcript_turn_id
+        for entry in history_payload.get("entries", [])
+    )
+
+    history_entry = client.get(f"/hub/pma/history/{transcript_turn_id}")
+    assert history_entry.status_code == 200
+    assert history_entry.json()["content"].strip() == "assistant transcript payload"
+
+
 def test_pma_chat_github_injection_uses_raw_user_message(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -437,6 +483,108 @@ async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
     assert resp_one.status_code == 200
     assert resp_two.status_code == 200
     assert resp_two.json().get("deduped") is not True
+
+
+@pytest.mark.anyio
+async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-interrupt"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            await asyncio.Future()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.turn_interrupt_calls: list[tuple[str, Optional[str]]] = []
+
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+            return None
+
+        async def thread_start(self, root: str) -> dict[str, str]:
+            _ = root
+            return {"id": "thread-interrupt"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: Optional[str] = None
+        ) -> None:
+            self.turn_interrupt_calls.append((turn_id, thread_id))
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    fake_supervisor = FakeSupervisor()
+    app.state.app_server_supervisor = fake_supervisor
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        chat_task = asyncio.create_task(
+            client.post(
+                "/hub/pma/chat",
+                json={"message": "interrupt me", "client_turn_id": "turn-interrupt"},
+            )
+        )
+        with anyio.fail_after(2):
+            while True:
+                active_resp = await client.get("/hub/pma/active")
+                payload = active_resp.json()
+                current = payload.get("current") or {}
+                if (
+                    payload.get("active")
+                    and current.get("thread_id")
+                    and current.get("turn_id")
+                ):
+                    break
+                await anyio.sleep(0.05)
+
+        interrupt_resp = await client.post("/hub/pma/interrupt")
+        assert interrupt_resp.status_code == 200
+        assert interrupt_resp.json()["interrupted"] is True
+
+        with anyio.fail_after(5):
+            chat_resp = await chat_task
+
+        assert chat_resp.status_code == 200
+        assert chat_resp.json()["status"] == "interrupted"
+        assert chat_resp.json()["detail"] == "PMA chat interrupted"
+
+        with anyio.fail_after(2):
+            while True:
+                final_active = (await client.get("/hub/pma/active")).json()
+                if final_active["last_result"].get("status") == "interrupted":
+                    break
+                await anyio.sleep(0.05)
+        assert final_active["last_result"]["status"] == "interrupted"
+        assert final_active["last_result"]["client_turn_id"] == "turn-interrupt"
+
+    assert fake_supervisor.client.turn_interrupt_calls
+    assert set(fake_supervisor.client.turn_interrupt_calls) == {
+        ("turn-interrupt", "thread-interrupt")
+    }
 
 
 @pytest.mark.anyio
@@ -654,6 +802,49 @@ async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> Non
         first_resp = await chat_task
         assert first_resp.status_code == 200
         assert first_resp.json().get("status") == "ok"
+
+
+@pytest.mark.anyio
+async def test_pma_queue_endpoints_report_lane_items(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    queue = PmaQueue(hub_env.hub_root)
+    lane_id = "pma:test-queue"
+
+    item, dupe_reason = await queue.enqueue(
+        lane_id,
+        "pma:test-queue:key-1",
+        {"message": "queued turn", "agent": "codex"},
+    )
+    assert dupe_reason is None
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        summary_resp = await client.get("/hub/pma/queue")
+        lane_resp = await client.get(f"/hub/pma/queue/{lane_id}")
+
+    assert summary_resp.status_code == 200
+    summary_payload = summary_resp.json()
+    assert summary_payload["total_lanes"] >= 1
+    assert summary_payload["lanes"][lane_id]["total_items"] == 1
+    assert summary_payload["lanes"][lane_id]["by_state"]["pending"] == 1
+
+    assert lane_resp.status_code == 200
+    lane_payload = lane_resp.json()
+    assert lane_payload["lane_id"] == lane_id
+    assert lane_payload["items"] == [
+        {
+            "item_id": item.item_id,
+            "state": "pending",
+            "enqueued_at": item.enqueued_at,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+            "dedupe_reason": None,
+        }
+    ]
 
 
 @pytest.mark.anyio
@@ -984,6 +1175,23 @@ def test_pma_stop_creates_artifact(hub_env) -> None:
     assert payload["details"]["lane_id"] == "pma:default"
 
 
+def test_pma_compact_creates_artifact(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/hub/pma/compact",
+        json={"summary": "compact this PMA history", "agent": "codex"},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
+    assert payload["details"]["summary_length"] == len("compact this PMA history")
+
+
 def test_pma_new_creates_artifact(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -997,6 +1205,42 @@ def test_pma_new_creates_artifact(hub_env) -> None:
     assert payload.get("status") == "ok"
     artifact_path = Path(payload["artifact_path"])
     assert artifact_path.exists()
+
+
+def test_pma_turn_events_stream_codex_respects_resume_cursor(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeEvents:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        def stream(self, thread_id: str, turn_id: str, *, after_id: int = 0):
+            self.calls.append((thread_id, turn_id, after_id))
+
+            async def _stream():
+                yield (
+                    "id: 2\n"
+                    "event: app-server\n"
+                    'data: {"thread_id":"thread-1","turn_id":"turn-1","seq":2}\n\n'
+                )
+
+            return _stream()
+
+    fake_events = FakeEvents()
+    app.state.app_server_events = fake_events
+
+    client = TestClient(app)
+    resp = client.get(
+        "/hub/pma/turns/turn-1/events",
+        params={"thread_id": "thread-1"},
+        headers={"Last-Event-ID": "1"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert "event: app-server" in resp.text
+    assert '"seq":2' in resp.text
+    assert fake_events.calls == [("thread-1", "turn-1", 1)]
 
 
 def test_pma_files_list_empty(hub_env) -> None:
