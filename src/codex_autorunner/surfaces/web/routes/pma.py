@@ -112,6 +112,7 @@ from .pma_routes import (
 from .pma_routes.automation_adapter import (
     normalize_optional_text as _normalize_optional_text,
 )
+from .pma_routes.managed_threads import _truncate_text
 from .pma_routes.publish import PMA_PUBLISH_RETRY_DELAYS_SECONDS
 from .pma_routes.runtime_state import PmaRuntimeState
 from .shared import SSE_HEADERS
@@ -1307,14 +1308,7 @@ def build_pma_routes() -> APIRouter:
         task.add_done_callback(_on_done)
         task.cancel()
 
-    def _truncate_text(value: Any, limit: int) -> str:
-        if not isinstance(value, str):
-            text_value: str = "" if value is None else str(value)
-        else:
-            text_value = value
-        if len(text_value) <= limit:
-            return text_value
-        return text_value[: max(0, limit - 3)] + "..."
+    # _truncate_text imported from managed_threads.py
 
     def _format_last_result(
         result: dict[str, Any], current: dict[str, Any]
