@@ -116,6 +116,7 @@ from .pma_routes.managed_threads import _truncate_text
 from .pma_routes.publish import PMA_PUBLISH_RETRY_DELAYS_SECONDS
 from .pma_routes.runtime_state import PmaRuntimeState
 from .pma_routes.tail_stream import (
+    iso_from_event_ms as _iso_from_event_ms,
     normalize_tail_level as _normalize_tail_level,
     resolve_resume_after as _resolve_resume_after,
 )
@@ -663,11 +664,7 @@ def build_pma_routes() -> APIRouter:
 
     # _normalize_tail_level imported from tail_stream.py
     # _resolve_resume_after imported from tail_stream.py
-
-    def _iso_from_event_ms(value: Any) -> Optional[str]:
-        if not isinstance(value, (int, float)) or value <= 0:
-            return None
-        return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc).isoformat()
+    # _iso_from_event_ms imported from tail_stream.py
 
     def _redact_nested(value: Any) -> Any:
         if isinstance(value, str):
