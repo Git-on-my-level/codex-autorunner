@@ -7,7 +7,7 @@ from typing import Any, Callable, Optional
 from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
-from . import runner_prompt
+from . import runner_post_turn, runner_prompt
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
@@ -937,24 +937,13 @@ class TicketRunner:
 
         Returns an error string if the checkpoint failed, else None.
         """
-
-        try:
-            status_proc = run_git(
-                ["status", "--porcelain"], cwd=self._workspace_root, check=True
-            )
-            if not (status_proc.stdout or "").strip():
-                return None
-            run_git(["add", "-A"], cwd=self._workspace_root, check=True)
-            msg = self._config.checkpoint_message_template.format(
-                run_id=self._run_id,
-                turn=turn,
-                agent=agent,
-            )
-            run_git(["commit", "-m", msg], cwd=self._workspace_root, check=True)
-            return None
-        except Exception as exc:
-            _logger.exception("Checkpoint commit failed")
-            return str(exc)
+        return runner_post_turn.checkpoint_git(
+            workspace_root=self._workspace_root,
+            run_id=self._run_id,
+            turn=turn,
+            agent=agent,
+            checkpoint_message_template=self._config.checkpoint_message_template,
+        )
 
     def _pause(
         self,
@@ -995,20 +984,7 @@ class TicketRunner:
 
     def _repo_fingerprint(self) -> Optional[str]:
         """Return a stable snapshot of HEAD + porcelain status."""
-        try:
-            head_proc = run_git(
-                ["rev-parse", "HEAD"], cwd=self._workspace_root, check=True
-            )
-            status_proc = run_git(
-                ["status", "--porcelain"], cwd=self._workspace_root, check=True
-            )
-            head = (head_proc.stdout or "").strip()
-            status = (status_proc.stdout or "").strip()
-            if not head:
-                return None
-            return f"{head}\n{status}"
-        except Exception:
-            return None
+        return runner_post_turn.get_repo_fingerprint(self._workspace_root)
 
     def _create_runner_pause_dispatch(
         self,
