@@ -243,6 +243,7 @@ MODEL_EFFORT_SELECT_ID = "model_effort_select"
 BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
+TICKET_PICKER_TOKEN_PREFIX = "ticket@"
 TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
 TICKETS_SELECT_ID = "tickets_select"
 TICKETS_MODAL_PREFIX = "tickets_modal"
@@ -3928,6 +3929,36 @@ class DiscordBotService:
             return "Select a ticket to view or edit."
         return f"Select a ticket to view or edit. Search: `{normalized_query}`"
 
+    def _ticket_picker_value(self, ticket_rel: str) -> str:
+        normalized = ticket_rel.strip()
+        if len(normalized) <= 100:
+            return normalized
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"{TICKET_PICKER_TOKEN_PREFIX}{digest}"
+
+    def _resolve_ticket_picker_value(
+        self,
+        selected_value: str,
+        *,
+        workspace_root: Path,
+    ) -> Optional[str]:
+        normalized = selected_value.strip()
+        if not normalized:
+            return None
+        if not normalized.startswith(TICKET_PICKER_TOKEN_PREFIX):
+            return normalized
+
+        digest = normalized[len(TICKET_PICKER_TOKEN_PREFIX) :]
+        if not digest:
+            return None
+
+        for path in list_ticket_paths(self._ticket_dir(workspace_root)):
+            rel_path = safe_relpath(path, workspace_root)
+            candidate = self._ticket_picker_value(rel_path)
+            if candidate == normalized:
+                return rel_path
+        return None
+
     def _build_ticket_components(
         self,
         workspace_root: Path,
@@ -3935,14 +3966,18 @@ class DiscordBotService:
         status_filter: str,
         search_query: str = "",
     ) -> list[dict[str, Any]]:
+        ticket_choices = self._list_ticket_choices(
+            workspace_root,
+            status_filter=status_filter,
+            search_query=search_query,
+        )
         return [
             build_ticket_filter_picker(current_filter=status_filter),
             build_ticket_picker(
-                self._list_ticket_choices(
-                    workspace_root,
-                    status_filter=status_filter,
-                    search_query=search_query,
-                )
+                [
+                    (self._ticket_picker_value(value), label, description)
+                    for value, label, description in ticket_choices
+                ]
             ),
         ]
 
@@ -5106,11 +5141,22 @@ class DiscordBotService:
         )
         if not workspace_root:
             return
+        ticket_rel = self._resolve_ticket_picker_value(
+            values[0],
+            workspace_root=workspace_root,
+        )
+        if not ticket_rel:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket selection is invalid. Re-open the ticket list and try again.",
+            )
+            return
         await self._open_ticket_modal(
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
-            ticket_rel=values[0],
+            ticket_rel=ticket_rel,
         )
 
     async def _open_ticket_modal(

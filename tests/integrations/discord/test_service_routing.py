@@ -3101,6 +3101,73 @@ async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    long_name = f"TICKET-001-{'x' * 120}.md"
+    ticket_rel = f".codex-autorunner/tickets/{long_name}"
+    (ticket_dir / long_name).write_text(
+        "---\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="tickets", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        picker_data = rest.interaction_responses[0]["payload"]["data"]
+        picker_options = picker_data["components"][1]["components"][0]["options"]
+        assert len(picker_options) == 1
+        option_value = picker_options[0]["value"]
+        assert option_value.startswith("ticket@")
+        assert len(option_value) <= 100
+
+        rest.interaction_responses.clear()
+        gateway._events = [
+            _component_interaction(
+                custom_id="tickets_select",
+                values=[option_value],
+            )
+        ]
+        await service.run_forever()
+
+        modal_payload = rest.interaction_responses[0]["payload"]
+        assert modal_payload["type"] == 9
+        text_input = modal_payload["data"]["components"][0]["component"]
+        assert text_input["value"] == (
+            "---\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n"
+        )
+        assert (
+            service._resolve_ticket_picker_value(
+                option_value,
+                workspace_root=workspace,
+            )
+            == ticket_rel
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_tickets_search_filters_picker_and_persists_across_filter_changes(
     tmp_path: Path,
 ) -> None:
