@@ -5,7 +5,7 @@
       "properties": {
         "read": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -14,7 +14,7 @@
         },
         "write": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -61,6 +61,17 @@
       },
       "type": "object"
     },
+    "AdditionalNetworkPermissions": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "AdditionalPermissionProfile": {
       "properties": {
         "fileSystem": {
@@ -84,9 +95,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -357,7 +372,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -382,7 +397,7 @@
           "description": "NEW APIs",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -406,7 +421,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -430,7 +445,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -454,7 +469,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -478,7 +493,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -502,7 +517,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -526,7 +541,31 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/metadata/update"
+              ],
+              "title": "Thread/metadata/updateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadMetadataUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/metadata/updateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -550,7 +589,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -574,7 +613,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -598,7 +637,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -622,7 +661,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -646,7 +685,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -670,7 +709,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -694,7 +733,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -718,7 +757,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -742,7 +781,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -766,7 +805,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -790,7 +829,31 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/install"
+              ],
+              "title": "Plugin/installRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginInstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/installRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -814,7 +877,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -838,7 +901,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -862,7 +925,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -886,7 +949,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -910,7 +973,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -934,7 +997,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -958,7 +1021,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -981,7 +1044,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1005,7 +1068,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1029,7 +1092,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1053,7 +1116,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1077,7 +1140,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1100,7 +1163,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1123,7 +1186,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1148,7 +1211,7 @@
           "description": "Execute a command (argv vector) under the server's sandbox.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1172,7 +1235,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1196,7 +1259,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1220,7 +1283,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1244,7 +1307,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1268,7 +1331,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1292,7 +1355,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1315,7 +1378,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1339,7 +1402,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -1382,7 +1445,7 @@
         "thread_id": {
           "allOf": [
             {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             }
           ],
           "description": "Thread ID of the receiver/new agent."
@@ -1420,7 +1483,7 @@
         "thread_id": {
           "allOf": [
             {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             }
           ],
           "description": "Thread ID of the receiver/new agent."
@@ -1710,6 +1773,56 @@
       ],
       "title": "DynamicToolCallResponse",
       "type": "object"
+    },
+    "ElicitationRequest": {
+      "oneOf": [
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "form"
+              ],
+              "type": "string"
+            },
+            "requested_schema": true
+          },
+          "required": [
+            "message",
+            "mode",
+            "requested_schema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "elicitation_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "elicitation_id",
+            "message",
+            "mode",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -2306,6 +2419,16 @@
               ],
               "description": "How to sandbox commands executed in the system"
             },
+            "service_tier": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "session_id": {
               "$ref": "#/definitions/v2/ThreadId"
             },
@@ -2543,6 +2666,60 @@
             "type"
           ],
           "title": "WebSearchEndEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_begin"
+              ],
+              "title": "ImageGenerationBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "type"
+          ],
+          "title": "ImageGenerationBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_end"
+              ],
+              "title": "ImageGenerationEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationEndEventMsg",
           "type": "object"
         },
         {
@@ -3065,10 +3242,10 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
-            "message": {
-              "type": "string"
+            "request": {
+              "$ref": "#/definitions/ElicitationRequest"
             },
             "server_name": {
               "type": "string"
@@ -3083,7 +3260,7 @@
           },
           "required": [
             "id",
-            "message",
+            "request",
             "server_name",
             "type"
           ],
@@ -4722,7 +4899,7 @@
       "properties": {
         "read": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -4731,7 +4908,7 @@
         },
         "write": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "type": [
             "array",
@@ -4943,7 +5120,7 @@
           "$ref": "#/definitions/JSONRPCErrorError"
         },
         "id": {
-          "$ref": "#/definitions/RequestId"
+          "$ref": "#/definitions/v2/RequestId"
         }
       },
       "required": [
@@ -5011,12 +5188,23 @@
       "description": "A request that expects a response.",
       "properties": {
         "id": {
-          "$ref": "#/definitions/RequestId"
+          "$ref": "#/definitions/v2/RequestId"
         },
         "method": {
           "type": "string"
         },
-        "params": true
+        "params": true,
+        "trace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/W3cTraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional W3C Trace Context for distributed tracing."
+        }
       },
       "required": [
         "id",
@@ -5030,7 +5218,7 @@
       "description": "A successful (non-error) response to a request.",
       "properties": {
         "id": {
-          "$ref": "#/definitions/RequestId"
+          "$ref": "#/definitions/v2/RequestId"
         },
         "result": true
       },
@@ -5119,6 +5307,102 @@
         "server",
         "tool"
       ],
+      "type": "object"
+    },
+    "McpServerElicitationAction": {
+      "enum": [
+        "accept",
+        "decline",
+        "cancel"
+      ],
+      "type": "string"
+    },
+    "McpServerElicitationRequestParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "form"
+              ],
+              "type": "string"
+            },
+            "requestedSchema": true
+          },
+          "required": [
+            "message",
+            "mode",
+            "requestedSchema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "elicitationId": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "elicitationId",
+            "message",
+            "mode",
+            "url"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "serverName": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "description": "Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "serverName",
+        "threadId"
+      ],
+      "title": "McpServerElicitationRequestParams",
+      "type": "object"
+    },
+    "McpServerElicitationRequestResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/McpServerElicitationAction"
+        },
+        "content": {
+          "description": "Structured user input for accepted elicitations, mirroring RMCP `CreateElicitationResult`.\n\nThis is nullable because decline/cancel responses have no content."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "McpServerElicitationRequestResponse",
       "type": "object"
     },
     "McpStartupFailure": {
@@ -5226,6 +5510,17 @@
         "socks5Udp"
       ],
       "type": "string"
+    },
+    "NetworkPermissions": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "NetworkPolicyAmendment": {
       "properties": {
@@ -5383,9 +5678,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -5443,8 +5742,14 @@
         {
           "additionalProperties": false,
           "properties": {
-            "SessionCreated": {
+            "SessionUpdated": {
               "properties": {
+                "instructions": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "session_id": {
                   "type": "string"
                 }
@@ -5452,27 +5757,6 @@
               "required": [
                 "session_id"
               ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "SessionCreated"
-          ],
-          "title": "SessionCreatedRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "SessionUpdated": {
-              "properties": {
-                "backend_prompt": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              },
               "type": "object"
             }
           },
@@ -5509,6 +5793,40 @@
         {
           "additionalProperties": false,
           "properties": {
+            "ConversationItemDone": {
+              "properties": {
+                "item_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "item_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ConversationItemDone"
+          ],
+          "title": "ConversationItemDoneRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "HandoffRequested": {
+              "$ref": "#/definitions/RealtimeHandoffRequested"
+            }
+          },
+          "required": [
+            "HandoffRequested"
+          ],
+          "title": "HandoffRequestedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "Error": {
               "type": "string"
             }
@@ -5520,6 +5838,47 @@
           "type": "object"
         }
       ]
+    },
+    "RealtimeHandoffMessage": {
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "RealtimeHandoffRequested": {
+      "properties": {
+        "handoff_id": {
+          "type": "string"
+        },
+        "input_transcript": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/definitions/RealtimeHandoffMessage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "handoff_id",
+        "input_transcript",
+        "item_id",
+        "messages"
+      ],
+      "type": "object"
     },
     "RejectConfig": {
       "properties": {
@@ -5544,6 +5903,7 @@
       "type": "object"
     },
     "RequestId": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
       "anyOf": [
         {
           "type": "string"
@@ -5553,7 +5913,7 @@
           "type": "integer"
         }
       ],
-      "description": "ID of a request, which can be either a string or an integer."
+      "title": "RequestId"
     },
     "RequestUserInputQuestion": {
       "properties": {
@@ -5937,6 +6297,26 @@
           "properties": {
             "method": {
               "enum": [
+                "skills/changed"
+              ],
+              "title": "Skills/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Skills/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -6192,6 +6572,26 @@
             "params"
           ],
           "title": "Item/fileChange/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "serverRequest/resolved"
+              ],
+              "title": "ServerRequest/resolvedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ServerRequestResolvedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ServerRequest/resolvedNotification",
           "type": "object"
         },
         {
@@ -6647,7 +7047,7 @@
           "description": "NEW APIs Sent when approval is requested for a specific command execution. This request is used for Turns started via turn/start.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -6672,7 +7072,7 @@
           "description": "Sent when approval is requested for a specific file change. This request is used for Turns started via turn/start.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -6697,7 +7097,7 @@
           "description": "EXPERIMENTAL - Request input from the user for a tool call.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -6719,10 +7119,35 @@
           "type": "object"
         },
         {
+          "description": "Request input for an MCP server elicitation.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "mcpServer/elicitation/request"
+              ],
+              "title": "McpServer/elicitation/requestRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/McpServerElicitationRequestParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "McpServer/elicitation/requestRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a dynamic tool call on the client.",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -6746,7 +7171,7 @@
         {
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -6771,7 +7196,7 @@
           "description": "DEPRECATED APIs below Request to approve a patch. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -6796,7 +7221,7 @@
           "description": "Request to exec a command. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "enum": [
@@ -7029,7 +7454,7 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/definitions/UserInput"
+                "$ref": "#/definitions/v2/UserInput"
               },
               "type": "array"
             },
@@ -7067,7 +7492,7 @@
             "phase": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/MessagePhase"
+                  "$ref": "#/definitions/v2/MessagePhase"
                 },
                 {
                   "type": "null"
@@ -7152,7 +7577,7 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/v2/WebSearchAction"
             },
             "id": {
               "type": "string"
@@ -7182,6 +7607,40 @@
             "id": {
               "type": "string"
             },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ImageGeneration"
+              ],
+              "title": "ImageGenerationTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "ContextCompaction"
@@ -7198,6 +7657,23 @@
           "type": "object"
         }
       ]
+    },
+    "W3cTraceContext": {
+      "properties": {
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracestate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "v2": {
       "AbsolutePathBuf": {
@@ -7293,6 +7769,16 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/AuthMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planType": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PlanType"
               },
               {
                 "type": "null"
@@ -8476,6 +8962,16 @@
               }
             ]
           },
+          "service_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "tools": {
             "anyOf": [
               {
@@ -8823,6 +9319,15 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "featureRequirements": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": [
+              "object",
+              "null"
             ]
           }
         },
@@ -9537,6 +10042,16 @@
           },
           {
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "image_url": {
                 "type": "string"
               },
@@ -9699,6 +10214,15 @@
           "workspace-shared",
           "all-shared",
           "personal"
+        ],
+        "type": "string"
+      },
+      "ImageDetail": {
+        "enum": [
+          "auto",
+          "low",
+          "high",
+          "original"
         ],
         "type": "string"
       },
@@ -10225,6 +10749,16 @@
       },
       "Model": {
         "properties": {
+          "availabilityNux": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelAvailabilityNux"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "defaultReasoningEffort": {
             "$ref": "#/definitions/v2/ReasoningEffort"
           },
@@ -10271,6 +10805,16 @@
               "string",
               "null"
             ]
+          },
+          "upgradeInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelUpgradeInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -10282,6 +10826,17 @@
           "isDefault",
           "model",
           "supportedReasoningEfforts"
+        ],
+        "type": "object"
+      },
+      "ModelAvailabilityNux": {
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
         ],
         "type": "object"
       },
@@ -10371,6 +10926,35 @@
           "turnId"
         ],
         "title": "ModelReroutedNotification",
+        "type": "object"
+      },
+      "ModelUpgradeInfo": {
+        "properties": {
+          "migrationMarkdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelLink": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upgradeCopy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "model"
+        ],
         "type": "object"
       },
       "NetworkAccess": {
@@ -10596,6 +11180,34 @@
         ],
         "type": "string"
       },
+      "PluginInstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "marketplaceName": {
+            "type": "string"
+          },
+          "pluginName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplaceName",
+          "pluginName"
+        ],
+        "title": "PluginInstallParams",
+        "type": "object"
+      },
+      "PluginInstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginInstallResponse",
+        "type": "object"
+      },
       "ProductSurface": {
         "enum": [
           "chatgpt",
@@ -10660,6 +11272,16 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/Verbosity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "service_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
               },
               {
                 "type": "null"
@@ -11050,6 +11672,17 @@
         ],
         "type": "object"
       },
+      "RequestId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "format": "int64",
+            "type": "integer"
+          }
+        ]
+      },
       "ResidencyRequirement": {
         "enum": [
           "us"
@@ -11382,7 +12015,7 @@
                 "type": "string"
               },
               "output": {
-                "type": "string"
+                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
               },
               "type": {
                 "enum": [
@@ -11437,6 +12070,40 @@
               "type"
             ],
             "title": "WebSearchCallResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "result": {
+                "type": "string"
+              },
+              "revised_prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "image_generation_call"
+                ],
+                "title": "ImageGenerationCallResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "result",
+              "status",
+              "type"
+            ],
+            "title": "ImageGenerationCallResponseItem",
             "type": "object"
           },
           {
@@ -11680,6 +12347,10 @@
                   "type": "fullAccess"
                 }
               },
+              "networkAccess": {
+                "default": false,
+                "type": "boolean"
+              },
               "type": {
                 "enum": [
                   "readOnly"
@@ -11788,6 +12459,30 @@
           }
         },
         "type": "object"
+      },
+      "ServerRequestResolvedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "requestId": {
+            "$ref": "#/definitions/v2/RequestId"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "threadId"
+        ],
+        "title": "ServerRequestResolvedNotification",
+        "type": "object"
+      },
+      "ServiceTier": {
+        "enum": [
+          "fast",
+          "flex"
+        ],
+        "type": "string"
       },
       "SessionSource": {
         "oneOf": [
@@ -12014,6 +12709,12 @@
           "type",
           "value"
         ],
+        "type": "object"
+      },
+      "SkillsChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+        "title": "SkillsChangedNotification",
         "type": "object"
       },
       "SkillsConfigWriteParams": {
@@ -12389,6 +13090,10 @@
             "description": "Working directory captured for the thread.",
             "type": "string"
           },
+          "ephemeral": {
+            "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+            "type": "boolean"
+          },
           "gitInfo": {
             "anyOf": [
               {
@@ -12458,6 +13163,7 @@
           "cliVersion",
           "createdAt",
           "cwd",
+          "ephemeral",
           "id",
           "modelProvider",
           "preview",
@@ -12599,6 +13305,23 @@
               }
             ]
           },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "threadId": {
             "type": "string"
           }
@@ -12636,6 +13359,16 @@
           },
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
+          },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -13126,6 +13859,40 @@
               "id": {
                 "type": "string"
               },
+              "result": {
+                "type": "string"
+              },
+              "revisedPrompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "imageGeneration"
+                ],
+                "title": "ImageGenerationThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "result",
+              "status",
+              "type"
+            ],
+            "title": "ImageGenerationThreadItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
               "review": {
                 "type": "string"
               },
@@ -13334,6 +14101,69 @@
           "data"
         ],
         "title": "ThreadLoadedListResponse",
+        "type": "object"
+      },
+      "ThreadMetadataGitInfoUpdateParams": {
+        "properties": {
+          "branch": {
+            "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "originUrl": {
+            "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ThreadMetadataUpdateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "gitInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadMetadataGitInfoUpdateParams"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadMetadataUpdateParams",
+        "type": "object"
+      },
+      "ThreadMetadataUpdateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "title": "ThreadMetadataUpdateResponse",
         "type": "object"
       },
       "ThreadNameUpdatedNotification": {
@@ -13582,6 +14412,23 @@
               }
             ]
           },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "threadId": {
             "type": "string"
           }
@@ -13619,6 +14466,16 @@
           },
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
+          },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -13798,6 +14655,23 @@
               "string",
               "null"
             ]
+          },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "ThreadStartParams",
@@ -13830,6 +14704,16 @@
           },
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
+          },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -14398,6 +15282,24 @@
             ],
             "description": "Override the sandbox policy for this turn and subsequent turns."
           },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the service tier for this turn and subsequent turns."
+          },
           "summary": {
             "anyOf": [
               {
@@ -14768,6 +15670,12 @@
       "WindowsSandboxSetupStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
             "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
           }

@@ -579,6 +579,9 @@
           "messageID": {
             "type": "string"
           },
+          "overflow": {
+            "type": "boolean"
+          },
           "sessionID": {
             "type": "string"
           },
@@ -1075,6 +1078,12 @@
           },
           {
             "$ref": "#/components/schemas/Event.project.updated"
+          },
+          {
+            "$ref": "#/components/schemas/Event.workspace.ready"
+          },
+          {
+            "$ref": "#/components/schemas/Event.workspace.failed"
           },
           {
             "$ref": "#/components/schemas/Event.server.instance.disposed"
@@ -2302,6 +2311,54 @@
         ],
         "type": "object"
       },
+      "Event.workspace.failed": {
+        "properties": {
+          "properties": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "const": "workspace.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "Event.workspace.ready": {
+        "properties": {
+          "properties": {
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "const": "workspace.ready",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ],
+        "type": "object"
+      },
       "Event.worktree.failed": {
         "properties": {
           "properties": {
@@ -2812,6 +2869,9 @@
             "type": "string"
           },
           "version": {
+            "type": "string"
+          },
+          "workspaceID": {
             "type": "string"
           }
         },
@@ -4755,6 +4815,9 @@
           },
           "version": {
             "type": "string"
+          },
+          "workspaceID": {
+            "type": "string"
           }
         },
         "required": [
@@ -5671,6 +5734,68 @@
         ],
         "type": "object"
       },
+      "Workspace": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "pattern": "^wrk.*",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectID": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "branch",
+          "name",
+          "directory",
+          "extra",
+          "projectID"
+        ],
+        "type": "object"
+      },
       "Worktree": {
         "properties": {
           "branch": {
@@ -5741,6 +5866,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -5860,6 +5992,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5891,6 +6030,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5914,6 +6060,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -5961,6 +6114,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6013,6 +6173,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6038,6 +6205,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6073,6 +6247,13 @@
             "description": "Filter sessions by project directory",
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6158,6 +6339,13 @@
           },
           {
             "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "provider",
             "required": true,
             "schema": {
@@ -6209,6 +6397,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6236,6 +6431,182 @@
         "summary": "List tool IDs"
       }
     },
+    "/experimental/workspace": {
+      "get": {
+        "description": "List all workspaces.",
+        "operationId": "experimental.workspace.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Workspace"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Workspaces"
+          }
+        },
+        "summary": "List workspaces"
+      },
+      "post": {
+        "description": "Create a workspace for the current project.",
+        "operationId": "experimental.workspace.create",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "branch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "extra": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "pattern": "^wrk.*",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "branch",
+                  "extra"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            },
+            "description": "Workspace created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Create workspace"
+      }
+    },
+    "/experimental/workspace/{id}": {
+      "delete": {
+        "description": "Remove an existing workspace.",
+        "operationId": "experimental.workspace.remove",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "pattern": "^wrk.*",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            },
+            "description": "Workspace removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Remove workspace"
+      }
+    },
     "/experimental/worktree": {
       "delete": {
         "description": "Remove a git worktree and delete its branch.",
@@ -6244,6 +6615,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6292,6 +6670,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6318,6 +6703,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6365,6 +6757,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6418,6 +6817,13 @@
           },
           {
             "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "path",
             "required": true,
             "schema": {
@@ -6457,6 +6863,13 @@
           },
           {
             "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "path",
             "required": true,
             "schema": {
@@ -6490,6 +6903,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6518,6 +6938,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6630,6 +7057,13 @@
           },
           {
             "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "query",
             "required": true,
             "schema": {
@@ -6700,6 +7134,13 @@
           },
           {
             "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "query",
             "required": true,
             "schema": {
@@ -6733,6 +7174,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -6892,6 +7340,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6917,6 +7372,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7000,6 +7462,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7028,6 +7497,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7060,6 +7536,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7137,6 +7620,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "name",
             "required": true,
@@ -7185,6 +7675,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7255,6 +7752,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "name",
             "required": true,
@@ -7306,6 +7810,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7385,6 +7896,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "name",
             "required": true,
@@ -7415,6 +7933,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7453,6 +7978,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7478,6 +8010,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7509,6 +8048,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7593,6 +8139,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7624,6 +8177,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7641,6 +8201,41 @@
         "summary": "Get current project"
       }
     },
+    "/project/git/init": {
+      "post": {
+        "description": "Create a git repository for the current project and return the refreshed project info.",
+        "operationId": "project.initGit",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": "Project information after git initialization"
+          }
+        },
+        "summary": "Initialize git repository"
+      }
+    },
     "/project/{projectID}": {
       "patch": {
         "description": "Update project properties such as name, icon, and commands.",
@@ -7649,6 +8244,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -7742,6 +8344,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8043,6 +8652,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8077,6 +8693,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8142,6 +8765,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8214,6 +8844,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8240,6 +8877,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8318,6 +8962,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "ptyID",
             "required": true,
@@ -8362,6 +9013,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "ptyID",
             "required": true,
@@ -8401,6 +9059,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8481,6 +9146,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "ptyID",
             "required": true,
@@ -8525,6 +9197,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8553,6 +9232,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8609,6 +9295,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8692,6 +9385,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Only return root sessions (no parentID)",
             "in": "query",
             "name": "roots",
@@ -8748,6 +9448,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8810,6 +9517,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8851,6 +9565,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -8911,6 +9632,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionID",
             "required": true,
@@ -8964,6 +9692,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -9047,6 +9782,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionID",
             "required": true,
@@ -9098,6 +9840,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -9161,6 +9910,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -9308,6 +10064,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionID",
             "required": true,
@@ -9351,6 +10114,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -9403,6 +10173,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -9491,6 +10268,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Session ID",
             "in": "path",
             "name": "sessionID",
@@ -9566,6 +10350,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -9720,6 +10511,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Session ID",
             "in": "path",
             "name": "sessionID",
@@ -9779,6 +10577,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -9865,6 +10670,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Session ID",
             "in": "path",
             "name": "sessionID",
@@ -9932,6 +10744,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -10021,6 +10840,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionID",
             "required": true,
@@ -10102,6 +10928,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -10234,6 +11067,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionID",
             "required": true,
@@ -10312,6 +11152,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionID",
             "required": true,
@@ -10362,6 +11209,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -10418,6 +11272,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -10516,6 +11377,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Session ID",
             "in": "path",
             "name": "sessionID",
@@ -10598,6 +11466,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Session ID",
             "in": "path",
             "name": "sessionID",
@@ -10658,6 +11533,13 @@
             }
           },
           {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionID",
             "required": true,
@@ -10712,6 +11594,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10760,6 +11649,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -10818,6 +11714,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10843,6 +11746,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -10884,6 +11794,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -10916,6 +11833,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -10974,6 +11898,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10999,6 +11930,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -11030,6 +11968,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11058,6 +12003,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11083,6 +12035,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -11143,6 +12102,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
@@ -11213,6 +12179,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -11276,6 +12249,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11301,6 +12281,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
             "schema": {
               "type": "string"
             }
