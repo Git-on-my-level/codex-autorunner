@@ -11,7 +11,7 @@ from . import runner_post_turn, runner_prompt
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
-from .lint import lint_ticket_directory, lint_ticket_frontmatter
+from .lint import lint_ticket_directory
 from .models import TicketContextEntry, TicketFrontmatter, TicketResult, TicketRunConfig
 from .outbox import (
     archive_dispatch,
@@ -922,15 +922,7 @@ class TicketRunner:
         return None
 
     def _recheck_ticket_frontmatter(self, ticket_path: Path):
-        try:
-            raw = ticket_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            return None, [f"Failed to read ticket after turn: {exc}"]
-        from .frontmatter import parse_markdown_frontmatter
-
-        data, _ = parse_markdown_frontmatter(raw)
-        fm, errors = lint_ticket_frontmatter(data)
-        return fm, errors
+        return runner_post_turn.check_ticket_frontmatter(ticket_path=ticket_path)
 
     def _checkpoint_git(self, *, turn: int, agent: str) -> Optional[str]:
         """Create a best-effort git commit checkpoint.
