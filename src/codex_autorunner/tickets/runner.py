@@ -26,7 +26,11 @@ from .replies import (
     parse_user_reply,
     resolve_reply_paths,
 )
-from .runner_execution import is_network_error
+from .runner_execution import (
+    compute_loop_guard,
+    is_network_error,
+    should_pause_for_loop,
+)
 from .runner_prompt import (
     TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
     _build_car_hud,
@@ -40,7 +44,6 @@ _is_network_error = is_network_error
 _logger = logging.getLogger(__name__)
 
 WORKSPACE_DOC_MAX_CHARS = 4000
-LOOP_NO_CHANGE_THRESHOLD = 2
 CAR_HUD_MAX_LINES = 14
 CAR_HUD_MAX_CHARS = 900
 TICKET_CONTEXT_DEFAULT_MAX_BYTES = 4096
@@ -692,76 +695,59 @@ class TicketRunner:
         # Loop guard: if the same ticket runs with no repository state change for
         # LOOP_NO_CHANGE_THRESHOLD consecutive successful turns, pause and ask for
         # user intervention instead of spinning.
-        loop_guard_raw = state.get("loop_guard")
-        loop_guard_state: dict[str, Any] = (
-            dict(loop_guard_raw) if isinstance(loop_guard_raw, dict) else {}
-        )
         current_ticket_id = safe_relpath(current_path, self._workspace_root)
-        no_repo_change_this_turn = (
-            isinstance(repo_fingerprint_before_turn, str)
-            and isinstance(repo_fingerprint_after_turn, str)
-            and repo_fingerprint_before_turn == repo_fingerprint_after_turn
-        )
         lint_retry_mode = bool(lint_errors)
-        if lint_retry_mode:
-            state.pop("loop_guard", None)
-        else:
-            prev_ticket = loop_guard_state.get("ticket")
-            prev_count = int(loop_guard_state.get("no_change_count") or 0)
-            if (
-                no_repo_change_this_turn
-                and isinstance(prev_ticket, str)
-                and prev_ticket == current_ticket_id
-            ):
-                no_change_count = prev_count + 1
-            elif no_repo_change_this_turn:
-                no_change_count = 1
-            else:
-                no_change_count = 0
-            state["loop_guard"] = {
-                "ticket": current_ticket_id,
-                "no_change_count": no_change_count,
-            }
+        loop_guard_result = compute_loop_guard(
+            state=state,
+            current_ticket_id=current_ticket_id,
+            repo_fingerprint_before=repo_fingerprint_before_turn,
+            repo_fingerprint_after=repo_fingerprint_after_turn,
+            lint_retry_mode=lint_retry_mode,
+        )
+        loop_guard_updates = loop_guard_result.get("loop_guard_updates", {})
+        if "loop_guard" in loop_guard_result:
+            state["loop_guard"] = loop_guard_result["loop_guard"]
 
-            if no_change_count >= LOOP_NO_CHANGE_THRESHOLD:
-                reason = "Ticket appears stuck: same ticket ran twice with no repository diff changes."
-                details = (
-                    "Runner paused to avoid repeated no-op work.\n\n"
-                    f"Ticket: {current_ticket_id}\n"
-                    f"Consecutive no-change turns: {no_change_count}\n\n"
-                    "Please provide unblock guidance via reply, or change repository state, then resume. "
-                    "Use force resume only if you intentionally want to retry unchanged."
-                )
-                dispatch_record = self._create_runner_pause_dispatch(
-                    outbox_paths=outbox_paths,
-                    state=state,
-                    title="Ticket loop detected (no repo diff change)",
-                    body=details,
-                    ticket_id=current_ticket_id,
-                )
-                pause_context: dict[str, Any] = {
-                    "paused_reply_seq": int(state.get("reply_seq") or 0),
-                }
-                fingerprint = self._repo_fingerprint()
-                if isinstance(fingerprint, str):
-                    pause_context["repo_fingerprint"] = fingerprint
-                state["pause_context"] = pause_context
-                state["status"] = "paused"
-                state["reason"] = reason
-                state["reason_code"] = "loop_no_diff"
-                state["reason_details"] = details
-                return TicketResult(
-                    status="paused",
-                    state=state,
-                    reason=reason,
-                    reason_details=details,
-                    dispatch=dispatch_record,
-                    current_ticket=current_ticket_id,
-                    agent_output=result.text,
-                    agent_id=result.agent_id,
-                    agent_conversation_id=result.conversation_id,
-                    agent_turn_id=result.turn_id,
-                )
+        if should_pause_for_loop(loop_guard_updates=loop_guard_updates):
+            no_change_count = loop_guard_updates.get("no_change_count", 0)
+            reason = "Ticket appears stuck: same ticket ran twice with no repository diff changes."
+            details = (
+                "Runner paused to avoid repeated no-op work.\n\n"
+                f"Ticket: {current_ticket_id}\n"
+                f"Consecutive no-change turns: {no_change_count}\n\n"
+                "Please provide unblock guidance via reply, or change repository state, then resume. "
+                "Use force resume only if you intentionally want to retry unchanged."
+            )
+            dispatch_record = self._create_runner_pause_dispatch(
+                outbox_paths=outbox_paths,
+                state=state,
+                title="Ticket loop detected (no repo diff change)",
+                body=details,
+                ticket_id=current_ticket_id,
+            )
+            pause_context: dict[str, Any] = {
+                "paused_reply_seq": int(state.get("reply_seq") or 0),
+            }
+            fingerprint = self._repo_fingerprint()
+            if isinstance(fingerprint, str):
+                pause_context["repo_fingerprint"] = fingerprint
+            state["pause_context"] = pause_context
+            state["status"] = "paused"
+            state["reason"] = reason
+            state["reason_code"] = "loop_no_diff"
+            state["reason_details"] = details
+            return TicketResult(
+                status="paused",
+                state=state,
+                reason=reason,
+                reason_details=details,
+                dispatch=dispatch_record,
+                current_ticket=current_ticket_id,
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
+            )
 
         # Post-turn: ticket frontmatter must remain valid.
         updated_fm, fm_errors = self._recheck_ticket_frontmatter(current_path)
