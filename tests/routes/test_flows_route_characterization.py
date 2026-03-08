@@ -264,12 +264,7 @@ def test_dispatch_history_includes_diff_stats_and_serves_attachments(
         )
 
     entry_dir = (
-        repo_root
-        / ".codex-autorunner"
-        / "runs"
-        / run_id
-        / "dispatch_history"
-        / "0001"
+        repo_root / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / "0001"
     )
     entry_dir.mkdir(parents=True, exist_ok=True)
     (entry_dir / "DISPATCH.md").write_text(
@@ -300,7 +295,9 @@ def test_dispatch_history_includes_diff_stats_and_serves_attachments(
         assert len(entry["attachments"]) == 1
         attachment = entry["attachments"][0]
         assert attachment["name"] == "notes.txt"
-        assert attachment["url"] == f"api/flows/{run_id}/dispatch_history/0001/notes.txt"
+        assert (
+            attachment["url"] == f"api/flows/{run_id}/dispatch_history/0001/notes.txt"
+        )
 
         file_res = client.get(f"/api/flows/{run_id}/dispatch_history/0001/notes.txt")
 
