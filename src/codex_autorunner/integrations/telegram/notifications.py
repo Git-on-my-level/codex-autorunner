@@ -420,8 +420,9 @@ class TelegramNotificationHandlers:
             return
         delta_type_raw = params.get("deltaType") or params.get("delta_type")
         delta_type = delta_type_raw.strip() if isinstance(delta_type_raw, str) else ""
+        has_explicit_delta_type = bool(delta_type)
         is_log_line = delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE
-        if not is_log_line and method == "outputDelta":
+        if not is_log_line and not has_explicit_delta_type and method == "outputDelta":
             # Older emitters may omit deltaType; preserve in-place token usage updates.
             is_log_line = _progress_item_id_for_log_line(delta) is not None
         if is_log_line:

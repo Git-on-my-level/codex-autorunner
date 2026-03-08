@@ -545,6 +545,30 @@ async def test_output_delta_log_line_updates_token_usage_in_place() -> None:
 
 
 @pytest.mark.anyio
+async def test_output_delta_with_explicit_assistant_stream_does_not_use_log_fallback() -> (
+    None
+):
+    harness = _OutputDeltaProgressHarness()
+    key = harness._turn_key
+    tracker: TurnProgressTracker = harness._turn_progress_trackers[key]
+
+    await harness._note_progress_output_delta(
+        "outputDelta",
+        {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "deltaType": "assistant_stream",
+            "delta": "tokens used - this is normal assistant text",
+        },
+    )
+
+    output_actions = [action for action in tracker.actions if action.label == "output"]
+    assert len(output_actions) == 1
+    assert output_actions[0].item_id is None
+    assert output_actions[0].text == "tokens used - this is normal assistant text"
+
+
+@pytest.mark.anyio
 async def test_start_turn_progress_uses_full_message_budget_for_persistent_output() -> (
     None
 ):
