@@ -116,6 +116,7 @@ from .pma_routes.managed_threads import _truncate_text
 from .pma_routes.publish import PMA_PUBLISH_RETRY_DELAYS_SECONDS
 from .pma_routes.runtime_state import PmaRuntimeState
 from .pma_routes.tail_stream import (
+    coerce_dict as _coerce_dict,
     iso_from_event_ms as _iso_from_event_ms,
     normalize_tail_level as _normalize_tail_level,
     resolve_resume_after as _resolve_resume_after,
@@ -601,8 +602,7 @@ def build_pma_routes() -> APIRouter:
             return created
         return {"subscription": created}
 
-    def _coerce_dict(value: Any) -> dict[str, Any]:
-        return value if isinstance(value, dict) else {}
+    # _coerce_dict imported from tail_stream.py
 
     def _parse_iso_datetime(value: Any) -> Optional[datetime]:
         if not isinstance(value, str) or not value.strip():
