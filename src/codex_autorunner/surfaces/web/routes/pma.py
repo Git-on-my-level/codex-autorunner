@@ -111,6 +111,7 @@ from .pma_routes import (
     build_managed_thread_crud_routes,
     build_managed_thread_tail_routes,
 )
+from .pma_routes.publish import PMA_PUBLISH_RETRY_DELAYS_SECONDS
 from .pma_routes.runtime_state import PmaRuntimeState
 from .shared import SSE_HEADERS
 
@@ -122,7 +123,7 @@ PMA_TIMEOUT_SECONDS = 7200
 PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
 PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
 PMA_BULK_DELETE_SAMPLE_LIMIT = 10
-PMA_PUBLISH_RETRY_DELAYS_SECONDS = (0.0, 0.25, 0.75)
+# PMA_PUBLISH_RETRY_DELAYS_SECONDS imported from .pma_routes.publish
 PMA_DISCORD_MESSAGE_MAX_LEN = 1900
 MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
