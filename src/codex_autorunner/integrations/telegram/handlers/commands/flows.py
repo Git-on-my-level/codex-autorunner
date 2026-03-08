@@ -1103,12 +1103,12 @@ class FlowCommands(SharedHelpers):
             status_value: str,
             progress_label: str,
             run_id: Optional[str],
-            indent: str = "",
+            prefix: str = "",
         ) -> str:
             run_suffix = f" run {_code(run_id)}" if run_id else ""
             repo_label = _code(label)
             return (
-                f"{indent}{status_icon} {repo_label}: {status_value} "
+                f"{prefix}{status_icon} {repo_label}: {status_value} "
                 f"{progress_label}{run_suffix}"
             )
 
@@ -1132,7 +1132,7 @@ class FlowCommands(SharedHelpers):
         for entry in overview_entries:
             repo_root = entry.repo_root
             label = entry.label
-            indent = entry.indent
+            line_prefix = "  -> " if entry.is_worktree else ""
             group = entry.group
             if group not in groups:
                 groups[group] = []
@@ -1157,10 +1157,10 @@ class FlowCommands(SharedHelpers):
                     status_value=str(display["status_label"]),
                     progress_label=progress_label,
                     run_id=display.get("run_id"),
-                    indent=indent,
+                    prefix=line_prefix,
                 )
             except Exception:
-                status_line = f"{indent}❓ {_code(label)}: Error reading state"
+                status_line = f"{line_prefix}❓ {_code(label)}: Error reading state"
             finally:
                 store.close()
 

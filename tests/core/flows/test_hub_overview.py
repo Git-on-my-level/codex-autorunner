@@ -152,4 +152,4 @@ def test_base_repo_id_with_double_dash_is_not_treated_as_worktree(
     )
 
     assert [entry.repo_id for entry in entries] == ["base--name"]
-    assert entries[0].indent == ""
+    assert entries[0].is_worktree is False
