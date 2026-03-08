@@ -948,6 +948,126 @@ async def test_service_model_name_autocomplete_returns_filtered_models(
 
 
 @pytest.mark.anyio
+async def test_service_skills_search_autocomplete_returns_filtered_skills(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _autocomplete_interaction(
+                name="skills",
+                focused_name="search",
+                focused_value="deck",
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _SkillsClient:
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            assert method == "skills/list"
+            assert params["cwds"] == [str(workspace)]
+            return [
+                {
+                    "cwd": str(workspace),
+                    "skills": [
+                        {
+                            "name": "slides",
+                            "shortDescription": "Build deck presentations",
+                        },
+                        {
+                            "name": "spreadsheets",
+                            "shortDescription": "Work with tables",
+                        },
+                    ],
+                }
+            ]
+
+    async def _fake_client_for_workspace(_workspace_path: str) -> Any:
+        return _SkillsClient()
+
+    service._client_for_workspace = _fake_client_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 8
+        assert [entry["value"] for entry in payload["data"]["choices"]] == ["slides"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_tickets_search_autocomplete_returns_filtered_tickets(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-002.md").write_text(
+        "---\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _autocomplete_interaction(
+                name="tickets",
+                focused_name="search",
+                focused_value="beta",
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 8
+        assert [entry["value"] for entry in payload["data"]["choices"]] == [
+            ".codex-autorunner/tickets/TICKET-002.md"
+        ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_service_session_resume_autocomplete_filters_threads(
     tmp_path: Path,
 ) -> None:
@@ -2976,6 +3096,134 @@ async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> N
             "tickets_filter_select",
             "tickets_select",
         ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_tickets_search_filters_picker_and_persists_across_filter_changes(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+    (ticket_dir / "TICKET-002.md").write_text(
+        "---\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="tickets",
+                options=[{"type": 3, "name": "search", "value": "beta"}],
+            ),
+            _component_interaction(
+                custom_id="tickets_filter_select",
+                values=["done"],
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        initial_data = rest.interaction_responses[0]["payload"]["data"]
+        initial_options = initial_data["components"][1]["components"][0]["options"]
+        assert [option["value"] for option in initial_options] == [
+            ".codex-autorunner/tickets/TICKET-002.md"
+        ]
+
+        filtered_data = rest.interaction_responses[1]["payload"]["data"]
+        assert "Search: `beta`" in filtered_data["content"]
+        filtered_options = filtered_data["components"][1]["components"][0]["options"]
+        assert [option["value"] for option in filtered_options] == [
+            ".codex-autorunner/tickets/TICKET-002.md"
+        ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_skills_search_filters_results(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="skills",
+                options=[{"type": 3, "name": "search", "value": "deck"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _SkillsClient:
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            assert method == "skills/list"
+            assert params["cwds"] == [str(workspace)]
+            return [
+                {
+                    "cwd": str(workspace),
+                    "skills": [
+                        {
+                            "name": "slides",
+                            "shortDescription": "Build deck presentations",
+                        },
+                        {
+                            "name": "spreadsheets",
+                            "shortDescription": "Work with tables",
+                        },
+                    ],
+                }
+            ]
+
+    async def _fake_client_for_workspace(_workspace_path: str) -> Any:
+        return _SkillsClient()
+
+    service._client_for_workspace = _fake_client_for_workspace  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Skills matching `deck`" in content
+        assert "slides" in content
+        assert "spreadsheets" not in content
     finally:
         await store.close()
 

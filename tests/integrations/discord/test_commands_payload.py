@@ -95,6 +95,16 @@ def test_required_options_are_marked_required() -> None:
     assert model_name["required"] is False
     assert model_name["autocomplete"] is True
 
+    skills = _find_option(car_options, "skills")
+    skills_search = _find_option(skills["options"], "search")
+    assert skills_search["required"] is False
+    assert skills_search["autocomplete"] is True
+
+    tickets = _find_option(car_options, "tickets")
+    tickets_search = _find_option(tickets["options"], "search")
+    assert tickets_search["required"] is False
+    assert tickets_search["autocomplete"] is True
+
     session = _find_option(car_options, "session")
     session_resume = _find_option(session["options"], "resume")
     session_thread_id = _find_option(session_resume["options"], "thread_id")
