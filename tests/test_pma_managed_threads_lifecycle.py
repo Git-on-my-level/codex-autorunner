@@ -264,3 +264,7 @@ def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
     payload = interrupt_resp.json()
     assert payload["backend_error"] == "Failed to interrupt backend turn"
     assert "sensitive-interrupt-error" not in (payload.get("backend_error") or "")
+    updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+    assert updated_turn is not None
+    assert updated_turn["status"] == "interrupted"
+    assert updated_turn["finished_at"] is not None

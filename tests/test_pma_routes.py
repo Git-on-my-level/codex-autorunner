@@ -808,6 +808,110 @@ async def test_pma_wakeup_failure_publishes_failure_summary(hub_env) -> None:
     assert "next_action:" in failure_message
 
 
+@pytest.mark.anyio
+async def test_pma_wakeup_publish_retries_transient_telegram_enqueue_failure(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id="turn-wakeup-retry",
+        message="automation summary complete",
+    )
+    app.state.app_server_events = object()
+
+    await _seed_telegram_pma_binding(hub_env, chat_id=5005, thread_id=6006)
+
+    original_enqueue_outbox = TelegramStateStore.enqueue_outbox
+    original_sleep = pma_routes.asyncio.sleep
+    enqueue_attempts = 0
+    sleep_calls: list[float] = []
+
+    async def _flaky_enqueue_outbox(self, record):
+        nonlocal enqueue_attempts
+        enqueue_attempts += 1
+        if enqueue_attempts == 1:
+            raise RuntimeError("transient-telegram-outbox")
+        return await original_enqueue_outbox(self, record)
+
+    async def _fake_sleep(delay: float) -> None:
+        if delay in {0.25, 0.75}:
+            sleep_calls.append(delay)
+            await original_sleep(0)
+            return
+        await original_sleep(delay)
+
+    monkeypatch.setattr(TelegramStateStore, "enqueue_outbox", _flaky_enqueue_outbox)
+    monkeypatch.setattr(pma_routes.asyncio, "sleep", _fake_sleep)
+
+    queue = PmaQueue(hub_env.hub_root)
+    lane_id = "pma:test-publish-retry"
+    start_lane_worker = app.state.pma_lane_worker_start
+    stop_lane_worker = app.state.pma_lane_worker_stop
+    assert callable(start_lane_worker)
+    assert callable(stop_lane_worker)
+
+    item, _ = await queue.enqueue(
+        lane_id,
+        "pma:test-publish-retry:key-1",
+        {
+            "message": "Automation wake-up received.",
+            "agent": "codex",
+            "client_turn_id": "wakeup-retry-123",
+            "wake_up": {
+                "wakeup_id": "wakeup-retry-123",
+                "repo_id": hub_env.repo_id,
+                "event_type": "managed_thread_completed",
+                "source": "lifecycle_subscription",
+                "run_id": "run-retry-123",
+            },
+        },
+    )
+
+    try:
+        await start_lane_worker(app, lane_id)
+        result: dict[str, Any] | None = None
+        with anyio.fail_after(3):
+            while True:
+                items = await queue.list_items(lane_id)
+                match = next(
+                    (entry for entry in items if entry.item_id == item.item_id), None
+                )
+                assert match is not None
+                if match.state in (QueueItemState.COMPLETED, QueueItemState.FAILED):
+                    result = dict(match.result or {})
+                    break
+                await anyio.sleep(0.05)
+        assert result is not None
+        assert result.get("status") == "ok"
+        assert result.get("delivery_status") == "success"
+        outcome = result.get("delivery_outcome") or {}
+        assert outcome.get("published") == 1
+        assert outcome.get("failed") == 0
+    finally:
+        await stop_lane_worker(app, lane_id)
+
+    assert enqueue_attempts == 2
+    assert sleep_calls == [0.25]
+
+    telegram_store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await telegram_store.close()
+
+    matching = [
+        record
+        for record in telegram_outbox
+        if record.chat_id == 5005 and record.thread_id == 6006
+    ]
+    assert len(matching) == 1
+    assert "automation summary complete" in matching[0].text
+
+
 def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

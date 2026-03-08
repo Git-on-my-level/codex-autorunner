@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
+import anyio
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
@@ -963,3 +967,107 @@ def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
     assert all_subs
     assert all_subs[0].get("state") == "cancelled"
     assert all_subs[0].get("match_count") == 1
+
+
+@pytest.mark.anyio
+async def test_send_message_defer_execution_completes_in_background(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blocker = asyncio.Event()
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            await blocker.wait()
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        create_resp = await client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        message_resp = await client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "background turn", "defer_execution": True},
+        )
+        assert message_resp.status_code == 200
+        payload = message_resp.json()
+        assert payload["status"] == "ok"
+        assert payload["send_state"] == "accepted"
+        assert payload["execution_state"] == "running"
+        assert payload["assistant_text"] == ""
+
+        store = PmaThreadStore(hub_env.hub_root)
+        managed_turn_id = payload["managed_turn_id"]
+        turn = store.get_turn(managed_thread_id, managed_turn_id)
+        assert turn is not None
+        assert turn["status"] == "running"
+        assert store.has_running_turn(managed_thread_id) is True
+
+        task_pool = getattr(app.state, "pma_managed_thread_tasks", None)
+        assert isinstance(task_pool, set)
+        assert len(task_pool) == 1
+
+        blocker.set()
+
+        with anyio.fail_after(2):
+            while True:
+                turn = store.get_turn(managed_thread_id, managed_turn_id)
+                if turn is not None and turn.get("status") == "ok":
+                    break
+                await anyio.sleep(0.05)
+
+        finalized_thread = store.get_thread(managed_thread_id)
+        assert finalized_thread is not None
+        assert finalized_thread["last_turn_id"] == managed_turn_id
+        assert finalized_thread["last_message_preview"] == "background turn"
+
+        transcript = PmaTranscriptStore(hub_env.hub_root).read_transcript(
+            managed_turn_id
+        )
+        assert transcript is not None
+        assert transcript["content"].strip() == "assistant-output"
+
+        with anyio.fail_after(2):
+            while len(getattr(app.state, "pma_managed_thread_tasks", set())) != 0:
+                await anyio.sleep(0.05)
