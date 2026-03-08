@@ -4,28 +4,23 @@ import asyncio
 import contextlib
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
 from .....agents.registry import validate_agent_id
 from .....core.state import now_iso
 from .....core.usage import persist_opencode_usage_snapshot
 from .....core.utils import atomic_write
 from .targets import (
-    _Target,
-    build_file_chat_prompt,
-    build_patch,
-    parse_target,
-    read_file,
-    _resolve_repo_root,
     _hash_content,
     _load_state,
     _save_state,
+    _Target,
+    build_file_chat_prompt,
+    build_patch,
+    read_file,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -437,3 +432,6 @@ def parse_agent_message(output: str) -> str:
             return line[len("agent:") :].strip() or "File updated via chat."
     first_line = text.splitlines()[0].strip()
     return (first_line[:97] + "...") if len(first_line) > 100 else first_line
+
+
+_FILE_CHAT_EXECUTION_API = execute_file_chat

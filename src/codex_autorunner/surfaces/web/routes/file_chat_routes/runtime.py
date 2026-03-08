@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import Any, Dict, Optional, cast
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
 from . import FileChatRoutesState
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
 
 
 async def get_or_create_interrupt_event(request: Request, key: str) -> asyncio.Event:

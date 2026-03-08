@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
+    from . import FlowRoutesState
 
 _logger = logging.getLogger(__name__)
 
@@ -78,9 +78,9 @@ def seed_issue(
     state: "FlowRoutesState",
     body: Dict[str, Any],
 ) -> Dict[str, Any]:
-    from .....core.flows.ux_helpers import seed_issue_from_github
-    from .....core.flows.ux_helpers import seed_issue_from_text
     from fastapi import HTTPException
+
+    from .....core.flows.ux_helpers import seed_issue_from_github, seed_issue_from_text
 
     source = (body.get("source") or "text").strip().lower()
     if source not in ("text", "github"):
@@ -129,7 +129,7 @@ def run_bootstrap(
             raise
         store = require_flow_store(repo_root)
         if store is None:
-            raise RuntimeError("Flow store unavailable after recovery")
+            raise RuntimeError("Flow store unavailable after recovery") from exc
         runs = store.list_runs(flow_type=flow_type)
 
     active_runs = [r for r in runs if r.status.value == "active"]
@@ -180,6 +180,9 @@ def run_bootstrap(
 
 
 def get_flow_controller(repo_root: Path, flow_type: str, state: "FlowRoutesState"):
-    from .definitions import build_flow_definition, get_flow_controller as impl
+    from .definitions import get_flow_controller as impl
 
     return impl(repo_root, flow_type, state)
+
+
+_TICKET_BOOTSTRAP_ROUTE_API = run_bootstrap

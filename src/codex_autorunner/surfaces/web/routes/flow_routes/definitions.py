@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from ....core.flows import FlowController, FlowDefinition
+    from . import FlowRoutesState
 
 _logger = logging.getLogger(__name__)
 
@@ -13,8 +14,6 @@ _logger = logging.getLogger(__name__)
 def build_flow_definition(
     repo_root: Path, flow_type: str, state: "FlowRoutesState"
 ) -> FlowDefinition:
-    from . import FlowRoutesState
-
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
     with state.lock:
@@ -68,8 +67,8 @@ def get_flow_controller(
 def get_flow_record(
     repo_root: Path, run_id: str, state: "FlowRoutesState"
 ) -> Optional[Dict[str, Any]]:
-    from .runtime_service import recover_flow_store_if_possible
     from ...services import flow_store as flow_store_service
+    from .runtime_service import recover_flow_store_if_possible
 
     try:
         store = flow_store_service.require_flow_store(repo_root, logger=_logger)
@@ -81,19 +80,25 @@ def get_flow_record(
         return {
             "id": record.id,
             "flow_type": record.flow_type,
-            "status": record.status.value
-            if hasattr(record.status, "value")
-            else str(record.status),
+            "status": (
+                record.status.value
+                if hasattr(record.status, "value")
+                else str(record.status)
+            ),
             "current_ticket_index": record.current_ticket_index,
-            "current_ticket_path": str(record.current_ticket_path)
-            if record.current_ticket_path
-            else None,
-            "created_at": record.created_at.isoformat()
-            if hasattr(record.created_at, "isoformat")
-            else str(record.created_at),
-            "updated_at": record.updated_at.isoformat()
-            if hasattr(record.updated_at, "isoformat")
-            else str(record.updated_at),
+            "current_ticket_path": (
+                str(record.current_ticket_path) if record.current_ticket_path else None
+            ),
+            "created_at": (
+                record.created_at.isoformat()
+                if hasattr(record.created_at, "isoformat")
+                else str(record.created_at)
+            ),
+            "updated_at": (
+                record.updated_at.isoformat()
+                if hasattr(record.updated_at, "isoformat")
+                else str(record.updated_at)
+            ),
         }
     except Exception as exc:
         recovered = recover_flow_store_if_possible(repo_root, "ticket_flow", state, exc)
@@ -109,19 +114,27 @@ def get_flow_record(
             return {
                 "id": record.id,
                 "flow_type": record.flow_type,
-                "status": record.status.value
-                if hasattr(record.status, "value")
-                else str(record.status),
+                "status": (
+                    record.status.value
+                    if hasattr(record.status, "value")
+                    else str(record.status)
+                ),
                 "current_ticket_index": record.current_ticket_index,
-                "current_ticket_path": str(record.current_ticket_path)
-                if record.current_ticket_path
-                else None,
-                "created_at": record.created_at.isoformat()
-                if hasattr(record.created_at, "isoformat")
-                else str(record.created_at),
-                "updated_at": record.updated_at.isoformat()
-                if hasattr(record.updated_at, "isoformat")
-                else str(record.updated_at),
+                "current_ticket_path": (
+                    str(record.current_ticket_path)
+                    if record.current_ticket_path
+                    else None
+                ),
+                "created_at": (
+                    record.created_at.isoformat()
+                    if hasattr(record.created_at, "isoformat")
+                    else str(record.created_at)
+                ),
+                "updated_at": (
+                    record.updated_at.isoformat()
+                    if hasattr(record.updated_at, "isoformat")
+                    else str(record.updated_at)
+                ),
             }
         except Exception:
             return None

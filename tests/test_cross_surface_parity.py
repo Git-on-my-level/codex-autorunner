@@ -9,6 +9,18 @@ from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
 from codex_autorunner.core.report_retention import prune_report_directory
+from codex_autorunner.integrations.telegram.helpers import (
+    _coerce_thread_list,
+    _extract_context_usage_percent,
+    _extract_thread_list_cursor,
+    _extract_thread_preview_parts,
+    _format_turn_metrics,
+    _parse_review_commit_log,
+)
+from codex_autorunner.integrations.telegram.progress_stream import (
+    TurnProgressTracker,
+    render_progress_text,
+)
 from codex_autorunner.server import create_hub_app
 
 runner = CliRunner()
@@ -375,3 +387,73 @@ def test_cross_surface_parity_report(hub_env) -> None:
         and not check.passed
     ]
     assert not critical_failures
+
+
+def test_cross_surface_shared_chat_primitive_behavior_characterization() -> None:
+    thread_entries = _coerce_thread_list(
+        {
+            "threads": [
+                {
+                    "threadId": "thread-1",
+                    "last_user_message": (
+                        "<injected context>\nworkspace details\n</injected context>\n\n"
+                        "Need a repo summary."
+                    ),
+                    "last_assistant_message": "Scanning manifests now.",
+                },
+                "thread-2",
+            ],
+            "next_cursor": 7,
+        }
+    )
+
+    assert [entry["id"] for entry in thread_entries] == ["thread-1", "thread-2"]
+    assert _extract_thread_list_cursor({"next_cursor": 7}) == "7"
+
+    user_preview, assistant_preview = _extract_thread_preview_parts(thread_entries[0])
+    assert user_preview == "Need a repo summary."
+    assert assistant_preview == "Scanning manifests now."
+
+    token_usage = {
+        "last": {"totalTokens": 80, "inputTokens": 60, "outputTokens": 20},
+        "total": {"totalTokens": 120, "inputTokens": 90, "outputTokens": 30},
+        "modelContextWindow": 100,
+    }
+    assert _extract_context_usage_percent(token_usage) == 20
+    assert (
+        _format_turn_metrics(token_usage, 12.34)
+        == "Turn time: 12.3s\nToken usage: total 80 input 60 output 20 ctx 20%"
+    )
+
+    assert _parse_review_commit_log("abc1234\x1fFix routing\x1e9876543\x1f") == [
+        ("abc1234", "Fix routing"),
+        ("9876543", ""),
+    ]
+
+    tracker = TurnProgressTracker(
+        started_at=10.0,
+        agent="codex",
+        model="gpt-5",
+        label="Thread resume",
+    )
+    tracker.add_action("plan", "Inspect thread metadata", "done")
+    tracker.note_output("Partial")
+    tracker.note_output("Partial answer")
+    tracker.note_tool("Read channel state")
+    tracker.set_context_usage_percent(_extract_context_usage_percent(token_usage))
+
+    rendered = render_progress_text(tracker, max_length=400, now=16.0)
+    assert "Thread resume" in rendered
+    assert "agent codex" in rendered
+    assert "ctx 20%" in rendered
+    assert "Inspect thread metadata" in rendered
+    assert "Partial answer" in rendered
+    assert "tool: Read channel state" in rendered
+
+    final_rendered = render_progress_text(
+        tracker,
+        max_length=400,
+        now=16.0,
+        render_mode="final",
+    )
+    assert final_rendered == "Partial answer"

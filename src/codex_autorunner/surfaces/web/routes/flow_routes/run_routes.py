@@ -137,9 +137,7 @@ def stream_flow_events(
     flow_type: str,
     state: FlowRoutesState,
 ):
-    from ....core.flows import FlowStore
     from ....integrations.app_server.event_buffer import format_sse
-
     from ...services import flow_store as flow_store_service
 
     store = flow_store_service.require_flow_store(repo_root, logger=_logger)
@@ -150,3 +148,11 @@ def stream_flow_events(
     for event in events:
         yield format_sse("flow_event", event)
     yield format_sse("done", {"status": "ok"})
+
+
+_RUN_ROUTE_API = (
+    stop_flow_worker,
+    resume_flow_run,
+    archive_flow_run,
+    get_flow_run_status,
+)

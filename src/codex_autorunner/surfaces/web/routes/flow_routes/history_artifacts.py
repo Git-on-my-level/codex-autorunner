@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any
 
-if TYPE_CHECKING:
-    from fastapi import HTTPException
+from fastapi import HTTPException
 
 _logger = logging.getLogger(__name__)
 
@@ -19,8 +18,7 @@ def resolve_outbox_for_record(repo_root: Path, record: Any) -> list[Path]:
 def get_diff_stats_by_dispatch_seq(
     repo_root: Path, record: Any, outbox_paths: list[Path]
 ) -> dict[int, dict[str, int]]:
-    from ....core.flows import FlowEventType, FlowStore
-
+    from ....core.flows import FlowEventType
     from ...services import flow_store as flow_store_service
 
     store = flow_store_service.require_flow_store(repo_root, logger=_logger)
@@ -50,8 +48,6 @@ def get_dispatch_history(
     flow_type: str,
 ) -> dict[str, Any]:
     from ....tickets.outbox import parse_dispatch
-
-    from ...services import flow_store as flow_store_service
     from .definitions import get_flow_record
 
     record = get_flow_record(repo_root, run_id, None)
@@ -93,10 +89,9 @@ def get_dispatch_history_file(
     file_path: str,
     flow_type: str,
 ):
-    from ....core.safe_paths import SafePathError, validate_single_filename
     from fastapi import HTTPException
 
-    from ...services import flow_store as flow_store_service
+    from ....core.safe_paths import SafePathError, validate_single_filename
     from .definitions import get_flow_record
 
     record = get_flow_record(repo_root, run_id, None)
@@ -127,10 +122,9 @@ def get_reply_history(
     file_path: str,
     flow_type: str,
 ):
-    from ....core.safe_paths import SafePathError, validate_single_filename
     from fastapi import HTTPException
 
-    from ...services import flow_store as flow_store_service
+    from ....core.safe_paths import SafePathError, validate_single_filename
     from .definitions import get_flow_record
 
     record = get_flow_record(repo_root, run_id, None)
@@ -164,7 +158,6 @@ def get_artifacts(
 ) -> dict[str, Any]:
     from fastapi import HTTPException
 
-    from ...services import flow_store as flow_store_service
     from .definitions import get_flow_record
 
     record = get_flow_record(repo_root, run_id, None)
@@ -204,10 +197,9 @@ def get_artifact(
     file_path: str,
     flow_type: str,
 ):
-    from ....core.safe_paths import SafePathError, validate_single_filename
     from fastapi import HTTPException
 
-    from ...services import flow_store as flow_store_service
+    from ....core.safe_paths import SafePathError, validate_single_filename
     from .definitions import get_flow_record
 
     record = get_flow_record(repo_root, run_id, None)
@@ -229,3 +221,10 @@ def get_artifact(
             return FileResponse(target)
 
     raise HTTPException(status_code=404, detail="File not found")
+
+
+_HISTORY_ARTIFACT_ROUTE_API = (
+    get_diff_stats_by_dispatch_seq,
+    get_dispatch_history_file,
+    get_reply_history,
+)

@@ -32,12 +32,19 @@ from ....core.state import now_iso
 from ....core.usage import persist_opencode_usage_snapshot
 from ....core.utils import atomic_write, find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
-from .file_chat_routes import FileChatRoutesState
+from .file_chat_routes import FileChatRoutesState, build_file_chat_runtime_routes
+from .file_chat_routes.execution import execute_file_chat as extracted_execute_file_chat
 from .shared import SSE_HEADERS
 
 FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
 FILE_CHAT_TIMEOUT_SECONDS = 180
 logger = logging.getLogger(__name__)
+
+# Keep the staged extraction seam visible while this module remains the composition owner.
+_EXTRACTED_FILE_CHAT_SEAMS = (
+    build_file_chat_runtime_routes,
+    extracted_execute_file_chat,
+)
 
 
 class FileChatError(Exception):

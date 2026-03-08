@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
 
 from .targets import (
+    _hash_content,
     _load_state,
     _save_state,
-    _hash_content,
     parse_target,
     read_file,
     resolve_repo_root,

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-__all__ = [
-    "FileChatRoutesState",
-    "build_file_chat_runtime_routes",
-]
-
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict
+
+from . import execution, targets
+
+__all__ = [
+    "FileChatRoutesState",
+    "build_file_chat_runtime_routes",
+    "execution",
+    "targets",
+]
 
 
 @dataclass
@@ -39,8 +43,6 @@ def build_file_chat_runtime_routes():
         last_for_client,
         update_turn_state,
     )
-    from . import execution, targets
-    from .. import shared
 
     return {
         "get_state": get_state,
@@ -54,3 +56,6 @@ def build_file_chat_runtime_routes():
         "targets": targets,
         "execution": execution,
     }
+
+
+_FILE_CHAT_RUNTIME_ROUTE_FACTORY = build_file_chat_runtime_routes

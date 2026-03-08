@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sqlite3
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 from .....core.flows import FlowStore
 
@@ -101,8 +99,6 @@ def recover_flow_store_if_possible(
     state: FlowRoutesState,
     exc: Exception,
 ) -> bool:
-    from ...services import flow_store as flow_store_service
-
     db_path, _ = flow_paths(repo_root)
     if not is_probably_corrupt_flow_db_error(exc, db_path):
         return False
