@@ -971,6 +971,68 @@ async def test_ticket_runner_archives_user_reply_before_turn(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_ticket_runner_only_consumes_archived_reply_after_success(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    run_dir = workspace_root / ".codex-autorunner" / "runs" / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "USER_REPLY.md").write_text("Please unblock this\n", encoding="utf-8")
+
+    prompts: list[str] = []
+    call_count = 0
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        prompts.append(req.prompt)
+        if call_count == 1:
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="conv1",
+                turn_id="t1",
+                text="failed",
+                error="Validation error: still blocked",
+            )
+
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t2",
+            text="done",
+        )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=FakeAgentPool(handler),
+    )
+
+    first = await runner.step({})
+    assert first.status == "paused"
+    assert first.state.get("reply_seq") is None
+    assert "Please unblock this" in prompts[0]
+    assert (run_dir / "reply_history" / "0001" / "USER_REPLY.md").exists()
+
+    second = await runner.step(first.state)
+    assert second.status == "continue"
+    assert second.state.get("reply_seq") == 1
+    assert "Please unblock this" in prompts[1]
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_ticket_runner_pauses_after_two_no_diff_turns(tmp_path: Path) -> None:
     workspace_root = tmp_path
     _init_git_repo(workspace_root)
