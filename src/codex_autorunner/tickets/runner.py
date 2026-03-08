@@ -6,9 +6,9 @@ from typing import Any, Callable, Optional
 
 from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
-from ..core.git_utils import git_diff_stats, run_git
+from ..core.git_utils import git_diff_stats
 from . import runner_post_turn, runner_prompt
-from .agent_pool import AgentPool, AgentTurnRequest
+from .agent_pool import AgentPool
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory
@@ -27,7 +27,10 @@ from .replies import (
     resolve_reply_paths,
 )
 from .runner_execution import (
+    capture_git_state,
+    capture_git_state_after,
     compute_loop_guard,
+    execute_turn,
     is_network_error,
     should_pause_for_loop,
 )
@@ -513,103 +516,81 @@ class TicketRunner:
             turn_options["model"] = ticket_doc.frontmatter.model
         if ticket_doc.frontmatter.reasoning:
             turn_options["reasoning"] = ticket_doc.frontmatter.reasoning
-        req = AgentTurnRequest(
-            agent_id=ticket_doc.frontmatter.agent,
-            prompt=prompt,
-            workspace_root=self._workspace_root,
-            conversation_id=reuse_conversation_id,
-            emit_event=emit_event,
-            options=turn_options if turn_options else None,
-        )
 
         total_turns += 1
         ticket_turns += 1
         state["total_turns"] = total_turns
         state["ticket_turns"] = ticket_turns
 
-        repo_fingerprint_before_turn = self._repo_fingerprint()
-        head_before_turn: Optional[str] = None
-        try:
-            head_proc = run_git(
-                ["rev-parse", "HEAD"], cwd=self._workspace_root, check=True
-            )
-            head_before_turn = (head_proc.stdout or "").strip() or None
-        except Exception:
-            head_before_turn = None
+        current_ticket_id = safe_relpath(current_path, self._workspace_root)
 
-        result = await self._agent_pool.run_turn(req)
-        if result.error:
-            state["last_agent_output"] = result.text
-            state["last_agent_id"] = result.agent_id
-            state["last_agent_conversation_id"] = result.conversation_id
-            state["last_agent_turn_id"] = result.turn_id
+        git_state_before = capture_git_state(workspace_root=self._workspace_root)
+        repo_fingerprint_before_turn = git_state_before["repo_fingerprint_before"]
+        head_before_turn = git_state_before["head_before_turn"]
 
-            # Check if this is a network error that should be retried
-            if _is_network_error(result.error):
-                network_retries += 1
-                if network_retries <= self._config.max_network_retries:
-                    state["network_retry"] = {
-                        "retries": network_retries,
-                        "last_error": result.error,
-                    }
-                    return TicketResult(
-                        status="continue",
-                        state=state,
-                        reason=(
-                            f"Network error detected (attempt {network_retries}/{self._config.max_network_retries}): {result.error}\n"
-                            "Retrying automatically..."
-                        ),
-                        current_ticket=safe_relpath(current_path, self._workspace_root),
-                        agent_output=result.text,
-                        agent_id=result.agent_id,
-                        agent_conversation_id=result.conversation_id,
-                        agent_turn_id=result.turn_id,
-                    )
+        result = await execute_turn(
+            agent_pool=self._agent_pool,
+            agent_id=ticket_doc.frontmatter.agent,
+            prompt=prompt,
+            workspace_root=self._workspace_root,
+            conversation_id=reuse_conversation_id,
+            options=turn_options if turn_options else None,
+            emit_event=emit_event,
+            max_network_retries=self._config.max_network_retries,
+            current_network_retries=network_retries,
+        )
+        if not result["success"]:
+            state["last_agent_output"] = result["text"]
+            state["last_agent_id"] = result["agent_id"]
+            state["last_agent_conversation_id"] = result["conversation_id"]
+            state["last_agent_turn_id"] = result["turn_id"]
 
-            # Not a network error or retries exhausted - pause for user intervention
+            if result["should_retry"]:
+                state["network_retry"] = {
+                    "retries": result["network_retries"],
+                    "last_error": result["error"],
+                }
+                return TicketResult(
+                    status="continue",
+                    state=state,
+                    reason=(
+                        f"Network error detected (attempt {result['network_retries']}/{self._config.max_network_retries}): {result['error']}\n"
+                        "Retrying automatically..."
+                    ),
+                    current_ticket=current_ticket_id,
+                    agent_output=result["text"],
+                    agent_id=result["agent_id"],
+                    agent_conversation_id=result["conversation_id"],
+                    agent_turn_id=result["turn_id"],
+                )
+
             state.pop("network_retry", None)
             return self._pause(
                 state,
                 reason="Agent turn failed. Fix the issue and resume.",
-                reason_details=f"Error: {result.error}",
-                current_ticket=safe_relpath(current_path, self._workspace_root),
+                reason_details=f"Error: {result['error']}",
+                current_ticket=current_ticket_id,
                 reason_code="infra_error",
             )
 
         # Mark replies as consumed only after a successful agent turn.
         if reply_max_seq > reply_seq:
             state["reply_seq"] = reply_max_seq
-        state["last_agent_output"] = result.text
-        # Clear network retry state on successful turn
+        state["last_agent_output"] = result["text"]
         state.pop("network_retry", None)
-        state["last_agent_id"] = result.agent_id
-        state["last_agent_conversation_id"] = result.conversation_id
-        state["last_agent_turn_id"] = result.turn_id
-        repo_fingerprint_after_turn = self._repo_fingerprint()
+        state["last_agent_id"] = result["agent_id"]
+        state["last_agent_conversation_id"] = result["conversation_id"]
+        state["last_agent_turn_id"] = result["turn_id"]
 
-        # Best-effort: check whether the agent created a commit and whether the
-        # working tree is clean, before any runner-driven checkpoint commit.
-        head_after_agent: Optional[str] = None
-        clean_after_agent: Optional[bool] = None
-        status_after_agent: Optional[str] = None
-        agent_committed_this_turn: Optional[bool] = None
-        try:
-            head_proc = run_git(
-                ["rev-parse", "HEAD"], cwd=self._workspace_root, check=True
-            )
-            head_after_agent = (head_proc.stdout or "").strip() or None
-            status_proc = run_git(
-                ["status", "--porcelain"], cwd=self._workspace_root, check=True
-            )
-            status_after_agent = (status_proc.stdout or "").strip()
-            clean_after_agent = not bool(status_after_agent)
-            if head_before_turn and head_after_agent:
-                agent_committed_this_turn = head_after_agent != head_before_turn
-        except Exception:
-            head_after_agent = None
-            clean_after_agent = None
-            status_after_agent = None
-            agent_committed_this_turn = None
+        git_state_after = capture_git_state_after(
+            workspace_root=self._workspace_root,
+            head_before_turn=head_before_turn,
+        )
+        repo_fingerprint_after_turn = git_state_after["repo_fingerprint_after"]
+        head_after_agent = git_state_after["head_after_turn"]
+        clean_after_agent = git_state_after["clean_after_turn"]
+        status_after_agent = git_state_after["status_after_turn"]
+        agent_committed_this_turn = git_state_after["agent_committed_this_turn"]
 
         # Post-turn: archive outbox if DISPATCH.md exists.
         dispatch_seq = int(state.get("dispatch_seq") or 0)
@@ -663,9 +644,9 @@ class TicketRunner:
         turn_summary, turn_summary_errors = create_turn_summary(
             outbox_paths,
             next_seq=turn_summary_seq,
-            agent_output=result.text or "",
+            agent_output=result.get("text") or "",
             ticket_id=current_ticket_id,
-            agent_id=result.agent_id,
+            agent_id=result.get("agent_id"),
             turn_number=total_turns,
             diff_stats=turn_diff_stats,
         )
@@ -743,10 +724,10 @@ class TicketRunner:
                 reason_details=details,
                 dispatch=dispatch_record,
                 current_ticket=current_ticket_id,
-                agent_output=result.text,
-                agent_id=result.agent_id,
-                agent_conversation_id=result.conversation_id,
-                agent_turn_id=result.turn_id,
+                agent_output=result["text"],
+                agent_id=result["agent_id"],
+                agent_conversation_id=result["conversation_id"],
+                agent_turn_id=result["turn_id"],
             )
 
         # Post-turn: ticket frontmatter must remain valid.
@@ -768,17 +749,17 @@ class TicketRunner:
             state["lint"] = {
                 "errors": fm_errors,
                 "retries": lint_retries,
-                "conversation_id": result.conversation_id,
+                "conversation_id": result["conversation_id"],
             }
             return TicketResult(
                 status="continue",
                 state=state,
                 reason="Ticket frontmatter invalid; requesting agent fix.",
                 current_ticket=safe_relpath(current_path, self._workspace_root),
-                agent_output=result.text,
-                agent_id=result.agent_id,
-                agent_conversation_id=result.conversation_id,
-                agent_turn_id=result.turn_id,
+                agent_output=result["text"],
+                agent_id=result["agent_id"],
+                agent_conversation_id=result["conversation_id"],
+                agent_turn_id=result["turn_id"],
             )
 
         # Clear lint state if previously set.
@@ -792,7 +773,7 @@ class TicketRunner:
         )
         if self._config.auto_commit and not commit_pending and not commit_required_now:
             checkpoint_error = self._checkpoint_git(
-                turn=total_turns, agent=result.agent_id
+                turn=total_turns, agent=result["agent_id"]
             )
 
         # If we dispatched a pause message, pause regardless of ticket completion.
@@ -809,67 +790,53 @@ class TicketRunner:
                 reason=reason,
                 dispatch=dispatch,
                 current_ticket=safe_relpath(current_path, self._workspace_root),
-                agent_output=result.text,
-                agent_id=result.agent_id,
-                agent_conversation_id=result.conversation_id,
-                agent_turn_id=result.turn_id,
+                agent_output=result["text"],
+                agent_id=result["agent_id"],
+                agent_conversation_id=result["conversation_id"],
+                agent_turn_id=result["turn_id"],
             )
 
         # If ticket is marked done, require a clean working tree (i.e., changes
         # committed) before advancing. This is bounded by max_commit_retries.
         if updated_fm and updated_fm.done:
             if clean_after_agent is False:
-                # Enter or continue bounded commit loop.
-                if commit_pending:
-                    # A "commit required" turn just ran and did not succeed.
-                    next_failed_attempts = commit_retries + 1
-                else:
-                    # Ticket just transitioned to done, but repo is still dirty.
-                    next_failed_attempts = 0
-
-                state["commit"] = {
-                    "pending": True,
-                    "retries": next_failed_attempts,
-                    "head_before": head_before_turn,
-                    "head_after": head_after_agent,
-                    "agent_committed_this_turn": agent_committed_this_turn,
-                    "status_porcelain": status_after_agent,
-                }
-
-                if (
-                    commit_pending
-                    and next_failed_attempts >= self._config.max_commit_retries
-                ):
-                    detail = (status_after_agent or "").strip()
-                    detail_lines = detail.splitlines()[:20]
-                    details_parts = [
-                        "Please commit manually (ensuring pre-commit hooks pass) and resume."
-                    ]
-                    if detail_lines:
-                        details_parts.append(
-                            "\n\nWorking tree status (git status --porcelain):\n- "
-                            + "\n- ".join(detail_lines)
-                        )
+                (
+                    commit_state_update,
+                    commit_status,
+                    commit_reason,
+                    commit_reason_code,
+                    commit_reason_details,
+                ) = runner_post_turn.process_commit_required(
+                    state=state,
+                    clean_after_agent=clean_after_agent,
+                    commit_pending=commit_pending,
+                    commit_retries=commit_retries,
+                    head_before_turn=head_before_turn,
+                    head_after_agent=head_after_agent,
+                    agent_committed_this_turn=agent_committed_this_turn,
+                    status_after_agent=status_after_agent,
+                    max_commit_retries=self._config.max_commit_retries,
+                )
+                if commit_state_update:
+                    state["commit"] = commit_state_update
+                if commit_reason is not None:
                     return self._pause(
                         state,
-                        reason=(
-                            f"Commit failed after {self._config.max_commit_retries} attempts. "
-                            "Manual commit required."
-                        ),
-                        reason_details="".join(details_parts),
-                        current_ticket=safe_relpath(current_path, self._workspace_root),
-                        reason_code="needs_user_fix",
+                        reason=commit_reason,
+                        reason_details=commit_reason_details,
+                        current_ticket=current_ticket_id,
+                        reason_code=commit_reason_code,
                     )
 
                 return TicketResult(
-                    status="continue",
+                    status=commit_status,
                     state=state,
                     reason="Ticket done but commit required; requesting agent commit.",
-                    current_ticket=safe_relpath(current_path, self._workspace_root),
-                    agent_output=result.text,
-                    agent_id=result.agent_id,
-                    agent_conversation_id=result.conversation_id,
-                    agent_turn_id=result.turn_id,
+                    current_ticket=current_ticket_id,
+                    agent_output=result["text"],
+                    agent_id=result["agent_id"],
+                    agent_conversation_id=result["conversation_id"],
+                    agent_turn_id=result["turn_id"],
                 )
 
             # Clean (or unknown) → commit satisfied (or no changes / cannot check).
@@ -894,10 +861,10 @@ class TicketRunner:
             reason="Turn complete.",
             dispatch=dispatch,
             current_ticket=safe_relpath(current_path, self._workspace_root),
-            agent_output=result.text,
-            agent_id=result.agent_id,
-            agent_conversation_id=result.conversation_id,
-            agent_turn_id=result.turn_id,
+            agent_output=result["text"],
+            agent_id=result["agent_id"],
+            agent_conversation_id=result["conversation_id"],
+            agent_turn_id=result["turn_id"],
         )
 
     def _find_next_ticket(self, ticket_paths: list[Path]) -> Optional[Path]:

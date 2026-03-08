@@ -33,7 +33,7 @@ def is_network_error(error_message: str) -> bool:
     return any(indicator in error_lower for indicator in network_indicators)
 
 
-def execute_turn(
+async def execute_turn(
     *,
     agent_pool: AgentPool,
     agent_id: str,
@@ -67,7 +67,7 @@ def execute_turn(
         options=turn_options if turn_options else None,
     )
 
-    result = agent_pool.run_turn(req)
+    result = await agent_pool.run_turn(req)
 
     if result.error:
         is_net_err = is_network_error(result.error)

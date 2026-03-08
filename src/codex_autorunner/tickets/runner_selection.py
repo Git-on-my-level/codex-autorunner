@@ -30,31 +30,40 @@ def select_ticket(
     config: TicketRunConfig,
     state: dict[str, Any],
     emit_event: Optional[Any] = None,
-) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]], str, str, str]:
+) -> tuple[
+    Optional[dict[str, Any]],
+    dict[str, Any],
+    str,
+    str,
+    str,
+    Optional[str],
+]:
     """Select and validate the next ticket to run.
 
-    Returns (selected_ticket_info, state_updates, status, reason_code, message).
+    Returns (selected_ticket_info, state_updates, status, reason_code, message, reason_details).
     - selected_ticket_info: dict with path, rel_path, frontmatter, or None if completed
     - state_updates: dict of state changes to apply
     - status: "continue" | "paused" | "completed"
     - reason_code: pause/completion reason code
     - message: human-readable message
+    - reason_details: optional detail string for paused states
     """
     ticket_paths = list_ticket_paths(ticket_dir)
     if not ticket_paths:
         return (
             None,
-            {"status": "completed"},
-            "completed",
+            {},
+            "paused",
             "no_tickets",
             f"No tickets found. Create tickets under {safe_relpath(ticket_dir, workspace_root)} and resume.",
+            None,
         )
 
     dir_lint_errors = lint_ticket_directory(ticket_dir)
     if dir_lint_errors:
         return (
             None,
-            {"status": "paused"},
+            {},
             "paused",
             "needs_user_fix",
             "Duplicate ticket indices detected.",
@@ -68,19 +77,21 @@ def select_ticket(
         else None
     )
 
+    def _clear_per_ticket_state() -> None:
+        state_updates["current_ticket"] = None
+        state_updates["ticket_turns"] = None
+        state_updates["last_agent_output"] = None
+        state_updates["lint"] = None
+        state_updates["commit"] = None
+
     if current_path is not None and not current_path.exists():
         _logger.warning(
             "Current ticket file no longer exists at %s; clearing stale current_ticket state.",
             safe_relpath(current_path, workspace_root),
         )
         current_path = None
-        state_updates = {
-            "current_ticket": None,
-            "ticket_turns": None,
-            "last_agent_output": None,
-            "lint": None,
-            "commit": None,
-        }
+        state_updates = {}
+        _clear_per_ticket_state()
     else:
         state_updates = {}
 
@@ -90,6 +101,7 @@ def select_ticket(
 
     if current_path and ticket_is_done(current_path) and not commit_pending:
         current_path = None
+        _clear_per_ticket_state()
 
     if current_path is None:
         next_path = _find_next_ticket(ticket_paths)
@@ -100,6 +112,7 @@ def select_ticket(
                 "completed",
                 "all_done",
                 "All tickets done.",
+                None,
             )
         current_path = next_path
         rel_path = safe_relpath(current_path, workspace_root)
@@ -125,6 +138,7 @@ def select_ticket(
         "continue",
         "",
         "",
+        None,
     )
 
 
