@@ -4,12 +4,11 @@ import re
 import shutil
 import sqlite3
 import subprocess
-import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import IO, Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Union
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -74,28 +73,13 @@ from ..schemas import (
     TicketUpdateRequest,
 )
 from ..services import flow_store as flow_store_service
+from .flow_routes import FlowRoutesState
 
 _logger = logging.getLogger(__name__)
 
 _supported_flow_types = ("ticket_flow",)
 _FLOW_DB_CORRUPT_SUFFIX = ".corrupt"
 _FLOW_DB_NOTICE_SUFFIX = ".corrupt.json"
-
-
-@dataclass
-class FlowRoutesState:
-    active_workers: Dict[
-        str, Tuple[Optional[subprocess.Popen], Optional[IO[bytes]], Optional[IO[bytes]]]
-    ]
-    controller_cache: Dict[tuple[Path, str], FlowController]
-    definition_cache: Dict[tuple[Path, str], FlowDefinition]
-    lock: threading.Lock
-
-    def __init__(self) -> None:
-        self.active_workers = {}
-        self.controller_cache = {}
-        self.definition_cache = {}
-        self.lock = threading.Lock()
 
 
 def _utc_stamp() -> str:
