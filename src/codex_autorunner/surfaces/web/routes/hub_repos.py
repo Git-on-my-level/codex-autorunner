@@ -21,7 +21,6 @@ from ....core.chat_bindings import (
 )
 from ....core.destinations import (
     resolve_effective_repo_destination,
-    validate_destination_write_payload,
 )
 from ....core.flows import FlowEventType, FlowStore
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
@@ -32,10 +31,7 @@ from ....core.pma_context import (
 )
 from ....core.pma_thread_store import default_pma_threads_db_path
 from ....core.request_context import get_request_id
-from ....core.runtime import LockError
-from ....core.ticket_flow_projection import build_canonical_state_v1
 from ....core.ticket_flow_summary import (
-    build_ticket_flow_display,
     build_ticket_flow_summary,
 )
 from ....integrations.app_server.threads import (
@@ -51,7 +47,7 @@ from ....integrations.chat.channel_directory import (
     channel_entry_key,
 )
 from ....integrations.telegram.state import topic_key
-from ....manifest import Manifest, load_manifest, save_manifest
+from ....manifest import Manifest, load_manifest
 from ..app_state import HubAppContext
 from ..schemas import (
     HubArchiveWorktreeRequest,
@@ -65,7 +61,13 @@ from ..schemas import (
     HubRemoveRepoRequest,
     RunControlRequest,
 )
-from .hub_repo_routes.mount_manager import HubMountManager
+from .hub_repo_routes import (
+    HubDestinationService,
+    HubMountManager,
+    HubRepoEnricher,
+    HubRunControlService,
+    HubWorktreeService,
+)
 
 
 def build_hub_repo_routes(
@@ -73,6 +75,8 @@ def build_hub_repo_routes(
     mount_manager: HubMountManager,
 ) -> APIRouter:
     router = APIRouter()
+    enricher = HubRepoEnricher(context, mount_manager)
+    run_control = HubRunControlService(context, mount_manager, enricher)
 
     def _build_force_attestation_payload(
         attestation: Optional[str], *, target_scope: str
@@ -84,6 +88,11 @@ def build_hub_repo_routes(
             "user_request": attestation,
             "target_scope": target_scope,
         }
+
+    worktree = HubWorktreeService(
+        context, mount_manager, enricher, _build_force_attestation_payload
+    )
+    destination = HubDestinationService(context, mount_manager)
 
     def _active_chat_binding_counts() -> dict[str, int]:
         try:
@@ -120,67 +129,9 @@ def build_hub_repo_routes(
         chat_binding_counts: Optional[dict[str, int]] = None,
         chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
     ) -> dict:
-        repo_dict = snapshot.to_dict(context.config.root)
-        repo_dict = mount_manager.add_mount_info(repo_dict)
-        binding_count = int((chat_binding_counts or {}).get(snapshot.id, 0))
-        source_counts = dict((chat_binding_counts_by_source or {}).get(snapshot.id, {}))
-        pma_binding_count = int(source_counts.get("pma", 0))
-        discord_binding_count = int(source_counts.get("discord", 0))
-        telegram_binding_count = int(source_counts.get("telegram", 0))
-        non_pma_binding_count = max(0, binding_count - pma_binding_count)
-        repo_dict["chat_bound"] = binding_count > 0
-        repo_dict["chat_bound_thread_count"] = binding_count
-        repo_dict["pma_chat_bound_thread_count"] = pma_binding_count
-        repo_dict["discord_chat_bound_thread_count"] = discord_binding_count
-        repo_dict["telegram_chat_bound_thread_count"] = telegram_binding_count
-        repo_dict["non_pma_chat_bound_thread_count"] = non_pma_binding_count
-        repo_dict["cleanup_blocked_by_chat_binding"] = non_pma_binding_count > 0
-        if snapshot.initialized and snapshot.exists_on_disk:
-            ticket_flow = _get_ticket_flow_summary(snapshot.path)
-            repo_dict["ticket_flow"] = ticket_flow
-            if isinstance(ticket_flow, dict):
-                repo_dict["ticket_flow_display"] = build_ticket_flow_display(
-                    status=(
-                        str(ticket_flow.get("status"))
-                        if ticket_flow.get("status") is not None
-                        else None
-                    ),
-                    done_count=int(ticket_flow.get("done_count") or 0),
-                    total_count=int(ticket_flow.get("total_count") or 0),
-                    run_id=(
-                        str(ticket_flow.get("run_id"))
-                        if ticket_flow.get("run_id")
-                        else None
-                    ),
-                )
-            else:
-                repo_dict["ticket_flow_display"] = build_ticket_flow_display(
-                    status=None,
-                    done_count=0,
-                    total_count=0,
-                    run_id=None,
-                )
-            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
-                snapshot.path, snapshot.id
-            )
-            repo_dict["run_state"] = run_state
-            repo_dict["canonical_state_v1"] = build_canonical_state_v1(
-                repo_root=snapshot.path,
-                repo_id=snapshot.id,
-                run_state=repo_dict["run_state"],
-                record=run_record,
-                preferred_run_id=(
-                    str(snapshot.last_run_id)
-                    if snapshot.last_run_id is not None
-                    else None
-                ),
-            )
-        else:
-            repo_dict["ticket_flow"] = None
-            repo_dict["ticket_flow_display"] = None
-            repo_dict["run_state"] = None
-            repo_dict["canonical_state_v1"] = None
-        return repo_dict
+        return enricher.enrich_repo(
+            snapshot, chat_binding_counts, chat_binding_counts_by_source
+        )
 
     def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict]:
         return build_ticket_flow_summary(repo_path, include_failure=True)
@@ -1065,7 +1016,9 @@ def build_hub_repo_routes(
             "last_scan_at": context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
             "repos": [
-                _enrich_repo(snap, chat_binding_counts, chat_binding_counts_by_source)
+                enricher.enrich_repo(
+                    snap, chat_binding_counts, chat_binding_counts_by_source
+                )
                 for snap in snapshots
             ],
         }
@@ -1084,7 +1037,9 @@ def build_hub_repo_routes(
             "last_scan_at": context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
             "repos": [
-                _enrich_repo(snap, chat_binding_counts, chat_binding_counts_by_source)
+                enricher.enrich_repo(
+                    snap, chat_binding_counts, chat_binding_counts_by_source
+                )
                 for snap in snapshots
             ],
         }
@@ -1137,7 +1092,7 @@ def build_hub_repo_routes(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return _enrich_repo(snapshot)
+        return enricher.enrich_repo(snapshot)
 
     @router.post("/hub/jobs/repos", response_model=HubJobResponse)
     async def create_repo_job(payload: HubCreateRepoRequest):
@@ -1167,7 +1122,7 @@ def build_hub_repo_routes(
                     force=force,
                 )
             await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-            return _enrich_repo(snapshot)
+            return enricher.enrich_repo(snapshot)
 
         job = await context.job_manager.submit(
             "hub.create_repo", _run_create_repo, request_id=get_request_id()
@@ -1205,7 +1160,7 @@ def build_hub_repo_routes(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return _enrich_repo(snapshot)
+        return enricher.enrich_repo(snapshot)
 
     @router.post("/hub/repos/{repo_id}/pin")
     async def pin_parent_repo(
@@ -1233,89 +1188,11 @@ def build_hub_repo_routes(
 
     @router.get("/hub/repos/{repo_id}/destination")
     async def get_repo_destination(repo_id: str):
-        safe_log(context.logger, logging.INFO, "Hub destination show repo=%s" % repo_id)
-        manifest, repos_by_id, repo = await asyncio.to_thread(
-            _resolve_manifest_repo, repo_id
-        )
-        return _destination_payload(manifest, repo, repos_by_id)
+        return await destination.get_repo_destination(repo_id)
 
     @router.post("/hub/repos/{repo_id}/destination")
     async def set_repo_destination(repo_id: str, payload: HubDestinationSetRequest):
-        normalized_kind = payload.kind.strip().lower()
-        destination: dict[str, Any]
-        if normalized_kind == "local":
-            destination = {"kind": "local"}
-        elif normalized_kind == "docker":
-            destination = {"kind": "docker", "image": (payload.image or "").strip()}
-            container_name = (payload.container_name or "").strip()
-            if container_name:
-                destination["container_name"] = container_name
-            profile = (payload.profile or "").strip()
-            if profile:
-                destination["profile"] = profile
-            workdir = (payload.workdir or "").strip()
-            if workdir:
-                destination["workdir"] = workdir
-            env_passthrough = [
-                str(item).strip()
-                for item in (payload.env_passthrough or [])
-                if str(item).strip()
-            ]
-            if env_passthrough:
-                destination["env_passthrough"] = env_passthrough
-            if payload.env:
-                destination["env"] = dict(payload.env)
-            mounts: list[dict[str, Any]] = []
-            for item in payload.mounts or []:
-                source = str((item or {}).get("source") or "")
-                target = str((item or {}).get("target") or "")
-                mount_payload: dict[str, Any] = {"source": source, "target": target}
-                read_only = (item or {}).get("read_only")
-                if read_only is None and "readOnly" in (item or {}):
-                    read_only = (item or {}).get("readOnly")
-                if read_only is None and "readonly" in (item or {}):
-                    read_only = (item or {}).get("readonly")
-                if read_only is not None:
-                    mount_payload["read_only"] = read_only
-                mounts.append(mount_payload)
-            if mounts:
-                destination["mounts"] = mounts
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Unsupported destination kind: {payload.kind!r}. "
-                    "Use 'local' or 'docker'."
-                ),
-            )
-
-        validated = validate_destination_write_payload(
-            destination, context="destination"
-        )
-        if not validated.valid or validated.normalized_destination is None:
-            detail = "; ".join(validated.errors) or "Invalid destination payload"
-            raise HTTPException(status_code=400, detail=detail)
-        normalized_destination = validated.normalized_destination
-
-        manifest, repos_by_id, repo = await asyncio.to_thread(
-            _resolve_manifest_repo, repo_id
-        )
-        repo.destination = normalized_destination
-        await asyncio.to_thread(
-            save_manifest,
-            context.config.manifest_path,
-            manifest,
-            context.config.root,
-        )
-        manifest, repos_by_id, repo = await asyncio.to_thread(
-            _resolve_manifest_repo, repo_id
-        )
-
-        snapshots = await asyncio.to_thread(
-            context.supervisor.list_repos, use_cache=False
-        )
-        await mount_manager.refresh_mounts(snapshots)
-        return _destination_payload(manifest, repo, repos_by_id)
+        return await destination.set_repo_destination(repo_id, payload)
 
     @router.get("/hub/chat/channels")
     async def list_chat_channels(query: Optional[str] = None, limit: int = 100):
@@ -1690,217 +1567,65 @@ def build_hub_repo_routes(
 
     @router.post("/hub/worktrees/create")
     async def create_worktree(payload: HubCreateWorktreeRequest):
-        base_repo_id = payload.base_repo_id
-        branch = payload.branch
-        force = payload.force
-        start_point = payload.start_point
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub create worktree base=%s branch=%s force=%s start_point=%s"
-            % (base_repo_id, branch, force, start_point),
+        return await worktree.create_worktree(
+            base_repo_id=payload.base_repo_id,
+            branch=payload.branch,
+            force=payload.force,
+            start_point=payload.start_point,
         )
-        try:
-            snapshot = await asyncio.to_thread(
-                context.supervisor.create_worktree,
-                base_repo_id=str(base_repo_id),
-                branch=str(branch),
-                force=force,
-                start_point=str(start_point) if start_point else None,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return _enrich_repo(snapshot)
 
     @router.post("/hub/jobs/worktrees/create", response_model=HubJobResponse)
     async def create_worktree_job(payload: HubCreateWorktreeRequest):
-        async def _run_create_worktree():
-            snapshot = await asyncio.to_thread(
-                context.supervisor.create_worktree,
-                base_repo_id=str(payload.base_repo_id),
-                branch=str(payload.branch),
-                force=payload.force,
-                start_point=str(payload.start_point) if payload.start_point else None,
-            )
-            await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-            return _enrich_repo(snapshot)
-
-        job = await context.job_manager.submit(
-            "hub.create_worktree", _run_create_worktree, request_id=get_request_id()
-        )
-        return job.to_dict()
+        return await worktree.create_worktree_job(payload)
 
     @router.post("/hub/worktrees/cleanup")
     async def cleanup_worktree(payload: HubCleanupWorktreeRequest):
-        worktree_repo_id = payload.worktree_repo_id
-        delete_branch = payload.delete_branch
-        delete_remote = payload.delete_remote
-        archive = payload.archive
-        force = payload.force
-        force_attestation = payload.force_attestation
-        force_archive = payload.force_archive
-        archive_note = payload.archive_note
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s archive=%s force=%s force_archive=%s force_attestation=%s"
-            % (
-                worktree_repo_id,
-                delete_branch,
-                delete_remote,
-                archive,
-                force,
-                force_archive,
-                bool(force_attestation),
-            ),
+        return await worktree.cleanup_worktree(
+            worktree_repo_id=payload.worktree_repo_id,
+            delete_branch=payload.delete_branch,
+            delete_remote=payload.delete_remote,
+            archive=payload.archive,
+            force=payload.force,
+            force_attestation=payload.force_attestation,
+            force_archive=payload.force_archive,
+            archive_note=payload.archive_note,
         )
-        cleanup_kwargs: dict[str, Any] = {
-            "worktree_repo_id": str(worktree_repo_id),
-            "delete_branch": delete_branch,
-            "delete_remote": delete_remote,
-            "archive": archive,
-            "force": force,
-            "force_archive": force_archive,
-            "archive_note": archive_note,
-        }
-        if force_attestation is not None:
-            cleanup_kwargs["force_attestation"] = _build_force_attestation_payload(
-                force_attestation,
-                target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
-            )
-        try:
-            result = await asyncio.to_thread(
-                context.supervisor.cleanup_worktree,
-                **cleanup_kwargs,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if isinstance(result, dict):
-            return result
-        return {"status": "ok"}
 
     @router.post("/hub/jobs/worktrees/cleanup", response_model=HubJobResponse)
     async def cleanup_worktree_job(payload: HubCleanupWorktreeRequest):
-        cleanup_kwargs: dict[str, Any] = {
-            "worktree_repo_id": str(payload.worktree_repo_id),
-            "delete_branch": payload.delete_branch,
-            "delete_remote": payload.delete_remote,
-            "archive": payload.archive,
-            "force": payload.force,
-            "force_archive": payload.force_archive,
-            "archive_note": payload.archive_note,
-        }
-        if payload.force_attestation is not None:
-            cleanup_kwargs["force_attestation"] = _build_force_attestation_payload(
-                payload.force_attestation,
-                target_scope=f"hub.worktree.cleanup:{payload.worktree_repo_id}",
-            )
-
-        def _run_cleanup_worktree():
-            result = context.supervisor.cleanup_worktree(**cleanup_kwargs)
-            if isinstance(result, dict):
-                return result
-            return {"status": "ok"}
-
-        job = await context.job_manager.submit(
-            "hub.cleanup_worktree", _run_cleanup_worktree, request_id=get_request_id()
-        )
-        return job.to_dict()
+        return await worktree.cleanup_worktree_job(payload)
 
     @router.post("/hub/worktrees/archive", response_model=HubArchiveWorktreeResponse)
     async def archive_worktree(payload: HubArchiveWorktreeRequest):
-        worktree_repo_id = payload.worktree_repo_id
-        archive_note = payload.archive_note
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub archive worktree id=%s" % (worktree_repo_id,),
+        return await worktree.archive_worktree(
+            worktree_repo_id=payload.worktree_repo_id,
+            archive_note=payload.archive_note,
         )
-        try:
-            result = await asyncio.to_thread(
-                context.supervisor.archive_worktree,
-                worktree_repo_id=str(worktree_repo_id),
-                archive_note=archive_note,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return result
 
     @router.post("/hub/repos/{repo_id}/run")
     async def run_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
         once = payload.once if payload else False
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub run %s once=%s" % (repo_id, once),
-        )
-        try:
-            snapshot = await asyncio.to_thread(
-                context.supervisor.run_repo, repo_id, once=once
-            )
-        except LockError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return _enrich_repo(snapshot)
+        return await run_control.run_repo(repo_id, once)
 
     @router.post("/hub/repos/{repo_id}/stop")
     async def stop_repo(repo_id: str):
-        safe_log(context.logger, logging.INFO, f"Hub stop {repo_id}")
-        try:
-            snapshot = await asyncio.to_thread(context.supervisor.stop_repo, repo_id)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _enrich_repo(snapshot)
+        return await run_control.stop_repo(repo_id)
 
     @router.post("/hub/repos/{repo_id}/resume")
     async def resume_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
         once = payload.once if payload else False
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub resume %s once=%s" % (repo_id, once),
-        )
-        try:
-            snapshot = await asyncio.to_thread(
-                context.supervisor.resume_repo, repo_id, once=once
-            )
-        except LockError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return _enrich_repo(snapshot)
+        return await run_control.resume_repo(repo_id, once)
 
     @router.post("/hub/repos/{repo_id}/kill")
     async def kill_repo(repo_id: str):
-        safe_log(context.logger, logging.INFO, f"Hub kill {repo_id}")
-        try:
-            snapshot = await asyncio.to_thread(context.supervisor.kill_repo, repo_id)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _enrich_repo(snapshot)
+        return await run_control.kill_repo(repo_id)
 
     @router.post("/hub/repos/{repo_id}/init")
     async def init_repo(repo_id: str):
-        safe_log(context.logger, logging.INFO, f"Hub init {repo_id}")
-        try:
-            snapshot = await asyncio.to_thread(context.supervisor.init_repo, repo_id)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return _enrich_repo(snapshot)
+        return await run_control.init_repo(repo_id)
 
     @router.post("/hub/repos/{repo_id}/sync-main")
     async def sync_repo_main(repo_id: str):
-        safe_log(context.logger, logging.INFO, f"Hub sync main {repo_id}")
-        try:
-            snapshot = await asyncio.to_thread(context.supervisor.sync_main, repo_id)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return _enrich_repo(snapshot)
+        return await run_control.sync_main(repo_id)
 
     return router

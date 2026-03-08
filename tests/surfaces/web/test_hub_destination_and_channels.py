@@ -319,6 +319,50 @@ def test_hub_repo_list_includes_ticket_flow_summary_and_run_state(
     assert repo_entry["canonical_state_v1"]["represented_run_id"] == "run-paused"
 
 
+def test_hub_scan_reuses_repo_summary_enrichment(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("base")
+
+    tickets_dir = repo.path / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\ntitle: First\ngoal: ship it\nagent: codex\ndone: false\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    _seed_flow_run(
+        repo.path,
+        run_id="run-running",
+        status=FlowRunStatus.RUNNING,
+        diff_events=[],
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.post("/hub/repos/scan")
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["last_scan_at"]
+    assert isinstance(payload["pinned_parent_repo_ids"], list)
+
+    repo_entry = next(item for item in payload["repos"] if item["id"] == "base")
+    summary = repo_entry["ticket_flow"]
+    assert summary["status"] == "running"
+    assert summary["done_count"] == 0
+    assert summary["total_count"] == 1
+    assert summary["run_id"] == "run-running"
+
+    display = repo_entry["ticket_flow_display"]
+    assert display["status"] == "running"
+    assert display["is_active"] is True
+
+    run_state = repo_entry["run_state"] or {}
+    assert run_state["run_id"] == "run-running"
+    assert run_state["flow_status"] == "running"
+    _assert_repo_canonical_state_v1(repo_entry)
+    assert repo_entry["canonical_state_v1"]["represented_run_id"] == "run-running"
+
+
 def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _create_hub_supervisor(hub_root)

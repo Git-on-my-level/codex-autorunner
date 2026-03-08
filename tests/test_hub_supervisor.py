@@ -769,6 +769,75 @@ def test_hub_remove_repo_route_forwards_force_attestation(
     }
 
 
+def test_hub_repo_job_routes_submit_expected_kinds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    repo_dir = hub_root / "demo#scan"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    submissions: list[dict[str, object]] = []
+
+    async def _fake_submit(kind: str, func, *, request_id: Optional[str] = None):
+        result = await func()
+        submissions.append(
+            {"kind": kind, "request_id": request_id, "result": result}
+        )
+
+        class _Job:
+            def to_dict(self) -> dict[str, object]:
+                return {
+                    "job_id": f"job-{len(submissions)}",
+                    "kind": kind,
+                    "status": "succeeded",
+                    "created_at": "2026-03-08T00:00:00Z",
+                    "started_at": "2026-03-08T00:00:00Z",
+                    "finished_at": "2026-03-08T00:00:01Z",
+                    "result": result if isinstance(result, dict) else None,
+                    "error": None,
+                }
+
+        return _Job()
+
+    monkeypatch.setattr(app.state.job_manager, "submit", _fake_submit)
+
+    client = TestClient(app)
+
+    scan_resp = client.post("/hub/jobs/scan")
+    assert scan_resp.status_code == 200
+    assert scan_resp.json()["kind"] == "hub.scan_repos"
+
+    create_resp = client.post("/hub/jobs/repos", json={"id": "base"})
+    assert create_resp.status_code == 200
+    assert create_resp.json()["kind"] == "hub.create_repo"
+    assert (hub_root / "base").exists()
+
+    remove_resp = client.post(
+        "/hub/jobs/repos/base/remove",
+        json={
+            "force": True,
+            "force_attestation": "REMOVE base",
+            "delete_dir": True,
+        },
+    )
+    assert remove_resp.status_code == 200
+    assert remove_resp.json()["kind"] == "hub.remove_repo"
+    assert not (hub_root / "base").exists()
+
+    assert [item["kind"] for item in submissions] == [
+        "hub.scan_repos",
+        "hub.create_repo",
+        "hub.remove_repo",
+    ]
+    assert submissions[0]["result"] == {"status": "ok"}
+    assert submissions[1]["result"]["id"] == "base"
+    assert submissions[2]["result"] == {"status": "ok"}
+
+
 def test_sync_main_raises_when_local_default_diverges_from_origin(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
