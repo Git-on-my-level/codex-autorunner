@@ -120,6 +120,7 @@ from .pma_routes.tail_stream import (
     iso_from_event_ms as _iso_from_event_ms,
     normalize_tail_level as _normalize_tail_level,
     parse_iso_datetime as _parse_iso_datetime,
+    parse_tail_duration_seconds as _parse_tail_duration_seconds,
     resolve_resume_after as _resolve_resume_after,
 )
 from .shared import SSE_HEADERS
@@ -605,50 +606,7 @@ def build_pma_routes() -> APIRouter:
 
     # _coerce_dict imported from tail_stream.py
     # _parse_iso_datetime imported from tail_stream.py
-
-    def _parse_tail_duration_seconds(value: Optional[str]) -> Optional[int]:
-        if value is None:
-            return None
-        raw = value.strip().lower()
-        if not raw:
-            raise HTTPException(status_code=400, detail="since must not be empty")
-        multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
-        total_seconds = 0
-        idx = 0
-        size = len(raw)
-        while idx < size:
-            start = idx
-            while idx < size and raw[idx].isdigit():
-                idx += 1
-            if start == idx or idx >= size:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Invalid since duration. Use forms like 30s, 5m, 2h, 1d, "
-                        "or combined 1h30m."
-                    ),
-                )
-            amount_text = raw[start:idx]
-            # Keep duration parsing bounded and predictable.
-            if len(amount_text) > 9:
-                raise HTTPException(
-                    status_code=400, detail="since duration component is too large"
-                )
-            unit = raw[idx]
-            multiplier = multipliers.get(unit)
-            if multiplier is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Invalid since duration. Use forms like 30s, 5m, 2h, 1d, "
-                        "or combined 1h30m."
-                    ),
-                )
-            idx += 1
-            total_seconds += int(amount_text) * multiplier
-        if total_seconds <= 0:
-            raise HTTPException(status_code=400, detail="since must be > 0")
-        return total_seconds
+    # _parse_tail_duration_seconds imported from tail_stream.py
 
     def _since_ms_from_duration(value: Optional[str]) -> Optional[int]:
         seconds = _parse_tail_duration_seconds(value)
