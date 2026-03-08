@@ -15,9 +15,13 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...agents.opencode.harness import OpenCodeHarness
-from ...core.config import load_repo_config, resolve_env_for_root
 from ...bootstrap import seed_hub_files, seed_repo_files
-from ...core.config import ConfigError, find_nearest_hub_config_path
+from ...core.config import (
+    ConfigError,
+    find_nearest_hub_config_path,
+    load_repo_config,
+    resolve_env_for_root,
+)
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_prompt_writing_hint,
@@ -144,7 +148,6 @@ from ...tickets.files import (
     read_ticket_frontmatter,
     safe_relpath,
 )
-
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ..telegram.helpers import (
