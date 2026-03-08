@@ -104,6 +104,7 @@ from ..services.pma.common import (
 from .agents import _available_agents, _serialize_model_catalog
 from .pma_routes import (
     build_automation_routes,
+    build_chat_runtime_router,
     build_history_files_docs_router,
     build_managed_thread_crud_routes,
     build_managed_thread_runtime_routes,
@@ -4131,6 +4132,7 @@ def build_pma_routes() -> APIRouter:
     build_managed_thread_tail_routes(router, _get_runtime_state)
     build_managed_thread_runtime_routes(router, _get_runtime_state)
     build_history_files_docs_router(router, _get_runtime_state)
+    build_chat_runtime_router(router, _get_runtime_state)
 
     return router
 

@@ -207,3 +207,41 @@ class PmaRuntimeState:
 
         task.add_done_callback(consume_result)
         task.cancel()
+
+    async def ensure_lane_worker(
+        self,
+        lane_id: str,
+        request: Any,
+        execute_callback: Any,
+    ) -> None:
+        existing = self.lane_workers.get(lane_id)
+        if existing is not None and existing.is_running:
+            return
+
+        def _on_result(item: Any, result: dict[str, Any]) -> None:
+            result_future = self.item_futures.get(item.item_id)
+            if result_future and not result_future.done():
+                result_future.set_result(result)
+            self.item_futures.pop(item.item_id, None)
+
+        queue = self.get_pma_queue(request.app.state.config.root)
+        worker = PmaLaneWorker(
+            lane_id,
+            queue,
+            execute_callback,
+            log=logger,
+            on_result=_on_result,
+        )
+        self.lane_workers[lane_id] = worker
+        await worker.start()
+
+    async def stop_lane_worker(self, lane_id: str) -> None:
+        worker = self.lane_workers.get(lane_id)
+        if worker is None:
+            return
+        await worker.stop()
+        self.lane_workers.pop(lane_id, None)
+
+    async def stop_all_lane_workers(self) -> None:
+        for lane_id in list(self.lane_workers.keys()):
+            await self.stop_lane_worker(lane_id)
