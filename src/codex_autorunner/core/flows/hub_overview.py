@@ -14,7 +14,7 @@ class HubFlowOverviewEntry:
     repo_id: str
     repo_root: Path
     label: str
-    indent: str
+    is_worktree: bool
     group: str
     unregistered: bool = False
 
@@ -134,7 +134,7 @@ def build_hub_flow_overview_entries(
                 repo_id=repo_id,
                 repo_root=repo_root,
                 label=label,
-                indent="  - " if is_worktree else "",
+                is_worktree=is_worktree,
                 group=_group_id_for_repo(repo),
                 unregistered=False,
             )
@@ -160,7 +160,7 @@ def build_hub_flow_overview_entries(
                 repo_id=repo_id,
                 repo_root=repo_root.resolve(),
                 label=label,
-                indent="  - ",
+                is_worktree=True,
                 group=_group_id_for_repo_id(repo_id),
                 unregistered=True,
             )

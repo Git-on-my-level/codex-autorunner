@@ -1352,6 +1352,8 @@ async def test_flow_hub_overview_shows_only_active_chat_bound_worktrees(
     content = handler.sent[0][0]
     assert "`wt-visible`" in content
     assert "`wt-hidden`" not in content
+    assert "\n  -> " in content
+    assert "\n  - " not in content
 
 
 @pytest.mark.anyio

@@ -5695,6 +5695,7 @@ class DiscordBotService:
         has_unregistered = any(entry.unregistered for entry in overview_entries)
         for entry in overview_entries:
             line_label = display_label_by_repo_id.get(entry.repo_id, entry.label)
+            line_prefix = "  -> " if entry.is_worktree else ""
             if entry.group not in groups:
                 groups[entry.group] = []
                 group_order.append(entry.group)
@@ -5704,7 +5705,7 @@ class DiscordBotService:
                 groups[entry.group].append(
                     (
                         line_label,
-                        f"{entry.indent}❓ {line_label}: Error reading state",
+                        f"{line_prefix}❓ {line_label}: Error reading state",
                     )
                 )
                 continue
@@ -5721,11 +5722,11 @@ class DiscordBotService:
                 run_id = display.get("run_id")
                 run_suffix = f" run {run_id}" if run_id else ""
                 line = (
-                    f"{entry.indent}{display['status_icon']} {line_label}: "
+                    f"{line_prefix}{display['status_icon']} {line_label}: "
                     f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}"
                 )
             except Exception:
-                line = f"{entry.indent}❓ {line_label}: Error reading state"
+                line = f"{line_prefix}❓ {line_label}: Error reading state"
             finally:
                 store.close()
             groups[entry.group].append((line_label, line))
