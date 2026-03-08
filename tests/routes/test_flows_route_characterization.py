@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -175,3 +177,53 @@ def test_get_flow_record_returns_503_for_sqlite_errors_and_closes_store(
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == "Flows database unavailable"
     assert store.close_calls == 1
+
+
+def test_stream_flow_events_uses_last_event_id_as_resume_cursor(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+    run_id = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        flow_routes,
+        "_get_flow_record",
+        lambda _repo_root, _run_id: SimpleNamespace(flow_type="ticket_flow"),
+    )
+
+    observed: dict[str, object] = {}
+
+    class StubEvent:
+        def __init__(self, seq: int, event_type: str) -> None:
+            self.seq = seq
+            self._payload = {"seq": seq, "event_type": event_type}
+
+        def model_dump(self, mode: str = "json") -> dict[str, object]:
+            assert mode == "json"
+            return dict(self._payload)
+
+    class StubController:
+        async def stream_events(self, run_id: str, after_seq: int | None = None):
+            observed["run_id"] = run_id
+            observed["after_seq"] = after_seq
+            yield StubEvent(2, "progress")
+            yield StubEvent(3, "completed")
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_get_flow_controller",
+        lambda _repo_root, _flow_type, _state: StubController(),
+    )
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/api/flows/{run_id}/events",
+            headers={"Last-Event-ID": "1"},
+        )
+
+    assert resp.status_code == 200
+    assert observed == {"run_id": run_id, "after_seq": 1}
+    assert "id: 2" in resp.text
+    assert f"data: {json.dumps({'seq': 2, 'event_type': 'progress'})}" in resp.text
+    assert "id: 3" in resp.text

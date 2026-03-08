@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
 from codex_autorunner.surfaces.web.routes.file_chat import (
     FileChatRoutesState,
     build_file_chat_routes,
@@ -61,3 +65,49 @@ def test_file_chat_state_is_app_scoped():
 
     # Verify old and new are different objects
     assert old_state is not new_state
+
+
+def test_file_chat_active_and_interrupt_routes_share_app_state(tmp_path) -> None:
+    app = FastAPI()
+    app.include_router(build_file_chat_routes())
+    app.state.engine = SimpleNamespace(repo_root=tmp_path)
+
+    target = file_chat_routes._parse_target(tmp_path, "contextspace:active_context")
+    interrupt_event = asyncio.Event()
+    current = {
+        "client_turn_id": "turn-123",
+        "target": target.target,
+        "status": "running",
+        "agent": "codex",
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+    }
+
+    state = FileChatRoutesState()
+    state.active_chats[target.state_key] = interrupt_event
+    state.current_by_target[target.state_key] = current
+    state.current_by_client["turn-123"] = current
+    app.state.file_chat_routes_state = state
+
+    client = TestClient(app)
+
+    active_res = client.get(
+        "/api/file-chat/active", params={"client_turn_id": "turn-123"}
+    )
+    assert active_res.status_code == 200
+    assert active_res.json() == {
+        "active": True,
+        "current": current,
+        "last_result": {},
+    }
+
+    interrupt_res = client.post(
+        "/api/file-chat/interrupt",
+        json={"target": target.target},
+    )
+    assert interrupt_res.status_code == 200
+    assert interrupt_res.json() == {
+        "status": "interrupted",
+        "detail": "File chat interrupted",
+    }
+    assert interrupt_event.is_set() is True

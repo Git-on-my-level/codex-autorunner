@@ -269,6 +269,56 @@ def _assert_repo_canonical_state_v1(repo_entry: dict) -> None:
     assert canonical.get("recommendation_generated_at")
 
 
+def test_hub_repo_list_includes_ticket_flow_summary_and_run_state(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("base")
+
+    tickets_dir = repo.path / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\ntitle: First\ngoal: ship it\nagent: codex\ndone: true\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    (tickets_dir / "TICKET-002.md").write_text(
+        "---\ntitle: Second\ngoal: verify it\nagent: codex\ndone: false\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    _seed_flow_run(
+        repo.path,
+        run_id="run-paused",
+        status=FlowRunStatus.PAUSED,
+        diff_events=[],
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/repos")
+    assert response.status_code == 200
+
+    repo_entry = next(item for item in response.json()["repos"] if item["id"] == "base")
+    summary = repo_entry["ticket_flow"]
+    assert summary["status"] == "paused"
+    assert summary["done_count"] == 1
+    assert summary["total_count"] == 2
+    assert summary["run_id"] == "run-paused"
+
+    display = repo_entry["ticket_flow_display"]
+    assert display["status"] == "paused"
+    assert display["done_count"] == 1
+    assert display["total_count"] == 2
+    assert display["run_id"] == "run-paused"
+    assert display["is_active"] is True
+
+    run_state = repo_entry["run_state"] or {}
+    assert run_state["run_id"] == "run-paused"
+    assert run_state["flow_status"] == "paused"
+    assert run_state["recommended_action"]
+    _assert_repo_canonical_state_v1(repo_entry)
+    assert repo_entry["canonical_state_v1"]["represented_run_id"] == "run-paused"
+
+
 def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _create_hub_supervisor(hub_root)

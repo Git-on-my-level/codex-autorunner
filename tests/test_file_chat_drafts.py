@@ -95,6 +95,32 @@ def test_apply_respects_force_and_clears_draft(client: TestClient, hub_env, repo
     assert res_pending.status_code == 404
 
 
+def test_discard_clears_draft_and_keeps_file_unchanged(
+    client: TestClient, hub_env, repo: Path
+):
+    repo_root = repo
+    contextspace_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    before = "spec v1\n"
+    after = "spec v2\n"
+    _write_file(contextspace_path, before)
+    target, _draft = _seed_draft(repo_root, "contextspace:spec", before, after)
+
+    res = client.post(
+        f"/repos/{hub_env.repo_id}/api/file-chat/discard",
+        json={"target": target.target},
+    )
+    assert res.status_code == 200
+    assert res.json()["content"] == before
+    assert contextspace_path.read_text(encoding="utf-8") == before
+
+    pending = client.get(
+        f"/repos/{hub_env.repo_id}/api/file-chat/pending",
+        params={"target": target.target},
+    )
+    assert pending.status_code == 404
+    assert not draft_utils.load_state(repo_root).get("drafts", {})
+
+
 def test_workspace_write_invalidates_draft(client: TestClient, hub_env, repo: Path):
     repo_root = repo
     contextspace_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
@@ -119,6 +145,48 @@ def test_workspace_write_invalidates_draft(client: TestClient, hub_env, repo: Pa
     # State file should no longer have the draft
     state = draft_utils.load_state(repo_root)
     assert not state.get("drafts", {})
+
+
+def test_ticket_chat_apply_and_discard_wrappers_match_generic_contract(
+    client: TestClient, hub_env, repo: Path
+):
+    repo_root = repo
+    ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+    before = "---\ntitle: Ticket\nagent: codex\ndone: false\ngoal: test\n---\n\nbody\n"
+    after = (
+        "---\ntitle: Ticket\nagent: codex\ndone: false\ngoal: test\n---\n\nupdated\n"
+    )
+    _write_file(ticket_path, before)
+
+    _seed_draft(repo_root, "ticket:1", before, after)
+    discard_res = client.post(f"/repos/{hub_env.repo_id}/api/tickets/1/chat/discard")
+    assert discard_res.status_code == 200
+    assert discard_res.json()["content"] == before
+    assert ticket_path.read_text(encoding="utf-8") == before
+
+    pending_after_discard = client.get(
+        f"/repos/{hub_env.repo_id}/api/tickets/1/chat/pending"
+    )
+    assert pending_after_discard.status_code == 404
+
+    _seed_draft(repo_root, "ticket:1", before, after)
+    _write_file(ticket_path, "externally changed\n")
+
+    conflict_res = client.post(f"/repos/{hub_env.repo_id}/api/tickets/1/chat/apply")
+    assert conflict_res.status_code == 409
+
+    force_res = client.post(
+        f"/repos/{hub_env.repo_id}/api/tickets/1/chat/apply",
+        json={"force": True},
+    )
+    assert force_res.status_code == 200
+    assert force_res.json()["content"] == after
+    assert ticket_path.read_text(encoding="utf-8") == after
+
+    pending_after_apply = client.get(
+        f"/repos/{hub_env.repo_id}/api/tickets/1/chat/pending"
+    )
+    assert pending_after_apply.status_code == 404
 
 
 def test_ticket_new_thread_resets_instance_scoped_registry_key(
