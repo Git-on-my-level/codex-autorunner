@@ -8,33 +8,21 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Body, HTTPException
-
-from ....core.chat_bindings import (
+from .....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
-    active_chat_binding_counts,
-    active_chat_binding_counts_by_source,
 )
-from ....core.destinations import (
-    resolve_effective_repo_destination,
-)
-from ....core.flows import FlowEventType, FlowStore
-from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
-from ....core.git_utils import git_is_clean
-from ....core.logging_utils import safe_log
-from ....core.pma_context import (
+from .....core.flows import FlowEventType, FlowStore
+from .....core.git_utils import git_is_clean
+from .....core.logging_utils import safe_log
+from .....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
-from ....core.pma_thread_store import default_pma_threads_db_path
-from ....core.request_context import get_request_id
-from ....core.ticket_flow_summary import (
-    build_ticket_flow_summary,
-)
-from ....integrations.app_server.threads import (
+from .....core.pma_thread_store import default_pma_threads_db_path
+from .....integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
     PMA_KEY,
@@ -42,162 +30,28 @@ from ....integrations.app_server.threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
-from ....integrations.chat.channel_directory import (
+from .....integrations.chat.channel_directory import (
     ChannelDirectoryStore,
     channel_entry_key,
 )
-from ....integrations.telegram.state import topic_key
-from ....manifest import Manifest, load_manifest
-from ..app_state import HubAppContext
-from ..schemas import (
-    HubArchiveWorktreeRequest,
-    HubArchiveWorktreeResponse,
-    HubCleanupWorktreeRequest,
-    HubCreateRepoRequest,
-    HubCreateWorktreeRequest,
-    HubDestinationSetRequest,
-    HubJobResponse,
-    HubPinRepoRequest,
-    HubRemoveRepoRequest,
-    RunControlRequest,
-)
-from .hub_repo_routes import (
-    HubDestinationService,
-    HubMountManager,
-    HubRepoEnricher,
-    HubRunControlService,
-    HubWorktreeService,
-    build_hub_channel_router,
-    build_hub_repo_crud_router,
-    build_hub_repo_listing_router,
-)
+from .....integrations.telegram.state import topic_key
+
+if TYPE_CHECKING:
+    from fastapi import APIRouter
+
+    from ...app_state import HubAppContext
 
 
-def build_hub_repo_routes(
-    context: HubAppContext,
-    mount_manager: HubMountManager,
-) -> APIRouter:
-    router = APIRouter()
-    enricher = HubRepoEnricher(context, mount_manager)
-    run_control = HubRunControlService(context, mount_manager, enricher)
+class HubChannelService:
+    def __init__(self, context: HubAppContext) -> None:
+        self._context = context
 
-    def _build_force_attestation_payload(
-        attestation: Optional[str], *, target_scope: str
-    ) -> Optional[dict[str, str]]:
-        if attestation is None:
-            return None
-        return {
-            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
-            "user_request": attestation,
-            "target_scope": target_scope,
-        }
-
-    worktree = HubWorktreeService(
-        context, mount_manager, enricher, _build_force_attestation_payload
-    )
-    destination = HubDestinationService(context, mount_manager)
-
-    def _active_chat_binding_counts() -> dict[str, int]:
-        try:
-            return active_chat_binding_counts(
-                hub_root=context.config.root,
-                raw_config=context.config.raw,
-            )
-        except Exception as exc:
-            safe_log(
-                context.logger,
-                logging.WARNING,
-                "Hub active chat-bound worktree lookup failed",
-                exc=exc,
-            )
-            return {}
-
-    def _active_chat_binding_counts_by_source() -> dict[str, dict[str, int]]:
-        try:
-            return active_chat_binding_counts_by_source(
-                hub_root=context.config.root,
-                raw_config=context.config.raw,
-            )
-        except Exception as exc:
-            safe_log(
-                context.logger,
-                logging.WARNING,
-                "Hub source chat-bound worktree lookup failed",
-                exc=exc,
-            )
-            return {}
-
-    def _enrich_repo(
-        snapshot,
-        chat_binding_counts: Optional[dict[str, int]] = None,
-        chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
-    ) -> dict:
-        return enricher.enrich_repo(
-            snapshot, chat_binding_counts, chat_binding_counts_by_source
+    def _state_db_path(self, section: str, default_path: str) -> Path:
+        raw = (
+            self._context.config.raw
+            if isinstance(self._context.config.raw, dict)
+            else {}
         )
-
-    def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict]:
-        return build_ticket_flow_summary(repo_path, include_failure=True)
-
-    def _resolve_manifest_repo(repo_id: str):
-        manifest = load_manifest(context.config.manifest_path, context.config.root)
-        repos_by_id = {entry.id: entry for entry in manifest.repos}
-        repo = repos_by_id.get(repo_id)
-        if repo is None:
-            raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
-        return manifest, repos_by_id, repo
-
-    def _destination_payload(
-        manifest: Manifest,
-        repo,
-        repos_by_id: dict[str, Any],
-    ) -> dict[str, Any]:
-        resolution = resolve_effective_repo_destination(repo, repos_by_id)
-        merged_issues = [*manifest.issues_for_repo(repo.id), *resolution.issues]
-        deduped_issues: list[str] = []
-        for message in merged_issues:
-            if message in deduped_issues:
-                continue
-            deduped_issues.append(message)
-        return {
-            "repo_id": repo.id,
-            "kind": repo.kind,
-            "worktree_of": repo.worktree_of,
-            "configured_destination": repo.destination,
-            "effective_destination": resolution.to_dict(),
-            "source": resolution.source,
-            "issues": deduped_issues,
-        }
-
-    def _normalize_agent(value: Any) -> str:
-        if isinstance(value, str) and value.strip().lower() == "opencode":
-            return "opencode"
-        return "codex"
-
-    def _normalize_scope(value: Any) -> Optional[str]:
-        if not isinstance(value, str):
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-    def _coerce_int(value: Any) -> int:
-        if isinstance(value, bool):
-            return 0
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
-
-    def _coerce_usage_int(value: Any) -> Optional[int]:
-        if isinstance(value, bool):
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _state_db_path(section: str, default_path: str) -> Path:
-        raw = context.config.raw if isinstance(context.config.raw, dict) else {}
         section_cfg = raw.get(section)
         state_file = default_path
         if isinstance(section_cfg, dict):
@@ -206,17 +60,21 @@ def build_hub_repo_routes(
                 state_file = candidate.strip()
         path = Path(state_file)
         if not path.is_absolute():
-            path = (context.config.root / path).resolve()
+            path = (self._context.config.root / path).resolve()
         return path
 
-    def _telegram_require_topics_enabled() -> bool:
-        raw = context.config.raw if isinstance(context.config.raw, dict) else {}
+    def _telegram_require_topics_enabled(self) -> bool:
+        raw = (
+            self._context.config.raw
+            if isinstance(self._context.config.raw, dict)
+            else {}
+        )
         telegram_cfg = raw.get("telegram_bot")
         if not isinstance(telegram_cfg, dict):
             return False
         return bool(telegram_cfg.get("require_topics", False))
 
-    def _workspace_path_candidates(value: Any) -> list[str]:
+    def _workspace_path_candidates(self, value: Any) -> list[str]:
         if not isinstance(value, str):
             return []
         raw = value.strip()
@@ -237,8 +95,8 @@ def build_hub_repo_routes(
                     candidates.append(suffix)
         return candidates
 
-    def _canonical_workspace_path(value: Any) -> Optional[str]:
-        for candidate in _workspace_path_candidates(value):
+    def _canonical_workspace_path(self, value: Any) -> Optional[str]:
+        for candidate in self._workspace_path_candidates(value):
             path = Path(candidate).expanduser()
             if not path.is_absolute():
                 continue
@@ -248,7 +106,7 @@ def build_hub_repo_routes(
                 return str(path)
         return None
 
-    def _repo_id_by_workspace_path(snapshots: Iterable[Any]) -> dict[str, str]:
+    def _repo_id_by_workspace_path(self, snapshots: Iterable[Any]) -> dict[str, str]:
         mapping: dict[str, str] = {}
         for snapshot in snapshots:
             repo_id = getattr(snapshot, "id", None)
@@ -263,27 +121,28 @@ def build_hub_repo_routes(
         return mapping
 
     def _resolve_repo_id(
+        self,
         raw_repo_id: Any,
         workspace_path: Any,
         repo_id_by_workspace: dict[str, str],
     ) -> Optional[str]:
         if isinstance(raw_repo_id, str) and raw_repo_id.strip():
             return raw_repo_id.strip()
-        for candidate in _workspace_path_candidates(workspace_path):
-            resolved = _canonical_workspace_path(candidate)
+        for candidate in self._workspace_path_candidates(workspace_path):
+            resolved = self._canonical_workspace_path(candidate)
             if resolved and resolved in repo_id_by_workspace:
                 return repo_id_by_workspace[resolved]
             if candidate in repo_id_by_workspace:
                 return repo_id_by_workspace[candidate]
         return None
 
-    def _open_sqlite_read_only(path: Path) -> sqlite3.Connection:
+    def _open_sqlite_read_only(self, path: Path) -> sqlite3.Connection:
         uri = f"{path.resolve().as_uri()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
         try:
             rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
         except sqlite3.Error:
@@ -295,8 +154,35 @@ def build_hub_repo_routes(
                 names.add(name)
         return names
 
+    def _normalize_agent(self, value: Any) -> str:
+        if isinstance(value, str) and value.strip().lower() == "opencode":
+            return "opencode"
+        return "codex"
+
+    def _normalize_scope(self, value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _coerce_int(self, value: Any) -> int:
+        if isinstance(value, bool):
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _coerce_usage_int(self, value: Any) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     def _parse_topic_identity(
-        chat_raw: Any, thread_raw: Any, topic_raw: Any
+        self, chat_raw: Any, thread_raw: Any, topic_raw: Any
     ) -> tuple[Optional[int], Optional[int], Optional[str]]:
         chat_id: Optional[int]
         thread_id: Optional[int]
@@ -332,19 +218,19 @@ def build_hub_repo_routes(
                 parsed_thread_id = int(thread_token)
             except ValueError:
                 parsed_thread_id = None
-        parsed_scope = _normalize_scope(parts[2]) if len(parts) == 3 else None
+        parsed_scope = self._normalize_scope(parts[2]) if len(parts) == 3 else None
         return parsed_chat_id, parsed_thread_id, parsed_scope
 
     def _read_discord_bindings(
-        db_path: Path, repo_id_by_workspace: dict[str, str]
+        self, db_path: Path, repo_id_by_workspace: dict[str, str]
     ) -> dict[str, dict[str, Any]]:
         if not db_path.exists():
             return {}
         bindings: dict[str, dict[str, Any]] = {}
         conn: Optional[sqlite3.Connection] = None
         try:
-            conn = _open_sqlite_read_only(db_path)
-            columns = _table_columns(conn, "channel_bindings")
+            conn = self._open_sqlite_read_only(db_path)
+            columns = self._table_columns(conn, "channel_bindings")
             if not columns:
                 return {}
             select_cols = ["channel_id"]
@@ -368,8 +254,8 @@ def build_hub_repo_routes(
                 workspace_path_raw = (
                     row["workspace_path"] if "workspace_path" in columns else None
                 )
-                workspace_path = _canonical_workspace_path(workspace_path_raw)
-                repo_id = _resolve_repo_id(
+                workspace_path = self._canonical_workspace_path(workspace_path_raw)
+                repo_id = self._resolve_repo_id(
                     row["repo_id"] if "repo_id" in columns else None,
                     workspace_path_raw,
                     repo_id_by_workspace,
@@ -382,7 +268,7 @@ def build_hub_repo_routes(
                     "pma_enabled": (
                         bool(row["pma_enabled"]) if "pma_enabled" in columns else False
                     ),
-                    "agent": _normalize_agent(
+                    "agent": self._normalize_agent(
                         row["agent"] if "agent" in columns else None
                     ),
                     "active_thread_id": None,
@@ -397,7 +283,7 @@ def build_hub_repo_routes(
                     )
         except Exception as exc:
             safe_log(
-                context.logger,
+                self._context.logger,
                 logging.WARNING,
                 f"Hub channel enrichment failed reading discord bindings from {db_path}",
                 exc=exc,
@@ -412,6 +298,7 @@ def build_hub_repo_routes(
         return bindings
 
     def _read_telegram_scope_map(
+        self,
         conn: sqlite3.Connection,
     ) -> Optional[dict[tuple[int, Optional[int]], Optional[str]]]:
         try:
@@ -433,19 +320,19 @@ def build_hub_repo_routes(
                 not isinstance(thread_id, int) or isinstance(thread_id, bool)
             ):
                 continue
-            scope_map[(chat_id, thread_id)] = _normalize_scope(row["scope"])
+            scope_map[(chat_id, thread_id)] = self._normalize_scope(row["scope"])
         return scope_map
 
     def _read_telegram_bindings(
-        db_path: Path, repo_id_by_workspace: dict[str, str]
+        self, db_path: Path, repo_id_by_workspace: dict[str, str]
     ) -> dict[str, dict[str, Any]]:
         if not db_path.exists():
             return {}
         bindings: dict[str, dict[str, Any]] = {}
         conn: Optional[sqlite3.Connection] = None
         try:
-            conn = _open_sqlite_read_only(db_path)
-            columns = _table_columns(conn, "telegram_topics")
+            conn = self._open_sqlite_read_only(db_path)
+            columns = self._table_columns(conn, "telegram_topics")
             if not columns:
                 return {}
             select_cols = ["topic_key"]
@@ -461,20 +348,22 @@ def build_hub_repo_routes(
             ):
                 if col in columns:
                     select_cols.append(col)
-            scope_map = _read_telegram_scope_map(conn)
+            scope_map = self._read_telegram_scope_map(conn)
             query = f"SELECT {', '.join(select_cols)} FROM telegram_topics"
             if "updated_at" in columns:
                 query += " ORDER BY updated_at DESC"
             for row in conn.execute(query).fetchall():
-                parsed_chat_id, parsed_thread_id, parsed_scope = _parse_topic_identity(
-                    row["chat_id"] if "chat_id" in columns else None,
-                    row["thread_id"] if "thread_id" in columns else None,
-                    row["topic_key"],
+                parsed_chat_id, parsed_thread_id, parsed_scope = (
+                    self._parse_topic_identity(
+                        row["chat_id"] if "chat_id" in columns else None,
+                        row["thread_id"] if "thread_id" in columns else None,
+                        row["topic_key"],
+                    )
                 )
                 if parsed_chat_id is None:
                     continue
                 row_scope = (
-                    _normalize_scope(row["scope"])
+                    self._normalize_scope(row["scope"])
                     if "scope" in columns
                     else parsed_scope
                 )
@@ -500,8 +389,8 @@ def build_hub_repo_routes(
                     if "workspace_path" in columns
                     else payload.get("workspace_path")
                 )
-                workspace_path = _canonical_workspace_path(workspace_path_raw)
-                repo_id = _resolve_repo_id(
+                workspace_path = self._canonical_workspace_path(workspace_path_raw)
+                repo_id = self._resolve_repo_id(
                     row["repo_id"] if "repo_id" in columns else payload.get("repo_id"),
                     workspace_path_raw,
                     repo_id_by_workspace,
@@ -524,7 +413,7 @@ def build_hub_repo_routes(
                     if isinstance(pma_enabled_raw, bool)
                     else False
                 )
-                agent = _normalize_agent(payload.get("agent"))
+                agent = self._normalize_agent(payload.get("agent"))
                 key = (
                     f"telegram:{parsed_chat_id}"
                     if parsed_thread_id is None
@@ -549,7 +438,7 @@ def build_hub_repo_routes(
                 )
         except Exception as exc:
             safe_log(
-                context.logger,
+                self._context.logger,
                 logging.WARNING,
                 f"Hub channel enrichment failed reading telegram bindings from {db_path}",
                 exc=exc,
@@ -564,19 +453,18 @@ def build_hub_repo_routes(
         return bindings
 
     def _read_active_pma_threads(
-        hub_root: Path,
-        repo_id_by_workspace: dict[str, str],
+        self, hub_root: Path, repo_id_by_workspace: dict[str, str]
     ) -> list[dict[str, Any]]:
         db_path = default_pma_threads_db_path(hub_root)
         if not db_path.exists():
             return []
         conn: Optional[sqlite3.Connection] = None
         try:
-            conn = _open_sqlite_read_only(db_path)
-            columns = _table_columns(conn, "pma_managed_threads")
+            conn = self._open_sqlite_read_only(db_path)
+            columns = self._table_columns(conn, "pma_managed_threads")
             if not columns:
                 return []
-            turns_columns = _table_columns(conn, "pma_managed_turns")
+            turns_columns = self._table_columns(conn, "pma_managed_turns")
             has_turns_table = bool(turns_columns)
 
             select_cols = [
@@ -600,7 +488,7 @@ def build_hub_repo_routes(
                           FROM pma_managed_turns turns
                          WHERE turns.managed_thread_id = pma_managed_threads.managed_thread_id
                            AND turns.status = 'running'
-                         LIMIT 1
+                          LIMIT 1
                     ) AS has_running_turn
                     """.strip()
                 )
@@ -623,13 +511,15 @@ def build_hub_repo_routes(
                 workspace_raw = (
                     row["workspace_root"] if "workspace_root" in columns else None
                 )
-                workspace_path = _canonical_workspace_path(workspace_raw)
-                repo_id = _resolve_repo_id(
+                workspace_path = self._canonical_workspace_path(workspace_raw)
+                repo_id = self._resolve_repo_id(
                     row["repo_id"] if "repo_id" in columns else None,
                     workspace_raw,
                     repo_id_by_workspace,
                 )
-                agent = _normalize_agent(row["agent"] if "agent" in columns else None)
+                agent = self._normalize_agent(
+                    row["agent"] if "agent" in columns else None
+                )
                 backend_thread_id = (
                     row["backend_thread_id"] if "backend_thread_id" in columns else None
                 )
@@ -662,7 +552,7 @@ def build_hub_repo_routes(
             return threads
         except Exception as exc:
             safe_log(
-                context.logger,
+                self._context.logger,
                 logging.WARNING,
                 f"Hub channel enrichment failed reading PMA threads from {db_path}",
                 exc=exc,
@@ -675,7 +565,7 @@ def build_hub_repo_routes(
                 except Exception:
                     pass
 
-    def _timestamp_rank(value: Any) -> float:
+    def _timestamp_rank(self, value: Any) -> float:
         if isinstance(value, bool):
             return float("-inf")
         if isinstance(value, (int, float)):
@@ -696,8 +586,8 @@ def build_hub_repo_routes(
         except ValueError:
             return float("-inf")
 
-    def _read_usage_by_session(workspace_path: str) -> dict[str, dict[str, Any]]:
-        canonical = _canonical_workspace_path(workspace_path)
+    def _read_usage_by_session(self, workspace_path: str) -> dict[str, dict[str, Any]]:
+        canonical = self._canonical_workspace_path(workspace_path)
         if canonical is None:
             return {}
         usage_path = (
@@ -727,17 +617,21 @@ def build_hub_repo_routes(
                     usage_payload = payload.get("usage")
                     if not isinstance(usage_payload, dict):
                         continue
-                    input_tokens = _coerce_usage_int(usage_payload.get("input_tokens"))
-                    cached_input_tokens = _coerce_usage_int(
+                    input_tokens = self._coerce_usage_int(
+                        usage_payload.get("input_tokens")
+                    )
+                    cached_input_tokens = self._coerce_usage_int(
                         usage_payload.get("cached_input_tokens")
                     )
-                    output_tokens = _coerce_usage_int(
+                    output_tokens = self._coerce_usage_int(
                         usage_payload.get("output_tokens")
                     )
-                    reasoning_output_tokens = _coerce_usage_int(
+                    reasoning_output_tokens = self._coerce_usage_int(
                         usage_payload.get("reasoning_output_tokens")
                     )
-                    total_tokens = _coerce_usage_int(usage_payload.get("total_tokens"))
+                    total_tokens = self._coerce_usage_int(
+                        usage_payload.get("total_tokens")
+                    )
                     if total_tokens is None:
                         total_tokens = sum(
                             value or 0
@@ -754,10 +648,10 @@ def build_hub_repo_routes(
                     turn_id = payload.get("turn_id")
                     if not isinstance(turn_id, str) or not turn_id.strip():
                         turn_id = None
-                    rank = _timestamp_rank(timestamp)
+                    rank = self._timestamp_rank(timestamp)
                     current = by_session.get(session_id)
                     current_rank = (
-                        _timestamp_rank(current.get("timestamp"))
+                        self._timestamp_rank(current.get("timestamp"))
                         if isinstance(current, dict)
                         else float("-inf")
                     )
@@ -798,6 +692,7 @@ def build_hub_repo_routes(
         return by_session
 
     def _resolve_pma_managed_thread_id(
+        self,
         *,
         pma_threads: list[dict[str, Any]],
         repo_id: Any,
@@ -808,7 +703,7 @@ def build_hub_repo_routes(
             repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
         )
         normalized_workspace = (
-            _canonical_workspace_path(workspace_path)
+            self._canonical_workspace_path(workspace_path)
             if isinstance(workspace_path, str) and workspace_path
             else None
         )
@@ -819,7 +714,7 @@ def build_hub_repo_routes(
             managed_thread_id = thread.get("managed_thread_id")
             if not isinstance(managed_thread_id, str) or not managed_thread_id.strip():
                 return False
-            if exact_agent and _normalize_agent(thread.get("agent")) != agent:
+            if exact_agent and self._normalize_agent(thread.get("agent")) != agent:
                 return False
             thread_workspace = thread.get("workspace_path")
             thread_repo_id = thread.get("repo_id")
@@ -845,7 +740,7 @@ def build_hub_repo_routes(
                         return managed_thread_id.strip()
         return None
 
-    def _channel_row_matches_query(row: dict[str, Any], query_text: str) -> bool:
+    def _channel_row_matches_query(self, row: dict[str, Any], query_text: str) -> bool:
         if not query_text:
             return True
         parts = [
@@ -864,13 +759,14 @@ def build_hub_repo_routes(
         return query_text in haystack
 
     def _build_registry_key(
+        self,
         entry: dict[str, Any],
         binding: dict[str, Any],
         *,
         telegram_require_topics: bool,
     ) -> Optional[str]:
         platform = str(binding.get("platform") or "").strip().lower()
-        agent = _normalize_agent(binding.get("agent"))
+        agent = self._normalize_agent(binding.get("agent"))
         pma_enabled = bool(binding.get("pma_enabled"))
         if pma_enabled:
             base_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
@@ -909,13 +805,14 @@ def build_hub_repo_routes(
         return f"{prefix}discord.{channel_id.strip()}.{digest}"
 
     def _registry_thread_id(
+        self,
         workspace_path: Any,
         registry_key: str,
         thread_map_cache: dict[str, dict[str, str]],
     ) -> Optional[str]:
         if not isinstance(registry_key, str) or not registry_key.strip():
             return None
-        canonical_workspace = _canonical_workspace_path(workspace_path)
+        canonical_workspace = self._canonical_workspace_path(workspace_path)
         if canonical_workspace is None:
             return None
         thread_map = thread_map_cache.get(canonical_workspace)
@@ -941,7 +838,7 @@ def build_hub_repo_routes(
             return None
         return None
 
-    def _is_working(run_state: Optional[dict[str, Any]]) -> bool:
+    def _is_working(self, run_state: Optional[dict[str, Any]]) -> bool:
         if not isinstance(run_state, dict):
             return False
         state = run_state.get("state")
@@ -957,11 +854,12 @@ def build_hub_repo_routes(
         return False
 
     def _load_workspace_run_data(
+        self,
         workspace_path: str,
         repo_id: Optional[str],
         cache: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
-        canonical = _canonical_workspace_path(workspace_path)
+        canonical = self._canonical_workspace_path(workspace_path)
         if canonical is None:
             return {}
         cached = cache.get(canonical)
@@ -990,9 +888,9 @@ def build_hub_repo_routes(
                     totals = {"insertions": 0, "deletions": 0, "files_changed": 0}
                     for event in events:
                         data = event.data or {}
-                        totals["insertions"] += _coerce_int(data.get("insertions"))
-                        totals["deletions"] += _coerce_int(data.get("deletions"))
-                        totals["files_changed"] += _coerce_int(
+                        totals["insertions"] += self._coerce_int(data.get("insertions"))
+                        totals["deletions"] += self._coerce_int(data.get("deletions"))
+                        totals["files_changed"] += self._coerce_int(
                             data.get("files_changed")
                         )
                     payload["diff_stats"] = totals
@@ -1006,231 +904,45 @@ def build_hub_repo_routes(
         cache[canonical] = payload
         return payload
 
-    @router.get("/hub/repos")
-    async def list_repos():
-        safe_log(context.logger, logging.INFO, "Hub list_repos")
-        snapshots = await asyncio.to_thread(context.supervisor.list_repos)
-        chat_binding_counts = await asyncio.to_thread(_active_chat_binding_counts)
-        chat_binding_counts_by_source = await asyncio.to_thread(
-            _active_chat_binding_counts_by_source
-        )
-        await mount_manager.refresh_mounts(snapshots)
-        return {
-            "last_scan_at": context.supervisor.state.last_scan_at,
-            "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [
-                enricher.enrich_repo(
-                    snap, chat_binding_counts, chat_binding_counts_by_source
-                )
-                for snap in snapshots
-            ],
-        }
+    async def list_chat_channels(
+        self, query: Optional[str] = None, limit: int = 100
+    ) -> dict[str, Any]:
+        from fastapi import HTTPException
 
-    @router.post("/hub/repos/scan")
-    async def scan_repos():
-        safe_log(context.logger, logging.INFO, "Hub scan_repos")
-        snapshots = await asyncio.to_thread(context.supervisor.scan)
-        chat_binding_counts = await asyncio.to_thread(_active_chat_binding_counts)
-        chat_binding_counts_by_source = await asyncio.to_thread(
-            _active_chat_binding_counts_by_source
-        )
-        await mount_manager.refresh_mounts(snapshots)
-
-        return {
-            "last_scan_at": context.supervisor.state.last_scan_at,
-            "pinned_parent_repo_ids": context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [
-                enricher.enrich_repo(
-                    snap, chat_binding_counts, chat_binding_counts_by_source
-                )
-                for snap in snapshots
-            ],
-        }
-
-    @router.post("/hub/jobs/scan", response_model=HubJobResponse)
-    async def scan_repos_job():
-        async def _run_scan():
-            snapshots = await asyncio.to_thread(context.supervisor.scan)
-            await mount_manager.refresh_mounts(snapshots)
-            return {"status": "ok"}
-
-        job = await context.job_manager.submit(
-            "hub.scan_repos", _run_scan, request_id=get_request_id()
-        )
-        return job.to_dict()
-
-    @router.post("/hub/repos")
-    async def create_repo(payload: HubCreateRepoRequest):
-        git_url = payload.git_url
-        repo_id = payload.repo_id
-        if not repo_id and not git_url:
-            raise HTTPException(status_code=400, detail="Missing repo id")
-        repo_path_val = payload.path
-        repo_path = Path(repo_path_val) if repo_path_val else None
-        git_init = payload.git_init
-        force = payload.force
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub create repo id=%s path=%s git_init=%s force=%s git_url=%s"
-            % (repo_id, repo_path_val, git_init, force, bool(git_url)),
-        )
-        try:
-            if git_url:
-                snapshot = await asyncio.to_thread(
-                    context.supervisor.clone_repo,
-                    git_url=str(git_url),
-                    repo_id=str(repo_id) if repo_id else None,
-                    repo_path=repo_path,
-                    force=force,
-                )
-            else:
-                snapshot = await asyncio.to_thread(
-                    context.supervisor.create_repo,
-                    str(repo_id),
-                    repo_path=repo_path,
-                    git_init=git_init,
-                    force=force,
-                )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return enricher.enrich_repo(snapshot)
-
-    @router.post("/hub/jobs/repos", response_model=HubJobResponse)
-    async def create_repo_job(payload: HubCreateRepoRequest):
-        async def _run_create_repo():
-            git_url = payload.git_url
-            repo_id = payload.repo_id
-            if not repo_id and not git_url:
-                raise ValueError("Missing repo id")
-            repo_path_val = payload.path
-            repo_path = Path(repo_path_val) if repo_path_val else None
-            git_init = payload.git_init
-            force = payload.force
-            if git_url:
-                snapshot = await asyncio.to_thread(
-                    context.supervisor.clone_repo,
-                    git_url=str(git_url),
-                    repo_id=str(repo_id) if repo_id else None,
-                    repo_path=repo_path,
-                    force=force,
-                )
-            else:
-                snapshot = await asyncio.to_thread(
-                    context.supervisor.create_repo,
-                    str(repo_id),
-                    repo_path=repo_path,
-                    git_init=git_init,
-                    force=force,
-                )
-            await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-            return enricher.enrich_repo(snapshot)
-
-        job = await context.job_manager.submit(
-            "hub.create_repo", _run_create_repo, request_id=get_request_id()
-        )
-        return job.to_dict()
-
-    @router.post("/hub/repos/{repo_id}/worktree-setup")
-    async def set_worktree_setup(repo_id: str, payload: Annotated[Any, Body()] = None):
-        if isinstance(payload, dict):
-            commands_raw = payload.get("commands", [])
-        elif isinstance(payload, list):
-            # Backward compatibility for older clients that posted a raw array.
-            commands_raw = payload
-        elif payload is None:
-            commands_raw = []
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="body must be an object with commands or a commands array",
-            )
-        if not isinstance(commands_raw, list):
-            raise HTTPException(status_code=400, detail="commands must be a list")
-        commands = [str(item) for item in commands_raw if str(item).strip()]
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub set worktree setup repo=%s commands=%d" % (repo_id, len(commands)),
-        )
-        try:
-            snapshot = await asyncio.to_thread(
-                context.supervisor.set_worktree_setup_commands,
-                repo_id,
-                commands,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return enricher.enrich_repo(snapshot)
-
-    @router.post("/hub/repos/{repo_id}/pin")
-    async def pin_parent_repo(
-        repo_id: str, payload: Optional[HubPinRepoRequest] = None
-    ):
-        requested = payload.pinned if payload else True
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub pin parent repo=%s pinned=%s" % (repo_id, requested),
-        )
-        try:
-            pinned_parent_repo_ids = await asyncio.to_thread(
-                context.supervisor.set_parent_repo_pinned,
-                repo_id,
-                requested,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "repo_id": repo_id,
-            "pinned": requested,
-            "pinned_parent_repo_ids": pinned_parent_repo_ids,
-        }
-
-    @router.get("/hub/repos/{repo_id}/destination")
-    async def get_repo_destination(repo_id: str):
-        return await destination.get_repo_destination(repo_id)
-
-    @router.post("/hub/repos/{repo_id}/destination")
-    async def set_repo_destination(repo_id: str, payload: HubDestinationSetRequest):
-        return await destination.set_repo_destination(repo_id, payload)
-
-    @router.get("/hub/chat/channels")
-    async def list_chat_channels(query: Optional[str] = None, limit: int = 100):
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         if limit > 1000:
             raise HTTPException(status_code=400, detail="limit must be <= 1000")
 
-        store = ChannelDirectoryStore(context.config.root)
+        store = ChannelDirectoryStore(self._context.config.root)
         entries = await asyncio.to_thread(store.list_entries, query=None, limit=None)
         snapshots: list[Any] = []
         try:
-            snapshots = await asyncio.to_thread(context.supervisor.list_repos)
+            snapshots = await asyncio.to_thread(self._context.supervisor.list_repos)
         except Exception as exc:
             safe_log(
-                context.logger,
+                self._context.logger,
                 logging.WARNING,
                 "Hub channel enrichment failed listing repo snapshots",
                 exc=exc,
             )
-        repo_id_by_workspace = _repo_id_by_workspace_path(snapshots)
-        discord_state_path = _state_db_path("discord_bot", DISCORD_STATE_FILE_DEFAULT)
-        telegram_state_path = _state_db_path(
+        repo_id_by_workspace = self._repo_id_by_workspace_path(snapshots)
+        discord_state_path = self._state_db_path(
+            "discord_bot", DISCORD_STATE_FILE_DEFAULT
+        )
+        telegram_state_path = self._state_db_path(
             "telegram_bot", TELEGRAM_STATE_FILE_DEFAULT
         )
-        telegram_require_topics = _telegram_require_topics_enabled()
+        telegram_require_topics = self._telegram_require_topics_enabled()
         discord_bindings_task = asyncio.to_thread(
-            _read_discord_bindings, discord_state_path, repo_id_by_workspace
+            self._read_discord_bindings, discord_state_path, repo_id_by_workspace
         )
         telegram_bindings_task = asyncio.to_thread(
-            _read_telegram_bindings, telegram_state_path, repo_id_by_workspace
+            self._read_telegram_bindings, telegram_state_path, repo_id_by_workspace
         )
         pma_threads_task = asyncio.to_thread(
-            _read_active_pma_threads,
-            context.config.root,
+            self._read_active_pma_threads,
+            self._context.config.root,
             repo_id_by_workspace,
         )
         discord_bindings, telegram_bindings, pma_threads = await asyncio.gather(
@@ -1276,9 +988,9 @@ def build_hub_repo_routes(
                     if isinstance(workspace_path, str) and workspace_path:
                         row["workspace_path"] = workspace_path
                     pma_enabled = bool(binding.get("pma_enabled"))
-                    agent = _normalize_agent(binding.get("agent"))
+                    agent = self._normalize_agent(binding.get("agent"))
                     if pma_enabled:
-                        managed_thread_id = _resolve_pma_managed_thread_id(
+                        managed_thread_id = self._resolve_pma_managed_thread_id(
                             pma_threads=pma_threads,
                             repo_id=repo_id,
                             workspace_path=workspace_path,
@@ -1305,13 +1017,13 @@ def build_hub_repo_routes(
                         if isinstance(direct_thread, str) and direct_thread:
                             active_thread_id = direct_thread
                     else:
-                        registry_key = _build_registry_key(
+                        registry_key = self._build_registry_key(
                             entry,
                             binding,
                             telegram_require_topics=telegram_require_topics,
                         )
                         if registry_key:
-                            resolved = _registry_thread_id(
+                            resolved = self._registry_thread_id(
                                 workspace_path,
                                 registry_key,
                                 thread_map_cache,
@@ -1323,7 +1035,7 @@ def build_hub_repo_routes(
 
                     run_data: dict[str, Any] = {}
                     if isinstance(workspace_path, str) and workspace_path:
-                        run_data = _load_workspace_run_data(
+                        run_data = self._load_workspace_run_data(
                             workspace_path,
                             repo_id if isinstance(repo_id, str) else None,
                             run_cache,
@@ -1339,7 +1051,7 @@ def build_hub_repo_routes(
                         row["dirty"] = run_data["dirty"]
 
                     if isinstance(active_thread_id, str) and active_thread_id:
-                        if _is_working(
+                        if self._is_working(
                             run_state if isinstance(run_state, dict) else None
                         ):
                             channel_status = "working"
@@ -1358,24 +1070,26 @@ def build_hub_repo_routes(
                     ):
                         usage_by_session = usage_cache.get(workspace_path)
                         if usage_by_session is None:
-                            usage_by_session = _read_usage_by_session(workspace_path)
+                            usage_by_session = self._read_usage_by_session(
+                                workspace_path
+                            )
                             usage_cache[workspace_path] = usage_by_session
                         usage_payload = usage_by_session.get(active_thread_id)
                         if isinstance(usage_payload, dict):
                             row["token_usage"] = {
-                                "total_tokens": _coerce_int(
+                                "total_tokens": self._coerce_int(
                                     usage_payload.get("total_tokens")
                                 ),
-                                "input_tokens": _coerce_int(
+                                "input_tokens": self._coerce_int(
                                     usage_payload.get("input_tokens")
                                 ),
-                                "cached_input_tokens": _coerce_int(
+                                "cached_input_tokens": self._coerce_int(
                                     usage_payload.get("cached_input_tokens")
                                 ),
-                                "output_tokens": _coerce_int(
+                                "output_tokens": self._coerce_int(
                                     usage_payload.get("output_tokens")
                                 ),
-                                "reasoning_output_tokens": _coerce_int(
+                                "reasoning_output_tokens": self._coerce_int(
                                     usage_payload.get("reasoning_output_tokens")
                                 ),
                                 "turn_id": usage_payload.get("turn_id"),
@@ -1383,7 +1097,7 @@ def build_hub_repo_routes(
                             }
                 except Exception as exc:
                     safe_log(
-                        context.logger,
+                        self._context.logger,
                         logging.WARNING,
                         f"Hub channel enrichment failed for {key}",
                         exc=exc,
@@ -1400,7 +1114,7 @@ def build_hub_repo_routes(
             repo_id = thread.get("repo_id")
             workspace_path = thread.get("workspace_path")
             backend_thread_id = thread.get("backend_thread_id")
-            agent = _normalize_agent(thread.get("agent"))
+            agent = self._normalize_agent(thread.get("agent"))
             has_running_turn = bool(thread.get("has_running_turn"))
             status_label = "working" if has_running_turn else "final"
             display_name = thread.get("name")
@@ -1439,7 +1153,7 @@ def build_hub_repo_routes(
                 row["repo_id"] = repo_id
             if isinstance(workspace_path, str) and workspace_path:
                 row["workspace_path"] = workspace_path
-                run_data = _load_workspace_run_data(
+                run_data = self._load_workspace_run_data(
                     workspace_path,
                     repo_id if isinstance(repo_id, str) else None,
                     run_cache,
@@ -1456,24 +1170,24 @@ def build_hub_repo_routes(
                 if usage_session_id:
                     usage_by_session = usage_cache.get(workspace_path)
                     if usage_by_session is None:
-                        usage_by_session = _read_usage_by_session(workspace_path)
+                        usage_by_session = self._read_usage_by_session(workspace_path)
                         usage_cache[workspace_path] = usage_by_session
                     usage_payload = usage_by_session.get(usage_session_id)
                     if isinstance(usage_payload, dict):
                         row["token_usage"] = {
-                            "total_tokens": _coerce_int(
+                            "total_tokens": self._coerce_int(
                                 usage_payload.get("total_tokens")
                             ),
-                            "input_tokens": _coerce_int(
+                            "input_tokens": self._coerce_int(
                                 usage_payload.get("input_tokens")
                             ),
-                            "cached_input_tokens": _coerce_int(
+                            "cached_input_tokens": self._coerce_int(
                                 usage_payload.get("cached_input_tokens")
                             ),
-                            "output_tokens": _coerce_int(
+                            "output_tokens": self._coerce_int(
                                 usage_payload.get("output_tokens")
                             ),
-                            "reasoning_output_tokens": _coerce_int(
+                            "reasoning_output_tokens": self._coerce_int(
                                 usage_payload.get("reasoning_output_tokens")
                             ),
                             "turn_id": usage_payload.get("turn_id"),
@@ -1482,161 +1196,25 @@ def build_hub_repo_routes(
             rows.append(row)
         query_text = (query or "").strip().lower()
         if query_text:
-            rows = [row for row in rows if _channel_row_matches_query(row, query_text)]
-        rows.sort(key=lambda item: _timestamp_rank(item.get("seen_at")), reverse=True)
+            rows = [
+                row for row in rows if self._channel_row_matches_query(row, query_text)
+            ]
+        rows.sort(
+            key=lambda item: self._timestamp_rank(item.get("seen_at")), reverse=True
+        )
         if limit >= 0:
             rows = rows[:limit]
         return {"entries": rows}
 
-    @router.get("/hub/repos/{repo_id}/remove-check")
-    async def remove_repo_check(repo_id: str):
-        safe_log(context.logger, logging.INFO, f"Hub remove-check {repo_id}")
-        try:
-            return await asyncio.to_thread(
-                context.supervisor.check_repo_removal, repo_id
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @router.post("/hub/repos/{repo_id}/remove")
-    async def remove_repo(repo_id: str, payload: Optional[HubRemoveRepoRequest] = None):
-        payload = payload or HubRemoveRepoRequest()
-        force = payload.force
-        force_attestation = payload.force_attestation
-        delete_dir = payload.delete_dir
-        delete_worktrees = payload.delete_worktrees
-        safe_log(
-            context.logger,
-            logging.INFO,
-            "Hub remove repo id=%s force=%s delete_dir=%s delete_worktrees=%s force_attestation=%s"
-            % (repo_id, force, delete_dir, delete_worktrees, bool(force_attestation)),
-        )
-        remove_kwargs: dict[str, Any] = {
-            "force": force,
-            "delete_dir": delete_dir,
-            "delete_worktrees": delete_worktrees,
-        }
-        if force_attestation is not None:
-            remove_kwargs["force_attestation"] = _build_force_attestation_payload(
-                force_attestation,
-                target_scope=f"hub.remove_repo:{repo_id}",
-            )
-        try:
-            await asyncio.to_thread(
-                context.supervisor.remove_repo,
-                repo_id,
-                **remove_kwargs,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        snapshots = await asyncio.to_thread(
-            context.supervisor.list_repos, use_cache=False
-        )
-        await mount_manager.refresh_mounts(snapshots)
-        return {"status": "ok"}
+def build_hub_channel_router(context: HubAppContext) -> APIRouter:
+    from fastapi import APIRouter
 
-    @router.post("/hub/jobs/repos/{repo_id}/remove", response_model=HubJobResponse)
-    async def remove_repo_job(
-        repo_id: str, payload: Optional[HubRemoveRepoRequest] = None
-    ):
-        payload = payload or HubRemoveRepoRequest()
-        remove_kwargs: dict[str, Any] = {
-            "force": payload.force,
-            "delete_dir": payload.delete_dir,
-            "delete_worktrees": payload.delete_worktrees,
-        }
-        if payload.force_attestation is not None:
-            remove_kwargs["force_attestation"] = _build_force_attestation_payload(
-                payload.force_attestation,
-                target_scope=f"hub.remove_repo:{repo_id}",
-            )
+    router = APIRouter()
+    channel_service = HubChannelService(context)
 
-        async def _run_remove_repo():
-            await asyncio.to_thread(
-                context.supervisor.remove_repo,
-                repo_id,
-                **remove_kwargs,
-            )
-            snapshots = await asyncio.to_thread(
-                context.supervisor.list_repos, use_cache=False
-            )
-            await mount_manager.refresh_mounts(snapshots)
-            return {"status": "ok"}
-
-        job = await context.job_manager.submit(
-            "hub.remove_repo", _run_remove_repo, request_id=get_request_id()
-        )
-        return job.to_dict()
-
-    @router.post("/hub/worktrees/create")
-    async def create_worktree(payload: HubCreateWorktreeRequest):
-        return await worktree.create_worktree(
-            base_repo_id=payload.base_repo_id,
-            branch=payload.branch,
-            force=payload.force,
-            start_point=payload.start_point,
-        )
-
-    @router.post("/hub/jobs/worktrees/create", response_model=HubJobResponse)
-    async def create_worktree_job(payload: HubCreateWorktreeRequest):
-        return await worktree.create_worktree_job(payload)
-
-    @router.post("/hub/worktrees/cleanup")
-    async def cleanup_worktree(payload: HubCleanupWorktreeRequest):
-        return await worktree.cleanup_worktree(
-            worktree_repo_id=payload.worktree_repo_id,
-            delete_branch=payload.delete_branch,
-            delete_remote=payload.delete_remote,
-            archive=payload.archive,
-            force=payload.force,
-            force_attestation=payload.force_attestation,
-            force_archive=payload.force_archive,
-            archive_note=payload.archive_note,
-        )
-
-    @router.post("/hub/jobs/worktrees/cleanup", response_model=HubJobResponse)
-    async def cleanup_worktree_job(payload: HubCleanupWorktreeRequest):
-        return await worktree.cleanup_worktree_job(payload)
-
-    @router.post("/hub/worktrees/archive", response_model=HubArchiveWorktreeResponse)
-    async def archive_worktree(payload: HubArchiveWorktreeRequest):
-        return await worktree.archive_worktree(
-            worktree_repo_id=payload.worktree_repo_id,
-            archive_note=payload.archive_note,
-        )
-
-    @router.post("/hub/repos/{repo_id}/run")
-    async def run_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
-        once = payload.once if payload else False
-        return await run_control.run_repo(repo_id, once)
-
-    @router.post("/hub/repos/{repo_id}/stop")
-    async def stop_repo(repo_id: str):
-        return await run_control.stop_repo(repo_id)
-
-    @router.post("/hub/repos/{repo_id}/resume")
-    async def resume_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
-        once = payload.once if payload else False
-        return await run_control.resume_repo(repo_id, once)
-
-    @router.post("/hub/repos/{repo_id}/kill")
-    async def kill_repo(repo_id: str):
-        return await run_control.kill_repo(repo_id)
-
-    @router.post("/hub/repos/{repo_id}/init")
-    async def init_repo(repo_id: str):
-        return await run_control.init_repo(repo_id)
-
-    @router.post("/hub/repos/{repo_id}/sync-main")
-    async def sync_repo_main(repo_id: str):
-        return await run_control.sync_main(repo_id)
-
-    listing_router = build_hub_repo_listing_router(context, mount_manager, enricher)
-    crud_router = build_hub_repo_crud_router(context, mount_manager, enricher)
-    channel_router = build_hub_channel_router(context)
-
-    router.include_router(listing_router)
-    router.include_router(crud_router)
-    router.include_router(channel_router)
+    @router.get("/hub/chat/channels")
+    async def list_chat_channels(query: Optional[str] = None, limit: int = 100):
+        return await channel_service.list_chat_channels(query, limit)
 
     return router
