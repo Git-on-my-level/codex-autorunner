@@ -155,20 +155,6 @@ def flatten_usage(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
     return usage or None
 
 
-def extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
-    """Extract total tokens from usage dict."""
-    total = _extract_usage_field(usage, OPENCODE_USAGE_TOTAL_KEYS)
-    if total is not None:
-        return total
-
-    input_tokens = _extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS) or 0
-    cached_tokens = _extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS) or 0
-    output_tokens = _extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS) or 0
-    reasoning_tokens = _extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS) or 0
-
-    return input_tokens + cached_tokens + output_tokens + reasoning_tokens
-
-
 def _extract_usage_field(usage: dict[str, Any], keys: tuple[str, ...]) -> Optional[int]:
     """Extract a usage field by checking multiple key variations."""
     for key in keys:
