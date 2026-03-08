@@ -19,6 +19,20 @@ from ...core.utils import (
     find_repo_root,
     is_within,
 )
+from ...integrations.chat.review_commits import (  # noqa: F401
+    _format_review_commit_label,
+    _parse_review_commit_log,
+)
+from ...integrations.chat.thread_summaries import (  # noqa: F401
+    _coerce_thread_list,
+    _extract_thread_list_cursor,
+    _extract_thread_preview_parts,
+)
+from ...integrations.chat.turn_metrics import (  # noqa: F401
+    _extract_context_usage_percent,
+    _format_tui_token_usage,
+    _format_turn_metrics,
+)
 from ...integrations.github.service import find_github_links, parse_github_url
 from .constants import (
     DEFAULT_MODEL_LIST_LIMIT,
@@ -27,7 +41,6 @@ from .constants import (
     RESUME_PREVIEW_ASSISTANT_LIMIT,
     RESUME_PREVIEW_SCAN_LINES,
     RESUME_PREVIEW_USER_LIMIT,
-    REVIEW_COMMIT_BUTTON_LABEL_LIMIT,
     SHELL_OUTPUT_TRUNCATION_SUFFIX,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_PAGE_LIMIT,
@@ -568,77 +581,6 @@ def _format_friendly_time(value: datetime) -> str:
     return f"{month} {day}, {hour}:{minute}{ampm}"
 
 
-def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[str]:
-    if not isinstance(token_usage, dict):
-        return None
-    usage = _select_context_usage_bucket(token_usage)
-    if not isinstance(usage, dict):
-        return None
-    total_tokens = usage.get("totalTokens")
-    input_tokens = usage.get("inputTokens")
-    output_tokens = usage.get("outputTokens")
-    if not isinstance(total_tokens, int):
-        return None
-    parts = [f"Token usage: total {total_tokens}"]
-    if isinstance(input_tokens, int):
-        parts.append(f"input {input_tokens}")
-    if isinstance(output_tokens, int):
-        parts.append(f"output {output_tokens}")
-    percent = _extract_context_usage_percent(token_usage)
-    if percent is not None:
-        parts.append(f"ctx {percent}%")
-    return " ".join(parts)
-
-
-def _select_context_usage_bucket(
-    token_usage: Optional[dict[str, Any]],
-) -> Optional[dict[str, Any]]:
-    if not isinstance(token_usage, dict):
-        return None
-    # Prefer per-turn usage so progress tracks the active response context.
-    last = token_usage.get("last")
-    if isinstance(last, dict):
-        return last
-    total = token_usage.get("total")
-    if isinstance(total, dict):
-        return total
-    return None
-
-
-def _extract_context_usage_percent(
-    token_usage: Optional[dict[str, Any]],
-) -> Optional[int]:
-    usage = _select_context_usage_bucket(token_usage)
-    if not isinstance(usage, dict):
-        return None
-    total_tokens = usage.get("totalTokens")
-    if not isinstance(token_usage, dict):
-        return None
-    context_window = token_usage.get("modelContextWindow")
-    if not isinstance(total_tokens, int) or not isinstance(context_window, int):
-        return None
-    if context_window <= 0:
-        return None
-    percent_used = round(total_tokens / context_window * 100)
-    percent_remaining = max(0, 100 - percent_used)
-    return min(percent_remaining, 100)
-
-
-def _format_turn_metrics(
-    token_usage: Optional[dict[str, Any]],
-    elapsed_seconds: Optional[float],
-) -> Optional[str]:
-    lines: list[str] = []
-    if elapsed_seconds is not None:
-        lines.append(f"Turn time: {elapsed_seconds:.1f}s")
-    token_line = _format_tui_token_usage(token_usage)
-    if token_line:
-        lines.append(token_line)
-    if not lines:
-        return None
-    return "\n".join(lines)
-
-
 def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -1097,64 +1039,6 @@ _THREAD_PATH_CONTAINERS = (
     "context",
     "config",
 )
-_THREAD_LIST_CURSOR_KEYS = ("nextCursor", "next_cursor", "next")
-
-
-def _extract_thread_list_cursor(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in _THREAD_LIST_CURSOR_KEYS:
-        value = payload.get(key)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, (str, int)):
-            text = str(value).strip()
-            if text:
-                return text
-    return None
-
-
-def _coerce_thread_list(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return _normalize_thread_entries(payload)
-    if isinstance(payload, dict):
-        for key in ("threads", "data", "items", "results"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return _normalize_thread_entries(value)
-            if isinstance(value, dict):
-                return _normalize_thread_mapping(value)
-        if any(key in payload for key in ("id", "threadId", "thread_id")):
-            return _normalize_thread_entries([payload])
-    return []
-
-
-def _normalize_thread_entries(entries: Iterable[Any]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    for entry in entries:
-        if isinstance(entry, dict):
-            item = dict(entry)
-            if "id" not in item:
-                for key in ("threadId", "thread_id"):
-                    value = item.get(key)
-                    if isinstance(value, str):
-                        item["id"] = value
-                        break
-            normalized.append(item)
-        elif isinstance(entry, str):
-            normalized.append({"id": entry})
-    return normalized
-
-
-def _normalize_thread_mapping(mapping: dict[str, Any]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    for key, value in mapping.items():
-        if not isinstance(key, str):
-            continue
-        item = dict(value) if isinstance(value, dict) else {}
-        item.setdefault("id", key)
-        normalized.append(item)
-    return normalized
 
 
 def _extract_thread_path(entry: dict[str, Any]) -> Optional[str]:
@@ -1747,67 +1631,6 @@ def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
     return None
 
 
-def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[str]]:
-    entry = _coerce_thread_payload(entry)
-    user_preview_keys = (
-        "last_user_message",
-        "lastUserMessage",
-        "last_user",
-        "lastUser",
-        "last_user_text",
-        "lastUserText",
-        "user_preview",
-        "userPreview",
-    )
-    assistant_preview_keys = (
-        "last_assistant_message",
-        "lastAssistantMessage",
-        "last_assistant",
-        "lastAssistant",
-        "last_assistant_text",
-        "lastAssistantText",
-        "assistant_preview",
-        "assistantPreview",
-        "last_response",
-        "lastResponse",
-        "response_preview",
-        "responsePreview",
-    )
-    user_preview = _coerce_preview_field(entry, user_preview_keys)
-    user_preview = _sanitize_user_preview(user_preview)
-    assistant_preview = _coerce_preview_field(entry, assistant_preview_keys)
-    turns = entry.get("turns")
-    if turns and (not user_preview or not assistant_preview):
-        turn_user, turn_assistant = _extract_turns_preview(turns)
-        if not user_preview and turn_user:
-            user_preview = turn_user
-        if not assistant_preview and turn_assistant:
-            assistant_preview = turn_assistant
-    rollout_path = _extract_rollout_path(entry)
-    if rollout_path and (not user_preview or not assistant_preview):
-        path = Path(rollout_path)
-        if path.exists():
-            rollout_user, rollout_assistant = _extract_rollout_preview(path)
-            if not user_preview and rollout_user:
-                user_preview = rollout_user
-            if not assistant_preview and rollout_assistant:
-                assistant_preview = rollout_assistant
-    if user_preview is None:
-        preview = entry.get("preview")
-        if isinstance(preview, str) and preview.strip():
-            user_preview = _sanitize_user_preview(preview.strip())
-    if user_preview:
-        user_preview = _truncate_text(
-            _normalize_preview_text(user_preview), RESUME_PREVIEW_USER_LIMIT
-        )
-    if assistant_preview:
-        assistant_preview = _truncate_text(
-            _normalize_preview_text(assistant_preview),
-            RESUME_PREVIEW_ASSISTANT_LIMIT,
-        )
-    return user_preview, assistant_preview
-
-
 def _extract_thread_resume_parts(entry: Any) -> tuple[Optional[str], Optional[str]]:
     entry = _coerce_thread_payload(entry)
     user_preview_keys = (
@@ -1988,28 +1811,6 @@ def _consume_raw_token(raw: str) -> tuple[Optional[str], str]:
         if ch.isspace():
             return stripped[:idx], stripped[idx:]
     return stripped, ""
-
-
-def _parse_review_commit_log(output: str) -> list[tuple[str, str]]:
-    entries: list[tuple[str, str]] = []
-    for record in output.split("\x1e"):
-        record = record.strip()
-        if not record:
-            continue
-        sha, _sep, subject = record.partition("\x1f")
-        if not sha:
-            continue
-        entries.append((sha, subject.strip()))
-    return entries
-
-
-def _format_review_commit_label(sha: str, subject: str) -> str:
-    short_sha = sha[:7]
-    if subject:
-        label = f"{short_sha} - {subject}"
-    else:
-        label = short_sha
-    return _truncate_text(label, REVIEW_COMMIT_BUTTON_LABEL_LIMIT)
 
 
 def _extract_first_bold_span(text: str) -> Optional[str]:
