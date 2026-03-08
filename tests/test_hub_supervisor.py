@@ -784,9 +784,7 @@ def test_hub_repo_job_routes_submit_expected_kinds(
 
     async def _fake_submit(kind: str, func, *, request_id: Optional[str] = None):
         result = await func()
-        submissions.append(
-            {"kind": kind, "request_id": request_id, "result": result}
-        )
+        submissions.append({"kind": kind, "request_id": request_id, "result": result})
 
         class _Job:
             def to_dict(self) -> dict[str, object]:
