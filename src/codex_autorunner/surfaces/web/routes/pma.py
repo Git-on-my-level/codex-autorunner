@@ -122,6 +122,7 @@ from .pma_routes.tail_stream import (
     parse_iso_datetime as _parse_iso_datetime,
     parse_tail_duration_seconds as _parse_tail_duration_seconds,
     resolve_resume_after as _resolve_resume_after,
+    since_ms_from_duration as since_ms_from_duration,
 )
 from .shared import SSE_HEADERS
 
@@ -607,12 +608,7 @@ def build_pma_routes() -> APIRouter:
     # _coerce_dict imported from tail_stream.py
     # _parse_iso_datetime imported from tail_stream.py
     # _parse_tail_duration_seconds imported from tail_stream.py
-
-    def _since_ms_from_duration(value: Optional[str]) -> Optional[int]:
-        seconds = _parse_tail_duration_seconds(value)
-        if seconds is None:
-            return None
-        return int((datetime.now(timezone.utc).timestamp() - seconds) * 1000)
+    # since_ms_from_duration imported from tail_stream.py
 
     # _normalize_tail_level imported from tail_stream.py
     # _resolve_resume_after imported from tail_stream.py
@@ -2233,7 +2229,7 @@ def build_pma_routes() -> APIRouter:
         normalized_limit = min(limit, 200)
         normalized_level = _normalize_tail_level(level)
         resume_after = _resolve_resume_after(request, since_event_id)
-        since_ms = _since_ms_from_duration(since)
+        since_ms = since_ms_from_duration(since)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             managed_thread_id=managed_thread_id,
@@ -2295,7 +2291,7 @@ def build_pma_routes() -> APIRouter:
         normalized_limit = min(limit, 200)
         normalized_level = _normalize_tail_level(level)
         resume_after = _resolve_resume_after(request, since_event_id)
-        since_ms = _since_ms_from_duration(since)
+        since_ms = since_ms_from_duration(since)
         return await _build_managed_thread_tail_snapshot(
             request=request,
             managed_thread_id=managed_thread_id,
@@ -2319,7 +2315,7 @@ def build_pma_routes() -> APIRouter:
         normalized_limit = min(limit, 200)
         normalized_level = _normalize_tail_level(level)
         resume_after = _resolve_resume_after(request, since_event_id)
-        since_ms = _since_ms_from_duration(since)
+        since_ms = since_ms_from_duration(since)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             managed_thread_id=managed_thread_id,
