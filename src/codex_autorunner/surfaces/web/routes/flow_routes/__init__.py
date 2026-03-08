@@ -3,6 +3,7 @@ from __future__ import annotations
 __all__ = [
     "FlowRoutesState",
     "definitions",
+    "history_artifacts",
     "runtime_service",
     "run_routes",
     "ticket_bootstrap",
@@ -30,4 +31,10 @@ class FlowRoutesState:
         self.lock = threading.Lock()
 
 
-from . import definitions, runtime_service, run_routes, ticket_bootstrap
+from . import (
+    definitions,
+    history_artifacts,
+    runtime_service,
+    run_routes,
+    ticket_bootstrap,
+)
