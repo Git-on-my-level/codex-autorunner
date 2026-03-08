@@ -2,6 +2,7 @@ from __future__ import annotations
 
 __all__ = [
     "FlowRoutesState",
+    "runtime_service",
 ]
 
 import threading
@@ -24,3 +25,6 @@ class FlowRoutesState:
         self.controller_cache = {}
         self.definition_cache = {}
         self.lock = threading.Lock()
+
+
+from . import runtime_service
