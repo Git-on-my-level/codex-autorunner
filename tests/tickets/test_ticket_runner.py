@@ -6,6 +6,8 @@ from typing import Callable
 
 import pytest
 
+from codex_autorunner.tickets import runner as runner_module
+from codex_autorunner.tickets import runner_selection as runner_selection_module
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
 from codex_autorunner.tickets.models import (
     DEFAULT_MAX_TOTAL_TURNS,
@@ -353,6 +355,118 @@ async def test_ticket_runner_recovers_when_current_ticket_path_is_stale(
     assert result.state.get("last_agent_output") == "noop"
     assert result.state.get("lint") is None
     assert result.state.get("commit") is None
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_delegates_selection_and_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    calls: list[tuple[str, str]] = []
+    real_select = runner_selection_module.select_ticket
+    real_validate = runner_selection_module.validate_ticket_for_execution
+
+    def wrapped_select(**kwargs):
+        result = real_select(**kwargs)
+        selected_ticket = result[0]
+        selected_rel_path = (
+            selected_ticket.get("rel_path", "")
+            if isinstance(selected_ticket, dict)
+            else ""
+        )
+        calls.append(("select", selected_rel_path))
+        return result
+
+    def wrapped_validate(**kwargs):
+        calls.append(("validate", kwargs["ticket_path"].name))
+        return real_validate(**kwargs)
+
+    monkeypatch.setattr(runner_module.runner_selection, "select_ticket", wrapped_select)
+    monkeypatch.setattr(
+        runner_module.runner_selection,
+        "validate_ticket_for_execution",
+        wrapped_validate,
+    )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=FakeAgentPool(
+            lambda req: AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id=req.conversation_id or "conv",
+                turn_id="t1",
+                text="ok",
+            )
+        ),
+    )
+
+    result = await runner.step({})
+
+    assert result.status == "continue"
+    assert calls == [
+        ("select", ".codex-autorunner/tickets/TICKET-001.md"),
+        ("validate", "TICKET-001.md"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_respects_validation_pause_from_selection_seam(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv",
+            turn_id="t1",
+            text="unexpected",
+        )
+    )
+
+    def paused_validation(**kwargs):
+        _ = kwargs
+        return None, "paused", "user_pause", "Paused from validation seam.", []
+
+    monkeypatch.setattr(
+        runner_module.runner_selection,
+        "validate_ticket_for_execution",
+        paused_validation,
+    )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+
+    assert result.status == "paused"
+    assert result.reason == "Paused from validation seam."
+    assert len(pool.requests) == 0
 
 
 @pytest.mark.asyncio

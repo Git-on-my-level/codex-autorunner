@@ -7,12 +7,10 @@ from typing import Any, Callable, Optional
 from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats
-from . import runner_post_turn, runner_prompt
+from . import runner_post_turn, runner_prompt, runner_selection
 from .agent_pool import AgentPool
-from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
-from .frontmatter import parse_markdown_frontmatter
-from .lint import lint_ticket_directory
-from .models import TicketContextEntry, TicketFrontmatter, TicketResult, TicketRunConfig
+from .files import list_ticket_paths, safe_relpath
+from .models import TicketContextEntry, TicketResult, TicketRunConfig
 from .outbox import (
     archive_dispatch,
     create_turn_summary,
@@ -253,86 +251,51 @@ class TicketRunner:
                     reason_code="needs_user_fix",
                 )
 
-        ticket_paths = list_ticket_paths(ticket_dir)
-        if not ticket_paths:
-            return self._pause(
-                state,
-                reason=(
-                    "No tickets found. Create tickets under "
-                    f"{safe_relpath(ticket_dir, self._workspace_root)} and resume."
-                ),
-                reason_code="no_tickets",
-            )
-
-        # Check for duplicate ticket indices before proceeding.
-        dir_lint_errors = lint_ticket_directory(ticket_dir)
-        if dir_lint_errors:
-            return self._pause(
-                state,
-                reason="Duplicate ticket indices detected.",
-                reason_details="Errors:\n- " + "\n- ".join(dir_lint_errors),
-                reason_code="needs_user_fix",
-            )
-
-        current_ticket = state.get("current_ticket")
-        current_path: Optional[Path] = (
-            (self._workspace_root / current_ticket)
-            if isinstance(current_ticket, str) and current_ticket
-            else None
+        (
+            selected_ticket,
+            selection_state_updates,
+            selection_status,
+            selection_reason_code,
+            selection_message,
+            selection_reason_details,
+        ) = runner_selection.select_ticket(
+            workspace_root=self._workspace_root,
+            ticket_dir=ticket_dir,
+            config=self._config,
+            state=state,
+            emit_event=emit_event,
         )
-
-        # The agent may rename/delete the current ticket file. If persisted state
-        # points at a path that no longer exists, clear stale per-ticket fields and
-        # reselect from current on-disk tickets.
-        if current_path is not None and not current_path.exists():
-            _logger.warning(
-                "Current ticket file no longer exists at %s; clearing stale current_ticket state.",
-                safe_relpath(current_path, self._workspace_root),
+        for key, value in selection_state_updates.items():
+            if value is None:
+                state.pop(key, None)
+            else:
+                state[key] = value
+        if selection_status == "paused":
+            return self._pause(
+                state,
+                reason=selection_message,
+                reason_details=selection_reason_details,
+                reason_code=selection_reason_code,
             )
-            current_path = None
-            state.pop("current_ticket", None)
-            state.pop("ticket_turns", None)
-            state.pop("last_agent_output", None)
-            state.pop("lint", None)
-            state.pop("commit", None)
+        if selection_status == "completed":
+            state["status"] = "completed"
+            return TicketResult(
+                status="completed",
+                state=state,
+                reason=selection_message,
+            )
+
+        if not selected_ticket:
+            return self._pause(
+                state,
+                reason="Ticket selection failed unexpectedly.",
+                reason_code="infra_error",
+            )
+
+        current_path = selected_ticket["path"]
+        if selected_ticket.get("reset_commit_state"):
             commit_pending = False
             commit_retries = 0
-
-        # If current ticket is done, clear it unless we're in the middle of a
-        # bounded "commit required" follow-up loop.
-        if current_path and ticket_is_done(current_path) and not commit_pending:
-            current_path = None
-            state.pop("current_ticket", None)
-            state.pop("ticket_turns", None)
-            state.pop("last_agent_output", None)
-            state.pop("lint", None)
-            state.pop("commit", None)
-
-        if current_path is None:
-            next_path = self._find_next_ticket(ticket_paths)
-            if next_path is None:
-                state["status"] = "completed"
-                return TicketResult(
-                    status="completed", state=state, reason="All tickets done."
-                )
-            current_path = next_path
-            state["current_ticket"] = safe_relpath(current_path, self._workspace_root)
-            # Inform listeners immediately which ticket is about to run so the UI
-            # can show the active indicator before the first turn completes.
-            if emit_event is not None:
-                emit_event(
-                    FlowEventType.STEP_PROGRESS,
-                    {
-                        "message": "Selected ticket",
-                        "current_ticket": state["current_ticket"],
-                    },
-                )
-            # New ticket resets per-ticket state.
-            state["ticket_turns"] = 0
-            state.pop("last_agent_output", None)
-            state.pop("lint", None)
-            state.pop("loop_guard", None)
-        state.pop("commit", None)
 
         # Determine lint-retry mode early. When lint state is present, we allow the
         # agent to fix the ticket frontmatter even if the ticket is currently
@@ -357,96 +320,50 @@ class TicketRunner:
             _conv_id_raw if isinstance(_conv_id_raw, str) else None
         )
 
-        # Read ticket (may lint-fail). In lint-retry mode, fall back to a relaxed
-        # frontmatter parse so we can still execute an agent turn to repair the file.
-        ticket_doc = None
-        ticket_errors: list[str] = []
-        if lint_errors:
-            try:
-                raw = current_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                return self._pause(
-                    state,
-                    reason=(
-                        "Ticket unreadable during lint retry for "
-                        f"{safe_relpath(current_path, self._workspace_root)}: {exc}"
-                    ),
-                    current_ticket=safe_relpath(current_path, self._workspace_root),
-                    reason_code="infra_error",
-                )
-
-            data, _ = parse_markdown_frontmatter(raw)
-            agent = data.get("agent")
-            agent_id = agent.strip() if isinstance(agent, str) else None
-            if not agent_id:
-                return self._pause(
-                    state,
-                    reason=(
-                        "Cannot determine ticket agent during lint retry (missing frontmatter.agent). "
-                        "Fix the ticket frontmatter manually and resume."
-                    ),
-                    current_ticket=safe_relpath(current_path, self._workspace_root),
-                    reason_code="needs_user_fix",
-                )
-
-            # Validate agent id unless it is the special user sentinel.
-            if agent_id != "user":
-                try:
-                    from ..agents.registry import validate_agent_id
-
-                    agent_id = validate_agent_id(agent_id)
-                except Exception as exc:
-                    return self._pause(
-                        state,
-                        reason=(
-                            "Cannot determine valid agent during lint retry for "
-                            f"{safe_relpath(current_path, self._workspace_root)}: {exc}"
-                        ),
-                        current_ticket=safe_relpath(current_path, self._workspace_root),
-                        reason_code="needs_user_fix",
-                    )
-
-            ticket_doc = type(
-                "_TicketDocForLintRetry",
-                (),
-                {
-                    "frontmatter": TicketFrontmatter(
-                        agent=agent_id,
-                        done=False,
-                    )
-                },
-            )()
-        else:
-            ticket_doc, ticket_errors = read_ticket(current_path)
-            if ticket_errors or ticket_doc is None:
-                return self._pause(
-                    state,
-                    reason=f"Ticket frontmatter invalid: {safe_relpath(current_path, self._workspace_root)}",
-                    reason_details="Errors:\n- " + "\n- ".join(ticket_errors),
-                    current_ticket=safe_relpath(current_path, self._workspace_root),
-                    reason_code="needs_user_fix",
-                )
-
-        # Built-in manual user ticket.
-        if ticket_doc.frontmatter.agent == "user":
-            if ticket_doc.frontmatter.done:
-                # Nothing to do, will advance next step.
-                return TicketResult(status="continue", state=state)
+        (
+            validated_ticket,
+            validation_status,
+            validation_reason_code,
+            validation_message,
+            validation_errors,
+        ) = runner_selection.validate_ticket_for_execution(
+            ticket_path=current_path,
+            workspace_root=self._workspace_root,
+            state=state,
+            lint_errors=lint_errors if lint_errors else None,
+        )
+        current_ticket_id = safe_relpath(current_path, self._workspace_root)
+        if validation_status == "paused":
+            reason_details = (
+                "Errors:\n- " + "\n- ".join(validation_errors)
+                if validation_errors
+                else None
+            )
             return self._pause(
                 state,
-                reason=(
-                    "Paused for user input. Mark ticket as done when ready: "
-                    f"{safe_relpath(current_path, self._workspace_root)}"
-                ),
-                current_ticket=safe_relpath(current_path, self._workspace_root),
-                reason_code="user_pause",
+                reason=validation_message or "Ticket validation failed.",
+                reason_details=reason_details,
+                current_ticket=current_ticket_id,
+                reason_code=validation_reason_code,
             )
+        if not validated_ticket:
+            return self._pause(
+                state,
+                reason="Ticket validation failed unexpectedly.",
+                current_ticket=current_ticket_id,
+                reason_code="infra_error",
+            )
+
+        ticket_doc = validated_ticket["ticket_doc"]
+        if validated_ticket.get("skip_execution"):
+            return TicketResult(status="continue", state=state)
 
         ticket_turns = int(state.get("ticket_turns") or 0)
         reply_seq = int(state.get("reply_seq") or 0)
         reply_context, reply_max_seq = self._build_reply_context(
             reply_paths=reply_paths, last_seq=reply_seq
         )
+        ticket_paths = list_ticket_paths(ticket_dir)
         requested_context_block, missing_required_context = _load_ticket_context_block(
             workspace_root=self._workspace_root,
             entries=ticket_doc.frontmatter.context,
@@ -866,13 +783,6 @@ class TicketRunner:
             agent_conversation_id=result["conversation_id"],
             agent_turn_id=result["turn_id"],
         )
-
-    def _find_next_ticket(self, ticket_paths: list[Path]) -> Optional[Path]:
-        for path in ticket_paths:
-            if ticket_is_done(path):
-                continue
-            return path
-        return None
 
     def _recheck_ticket_frontmatter(self, ticket_path: Path):
         return runner_post_turn.check_ticket_frontmatter(ticket_path=ticket_path)

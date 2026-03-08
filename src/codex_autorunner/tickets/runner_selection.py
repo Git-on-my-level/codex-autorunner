@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ..core.flows.models import FlowEventType
 from .files import (
     list_ticket_paths,
     read_ticket,
@@ -12,7 +13,7 @@ from .files import (
 )
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory
-from .models import TicketFrontmatter, TicketRunConfig
+from .models import TicketDoc, TicketFrontmatter, TicketRunConfig
 
 _logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ def select_ticket(
         state_updates["lint"] = None
         state_updates["commit"] = None
 
+    reset_commit_state = False
     if current_path is not None and not current_path.exists():
         _logger.warning(
             "Current ticket file no longer exists at %s; clearing stale current_ticket state.",
@@ -92,6 +94,7 @@ def select_ticket(
         current_path = None
         state_updates = {}
         _clear_per_ticket_state()
+        reset_commit_state = True
     else:
         state_updates = {}
 
@@ -119,7 +122,7 @@ def select_ticket(
         state_updates["current_ticket"] = rel_path
         if emit_event is not None:
             emit_event(
-                "step_progress",
+                FlowEventType.STEP_PROGRESS,
                 {
                     "message": "Selected ticket",
                     "current_ticket": rel_path,
@@ -133,7 +136,11 @@ def select_ticket(
     state_updates["commit"] = None
 
     return (
-        {"path": current_path, "rel_path": safe_relpath(current_path, workspace_root)},
+        {
+            "path": current_path,
+            "rel_path": safe_relpath(current_path, workspace_root),
+            "reset_commit_state": reset_commit_state,
+        },
         state_updates,
         "continue",
         "",
@@ -175,8 +182,10 @@ def validate_ticket_for_execution(
             return (
                 {
                     "path": ticket_path,
+                    "ticket_doc": ticket_doc,
                     "frontmatter": ticket_doc.frontmatter,
                     "rel_path": safe_relpath(ticket_path, workspace_root),
+                    "skip_execution": True,
                 },
                 "continue",
                 "",
@@ -194,8 +203,10 @@ def validate_ticket_for_execution(
     return (
         {
             "path": ticket_path,
+            "ticket_doc": ticket_doc,
             "frontmatter": ticket_doc.frontmatter,
             "rel_path": safe_relpath(ticket_path, workspace_root),
+            "skip_execution": False,
         },
         "continue",
         "",
@@ -251,8 +262,15 @@ def _validate_ticket_lint_retry(
     return (
         {
             "path": ticket_path,
+            "ticket_doc": TicketDoc(
+                path=ticket_path,
+                index=0,
+                frontmatter=TicketFrontmatter(agent=agent_id, done=False),
+                body="",
+            ),
             "frontmatter": TicketFrontmatter(agent=agent_id, done=False),
             "rel_path": safe_relpath(ticket_path, workspace_root),
+            "skip_execution": False,
         },
         "continue",
         "",
