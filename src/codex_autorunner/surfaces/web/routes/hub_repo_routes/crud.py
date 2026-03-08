@@ -5,17 +5,18 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
+from fastapi import APIRouter, Body
+
 from .....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
+from ...schemas import (
+    HubCreateRepoRequest,
+    HubJobResponse,
+    HubPinRepoRequest,
+    HubRemoveRepoRequest,
+)
 
 if TYPE_CHECKING:
-    from fastapi import APIRouter
-
     from ...app_state import HubAppContext
-    from ...schemas import (
-        HubCreateRepoRequest,
-        HubPinRepoRequest,
-        HubRemoveRepoRequest,
-    )
     from .mount_manager import HubMountManager
     from .services import HubRepoEnricher
 
@@ -121,7 +122,7 @@ class HubRepoCrudService:
         return job.to_dict()
 
     async def set_worktree_setup(
-        self, repo_id: str, payload: Annotated[Any, None] = None
+        self, repo_id: str, payload: Annotated[Any, Body()] = None
     ) -> dict[str, Any]:
         from fastapi import HTTPException
 
@@ -279,12 +280,6 @@ def build_hub_repo_crud_router(
     mount_manager: HubMountManager,
     enricher: HubRepoEnricher,
 ) -> APIRouter:
-    from fastapi import APIRouter
-
-    from ...schemas import (
-        HubJobResponse,
-    )
-
     router = APIRouter()
     crud_service = HubRepoCrudService(context, mount_manager, enricher)
 
@@ -297,7 +292,7 @@ def build_hub_repo_crud_router(
         return await crud_service.create_repo_job(payload)
 
     @router.post("/hub/repos/{repo_id}/worktree-setup")
-    async def set_worktree_setup(repo_id: str, payload: Annotated[Any, None] = None):
+    async def set_worktree_setup(repo_id: str, payload: Annotated[Any, Body()] = None):
         return await crud_service.set_worktree_setup(repo_id, payload)
 
     @router.post("/hub/repos/{repo_id}/pin")

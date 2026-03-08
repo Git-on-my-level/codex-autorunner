@@ -841,7 +841,7 @@ async def _ensure_lane_worker_for_app(
     await runtime.ensure_lane_worker(
         lane_id,
         _AppRequest(app),
-        lambda item, request: _execute_queue_item(runtime, item, request),
+        lambda item: _execute_queue_item(runtime, item, _AppRequest(app)),
     )
 
 
@@ -975,7 +975,7 @@ def build_chat_runtime_router(
         await runtime.ensure_lane_worker(
             lane_id,
             request,
-            lambda item, request: _execute_queue_item(runtime, item, request),
+            lambda item: _execute_queue_item(runtime, item, request),
         )
 
         try:

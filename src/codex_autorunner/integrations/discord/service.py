@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...agents.opencode.harness import OpenCodeHarness
-from ...core.config import load_repo_config, resolve_env_for_root
+from ...bootstrap import seed_hub_files, seed_repo_files
+from ...core.config import (
+    ConfigError,
+    find_nearest_hub_config_path,
+    load_repo_config,
+    resolve_env_for_root,
+)
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_prompt_writing_hint,
@@ -52,6 +58,7 @@ from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_DELTA_TYPE_LOG_LINE,
     RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
     Completed,
@@ -145,6 +152,8 @@ from ..chat.turn_metrics import (
     _extract_context_usage_percent,
     _format_turn_metrics,
 )
+from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
+from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
 from .allowlist import DiscordAllowlist, allowlist_allows
 from .command_registry import sync_commands
@@ -282,6 +291,65 @@ def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
         if len(options) >= limit:
             break
     return options
+
+
+def find_exact_picker_item(
+    items: list[tuple[str, str]],
+    query: str,
+) -> Optional[tuple[str, str]]:
+    normalized_query = query.strip().lower()
+    if not normalized_query:
+        return None
+    for value, label in items:
+        if value.strip().lower() == normalized_query:
+            return (value, label)
+        if label.strip().lower() == normalized_query:
+            return (value, label)
+    return None
+
+
+def filter_picker_items(
+    items: list[tuple[str, str]],
+    query: str,
+    *,
+    limit: int,
+    aliases: Optional[dict[str, tuple[str, ...]]] = None,
+) -> list[tuple[str, str]]:
+    normalized_query = query.strip().lower()
+    if limit <= 0:
+        return []
+    if not normalized_query:
+        return items[:limit]
+
+    scored: list[tuple[int, int, tuple[str, str]]] = []
+    for index, (value, label) in enumerate(items):
+        haystacks = [value.lower(), label.lower()]
+        alias_values = aliases.get(value) if isinstance(aliases, dict) else None
+        if isinstance(alias_values, tuple):
+            haystacks.extend(alias.lower() for alias in alias_values if alias)
+        if not any(normalized_query in haystack for haystack in haystacks):
+            continue
+
+        score = 0
+        if value.lower().startswith(normalized_query):
+            score += 30
+        elif normalized_query in value.lower():
+            score += 15
+        if label.lower().startswith(normalized_query):
+            score += 20
+        elif normalized_query in label.lower():
+            score += 10
+        if isinstance(alias_values, tuple):
+            for alias in alias_values:
+                alias_lower = alias.lower()
+                if alias_lower.startswith(normalized_query):
+                    score += 5
+                elif normalized_query in alias_lower:
+                    score += 2
+        scored.append((score, index, (value, label)))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [item for _score, _index, item in scored[:limit]]
 
 
 def _is_valid_opencode_model_name(model_name: str) -> bool:
@@ -1999,6 +2067,80 @@ class DiscordBotService:
             ],
         )
 
+    async def _resolve_flow_run_input(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        action: str,
+        run_id_opt: Any,
+    ) -> Optional[str]:
+        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action=action,
+            )
+            return None
+
+        run_id_value = run_id_opt.strip()
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError):
+            return run_id_value
+        try:
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+        except (sqlite3.Error, OSError):
+            return run_id_value
+        finally:
+            store.close()
+
+        matching_runs = [run for run in runs if _flow_run_matches_action(run, action)]
+        if not matching_runs:
+            return run_id_value
+
+        items = [(record.id, record.status.value) for record in matching_runs]
+        search_items = [(record.id, record.id) for record in matching_runs]
+        aliases = {record.id: (record.status.value,) for record in matching_runs}
+        exact_match = find_exact_picker_item(search_items, run_id_value)
+        if exact_match is not None:
+            return exact_match[0]
+
+        filtered_search_items = filter_picker_items(
+            search_items,
+            run_id_value,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+            aliases=aliases,
+        )
+        if not filtered_search_items:
+            return run_id_value
+
+        status_by_run_id = {run_id: status for run_id, status in items}
+        filtered_items = [
+            (run_id, status_by_run_id.get(run_id, ""))
+            for run_id, _label in filtered_search_items
+        ]
+        custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
+        prompt = (
+            f"Matched {len(filtered_items)} runs for `{run_id_value}`. "
+            f"Select a run to {_flow_action_label(action)}:"
+        )
+        await self._respond_with_components(
+            interaction_id,
+            interaction_token,
+            prompt,
+            [
+                build_flow_runs_picker(
+                    filtered_items,
+                    custom_id=custom_id,
+                    placeholder=f"Select run to {_flow_action_label(action)}...",
+                )
+            ],
+        )
+        return None
+
     async def _run_agent_turn_for_message(
         self,
         *,
@@ -2154,6 +2296,14 @@ class DiscordBotService:
                     return f"{current}{incoming[overlap:]}"
             return f"{current}{incoming}"
 
+        def _progress_item_id_for_log_line(content: str) -> Optional[str]:
+            normalized = " ".join(content.split()).strip().lower()
+            if normalized.startswith("tokens used"):
+                return "opencode:token-usage"
+            if normalized.startswith("context window:"):
+                return "opencode:context-window"
+            return None
+
         try:
             async for run_event in orchestrator.run_turn(
                 agent_id=agent,
@@ -2202,6 +2352,28 @@ class DiscordBotService:
                                     new_segment=True,
                                 )
                             tracker.end_output_segment()
+                        elif run_event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
+                            item_id = _progress_item_id_for_log_line(run_event.content)
+                            if item_id:
+                                if not tracker.update_action_by_item_id(
+                                    item_id,
+                                    run_event.content,
+                                    "update",
+                                    label="output",
+                                ):
+                                    tracker.add_action(
+                                        "output",
+                                        run_event.content,
+                                        "update",
+                                        item_id=item_id,
+                                        normalize_text=False,
+                                    )
+                            else:
+                                tracker.note_output(
+                                    run_event.content,
+                                    new_segment=True,
+                                )
+                                tracker.end_output_segment()
                         else:
                             tracker.note_output(run_event.content)
                         await _edit_progress()
@@ -2620,6 +2792,7 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 workspace_root=workspace_root,
+                options=options,
             )
             return
         if command_path == ("car", "mcp"):
@@ -4171,12 +4344,108 @@ class DiscordBotService:
         interaction_token: str,
         *,
         workspace_root: Path,
+        options: dict[str, Any],
     ) -> None:
+        try:
+            client = await self._client_for_workspace(str(workspace_root))
+        except AppServerUnavailableError:
+            client = None
+        if client is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Workspace unavailable. Re-bind this channel and try again.",
+            )
+            return
+
+        try:
+            result = await client.request(
+                "skills/list",
+                {"cwds": [str(workspace_root)], "forceReload": False},
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.skills.failed",
+                workspace_path=str(workspace_root),
+                exc=exc,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to list skills: {exc}",
+            )
+            return
+
+        search_query = options.get("search")
+        normalized_query = (
+            search_query.strip().lower() if isinstance(search_query, str) else ""
+        )
+        if normalized_query:
+            entries = result.get("data") if isinstance(result, dict) else result
+            skills: list[tuple[str, str]] = []
+            seen_names: set[str] = set()
+            if isinstance(entries, list):
+                resolved_workspace = workspace_root.expanduser().resolve()
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    cwd = entry.get("cwd")
+                    if (
+                        isinstance(cwd, str)
+                        and Path(cwd).expanduser().resolve() != resolved_workspace
+                    ):
+                        continue
+                    items = entry.get("skills")
+                    if not isinstance(items, list):
+                        continue
+                    for skill in items:
+                        if not isinstance(skill, dict):
+                            continue
+                        name = skill.get("name")
+                        if not isinstance(name, str):
+                            continue
+                        normalized_name = name.strip()
+                        if not normalized_name or normalized_name in seen_names:
+                            continue
+                        description = skill.get("shortDescription") or skill.get(
+                            "description"
+                        )
+                        desc_text = (
+                            description.strip() if isinstance(description, str) else ""
+                        )
+                        haystack = f"{normalized_name} {desc_text}".lower()
+                        if normalized_query not in haystack:
+                            continue
+                        skills.append((normalized_name, desc_text))
+                        seen_names.add(normalized_name)
+            if not skills:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    f"No skills found matching `{search_query}`.",
+                )
+                return
+            lines = [f"Skills matching `{search_query}`:"]
+            for name, description in skills[:DEFAULT_SKILLS_LIST_LIMIT]:
+                lines.append(f"{name} - {description}" if description else name)
+            if len(skills) > DEFAULT_SKILLS_LIST_LIMIT:
+                lines.append(
+                    f"...and {len(skills) - DEFAULT_SKILLS_LIST_LIMIT} more matches."
+                )
+            lines.append("Use $<SkillName> in your next message to invoke a skill.")
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "\n".join(lines),
+            )
+            return
+
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "Skills listing requires the app server client. "
-            "This command is not yet available in Discord.",
+            _format_skills_list(result, str(workspace_root)),
         )
 
     async def _handle_mcp(
@@ -4200,12 +4469,64 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
+        target_root = canonicalize_path(workspace_root)
+        ca_dir = target_root / ".codex-autorunner"
+
+        try:
+            hub_initialized = False
+            if (target_root / ".git").exists():
+                await asyncio.to_thread(seed_repo_files, target_root, False, True)
+                if find_nearest_hub_config_path(target_root) is None:
+                    await asyncio.to_thread(seed_hub_files, target_root, False)
+                    hub_initialized = True
+            elif self._has_nested_git(target_root):
+                await asyncio.to_thread(seed_hub_files, target_root, False)
+                hub_initialized = True
+            else:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "No .git directory found. Run git init or use the CLI `car init --git-init`.",
+                )
+                return
+        except ConfigError as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Init failed: {exc}",
+            )
+            return
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Init failed: {exc}",
+            )
+            return
+
+        lines = [f"Initialized repo at {ca_dir}"]
+        if hub_initialized:
+            lines.append(f"Initialized hub at {ca_dir}")
+        lines.append("Init complete")
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "AGENTS.md generation requires the app server client. "
-            "This command is not yet available in Discord.",
+            "\n".join(lines),
         )
+
+    @staticmethod
+    def _has_nested_git(path: Path) -> bool:
+        try:
+            for child in path.iterdir():
+                if not child.is_dir() or child.is_symlink():
+                    continue
+                if (child / ".git").exists():
+                    return True
+                if DiscordBotService._has_nested_git(child):
+                    return True
+        except OSError:
+            return False
+        return False
 
     async def _handle_repos(
         self,
@@ -5460,14 +5781,14 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         update_message: bool = False,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="status",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="status",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -5872,14 +6193,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="restart",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="restart",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -5984,14 +6305,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="recover",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="recover",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6140,14 +6461,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="resume",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="resume",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6265,14 +6586,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="stop",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="stop",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6383,14 +6704,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="archive",
-            )
+        run_id_opt = await self._resolve_flow_run_input(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action="archive",
+            run_id_opt=options.get("run_id"),
+        )
+        if run_id_opt is None:
             return
         try:
             store = self._open_flow_store(workspace_root)
@@ -6526,6 +6847,16 @@ class DiscordBotService:
                 action="reply",
             )
             return
+        if isinstance(run_id_opt, str) and run_id_opt.strip():
+            run_id_opt = await self._resolve_flow_run_input(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="reply",
+                run_id_opt=run_id_opt,
+            )
+            if run_id_opt is None:
+                return
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:

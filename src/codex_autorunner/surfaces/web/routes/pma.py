@@ -185,6 +185,59 @@ def build_pma_routes() -> APIRouter:
     lane_workers: dict[str, PmaLaneWorker] = {}
     item_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
+    def _route_method_path_pairs(target_router: APIRouter) -> set[tuple[str, str]]:
+        pairs: set[tuple[str, str]] = set()
+        for route in target_router.routes:
+            path = getattr(route, "path", None)
+            methods = getattr(route, "methods", None) or ()
+            if not isinstance(path, str):
+                continue
+            for method in methods:
+                if method in {"HEAD", "OPTIONS"}:
+                    continue
+                pairs.add((str(method), path))
+        return pairs
+
+    def _prune_overlapping_routes(
+        target_router: APIRouter, overlapping_pairs: set[tuple[str, str]]
+    ) -> None:
+        filtered_routes = []
+        for route in target_router.routes:
+            path = getattr(route, "path", None)
+            methods = getattr(route, "methods", None) or ()
+            if not isinstance(path, str):
+                filtered_routes.append(route)
+                continue
+            route_pairs = {
+                (str(method), path)
+                for method in methods
+                if method not in {"HEAD", "OPTIONS"}
+            }
+            if route_pairs and route_pairs.issubset(overlapping_pairs):
+                continue
+            filtered_routes.append(route)
+        target_router.routes = filtered_routes
+
+    def _dedupe_router_routes_keep_last(target_router: APIRouter) -> None:
+        filtered_routes_reversed = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for route in reversed(target_router.routes):
+            path = getattr(route, "path", None)
+            methods = getattr(route, "methods", None) or ()
+            if not isinstance(path, str):
+                filtered_routes_reversed.append(route)
+                continue
+            route_pairs = {
+                (str(method), path)
+                for method in methods
+                if method not in {"HEAD", "OPTIONS"}
+            }
+            if route_pairs and route_pairs.issubset(seen_pairs):
+                continue
+            seen_pairs.update(route_pairs)
+            filtered_routes_reversed.append(route)
+        target_router.routes = list(reversed(filtered_routes_reversed))
+
     # _normalize_optional_text imported from automation_adapter.py
 
     def _get_pma_config(request: Request) -> dict[str, Any]:
@@ -1989,6 +2042,14 @@ def build_pma_routes() -> APIRouter:
             limit=limit,
         )
         return {"threads": threads}
+
+    @router.get("/threads/{managed_thread_id}")
+    def get_managed_thread(managed_thread_id: str, request: Request) -> dict[str, Any]:
+        store = PmaThreadStore(request.app.state.config.root)
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        return {"thread": thread}
 
     @router.post("/threads/{managed_thread_id}/compact")
     def compact_managed_thread(
@@ -4127,12 +4188,19 @@ def build_pma_routes() -> APIRouter:
     def _get_runtime_state():
         return _pma_runtime_state
 
-    build_automation_routes(router, _get_runtime_state)
-    build_managed_thread_crud_routes(router, _get_runtime_state)
-    build_managed_thread_tail_routes(router, _get_runtime_state)
-    build_managed_thread_runtime_routes(router, _get_runtime_state)
-    build_history_files_docs_router(router, _get_runtime_state)
-    build_chat_runtime_router(router, _get_runtime_state)
+    extracted_router = APIRouter(
+        prefix=router.prefix,
+        dependencies=router.dependencies,
+    )
+    build_automation_routes(extracted_router, _get_runtime_state)
+    build_managed_thread_crud_routes(extracted_router, _get_runtime_state)
+    build_managed_thread_tail_routes(extracted_router, _get_runtime_state)
+    build_managed_thread_runtime_routes(extracted_router, _get_runtime_state)
+    build_history_files_docs_router(extracted_router, _get_runtime_state)
+    build_chat_runtime_router(extracted_router, _get_runtime_state)
+    _dedupe_router_routes_keep_last(extracted_router)
+    _prune_overlapping_routes(extracted_router, _route_method_path_pairs(router))
+    router.routes.extend(extracted_router.routes)
 
     return router
 

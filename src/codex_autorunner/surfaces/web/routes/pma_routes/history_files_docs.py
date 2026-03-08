@@ -4,10 +4,11 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.datastructures import UploadFile
 
 from .....bootstrap import (
     ensure_pma_docs,
@@ -30,9 +31,6 @@ from .....core.pma_dispatches import (
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.time_utils import now_iso
 from .....core.utils import atomic_write
-
-if TYPE_CHECKING:
-    from starlette.datastructures import UploadFile
 
 logger = logging.getLogger(__name__)
 
