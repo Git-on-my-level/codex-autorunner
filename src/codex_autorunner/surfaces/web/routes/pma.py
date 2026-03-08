@@ -110,6 +110,8 @@ from .pma_routes import (
     build_managed_thread_tail_routes,
 )
 from .pma_routes.automation_adapter import (
+    discover_automation_store_class as _discover_automation_store_class,
+    first_callable as _first_callable,
     normalize_optional_text as _normalize_optional_text,
 )
 from .pma_routes.managed_threads import _truncate_text
@@ -253,30 +255,8 @@ def build_pma_routes() -> APIRouter:
             raise last_type_error
         raise RuntimeError("No automation method call attempts were provided")
 
-    def _first_callable(target: Any, names: tuple[str, ...]) -> Optional[Any]:
-        for name in names:
-            candidate = getattr(target, name, None)
-            if callable(candidate):
-                return candidate
-        return None
-
-    def _discover_automation_store_class() -> Optional[type[Any]]:
-        candidates: tuple[tuple[str, str], ...] = (
-            ("codex_autorunner.core.pma_automation_store", "PmaAutomationStore"),
-            ("codex_autorunner.core.pma_automation", "PmaAutomationStore"),
-            ("codex_autorunner.core.automation_store", "AutomationStore"),
-            ("codex_autorunner.core.automation", "AutomationStore"),
-            ("codex_autorunner.core.hub_automation", "HubAutomationStore"),
-        )
-        for module_name, class_name in candidates:
-            try:
-                module = importlib.import_module(module_name)
-            except Exception:
-                continue
-            klass = getattr(module, class_name, None)
-            if isinstance(klass, type):
-                return klass
-        return None
+    # _first_callable imported from automation_adapter.py
+    # _discover_automation_store_class imported from automation_adapter.py
 
     async def _call_store_create_with_payload(
         store: Any, method_names: tuple[str, ...], payload: dict[str, Any]
