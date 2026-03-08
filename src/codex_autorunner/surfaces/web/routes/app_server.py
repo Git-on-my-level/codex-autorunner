@@ -125,7 +125,7 @@ def build_app_server_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="No backup available")
         path = Path(backup_path)
         engine = request.app.state.engine
-        if not is_within(engine.repo_root, path):
+        if not is_within(root=engine.repo_root, target=path):
             raise HTTPException(status_code=400, detail="Invalid backup path")
         if not path.exists():
             raise HTTPException(status_code=404, detail="Backup not found")

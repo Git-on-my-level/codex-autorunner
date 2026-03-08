@@ -104,7 +104,7 @@ def _artifact_entries(
         path = Path(raw).expanduser()
         if not path.is_absolute():
             path = (repo_root / path).resolve()
-        if not is_within(repo_root, path) or not path.exists():
+        if not is_within(root=repo_root, target=path) or not path.exists():
             continue
         label = label_by_kind.get(artifact.kind, f"Artifact ({artifact.kind})")
         content = _truncate_text(_safe_read(path), limit)

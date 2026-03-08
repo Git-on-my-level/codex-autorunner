@@ -777,7 +777,7 @@ class HubSupervisor:
         if manifest.get(repo_id) and not force:
             raise ValueError(f"Worktree repo already exists: {repo_id}")
         worktree_path = (worktrees_root / repo_id).resolve()
-        if not is_within(worktrees_root, worktree_path):
+        if not is_within(root=worktrees_root, target=worktree_path):
             raise ValueError(
                 "Worktree path escapes worktrees_root: "
                 f"{worktree_path} (root={worktrees_root})"

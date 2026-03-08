@@ -1424,7 +1424,7 @@ class FilesCommands(SharedHelpers):
         sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
         max_bytes = self._config.media.max_file_bytes
         for path in files:
-            if not _path_within(pending_dir, path):
+            if not _path_within(root=pending_dir, target=path):
                 continue
             try:
                 size = path.stat().st_size
@@ -1688,7 +1688,10 @@ class FilesCommands(SharedHelpers):
                 return
             name = Path(argv[1]).name
             candidate = pending_dir / name
-            if not _path_within(pending_dir, candidate) or not candidate.is_file():
+            if (
+                not _path_within(root=pending_dir, target=candidate)
+                or not candidate.is_file()
+            ):
                 await self._send_message(
                     message.chat_id,
                     f"Outbox file not found: {name}",

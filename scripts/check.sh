@@ -86,6 +86,9 @@ echo "Checking for legacy TODO/SUMMARY pipeline code..."
 echo "Checking destination contract drift..."
 "$PYTHON_BIN" scripts/check_destination_contract_drift.py
 
+echo "Checking keyword contracts..."
+"$PYTHON_BIN" scripts/check_keyword_contracts.py --report-only
+
 echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server src/codex_autorunner/integrations/telegram
 

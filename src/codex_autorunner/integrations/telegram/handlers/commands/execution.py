@@ -646,7 +646,7 @@ class ExecutionCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return
-        if not _path_within(workspace, path):
+        if not _path_within(root=workspace, target=path):
             await self._send_message(
                 message.chat_id,
                 "File must be within the bound workspace.",

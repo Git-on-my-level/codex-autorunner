@@ -505,8 +505,8 @@ def guard_unregistered_hub_repo(repo_root: Path, hub: Optional[Path]) -> None:
         raise_exit(str(exc), cause=exc)
 
     repo_root = repo_root.resolve()
-    under_repos = is_within(hub_config.repos_root, repo_root)
-    under_worktrees = is_within(hub_config.worktrees_root, repo_root)
+    under_repos = is_within(root=hub_config.repos_root, target=repo_root)
+    under_worktrees = is_within(root=hub_config.worktrees_root, target=repo_root)
     if not (under_repos or under_worktrees):
         return
 

@@ -44,7 +44,7 @@ def _sanitize_branch(branch: Optional[str]) -> str:
     return cleaned or "unknown"
 
 
-def _is_within(root: Path, target: Path) -> bool:
+def _is_within(*, root: Path, target: Path) -> bool:
     try:
         return target.resolve().is_relative_to(root.resolve())
     except FileNotFoundError:
@@ -105,7 +105,7 @@ def _copy_entry(
         except FileNotFoundError:
             skipped_symlinks.append(str(src))
             return False
-        if not _is_within(worktree_root, resolved):
+        if not _is_within(root=worktree_root, target=resolved):
             skipped_symlinks.append(str(src))
             return False
         if resolved.is_dir():

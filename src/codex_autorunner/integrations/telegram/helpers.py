@@ -1253,13 +1253,13 @@ def _local_workspace_threads(
     return thread_ids, previews, topic_keys_by_thread
 
 
-def _path_within(root: Path, target: Path) -> bool:
+def _path_within(*, root: Path, target: Path) -> bool:
     try:
         root = canonicalize_path(root)
         target = canonicalize_path(target)
     except Exception:
         return False
-    return is_within(root, target)
+    return is_within(root=root, target=target)
 
 
 def _repo_root(path: Path) -> Optional[Path]:
@@ -1270,9 +1270,9 @@ def _repo_root(path: Path) -> Optional[Path]:
 
 
 def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
-    if _path_within(workspace_root, resumed_root):
+    if _path_within(root=workspace_root, target=resumed_root):
         return True
-    if _path_within(resumed_root, workspace_root):
+    if _path_within(root=resumed_root, target=workspace_root):
         workspace_repo = _repo_root(workspace_root)
         resumed_repo = _repo_root(resumed_root)
         if workspace_repo is None or resumed_repo is None:
@@ -1286,7 +1286,7 @@ def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
         return False
     if workspace_repo != resumed_repo:
         return False
-    return _path_within(workspace_repo, resumed_root)
+    return _path_within(root=workspace_repo, target=resumed_root)
 
 
 def _should_trace_message(text: str) -> bool:

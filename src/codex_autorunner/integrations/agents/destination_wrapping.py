@@ -89,7 +89,7 @@ def wrap_command_for_destination(
 
     # Docker destination runs inside repo mount, so keep supervisor state under repo state root.
     state_root = repo_abs / ".codex-autorunner" / "app_server_workspaces"
-    if not is_within(repo_abs, state_root):
+    if not is_within(root=repo_abs, target=state_root):
         state_root = repo_abs / ".codex-autorunner" / "app_server_workspaces"
     return WrappedCommand(command=wrapped, state_root_override=state_root)
 

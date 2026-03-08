@@ -210,7 +210,9 @@ def _doctor_versions_payload(start_path: Path) -> dict[str, Any]:
     source_matches_checkout = None
     if package_path and repo_root:
         try:
-            source_matches_checkout = is_within(Path(package_path), repo_root)
+            source_matches_checkout = is_within(
+                root=repo_root, target=Path(package_path)
+            )
         except Exception:
             source_matches_checkout = None
 

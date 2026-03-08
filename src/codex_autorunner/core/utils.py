@@ -143,7 +143,7 @@ def canonicalize_path(path: Path) -> Path:
     return path.expanduser().resolve()
 
 
-def is_within(root: Path, target: Path) -> bool:
+def is_within(*, root: Path, target: Path) -> bool:
     try:
         target.relative_to(root)
         return True
