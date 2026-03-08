@@ -2039,11 +2039,7 @@ class DiscordBotService:
         items = [(record.id, record.status.value) for record in matching_runs]
         search_items = [(record.id, record.id) for record in matching_runs]
         aliases = {record.id: (record.status.value,) for record in matching_runs}
-        exact_match = find_exact_picker_item(
-            search_items,
-            run_id_value,
-            aliases=aliases,
-        )
+        exact_match = find_exact_picker_item(search_items, run_id_value)
         if exact_match is not None:
             return exact_match[0]
 

@@ -2006,6 +2006,70 @@ async def test_car_flow_resume_with_partial_run_id_prompts_filtered_picker(
 
 
 @pytest.mark.anyio
+async def test_car_flow_resume_status_text_prompts_picker_instead_of_auto_resolve(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction_path(
+                command_path=("car", "flow", "resume"),
+                options=[{"name": "run_id", "value": "paused"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _Run:
+        def __init__(self, run_id: str, status: FlowRunStatus) -> None:
+            self.id = run_id
+            self.status = status
+
+    class _Store:
+        def list_flow_runs(self, *, flow_type: str) -> list[Any]:
+            assert flow_type == "ticket_flow"
+            return [
+                _Run("run-paused-a", FlowRunStatus.PAUSED),
+                _Run("run-paused-b", FlowRunStatus.PAUSED),
+                _Run("run-running", FlowRunStatus.RUNNING),
+            ]
+
+        def close(self) -> None:
+            return None
+
+    service._open_flow_store = lambda _workspace_root: _Store()  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        content = payload["data"]["content"].lower()
+        assert "matched 2 runs" in content
+        select = payload["data"]["components"][0]["components"][0]
+        values = [option["value"] for option in select["options"]]
+        assert values == ["run-paused-a", "run-paused-b"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_component_interaction_model_select_updates_model(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
