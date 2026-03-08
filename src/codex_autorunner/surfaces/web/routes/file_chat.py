@@ -32,6 +32,7 @@ from ....core.state import now_iso
 from ....core.usage import persist_opencode_usage_snapshot
 from ....core.utils import atomic_write, find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
+from .file_chat_routes import FileChatRoutesState
 from .shared import SSE_HEADERS
 
 FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
@@ -52,24 +53,6 @@ class _Target:
     path: Path
     rel_path: str
     state_key: str
-
-
-@dataclass
-class FileChatRoutesState:
-    active_chats: Dict[str, asyncio.Event]
-    chat_lock: asyncio.Lock
-    turn_lock: asyncio.Lock
-    current_by_target: Dict[str, Dict[str, Any]]
-    current_by_client: Dict[str, Dict[str, Any]]
-    last_by_client: Dict[str, Dict[str, Any]]
-
-    def __init__(self) -> None:
-        self.active_chats = {}
-        self.chat_lock = asyncio.Lock()
-        self.turn_lock = asyncio.Lock()
-        self.current_by_target = {}
-        self.current_by_client = {}
-        self.last_by_client = {}
 
 
 def _state_path(repo_root: Path) -> Path:
