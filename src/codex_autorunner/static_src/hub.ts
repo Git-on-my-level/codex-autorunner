@@ -104,6 +104,7 @@ interface HubChannelEntry {
     managed_thread_id?: string | null;
     agent?: string | null;
     status?: string | null;
+    status_reason_code?: string | null;
   } | null;
   repo_id?: string | null;
   workspace_path?: string | null;
@@ -1414,6 +1415,12 @@ function channelPmaDetails(channel: HubChannelEntry): string {
   ).trim();
   if (managedId) {
     parts.push(`thread ${managedId.slice(0, 12)}`);
+  }
+  const reason = String(
+    channel.provenance?.status_reason_code || channel.meta?.status_reason_code || ""
+  ).trim();
+  if (reason) {
+    parts.push(reason);
   }
   return parts.join(" · ");
 }

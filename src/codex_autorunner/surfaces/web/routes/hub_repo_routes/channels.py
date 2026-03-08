@@ -475,6 +475,8 @@ class HubChannelService:
                 "name",
                 "backend_thread_id",
                 "status",
+                "normalized_status",
+                "status_reason_code",
                 "updated_at",
             ]
             select_exprs = [col for col in select_cols if col in columns]
@@ -534,6 +536,28 @@ class HubChannelService:
                 updated_at = row["updated_at"] if "updated_at" in columns else None
                 if not isinstance(updated_at, str) or not updated_at.strip():
                     updated_at = None
+                normalized_status = (
+                    row["normalized_status"] if "normalized_status" in columns else None
+                )
+                if (
+                    not isinstance(normalized_status, str)
+                    or not normalized_status.strip()
+                ):
+                    normalized_status = None
+                else:
+                    normalized_status = normalized_status.strip()
+                status_reason_code = (
+                    row["status_reason_code"]
+                    if "status_reason_code" in columns
+                    else None
+                )
+                if (
+                    not isinstance(status_reason_code, str)
+                    or not status_reason_code.strip()
+                ):
+                    status_reason_code = None
+                else:
+                    status_reason_code = status_reason_code.strip()
                 has_running_turn = bool(
                     row["has_running_turn"] if has_turns_table else False
                 )
@@ -546,6 +570,8 @@ class HubChannelService:
                         "backend_thread_id": backend_thread_id,
                         "name": name,
                         "updated_at": updated_at,
+                        "normalized_status": normalized_status,
+                        "status_reason_code": status_reason_code,
                         "has_running_turn": has_running_turn,
                     }
                 )
@@ -1116,7 +1142,12 @@ class HubChannelService:
             backend_thread_id = thread.get("backend_thread_id")
             agent = self._normalize_agent(thread.get("agent"))
             has_running_turn = bool(thread.get("has_running_turn"))
-            status_label = "working" if has_running_turn else "final"
+            normalized_status = (
+                str(thread.get("normalized_status") or "").strip().lower()
+            )
+            if not normalized_status:
+                normalized_status = "running" if has_running_turn else "idle"
+            status_reason_code = str(thread.get("status_reason_code") or "").strip()
             display_name = thread.get("name")
             short_id = managed_thread_id[:8]
             if not isinstance(display_name, str) or not display_name.strip():
@@ -1130,24 +1161,26 @@ class HubChannelService:
                 "meta": {
                     "agent": agent,
                     "managed_thread_id": managed_thread_id,
-                    "status": "active",
+                    "status": normalized_status,
+                    "status_reason_code": status_reason_code,
                 },
                 "entry": {
                     "platform": "pma_thread",
                     "thread_id": managed_thread_id,
                     "agent": agent,
-                    "status": "active",
+                    "status": normalized_status,
                 },
                 "source": "pma_thread",
                 "provenance": {
                     "source": "pma_thread",
                     "managed_thread_id": managed_thread_id,
                     "agent": agent,
-                    "status": "active",
+                    "status": normalized_status,
+                    "status_reason_code": status_reason_code,
                 },
                 "active_thread_id": managed_thread_id,
-                "channel_status": status_label,
-                "status_label": status_label,
+                "channel_status": normalized_status,
+                "status_label": normalized_status,
             }
             if isinstance(repo_id, str) and repo_id:
                 row["repo_id"] = repo_id

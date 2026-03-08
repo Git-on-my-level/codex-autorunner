@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from .locks import file_lock
+from .managed_thread_status import (
+    ManagedThreadStatusReason,
+    ManagedThreadStatusSnapshot,
+    backfill_managed_thread_status,
+    build_managed_thread_status_snapshot,
+    transition_managed_thread_status,
+)
 from .sqlite_utils import open_sqlite
 from .time_utils import now_iso
 
@@ -46,6 +53,61 @@ def pma_threads_db_lock(db_path: Path) -> Iterator[None]:
         yield
 
 
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    return {key: row[key] for key in row.keys()}
+
+
+def _table_columns(conn: Any, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    columns: set[str] = set()
+    for row in rows:
+        name = row["name"] if "name" in row.keys() else None
+        if isinstance(name, str) and name:
+            columns.add(name)
+    return columns
+
+
+def _coerce_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _latest_turn_for_thread(
+    conn: Any, managed_thread_id: str
+) -> Optional[dict[str, Any]]:
+    row = conn.execute(
+        """
+        SELECT *
+          FROM pma_managed_turns
+         WHERE managed_thread_id = ?
+         ORDER BY started_at DESC, rowid DESC
+         LIMIT 1
+        """,
+        (managed_thread_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_dict(row)
+
+
+def _normalize_thread_record(row: Any) -> dict[str, Any]:
+    record = _row_to_dict(row)
+    lifecycle_status = _coerce_text(record.get("status")) or "active"
+    snapshot = ManagedThreadStatusSnapshot.from_mapping(record)
+    record["status"] = lifecycle_status
+    record["lifecycle_status"] = lifecycle_status
+    record["normalized_status"] = snapshot.status
+    record["status_reason_code"] = snapshot.reason_code
+    record["status_reason"] = snapshot.reason_code
+    record["status_updated_at"] = snapshot.changed_at
+    record["status_changed_at"] = snapshot.changed_at
+    record["status_terminal"] = bool(snapshot.terminal)
+    record["status_turn_id"] = snapshot.turn_id
+    return record
+
+
 def _ensure_schema(conn: Any) -> None:
     with conn:
         conn.execute(
@@ -58,6 +120,11 @@ def _ensure_schema(conn: Any) -> None:
                 name TEXT,
                 backend_thread_id TEXT,
                 status TEXT NOT NULL,
+                normalized_status TEXT,
+                status_reason_code TEXT,
+                status_updated_at TEXT,
+                status_terminal INTEGER,
+                status_turn_id TEXT,
                 last_turn_id TEXT,
                 last_message_preview TEXT,
                 compact_seed TEXT,
@@ -102,10 +169,44 @@ def _ensure_schema(conn: Any) -> None:
             )
             """
         )
+
+    thread_columns = _table_columns(conn, "pma_managed_threads")
+    for statement in (
+        (
+            "normalized_status",
+            "ALTER TABLE pma_managed_threads ADD COLUMN normalized_status TEXT",
+        ),
+        (
+            "status_reason_code",
+            "ALTER TABLE pma_managed_threads ADD COLUMN status_reason_code TEXT",
+        ),
+        (
+            "status_updated_at",
+            "ALTER TABLE pma_managed_threads ADD COLUMN status_updated_at TEXT",
+        ),
+        (
+            "status_terminal",
+            "ALTER TABLE pma_managed_threads ADD COLUMN status_terminal INTEGER",
+        ),
+        (
+            "status_turn_id",
+            "ALTER TABLE pma_managed_threads ADD COLUMN status_turn_id TEXT",
+        ),
+    ):
+        if statement[0] not in thread_columns:
+            with conn:
+                conn.execute(statement[1])
+    with conn:
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_status
             ON pma_managed_threads(status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_normalized_status
+            ON pma_managed_threads(normalized_status)
             """
         )
         conn.execute(
@@ -127,9 +228,62 @@ def _ensure_schema(conn: Any) -> None:
             """
         )
 
+    _backfill_missing_thread_status(conn)
 
-def _row_to_dict(row: Any) -> dict[str, Any]:
-    return {key: row[key] for key in row.keys()}
+
+def _backfill_missing_thread_status(conn: Any) -> None:
+    rows = conn.execute(
+        """
+        SELECT *
+          FROM pma_managed_threads
+         WHERE normalized_status IS NULL
+            OR TRIM(COALESCE(normalized_status, '')) = ''
+            OR status_reason_code IS NULL
+            OR TRIM(COALESCE(status_reason_code, '')) = ''
+            OR status_updated_at IS NULL
+            OR TRIM(COALESCE(status_updated_at, '')) = ''
+            OR status_terminal IS NULL
+        """
+    ).fetchall()
+    if not rows:
+        return
+
+    with conn:
+        for row in rows:
+            record = _row_to_dict(row)
+            managed_thread_id = str(record["managed_thread_id"])
+            latest_turn = _latest_turn_for_thread(conn, managed_thread_id)
+            snapshot = backfill_managed_thread_status(
+                lifecycle_status=_coerce_text(record.get("status")),
+                latest_turn_status=_coerce_text((latest_turn or {}).get("status")),
+                changed_at=(
+                    _coerce_text(record.get("status_updated_at"))
+                    or _coerce_text((latest_turn or {}).get("finished_at"))
+                    or _coerce_text((latest_turn or {}).get("started_at"))
+                    or _coerce_text(record.get("updated_at"))
+                    or _coerce_text(record.get("created_at"))
+                ),
+                compacted=_coerce_text(record.get("compact_seed")) is not None,
+            )
+            conn.execute(
+                """
+                UPDATE pma_managed_threads
+                   SET normalized_status = ?,
+                       status_reason_code = ?,
+                       status_updated_at = ?,
+                       status_terminal = ?,
+                       status_turn_id = COALESCE(status_turn_id, ?)
+                 WHERE managed_thread_id = ?
+                """,
+                (
+                    snapshot.status,
+                    snapshot.reason_code,
+                    snapshot.changed_at,
+                    1 if snapshot.terminal else 0,
+                    snapshot.turn_id,
+                    managed_thread_id,
+                ),
+            )
 
 
 class PmaThreadStore:
@@ -154,6 +308,67 @@ class PmaThreadStore:
                 _ensure_schema(conn)
                 yield conn
 
+    def _fetch_thread(
+        self, conn: Any, managed_thread_id: str
+    ) -> Optional[dict[str, Any]]:
+        row = conn.execute(
+            """
+            SELECT *
+              FROM pma_managed_threads
+             WHERE managed_thread_id = ?
+            """,
+            (managed_thread_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _normalize_thread_record(row)
+
+    def _transition_thread_status(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        reason: str | ManagedThreadStatusReason,
+        changed_at: Optional[str] = None,
+        turn_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        thread = self._fetch_thread(conn, managed_thread_id)
+        if thread is None:
+            return None
+        current = ManagedThreadStatusSnapshot.from_mapping(thread)
+        resolved_changed_at = changed_at or now_iso()
+        snapshot = transition_managed_thread_status(
+            current,
+            reason=reason,
+            changed_at=resolved_changed_at,
+            turn_id=turn_id,
+        )
+        if snapshot == current:
+            return thread
+        with conn:
+            conn.execute(
+                """
+                UPDATE pma_managed_threads
+                   SET normalized_status = ?,
+                       status_reason_code = ?,
+                       status_updated_at = ?,
+                       status_terminal = ?,
+                       status_turn_id = ?,
+                       updated_at = ?
+                 WHERE managed_thread_id = ?
+                """,
+                (
+                    snapshot.status,
+                    snapshot.reason_code,
+                    snapshot.changed_at,
+                    1 if snapshot.terminal else 0,
+                    snapshot.turn_id,
+                    resolved_changed_at,
+                    managed_thread_id,
+                ),
+            )
+        return self._fetch_thread(conn, managed_thread_id)
+
     def create_thread(
         self,
         agent: str,
@@ -169,6 +384,10 @@ class PmaThreadStore:
         if not workspace.is_absolute():
             raise ValueError("workspace_root must be absolute")
 
+        snapshot = build_managed_thread_status_snapshot(
+            reason=ManagedThreadStatusReason.THREAD_CREATED,
+            changed_at=now,
+        )
         with self._write_conn() as conn:
             with conn:
                 conn.execute(
@@ -181,12 +400,17 @@ class PmaThreadStore:
                         name,
                         backend_thread_id,
                         status,
+                        normalized_status,
+                        status_reason_code,
+                        status_updated_at,
+                        status_terminal,
+                        status_turn_id,
                         last_turn_id,
                         last_message_preview,
                         compact_seed,
                         created_at,
                         updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         managed_thread_id,
@@ -196,6 +420,11 @@ class PmaThreadStore:
                         name,
                         backend_thread_id,
                         "active",
+                        snapshot.status,
+                        snapshot.reason_code,
+                        snapshot.changed_at,
+                        1 if snapshot.terminal else 0,
+                        snapshot.turn_id,
                         None,
                         None,
                         None,
@@ -203,38 +432,22 @@ class PmaThreadStore:
                         now,
                     ),
                 )
-            row = conn.execute(
-                """
-                SELECT *
-                  FROM pma_managed_threads
-                 WHERE managed_thread_id = ?
-                """,
-                (managed_thread_id,),
-            ).fetchone()
-
-        if row is None:
+            created = self._fetch_thread(conn, managed_thread_id)
+        if created is None:
             raise RuntimeError("Failed to create managed PMA thread")
-        return _row_to_dict(row)
+        return created
 
     def get_thread(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
         with open_sqlite(self._path, durable=self._durable) as conn:
-            row = conn.execute(
-                """
-                SELECT *
-                  FROM pma_managed_threads
-                 WHERE managed_thread_id = ?
-                """,
-                (managed_thread_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return _row_to_dict(row)
+            _ensure_schema(conn)
+            return self._fetch_thread(conn, managed_thread_id)
 
     def list_threads(
         self,
         *,
         agent: Optional[str] = None,
         status: Optional[str] = None,
+        normalized_status: Optional[str] = None,
         repo_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
@@ -253,6 +466,9 @@ class PmaThreadStore:
         if status is not None:
             query += " AND status = ?"
             params.append(status)
+        if normalized_status is not None:
+            query += " AND normalized_status = ?"
+            params.append(normalized_status)
         if repo_id is not None:
             query += " AND repo_id = ?"
             params.append(repo_id)
@@ -261,8 +477,9 @@ class PmaThreadStore:
         params.append(limit)
 
         with open_sqlite(self._path, durable=self._durable) as conn:
+            _ensure_schema(conn)
             rows = conn.execute(query, params).fetchall()
-        return [_row_to_dict(row) for row in rows]
+        return [_normalize_thread_record(row) for row in rows]
 
     def count_threads_by_repo(
         self, *, agent: Optional[str] = None, status: Optional[str] = None
@@ -283,6 +500,7 @@ class PmaThreadStore:
         query += " GROUP BY TRIM(repo_id)"
 
         with open_sqlite(self._path, durable=self._durable) as conn:
+            _ensure_schema(conn)
             rows = conn.execute(query, params).fetchall()
         counts: dict[str, int] = {}
         for row in rows:
@@ -339,12 +557,13 @@ class PmaThreadStore:
         *,
         reset_backend_id: bool = False,
     ) -> None:
+        changed_at = now_iso()
         query = """
             UPDATE pma_managed_threads
                SET compact_seed = ?,
                    updated_at = ?
         """
-        params: list[Any] = [compact_seed, now_iso()]
+        params: list[Any] = [compact_seed, changed_at]
         if reset_backend_id:
             query += ", backend_thread_id = NULL"
         query += " WHERE managed_thread_id = ?"
@@ -353,8 +572,16 @@ class PmaThreadStore:
         with self._write_conn() as conn:
             with conn:
                 conn.execute(query, params)
+            if _coerce_text(compact_seed) is not None:
+                self._transition_thread_status(
+                    conn,
+                    managed_thread_id,
+                    reason=ManagedThreadStatusReason.THREAD_COMPACTED,
+                    changed_at=changed_at,
+                )
 
     def archive_thread(self, managed_thread_id: str) -> None:
+        changed_at = now_iso()
         with self._write_conn() as conn:
             with conn:
                 conn.execute(
@@ -364,10 +591,17 @@ class PmaThreadStore:
                            updated_at = ?
                      WHERE managed_thread_id = ?
                     """,
-                    (now_iso(), managed_thread_id),
+                    (changed_at, managed_thread_id),
                 )
+            self._transition_thread_status(
+                conn,
+                managed_thread_id,
+                reason=ManagedThreadStatusReason.THREAD_ARCHIVED,
+                changed_at=changed_at,
+            )
 
     def activate_thread(self, managed_thread_id: str) -> None:
+        changed_at = now_iso()
         with self._write_conn() as conn:
             with conn:
                 conn.execute(
@@ -377,8 +611,14 @@ class PmaThreadStore:
                            updated_at = ?
                      WHERE managed_thread_id = ?
                     """,
-                    (now_iso(), managed_thread_id),
+                    (changed_at, managed_thread_id),
                 )
+            self._transition_thread_status(
+                conn,
+                managed_thread_id,
+                reason=ManagedThreadStatusReason.THREAD_RESUMED,
+                changed_at=changed_at,
+            )
 
     def create_turn(
         self,
@@ -459,6 +699,13 @@ class PmaThreadStore:
                             managed_thread_id, thread_status
                         )
                     raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
+            self._transition_thread_status(
+                conn,
+                managed_thread_id,
+                reason=ManagedThreadStatusReason.TURN_STARTED,
+                changed_at=started_at,
+                turn_id=managed_turn_id,
+            )
             row = conn.execute(
                 """
                 SELECT *
@@ -481,10 +728,27 @@ class PmaThreadStore:
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
+        finished_at = now_iso()
+        reason = (
+            ManagedThreadStatusReason.MANAGED_TURN_COMPLETED
+            if status == "ok"
+            else ManagedThreadStatusReason.MANAGED_TURN_FAILED
+        )
         with self._write_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT managed_thread_id
+                  FROM pma_managed_turns
+                 WHERE managed_turn_id = ?
+                """,
+                (managed_turn_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            managed_thread_id = str(row["managed_thread_id"])
             with conn:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE pma_managed_turns
                        SET status = ?,
@@ -502,10 +766,20 @@ class PmaThreadStore:
                         error,
                         backend_turn_id,
                         transcript_turn_id,
-                        now_iso(),
+                        finished_at,
                         managed_turn_id,
                     ),
                 )
+            if cursor.rowcount == 0:
+                return False
+            self._transition_thread_status(
+                conn,
+                managed_thread_id,
+                reason=reason,
+                changed_at=finished_at,
+                turn_id=managed_turn_id,
+            )
+        return True
 
     def set_turn_backend_turn_id(
         self, managed_turn_id: str, backend_turn_id: Optional[str]
@@ -521,18 +795,41 @@ class PmaThreadStore:
                     (backend_turn_id, managed_turn_id),
                 )
 
-    def mark_turn_interrupted(self, managed_turn_id: str) -> None:
+    def mark_turn_interrupted(self, managed_turn_id: str) -> bool:
+        finished_at = now_iso()
         with self._write_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT managed_thread_id
+                  FROM pma_managed_turns
+                 WHERE managed_turn_id = ?
+                """,
+                (managed_turn_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            managed_thread_id = str(row["managed_thread_id"])
             with conn:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE pma_managed_turns
                        SET status = 'interrupted',
                            finished_at = ?
                      WHERE managed_turn_id = ?
+                       AND status = 'running'
                     """,
-                    (now_iso(), managed_turn_id),
+                    (finished_at, managed_turn_id),
                 )
+            if cursor.rowcount == 0:
+                return False
+            self._transition_thread_status(
+                conn,
+                managed_thread_id,
+                reason=ManagedThreadStatusReason.MANAGED_TURN_INTERRUPTED,
+                changed_at=finished_at,
+                turn_id=managed_turn_id,
+            )
+        return True
 
     def list_turns(
         self, managed_thread_id: str, *, limit: int = 50
@@ -541,6 +838,7 @@ class PmaThreadStore:
             return []
 
         with open_sqlite(self._path, durable=self._durable) as conn:
+            _ensure_schema(conn)
             rows = conn.execute(
                 """
                 SELECT *
@@ -555,6 +853,7 @@ class PmaThreadStore:
 
     def has_running_turn(self, managed_thread_id: str) -> bool:
         with open_sqlite(self._path, durable=self._durable) as conn:
+            _ensure_schema(conn)
             row = conn.execute(
                 """
                 SELECT 1
@@ -569,6 +868,7 @@ class PmaThreadStore:
 
     def get_running_turn(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
         with open_sqlite(self._path, durable=self._durable) as conn:
+            _ensure_schema(conn)
             row = conn.execute(
                 """
                 SELECT *
@@ -588,6 +888,7 @@ class PmaThreadStore:
         self, managed_thread_id: str, managed_turn_id: str
     ) -> Optional[dict[str, Any]]:
         with open_sqlite(self._path, durable=self._durable) as conn:
+            _ensure_schema(conn)
             row = conn.execute(
                 """
                 SELECT *
@@ -629,6 +930,7 @@ class PmaThreadStore:
 
 __all__ = [
     "ManagedThreadAlreadyHasRunningTurnError",
+    "ManagedThreadNotActiveError",
     "PMA_THREADS_DB_FILENAME",
     "PmaThreadStore",
     "default_pma_threads_db_path",

@@ -629,6 +629,28 @@ def build_pma_routes() -> APIRouter:
             )
         return notify_on
 
+    def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(thread)
+        lifecycle_status = _normalize_optional_text(
+            thread.get("lifecycle_status") or thread.get("status")
+        )
+        normalized_status = _normalize_optional_text(thread.get("normalized_status"))
+        payload["lifecycle_status"] = lifecycle_status
+        payload["normalized_status"] = normalized_status or lifecycle_status or ""
+        payload["status"] = payload["normalized_status"]
+        payload["status_reason"] = _normalize_optional_text(
+            thread.get("status_reason") or thread.get("status_reason_code")
+        )
+        payload["status_changed_at"] = _normalize_optional_text(
+            thread.get("status_changed_at") or thread.get("status_updated_at")
+        )
+        payload["status_terminal"] = bool(thread.get("status_terminal"))
+        payload["status_turn_id"] = _normalize_optional_text(
+            thread.get("status_turn_id")
+        )
+        payload["accepts_messages"] = lifecycle_status == "active"
+        return payload
+
     def _build_terminal_notify_subscription_payload(
         *,
         managed_thread_id: str,
@@ -2019,7 +2041,7 @@ def build_pma_routes() -> APIRouter:
                     else None
                 ),
             )
-        response: dict[str, Any] = {"thread": thread}
+        response: dict[str, Any] = {"thread": _serialize_managed_thread(thread)}
         if notification is not None:
             response["notification"] = notification
         return response
@@ -2029,19 +2051,29 @@ def build_pma_routes() -> APIRouter:
         request: Request,
         agent: Optional[str] = None,
         status: Optional[str] = None,
+        lifecycle_status: Optional[str] = None,
         repo_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        normalized_status = _normalize_optional_text(status)
+        normalized_lifecycle_status = _normalize_optional_text(lifecycle_status)
+        if (
+            normalized_status in {"active", "archived"}
+            and normalized_lifecycle_status is None
+        ):
+            normalized_lifecycle_status = normalized_status
+            normalized_status = None
         store = PmaThreadStore(request.app.state.config.root)
         threads = store.list_threads(
             agent=_normalize_optional_text(agent),
-            status=_normalize_optional_text(status),
+            status=normalized_lifecycle_status,
+            normalized_status=normalized_status,
             repo_id=_normalize_optional_text(repo_id),
             limit=limit,
         )
-        return {"threads": threads}
+        return {"threads": [_serialize_managed_thread(thread) for thread in threads]}
 
     @router.get("/threads/{managed_thread_id}")
     def get_managed_thread(managed_thread_id: str, request: Request) -> dict[str, Any]:
@@ -2049,7 +2081,7 @@ def build_pma_routes() -> APIRouter:
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": thread}
+        return {"thread": _serialize_managed_thread(thread)}
 
     @router.post("/threads/{managed_thread_id}/compact")
     def compact_managed_thread(
@@ -2099,7 +2131,7 @@ def build_pma_routes() -> APIRouter:
         updated = store.get_thread(managed_thread_id)
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": updated}
+        return {"thread": _serialize_managed_thread(updated)}
 
     @router.post("/threads/{managed_thread_id}/resume")
     def resume_managed_thread(
@@ -2137,7 +2169,7 @@ def build_pma_routes() -> APIRouter:
         updated = store.get_thread(managed_thread_id)
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": updated}
+        return {"thread": _serialize_managed_thread(updated)}
 
     @router.post("/threads/{managed_thread_id}/archive")
     def archive_managed_thread(
@@ -2161,7 +2193,7 @@ def build_pma_routes() -> APIRouter:
         updated = store.get_thread(managed_thread_id)
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": updated}
+        return {"thread": _serialize_managed_thread(updated)}
 
     async def _build_managed_thread_tail_snapshot(
         *,
@@ -2339,8 +2371,19 @@ def build_pma_routes() -> APIRouter:
 
         return {
             "managed_thread_id": managed_thread_id,
-            "thread": thread,
+            "thread": _serialize_managed_thread(thread),
             "is_alive": is_alive,
+            "status": _normalize_optional_text(thread.get("normalized_status"))
+            or _normalize_optional_text(thread.get("status"))
+            or "",
+            "status_reason": _normalize_optional_text(
+                thread.get("status_reason") or thread.get("status_reason_code")
+            )
+            or "",
+            "status_changed_at": _normalize_optional_text(
+                thread.get("status_changed_at") or thread.get("status_updated_at")
+            ),
+            "status_terminal": bool(thread.get("status_terminal")),
             "turn": {
                 "managed_turn_id": snapshot.get("managed_turn_id"),
                 "status": snapshot.get("turn_status"),
@@ -3008,30 +3051,31 @@ def build_pma_routes() -> APIRouter:
         else:
             backend_error = f"Unknown managed thread agent: {agent}"
 
-        store.mark_turn_interrupted(managed_turn_id)
-        await _notify_managed_thread_terminal_transition(
-            request,
-            thread=thread,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-            to_state="failed",
-            reason=backend_error or "managed_turn_interrupted",
-        )
-        store.append_action(
-            "managed_thread_interrupt",
-            managed_thread_id=managed_thread_id,
-            payload_json=json.dumps(
-                {
-                    "agent": agent,
-                    "managed_turn_id": managed_turn_id,
-                    "backend_thread_id": backend_thread_id,
-                    "backend_turn_id": backend_turn_id,
-                    "backend_interrupt_attempted": backend_interrupt_attempted,
-                    "backend_error": backend_error,
-                },
-                ensure_ascii=True,
-            ),
-        )
+        interrupted = store.mark_turn_interrupted(managed_turn_id)
+        if interrupted:
+            await _notify_managed_thread_terminal_transition(
+                request,
+                thread=thread,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                to_state="failed",
+                reason=backend_error or "managed_turn_interrupted",
+            )
+            store.append_action(
+                "managed_thread_interrupt",
+                managed_thread_id=managed_thread_id,
+                payload_json=json.dumps(
+                    {
+                        "agent": agent,
+                        "managed_turn_id": managed_turn_id,
+                        "backend_thread_id": backend_thread_id,
+                        "backend_turn_id": backend_turn_id,
+                        "backend_interrupt_attempted": backend_interrupt_attempted,
+                        "backend_error": backend_error,
+                    },
+                    ensure_ascii=True,
+                ),
+            )
         updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
         return {
             "status": "ok",

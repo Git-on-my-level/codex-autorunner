@@ -150,6 +150,10 @@ def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> N
         assert payload["managed_thread_id"] == managed_thread_id
         assert isinstance(payload.get("thread"), dict)
         assert isinstance(payload.get("turn"), dict)
+        assert payload["status"] == "completed"
+        assert payload["status_reason"] == "managed_turn_completed"
+        assert payload["status_terminal"] is True
+        assert payload["thread"]["lifecycle_status"] == "active"
         assert payload["turn"]["status"] == "ok"
         assert payload["is_alive"] is False
         assert isinstance(payload.get("recent_progress"), list)

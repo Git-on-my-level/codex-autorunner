@@ -274,7 +274,9 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
     managed_thread_id = str(data.get("managed_thread_id") or "")
     agent = str(thread.get("agent") or "-")
     repo_id = str(thread.get("repo_id") or "-")
-    thread_state = str(thread.get("status") or "-")
+    thread_state = str(data.get("status") or thread.get("status") or "-")
+    lifecycle_state = str(thread.get("lifecycle_status") or "-")
+    status_reason = str(data.get("status_reason") or thread.get("status_reason") or "-")
     managed_turn_id = str(turn.get("managed_turn_id") or "-")
     turn_state = str(turn.get("status") or "-")
     activity = str(turn.get("activity") or "-")
@@ -288,10 +290,12 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
                 f"agent={agent}",
                 f"repo={repo_id}",
                 f"thread={thread_state}",
+                f"lifecycle={lifecycle_state}",
                 f"alive={alive}",
             ]
         )
     )
+    typer.echo(f"reason={status_reason}")
     typer.echo(
         f"turn={managed_turn_id} status={turn_state} activity={activity} elapsed={elapsed} idle={idle}"
     )
@@ -865,6 +869,7 @@ def pma_thread_list(
                     str(thread.get("managed_thread_id") or ""),
                     f"agent={thread.get('agent') or ''}",
                     f"status={thread.get('status') or ''}",
+                    f"reason={thread.get('status_reason') or '-'}",
                     f"repo={thread.get('repo_id') or '-'}",
                 ]
             ).strip()

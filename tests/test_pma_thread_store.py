@@ -32,6 +32,10 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     assert store.path == default_pma_threads_db_path(hub_root)
     assert store.path.exists()
     assert created["status"] == "active"
+    assert created["lifecycle_status"] == "active"
+    assert created["normalized_status"] == "idle"
+    assert created["status_reason"] == "thread_created"
+    assert created["status_terminal"] is False
     assert created["repo_id"] == "repo-123"
     assert created["name"] == "Primary"
     assert created["backend_thread_id"] == "backend-1"
@@ -43,6 +47,14 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     listed = store.list_threads(agent="codex", status="active", repo_id="repo-123")
     assert len(listed) == 1
     assert listed[0]["managed_thread_id"] == created["managed_thread_id"]
+
+    normalized_listed = store.list_threads(
+        agent="codex",
+        normalized_status="idle",
+        repo_id="repo-123",
+    )
+    assert len(normalized_listed) == 1
+    assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
 
 
 def test_create_finish_turn_and_query(tmp_path: Path) -> None:
@@ -79,6 +91,12 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     assert len(listed) == 1
     assert listed[0]["managed_turn_id"] == turn["managed_turn_id"]
 
+    thread_after = store.get_thread(thread["managed_thread_id"])
+    assert thread_after is not None
+    assert thread_after["normalized_status"] == "completed"
+    assert thread_after["status_reason"] == "managed_turn_completed"
+    assert thread_after["status_terminal"] is True
+
 
 def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
     store = PmaThreadStore(tmp_path / "hub")
@@ -102,19 +120,22 @@ def test_mark_turn_finished_does_not_override_interrupted_status(
     thread = store.create_thread("codex", tmp_path / "workspace")
     turn = store.create_turn(thread["managed_thread_id"], prompt="hello")
 
-    store.mark_turn_interrupted(turn["managed_turn_id"])
+    assert store.mark_turn_interrupted(turn["managed_turn_id"]) is True
     interrupted = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
     assert interrupted is not None
     interrupted_finished_at = interrupted["finished_at"]
     assert interrupted["status"] == "interrupted"
     assert interrupted_finished_at
 
-    store.mark_turn_finished(
-        turn["managed_turn_id"],
-        status="ok",
-        assistant_text="should-not-overwrite",
-        backend_turn_id="backend-turn-overwrite",
-        transcript_turn_id="transcript-overwrite",
+    assert (
+        store.mark_turn_finished(
+            turn["managed_turn_id"],
+            status="ok",
+            assistant_text="should-not-overwrite",
+            backend_turn_id="backend-turn-overwrite",
+            transcript_turn_id="transcript-overwrite",
+        )
+        is False
     )
 
     final = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
@@ -124,6 +145,12 @@ def test_mark_turn_finished_does_not_override_interrupted_status(
     assert final["backend_turn_id"] is None
     assert final["transcript_turn_id"] is None
     assert final["finished_at"] == interrupted_finished_at
+
+    thread_after = store.get_thread(thread["managed_thread_id"])
+    assert thread_after is not None
+    assert thread_after["normalized_status"] == "failed"
+    assert thread_after["status_reason"] == "managed_turn_interrupted"
+    assert thread_after["status_terminal"] is True
 
 
 def test_concurrent_create_turn_admission_is_atomic(tmp_path: Path) -> None:
@@ -170,6 +197,10 @@ def test_archive_thread_changes_status(tmp_path: Path) -> None:
     archived = store.get_thread(thread["managed_thread_id"])
     assert archived is not None
     assert archived["status"] == "archived"
+    assert archived["lifecycle_status"] == "archived"
+    assert archived["normalized_status"] == "archived"
+    assert archived["status_reason"] == "thread_archived"
+    assert archived["status_terminal"] is True
 
 
 def test_create_turn_rejects_archived_thread(tmp_path: Path) -> None:
@@ -201,6 +232,71 @@ def test_set_compact_seed_and_reset_backend_id(tmp_path: Path) -> None:
     assert updated is not None
     assert updated["compact_seed"] == "compact-seed"
     assert updated["backend_thread_id"] is None
+
+
+def test_transient_failure_recovery_promotes_status_back_to_completed(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    first_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    assert (
+        store.mark_turn_finished(first_turn["managed_turn_id"], status="error") is True
+    )
+
+    failed_thread = store.get_thread(thread["managed_thread_id"])
+    assert failed_thread is not None
+    assert failed_thread["normalized_status"] == "failed"
+    assert failed_thread["status_reason"] == "managed_turn_failed"
+
+    second_turn = store.create_turn(thread["managed_thread_id"], prompt="retry")
+    running_thread = store.get_thread(thread["managed_thread_id"])
+    assert running_thread is not None
+    assert running_thread["normalized_status"] == "running"
+    assert running_thread["status_reason"] == "turn_started"
+    assert running_thread["status_terminal"] is False
+
+    assert store.mark_turn_finished(second_turn["managed_turn_id"], status="ok") is True
+    recovered_thread = store.get_thread(thread["managed_thread_id"])
+    assert recovered_thread is not None
+    assert recovered_thread["normalized_status"] == "completed"
+    assert recovered_thread["status_reason"] == "managed_turn_completed"
+    assert recovered_thread["status_terminal"] is True
+
+
+def test_archive_then_activate_restores_ready_status(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    store.archive_thread(thread["managed_thread_id"])
+    store.activate_thread(thread["managed_thread_id"])
+
+    resumed = store.get_thread(thread["managed_thread_id"])
+    assert resumed is not None
+    assert resumed["status"] == "active"
+    assert resumed["lifecycle_status"] == "active"
+    assert resumed["normalized_status"] == "idle"
+    assert resumed["status_reason"] == "thread_resumed"
+    assert resumed["status_terminal"] is False
+
+
+def test_duplicate_completion_event_is_idempotent(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    turn = store.create_turn(thread["managed_thread_id"], prompt="hello")
+
+    assert store.mark_turn_finished(turn["managed_turn_id"], status="ok") is True
+    first_thread = store.get_thread(thread["managed_thread_id"])
+    assert first_thread is not None
+    first_changed_at = first_thread["status_changed_at"]
+
+    assert store.mark_turn_finished(turn["managed_turn_id"], status="ok") is False
+    second_thread = store.get_thread(thread["managed_thread_id"])
+    assert second_thread is not None
+    assert second_thread["normalized_status"] == "completed"
+    assert second_thread["status_reason"] == "managed_turn_completed"
+    assert second_thread["status_changed_at"] == first_changed_at
 
 
 def test_schema_creation_is_idempotent(tmp_path: Path) -> None:
