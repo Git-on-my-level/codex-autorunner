@@ -443,6 +443,9 @@ def register_hub_commands(
             run_state = repo.get("run_state")
             if not isinstance(run_state, dict):
                 run_state = {}
+            canonical = repo.get("canonical_state_v1")
+            if not isinstance(canonical, dict):
+                canonical = {}
             return {
                 "id": repo.get("id"),
                 "display_name": repo.get("display_name"),
@@ -463,6 +466,7 @@ def register_hub_commands(
                     "last_progress_at": run_state.get("last_progress_at"),
                     "recommended_action": run_state.get("recommended_action"),
                 },
+                "freshness": canonical.get("freshness"),
             }
 
         def _summarize_message(msg: dict) -> dict:
@@ -477,6 +481,9 @@ def register_hub_commands(
             run_state = msg.get("run_state")
             if not isinstance(run_state, dict):
                 run_state = {}
+            canonical = msg.get("canonical_state_v1")
+            if not isinstance(canonical, dict):
+                canonical = {}
             return {
                 "item_type": msg.get("item_type"),
                 "next_action": msg.get("next_action"),
@@ -505,14 +512,29 @@ def register_hub_commands(
                     "last_progress_at": run_state.get("last_progress_at"),
                     "recommended_action": run_state.get("recommended_action"),
                 },
+                "freshness": canonical.get("freshness"),
             }
 
         snapshot = {
+            "generated_at": repos_payload.get("generated_at")
+            or messages_payload.get("generated_at"),
             "last_scan_at": (
                 repos_payload.get("last_scan_at")
                 if isinstance(repos_payload, dict)
                 else None
             ),
+            "freshness": {
+                "repos": (
+                    repos_payload.get("freshness")
+                    if isinstance(repos_payload, dict)
+                    else None
+                ),
+                "inbox": (
+                    messages_payload.get("freshness")
+                    if isinstance(messages_payload, dict)
+                    else None
+                ),
+            },
             "repos": [_summarize_repo(repo) for repo in repos],
             "inbox_items": [_summarize_message(msg) for msg in messages_items],
         }
@@ -528,6 +550,8 @@ def register_hub_commands(
             typer.echo(
                 f"Hub Snapshot (repos={len(snapshot_repos)}, inbox={len(snapshot_inbox)})"
             )
+            if snapshot.get("generated_at"):
+                typer.echo(f"generated_at: {snapshot.get('generated_at')}")
             for repo in snapshot_repos:
                 if not isinstance(repo, dict):
                     continue
@@ -549,6 +573,13 @@ def register_hub_commands(
                     typer.echo(
                         f"  recommended_action: {run_state.get('recommended_action')}"
                     )
+                freshness = repo.get("freshness")
+                if isinstance(freshness, dict) and freshness.get("basis_at"):
+                    typer.echo(
+                        "  freshness: "
+                        f"{freshness.get('status')} basis={freshness.get('recency_basis')} "
+                        f"basis_at={freshness.get('basis_at')}"
+                    )
             for msg in snapshot_inbox:
                 if not isinstance(msg, dict):
                     continue
@@ -567,6 +598,13 @@ def register_hub_commands(
                 if run_state_inbox.get("recommended_action"):
                     typer.echo(
                         f"  recommended_action: {run_state_inbox.get('recommended_action')}"
+                    )
+                freshness = msg.get("freshness")
+                if isinstance(freshness, dict) and freshness.get("basis_at"):
+                    typer.echo(
+                        "  freshness: "
+                        f"{freshness.get('status')} basis={freshness.get('recency_basis')} "
+                        f"basis_at={freshness.get('basis_at')}"
                     )
             return
 

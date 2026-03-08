@@ -10,6 +10,7 @@ from ....core.flows.failure_diagnostics import (
 )
 from ....core.flows.models import FlowRunStatus
 from ....core.flows.store import FlowStore
+from ....core.freshness import resolve_stale_threshold_seconds
 from ....core.pma_context import build_ticket_flow_run_state
 from ....core.ticket_flow_projection import build_canonical_state_v1
 from ....tickets.files import safe_relpath
@@ -134,6 +135,10 @@ def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[
 
 def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dict]:
     messages: list[dict] = []
+    pma_config = getattr(getattr(context, "config", None), "pma", None)
+    stale_threshold_seconds = resolve_stale_threshold_seconds(
+        getattr(pma_config, "freshness_stale_threshold_seconds", None)
+    )
     try:
         snapshots = context.supervisor.list_repos()
     except Exception:
@@ -271,6 +276,7 @@ def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dic
                             record=record,
                             store=store,
                             preferred_run_id=newest_run_id,
+                            stale_threshold_seconds=stale_threshold_seconds,
                         ),
                     }
                     if has_pending_dispatch:

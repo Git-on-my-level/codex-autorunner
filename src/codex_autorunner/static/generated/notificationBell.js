@@ -31,6 +31,31 @@ function itemBody(item) {
     const payload = item.dispatch || item.message || {};
     return payload.body || item.run_state?.blocking_reason || "";
 }
+function formatFreshnessAge(ageSeconds) {
+    if (typeof ageSeconds !== "number" || !Number.isFinite(ageSeconds) || ageSeconds < 0) {
+        return "";
+    }
+    if (ageSeconds < 60)
+        return `${Math.floor(ageSeconds)}s`;
+    if (ageSeconds < 3600)
+        return `${Math.floor(ageSeconds / 60)}m`;
+    if (ageSeconds < 86400)
+        return `${Math.floor(ageSeconds / 3600)}h`;
+    return `${Math.floor(ageSeconds / 86400)}d`;
+}
+function freshnessDetail(freshness) {
+    if (!freshness)
+        return "";
+    const basis = String(freshness.recency_basis || "").replace(/_/g, " ").trim();
+    const age = formatFreshnessAge(freshness.age_seconds);
+    if (basis && age)
+        return `${basis} ${age} ago`;
+    if (age)
+        return `${age} old`;
+    if (basis)
+        return basis;
+    return "";
+}
 function renderList(items) {
     const listEl = document.getElementById("notification-list");
     if (!listEl)
@@ -53,6 +78,8 @@ function renderList(items) {
         const recommendedAction = canonicalRecommendedAction || legacyRecommendedAction;
         const canonicalRecommendationConfidence = canonicalState?.recommendation_confidence;
         const canonicalRecommendationIsStale = Boolean(canonicalState?.recommendation_stale_reason) || canonicalRecommendationConfidence === "low";
+        const snapshotFreshness = canonicalState?.freshness;
+        const snapshotIsStale = snapshotFreshness?.is_stale === true;
         const nextAction = isInformationalDispatch
             ? "Info only"
             : canonicalRecommendationIsStale
@@ -64,6 +91,9 @@ function renderList(items) {
                     : item.next_action === "reply_and_resume"
                         ? "Next: Reply + resume run"
                         : "";
+        const freshnessLine = snapshotIsStale
+            ? `Snapshot stale${freshnessDetail(snapshotFreshness) ? `: ${freshnessDetail(snapshotFreshness)}` : ""}`
+            : "";
         const stateLabel = canonicalState?.state || item.run_state?.state || item.status || "attention";
         const stateClass = isInformationalDispatch
             ? "pill-info"
@@ -79,6 +109,7 @@ function renderList(items) {
           <div class="notification-title">${escapeHtml(title)}</div>
           <div class="notification-excerpt">${escapeHtml(excerpt)}</div>
           ${nextAction ? `<div class="notification-next muted small">${escapeHtml(nextAction)}</div>` : ""}
+          ${freshnessLine ? `<div class="notification-next muted small">${escapeHtml(freshnessLine)}</div>` : ""}
           <div class="notification-actions">
             <a class="notification-action" href="${escapeHtml(resolvePath(href))}">Open run</a>
             <button class="notification-action" data-action="copy-run-id" data-run-id="${escapeHtml(item.run_id)}">Copy ID</button>

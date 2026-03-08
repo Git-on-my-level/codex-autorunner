@@ -10,6 +10,7 @@ from ..tickets.ingest_state import read_ingest_receipt
 from .config import load_repo_config
 from .flows.models import FlowRunRecord
 from .flows.store import FlowStore
+from .freshness import build_freshness_payload
 
 _START_NEW_FLOW_TOKEN = " flow ticket_flow start "
 _COMPLETED_FLOW_STATUSES = {"completed", "done"}
@@ -185,6 +186,7 @@ def build_canonical_state_v1(
     record: Optional[FlowRunRecord] = None,
     store: Optional[FlowStore] = None,
     preferred_run_id: Optional[str] = None,
+    stale_threshold_seconds: Optional[int] = None,
 ) -> dict[str, Any]:
     observed_at = _iso_now()
     ticket_state = _collect_ticket_frontmatter_state(repo_root)
@@ -294,6 +296,19 @@ def build_canonical_state_v1(
     elif contradictions:
         recommendation_confidence = "medium"
 
+    freshness = build_freshness_payload(
+        generated_at=observed_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+        candidates=[
+            ("last_event_at", last_event_at),
+            ("run_state_last_progress_at", run_state_payload.get("last_progress_at")),
+            ("latest_run_finished_at", getattr(latest_record, "finished_at", None)),
+            ("latest_run_started_at", getattr(latest_record, "started_at", None)),
+            ("latest_run_created_at", getattr(latest_record, "created_at", None)),
+            ("ticket_ingested_at", ingested_at),
+        ],
+    )
+
     return {
         "schema_version": 1,
         "observed_at": observed_at,
@@ -321,4 +336,5 @@ def build_canonical_state_v1(
         "recommendation_confidence": recommendation_confidence,
         "recommendation_stale_reason": recommendation_stale_reason,
         "contradictions": contradictions,
+        "freshness": freshness,
     }

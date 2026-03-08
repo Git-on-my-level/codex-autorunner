@@ -267,6 +267,10 @@ def _assert_repo_canonical_state_v1(repo_entry: dict) -> None:
     assert canonical.get("recommendation_confidence") in {"high", "medium", "low"}
     assert canonical.get("observed_at")
     assert canonical.get("recommendation_generated_at")
+    freshness = canonical.get("freshness") or {}
+    assert freshness.get("generated_at")
+    assert freshness.get("recency_basis")
+    assert freshness.get("basis_at")
 
 
 def test_hub_repo_list_includes_ticket_flow_summary_and_run_state(
@@ -396,6 +400,9 @@ def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:
     assert docker_payload["source"] == "repo"
 
     list_payload = client.get("/hub/repos").json()
+    assert list_payload.get("generated_at")
+    repos_freshness = list_payload.get("freshness") or {}
+    assert repos_freshness.get("generated_at")
     base_entry = next(item for item in list_payload["repos"] if item["id"] == "base")
     assert base_entry["effective_destination"] == {
         "kind": "docker",

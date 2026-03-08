@@ -705,6 +705,17 @@ def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> 
     assert canonical.get("recommendation_confidence") in {"high", "medium", "low"}
     assert canonical.get("observed_at")
     assert canonical.get("recommendation_generated_at")
+    freshness = canonical.get("freshness") or {}
+    assert freshness.get("generated_at")
+    assert freshness.get("recency_basis")
+    assert freshness.get("basis_at")
+    assert isinstance(freshness.get("is_stale"), bool)
+
+    assert snapshot.get("generated_at")
+    snapshot_freshness = snapshot.get("freshness") or {}
+    assert snapshot_freshness.get("generated_at")
+    repos_section = (snapshot_freshness.get("sections") or {}).get("repos") or {}
+    assert repos_section.get("entity_count") >= 1
 
 
 def test_build_hub_snapshot_marks_stale_start_new_flow_recommendations(hub_env) -> None:
@@ -735,6 +746,9 @@ def test_build_hub_snapshot_marks_stale_start_new_flow_recommendations(hub_env) 
     assert "ticket_flow start" in (canonical.get("recommended_action") or "")
     assert canonical.get("recommendation_stale_reason")
     assert canonical.get("recommendation_confidence") == "low"
+    freshness = canonical.get("freshness") or {}
+    assert freshness.get("generated_at")
+    assert freshness.get("recency_basis")
 
 
 def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
@@ -775,13 +789,18 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert first["repo_id"] == hub_env.repo_id
     assert first["status"] == "active"
     assert "last_message_preview" in first
+    thread_freshness = first.get("freshness") or {}
+    assert thread_freshness.get("generated_at")
+    assert thread_freshness.get("recency_basis") == "thread_updated_at"
 
     rendered = _render_hub_snapshot(snapshot)
+    assert "Snapshot Freshness:" in rendered
     assert "PMA Managed Threads:" in rendered
     assert managed_thread_id in rendered
     assert f"repo_id={hub_env.repo_id}" in rendered
     assert "agent=codex" in rendered
     assert "status=active" in rendered
+    assert "freshness: status=" in rendered
 
 
 def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(

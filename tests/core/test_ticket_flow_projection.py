@@ -110,3 +110,33 @@ def test_build_canonical_state_v1_falls_back_when_ingest_receipt_invalid(
     assert canonical.get("ingested") is True
     assert canonical.get("ingested_at") is None
     assert canonical.get("ingest_source") == "ticket_files"
+
+
+def test_build_canonical_state_v1_adds_freshness_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.ticket_flow_projection._iso_now",
+        lambda: "2026-03-01T01:00:00+00:00",
+    )
+
+    canonical = build_canonical_state_v1(
+        repo_root=repo_root,
+        repo_id="repo-1",
+        run_state={
+            "state": "paused",
+            "last_progress_at": "2026-03-01T00:00:00+00:00",
+        },
+        stale_threshold_seconds=600,
+    )
+
+    freshness = canonical.get("freshness") or {}
+    assert freshness.get("generated_at") == "2026-03-01T01:00:00+00:00"
+    assert freshness.get("recency_basis") == "run_state_last_progress_at"
+    assert freshness.get("basis_at") == "2026-03-01T00:00:00+00:00"
+    assert freshness.get("age_seconds") == 3600
+    assert freshness.get("stale_threshold_seconds") == 600
+    assert freshness.get("is_stale") is True

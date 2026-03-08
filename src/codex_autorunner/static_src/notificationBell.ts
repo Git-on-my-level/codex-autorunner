@@ -1,5 +1,15 @@
 import { api, escapeHtml, flash, openModal, resolvePath } from "./utils.js";
 
+interface FreshnessPayload {
+  generated_at?: string | null;
+  recency_basis?: string | null;
+  basis_at?: string | null;
+  age_seconds?: number | null;
+  stale_threshold_seconds?: number | null;
+  is_stale?: boolean | null;
+  status?: string | null;
+}
+
 interface HubMessageItem {
   repo_id: string;
   repo_display_name?: string;
@@ -22,6 +32,7 @@ interface HubMessageItem {
     recommended_action?: string | null;
     recommendation_confidence?: "high" | "medium" | "low" | null;
     recommendation_stale_reason?: string | null;
+    freshness?: FreshnessPayload | null;
   } | null;
   message?: {
     mode?: string;
@@ -71,6 +82,26 @@ function itemBody(item: HubMessageItem): string {
   return payload.body || item.run_state?.blocking_reason || "";
 }
 
+function formatFreshnessAge(ageSeconds: number | null | undefined): string {
+  if (typeof ageSeconds !== "number" || !Number.isFinite(ageSeconds) || ageSeconds < 0) {
+    return "";
+  }
+  if (ageSeconds < 60) return `${Math.floor(ageSeconds)}s`;
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
+  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
+  return `${Math.floor(ageSeconds / 86400)}d`;
+}
+
+function freshnessDetail(freshness: FreshnessPayload | null | undefined): string {
+  if (!freshness) return "";
+  const basis = String(freshness.recency_basis || "").replace(/_/g, " ").trim();
+  const age = formatFreshnessAge(freshness.age_seconds);
+  if (basis && age) return `${basis} ${age} ago`;
+  if (age) return `${age} old`;
+  if (basis) return basis;
+  return "";
+}
+
 function renderList(items: HubMessageItem[]): void {
   const listEl = document.getElementById("notification-list");
   if (!listEl) return;
@@ -95,6 +126,8 @@ function renderList(items: HubMessageItem[]): void {
       const canonicalRecommendationIsStale = Boolean(
         canonicalState?.recommendation_stale_reason,
       ) || canonicalRecommendationConfidence === "low";
+      const snapshotFreshness = canonicalState?.freshness;
+      const snapshotIsStale = snapshotFreshness?.is_stale === true;
       const nextAction = isInformationalDispatch
         ? "Info only"
         : canonicalRecommendationIsStale
@@ -106,6 +139,9 @@ function renderList(items: HubMessageItem[]): void {
         : item.next_action === "reply_and_resume"
           ? "Next: Reply + resume run"
           : "";
+      const freshnessLine = snapshotIsStale
+        ? `Snapshot stale${freshnessDetail(snapshotFreshness) ? `: ${freshnessDetail(snapshotFreshness)}` : ""}`
+        : "";
       const stateLabel =
         canonicalState?.state || item.run_state?.state || item.status || "attention";
       const stateClass = isInformationalDispatch
@@ -122,6 +158,7 @@ function renderList(items: HubMessageItem[]): void {
           <div class="notification-title">${escapeHtml(title)}</div>
           <div class="notification-excerpt">${escapeHtml(excerpt)}</div>
           ${nextAction ? `<div class="notification-next muted small">${escapeHtml(nextAction)}</div>` : ""}
+          ${freshnessLine ? `<div class="notification-next muted small">${escapeHtml(freshnessLine)}</div>` : ""}
           <div class="notification-actions">
             <a class="notification-action" href="${escapeHtml(resolvePath(href))}">Open run</a>
             <button class="notification-action" data-action="copy-run-id" data-run-id="${escapeHtml(item.run_id)}">Copy ID</button>

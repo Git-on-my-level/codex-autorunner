@@ -24,6 +24,12 @@ from .flows.failure_diagnostics import format_failure_summary, get_failure_paylo
 from .flows.models import FlowRunRecord, FlowRunStatus
 from .flows.store import FlowStore
 from .flows.worker_process import check_worker_health, read_worker_crash_info
+from .freshness import (
+    build_freshness_payload,
+    iso_now,
+    resolve_stale_threshold_seconds,
+    summarize_section_freshness,
+)
 from .hub import HubSupervisor
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .state_roots import resolve_hub_templates_root
@@ -415,9 +421,9 @@ def _load_template_scan_summary(
 
 def _snapshot_pma_files(
     hub_root: Path,
-) -> tuple[dict[str, list[str]], dict[str, list[dict[str, str]]]]:
+) -> tuple[dict[str, list[str]], dict[str, list[dict[str, Any]]]]:
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
-    pma_files_detail: dict[str, list[dict[str, str]]] = {"inbox": [], "outbox": []}
+    pma_files_detail: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
     try:
         filebox = list_filebox(hub_root, include_legacy=True)
         for box in ("inbox", "outbox"):
@@ -521,6 +527,90 @@ def _build_templates_snapshot(
     return payload
 
 
+def _resolve_pma_freshness_threshold_seconds(
+    supervisor: Optional[HubSupervisor],
+) -> int:
+    pma_config = getattr(getattr(supervisor, "hub_config", None), "pma", None)
+    return resolve_stale_threshold_seconds(
+        getattr(pma_config, "freshness_stale_threshold_seconds", None)
+    )
+
+
+def _extract_entry_freshness(entry: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    freshness = entry.get("freshness")
+    if isinstance(freshness, Mapping):
+        return freshness
+    canonical = entry.get("canonical_state_v1")
+    if isinstance(canonical, Mapping):
+        nested = canonical.get("freshness")
+        if isinstance(nested, Mapping):
+            return nested
+    return None
+
+
+def _build_snapshot_freshness_summary(
+    *,
+    generated_at: str,
+    stale_threshold_seconds: int,
+    repos: list[dict[str, Any]],
+    inbox: list[dict[str, Any]],
+    pma_threads: list[dict[str, Any]],
+    pma_files_detail: Mapping[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "generated_at": generated_at,
+        "stale_threshold_seconds": stale_threshold_seconds,
+        "sections": {
+            "repos": summarize_section_freshness(
+                repos,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                extractor=_extract_entry_freshness,
+            ),
+            "inbox": summarize_section_freshness(
+                inbox,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                extractor=_extract_entry_freshness,
+            ),
+            "pma_threads": summarize_section_freshness(
+                pma_threads,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+            ),
+            "pma_file_inbox": summarize_section_freshness(
+                pma_files_detail.get("inbox") or [],
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+            ),
+            "pma_file_outbox": summarize_section_freshness(
+                pma_files_detail.get("outbox") or [],
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+            ),
+        },
+    }
+
+
+def _render_freshness_summary(payload: Any, *, max_field_chars: int) -> Optional[str]:
+    if not isinstance(payload, Mapping):
+        return None
+    status = _truncate(str(payload.get("status") or "unknown"), max_field_chars)
+    basis = _truncate(str(payload.get("recency_basis") or ""), max_field_chars)
+    basis_at = _truncate(str(payload.get("basis_at") or ""), max_field_chars)
+    age_raw = payload.get("age_seconds")
+    age_text = _truncate(str(age_raw), max_field_chars) if age_raw is not None else ""
+    parts = [f"status={status}"]
+    if basis:
+        parts.append(f"basis={basis}")
+    if basis_at:
+        parts.append(f"basis_at={basis_at}")
+    if age_text:
+        parts.append(f"age_seconds={age_text}")
+    return " ".join(parts) if parts else None
+
+
 def load_pma_prompt(hub_root: Path) -> str:
     path = pma_doc_path(hub_root, "prompt.md")
     try:
@@ -573,6 +663,40 @@ def _render_hub_snapshot(
     max_automation_items: int = PMA_MAX_AUTOMATION_ITEMS,
 ) -> str:
     lines: list[str] = []
+
+    generated_at = _truncate(str(snapshot.get("generated_at") or ""), max_field_chars)
+    snapshot_freshness = snapshot.get("freshness") or {}
+    if generated_at or snapshot_freshness:
+        lines.append("Snapshot Freshness:")
+        threshold = snapshot_freshness.get("stale_threshold_seconds")
+        threshold_text = (
+            _truncate(str(threshold), max_field_chars) if threshold is not None else ""
+        )
+        header_parts: list[str] = []
+        if generated_at:
+            header_parts.append(f"generated_at={generated_at}")
+        if threshold_text:
+            header_parts.append(f"stale_threshold_seconds={threshold_text}")
+        if header_parts:
+            lines.append(f"- {' '.join(header_parts)}")
+        sections = snapshot_freshness.get("sections") or {}
+        if isinstance(sections, Mapping):
+            for section_name, payload in sections.items():
+                if not isinstance(payload, Mapping):
+                    continue
+                count = _truncate(
+                    str(payload.get("entity_count") or 0), max_field_chars
+                )
+                stale = _truncate(str(payload.get("stale_count") or 0), max_field_chars)
+                newest = _truncate(
+                    str(payload.get("newest_basis_at") or ""), max_field_chars
+                )
+                lines.append(
+                    f"- section={_truncate(str(section_name), max_field_chars)} "
+                    f"count={count} stale={stale}"
+                    + (f" newest_basis_at={newest}" if newest else "")
+                )
+        lines.append("")
 
     inbox = snapshot.get("inbox") or []
     if inbox:
@@ -629,6 +753,11 @@ def _render_hub_snapshot(
                 lines.append(
                     f"  recommended_action: {_truncate(str(recommended_action), max_text_chars)}"
                 )
+            freshness_summary = _render_freshness_summary(
+                _extract_entry_freshness(item), max_field_chars=max_field_chars
+            )
+            if freshness_summary:
+                lines.append(f"  freshness: {freshness_summary}")
         lines.append("")
 
     repos = snapshot.get("repos") or []
@@ -676,6 +805,11 @@ def _render_hub_snapshot(
                 lines.append(f"  blocking_reason: {blocking_reason}")
             if recommended_action:
                 lines.append(f"  recommended_action: {recommended_action}")
+            freshness_summary = _render_freshness_summary(
+                _extract_entry_freshness(repo), max_field_chars=max_field_chars
+            )
+            if freshness_summary:
+                lines.append(f"  freshness: {freshness_summary}")
         lines.append("")
 
     templates = snapshot.get("templates") or {}
@@ -754,6 +888,11 @@ def _render_hub_snapshot(
                 f"- {managed_thread_id} repo_id={repo_id} agent={agent} "
                 f"status={status} name={name} last={preview}"
             )
+            freshness_summary = _render_freshness_summary(
+                thread.get("freshness"), max_field_chars=max_field_chars
+            )
+            if freshness_summary:
+                lines.append(f"  freshness: {freshness_summary}")
         lines.append("")
 
     automation = snapshot.get("automation") or {}
@@ -1383,9 +1522,13 @@ def get_latest_ticket_flow_run_state_with_record(
 
 
 def _gather_inbox(
-    supervisor: HubSupervisor, *, max_text_chars: int
+    supervisor: HubSupervisor,
+    *,
+    max_text_chars: int,
+    stale_threshold_seconds: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
+    stale_threshold_seconds = resolve_stale_threshold_seconds(stale_threshold_seconds)
     try:
         snapshots = supervisor.list_repos()
     except Exception as exc:
@@ -1512,6 +1655,7 @@ def _gather_inbox(
                             record=record,
                             store=store,
                             preferred_run_id=newest_run_id,
+                            stale_threshold_seconds=stale_threshold_seconds,
                         ),
                         "active_run_id": active_run_id,
                     }
@@ -1747,8 +1891,11 @@ async def build_hub_snapshot(
     supervisor: Optional[HubSupervisor],
     hub_root: Optional[Path] = None,
 ) -> dict[str, Any]:
+    generated_at = iso_now()
+    stale_threshold_seconds = _resolve_pma_freshness_threshold_seconds(supervisor)
     if supervisor is None:
         return {
+            "generated_at": generated_at,
             "repos": [],
             "inbox": [],
             "templates": {"enabled": False, "repos": []},
@@ -1764,6 +1911,14 @@ async def build_hub_snapshot(
                     "pending_sample": [],
                 },
             },
+            "freshness": _build_snapshot_freshness_summary(
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                repos=[],
+                inbox=[],
+                pma_threads=[],
+                pma_files_detail={"inbox": [], "outbox": []},
+            ),
         }
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
@@ -1818,11 +1973,15 @@ async def build_hub_snapshot(
                 preferred_run_id=(
                     str(snap.last_run_id) if snap.last_run_id is not None else None
                 ),
+                stale_threshold_seconds=stale_threshold_seconds,
             )
         repos.append(summary)
 
     inbox = await asyncio.to_thread(
-        _gather_inbox, supervisor, max_text_chars=max_text_chars
+        _gather_inbox,
+        supervisor,
+        max_text_chars=max_text_chars,
+        stale_threshold_seconds=stale_threshold_seconds,
     )
     inbox = inbox[:max_messages]
 
@@ -1833,14 +1992,37 @@ async def build_hub_snapshot(
     templates = _build_templates_snapshot(supervisor, hub_root=hub_root)
 
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
-    pma_files_detail: dict[str, list[dict[str, str]]] = {"inbox": [], "outbox": []}
+    pma_files_detail: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
     pma_threads: list[dict[str, Any]] = []
     automation = await asyncio.to_thread(_snapshot_pma_automation, supervisor)
     if hub_root:
         pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
         pma_threads = _snapshot_pma_threads(hub_root)
+        for thread in pma_threads:
+            thread["freshness"] = build_freshness_payload(
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                candidates=[("thread_updated_at", thread.get("updated_at"))],
+            )
+        for box in ("inbox", "outbox"):
+            for entry in pma_files_detail.get(box) or []:
+                entry["freshness"] = build_freshness_payload(
+                    generated_at=generated_at,
+                    stale_threshold_seconds=stale_threshold_seconds,
+                    candidates=[("file_modified_at", entry.get("modified_at"))],
+                )
+
+    freshness = _build_snapshot_freshness_summary(
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+        repos=repos,
+        inbox=inbox,
+        pma_threads=pma_threads,
+        pma_files_detail=pma_files_detail,
+    )
 
     return {
+        "generated_at": generated_at,
         "repos": repos,
         "inbox": inbox,
         "templates": templates,
@@ -1849,6 +2031,7 @@ async def build_hub_snapshot(
         "pma_threads": pma_threads,
         "automation": automation,
         "lifecycle_events": lifecycle_events,
+        "freshness": freshness,
         "limits": {
             "max_repos": max_repos,
             "max_messages": max_messages,

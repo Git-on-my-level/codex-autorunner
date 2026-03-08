@@ -695,6 +695,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "docs_max_chars": 12_000,
         "active_context_max_lines": 200,
         "context_log_tail_lines": 120,
+        "freshness_stale_threshold_seconds": 1800,
         "reactive_enabled": True,
         "reactive_event_types": [
             "flow_paused",
@@ -876,6 +877,7 @@ class PmaConfig:
     docs_max_chars: int = 12_000
     active_context_max_lines: int = 200
     context_log_tail_lines: int = 120
+    freshness_stale_threshold_seconds: int = 1800
     dispatch_interception_enabled: bool = False
     reactive_enabled: bool = True
     reactive_event_types: List[str] = dataclasses.field(default_factory=list)
@@ -1728,6 +1730,9 @@ def _parse_pma_config(
     docs_max_chars = _parse_positive_int("docs_max_chars", 12_000)
     active_context_max_lines = _parse_positive_int("active_context_max_lines", 200)
     context_log_tail_lines = _parse_positive_int("context_log_tail_lines", 120)
+    freshness_stale_threshold_seconds = _parse_positive_int(
+        "freshness_stale_threshold_seconds", 1800
+    )
     dispatch_interception_enabled = bool(
         cfg.get(
             "dispatch_interception_enabled",
@@ -1792,6 +1797,7 @@ def _parse_pma_config(
         docs_max_chars=docs_max_chars,
         active_context_max_lines=active_context_max_lines,
         context_log_tail_lines=context_log_tail_lines,
+        freshness_stale_threshold_seconds=freshness_stale_threshold_seconds,
         dispatch_interception_enabled=dispatch_interception_enabled,
         reactive_enabled=reactive_enabled,
         reactive_event_types=reactive_event_types,

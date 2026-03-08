@@ -8,6 +8,11 @@ from .....core.chat_bindings import (
     active_chat_binding_counts,
     active_chat_binding_counts_by_source,
 )
+from .....core.freshness import (
+    iso_now,
+    resolve_stale_threshold_seconds,
+    summarize_section_freshness,
+)
 from .....core.logging_utils import safe_log
 from .....core.request_context import get_request_id
 
@@ -68,15 +73,42 @@ class HubRepoListingService:
             self._active_chat_binding_counts_by_source
         )
         await self._mount_manager.refresh_mounts(snapshots)
+        repos = [
+            self._enricher.enrich_repo(
+                snap, chat_binding_counts, chat_binding_counts_by_source
+            )
+            for snap in snapshots
+        ]
+        generated_at = iso_now()
+        stale_threshold_seconds = resolve_stale_threshold_seconds(
+            getattr(
+                self._context.config.pma,
+                "freshness_stale_threshold_seconds",
+                None,
+            )
+        )
         return {
+            "generated_at": generated_at,
             "last_scan_at": self._context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": self._context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [
-                self._enricher.enrich_repo(
-                    snap, chat_binding_counts, chat_binding_counts_by_source
-                )
-                for snap in snapshots
-            ],
+            "freshness": {
+                "schema_version": 1,
+                "generated_at": generated_at,
+                "stale_threshold_seconds": stale_threshold_seconds,
+                "sections": {
+                    "repos": summarize_section_freshness(
+                        repos,
+                        generated_at=generated_at,
+                        stale_threshold_seconds=stale_threshold_seconds,
+                        extractor=lambda item: (
+                            (item.get("canonical_state_v1") or {}).get("freshness")
+                            if isinstance(item, dict)
+                            else None
+                        ),
+                    )
+                },
+            },
+            "repos": repos,
         }
 
     async def scan_repos(self) -> dict[str, Any]:
@@ -87,16 +119,42 @@ class HubRepoListingService:
             self._active_chat_binding_counts_by_source
         )
         await self._mount_manager.refresh_mounts(snapshots)
-
+        repos = [
+            self._enricher.enrich_repo(
+                snap, chat_binding_counts, chat_binding_counts_by_source
+            )
+            for snap in snapshots
+        ]
+        generated_at = iso_now()
+        stale_threshold_seconds = resolve_stale_threshold_seconds(
+            getattr(
+                self._context.config.pma,
+                "freshness_stale_threshold_seconds",
+                None,
+            )
+        )
         return {
+            "generated_at": generated_at,
             "last_scan_at": self._context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": self._context.supervisor.state.pinned_parent_repo_ids,
-            "repos": [
-                self._enricher.enrich_repo(
-                    snap, chat_binding_counts, chat_binding_counts_by_source
-                )
-                for snap in snapshots
-            ],
+            "freshness": {
+                "schema_version": 1,
+                "generated_at": generated_at,
+                "stale_threshold_seconds": stale_threshold_seconds,
+                "sections": {
+                    "repos": summarize_section_freshness(
+                        repos,
+                        generated_at=generated_at,
+                        stale_threshold_seconds=stale_threshold_seconds,
+                        extractor=lambda item: (
+                            (item.get("canonical_state_v1") or {}).get("freshness")
+                            if isinstance(item, dict)
+                            else None
+                        ),
+                    )
+                },
+            },
+            "repos": repos,
         }
 
     async def scan_repos_job(self) -> dict[str, Any]:

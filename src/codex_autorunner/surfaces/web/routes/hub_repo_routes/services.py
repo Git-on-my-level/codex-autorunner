@@ -18,6 +18,7 @@ class HubRepoEnricher:
         chat_binding_counts: Optional[dict[str, int]] = None,
         chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
     ) -> dict:
+        from .....core.freshness import resolve_stale_threshold_seconds
         from .....core.pma_context import (
             get_latest_ticket_flow_run_state_with_record,
         )
@@ -30,6 +31,13 @@ class HubRepoEnricher:
         repo_dict = snapshot.to_dict(self._context.config.root)
         repo_dict = self._mount_manager.add_mount_info(repo_dict)
         binding_count = int((chat_binding_counts or {}).get(snapshot.id, 0))
+        stale_threshold_seconds = resolve_stale_threshold_seconds(
+            getattr(
+                self._context.config.pma,
+                "freshness_stale_threshold_seconds",
+                None,
+            )
+        )
         source_counts = dict((chat_binding_counts_by_source or {}).get(snapshot.id, {}))
         pma_binding_count = int(source_counts.get("pma", 0))
         discord_binding_count = int(source_counts.get("discord", 0))
@@ -81,6 +89,7 @@ class HubRepoEnricher:
                     if snapshot.last_run_id is not None
                     else None
                 ),
+                stale_threshold_seconds=stale_threshold_seconds,
             )
         else:
             repo_dict["ticket_flow"] = None

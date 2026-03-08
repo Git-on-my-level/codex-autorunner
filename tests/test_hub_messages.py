@@ -156,6 +156,11 @@ def _assert_canonical_state_v1(
     assert canonical.get("recommendation_confidence") in {"high", "medium", "low"}
     assert canonical.get("observed_at")
     assert canonical.get("recommendation_generated_at")
+    freshness = canonical.get("freshness") or {}
+    assert freshness.get("generated_at")
+    assert freshness.get("recency_basis")
+    assert freshness.get("basis_at")
+    assert isinstance(freshness.get("is_stale"), bool)
 
 
 def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
@@ -187,6 +192,24 @@ def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
             run_status="paused",
             state="blocked",
         )
+
+
+def test_hub_messages_response_includes_top_level_freshness(hub_env) -> None:
+    run_id = "90909090-1111-2222-3333-444444444444"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        payload = res.json()
+        assert payload.get("generated_at")
+        freshness = payload.get("freshness") or {}
+        assert freshness.get("generated_at")
+        inbox_section = (freshness.get("sections") or {}).get("inbox") or {}
+        assert inbox_section.get("entity_count") == 1
+        assert inbox_section.get("fresh_count") >= 1
 
 
 def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:

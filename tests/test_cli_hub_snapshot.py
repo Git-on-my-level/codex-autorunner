@@ -31,6 +31,11 @@ def test_hub_snapshot_json_structure() -> None:
 
     # Mock server response data
     mock_repos_response = {
+        "generated_at": "2025-01-01T12:05:00Z",
+        "freshness": {
+            "generated_at": "2025-01-01T12:05:00Z",
+            "sections": {"repos": {"entity_count": 1, "fresh_count": 1}},
+        },
         "last_scan_at": "2025-01-01T12:00:00Z",
         "repos": [
             {
@@ -42,11 +47,24 @@ def test_hub_snapshot_json_structure() -> None:
                 "last_run_id": 1,
                 "last_run_started_at": "2025-01-01T10:00:00Z",
                 "last_run_finished_at": "2025-01-01T10:05:00Z",
+                "canonical_state_v1": {
+                    "freshness": {
+                        "generated_at": "2025-01-01T12:05:00Z",
+                        "recency_basis": "last_event_at",
+                        "basis_at": "2025-01-01T10:05:00Z",
+                        "is_stale": True,
+                    }
+                },
             }
         ],
     }
 
     mock_messages_response = {
+        "generated_at": "2025-01-01T12:05:00Z",
+        "freshness": {
+            "generated_at": "2025-01-01T12:05:00Z",
+            "sections": {"inbox": {"entity_count": 1, "fresh_count": 1}},
+        },
         "items": [
             {
                 "repo_id": "test-repo",
@@ -62,8 +80,16 @@ def test_hub_snapshot_json_structure() -> None:
                     "is_handoff": False,
                 },
                 "files": ["test.txt"],
+                "canonical_state_v1": {
+                    "freshness": {
+                        "generated_at": "2025-01-01T12:05:00Z",
+                        "recency_basis": "last_event_at",
+                        "basis_at": "2025-01-01T11:00:00Z",
+                        "is_stale": False,
+                    }
+                },
             }
-        ]
+        ],
     }
 
     repos = mock_repos_response.get("repos", [])
@@ -72,6 +98,7 @@ def test_hub_snapshot_json_structure() -> None:
     def _summarize_repo(repo: dict) -> dict:
         if not isinstance(repo, dict):
             return {}
+        canonical = repo.get("canonical_state_v1", {})
         return {
             "id": repo.get("id"),
             "display_name": repo.get("display_name"),
@@ -81,6 +108,7 @@ def test_hub_snapshot_json_structure() -> None:
             "last_run_id": repo.get("last_run_id"),
             "last_run_started_at": repo.get("last_run_started_at"),
             "last_run_finished_at": repo.get("last_run_finished_at"),
+            "freshness": canonical.get("freshness"),
         }
 
     def _summarize_message(msg: dict) -> dict:
@@ -89,6 +117,7 @@ def test_hub_snapshot_json_structure() -> None:
         dispatch = msg.get("dispatch", {})
         if not isinstance(dispatch, dict):
             dispatch = {}
+        canonical = msg.get("canonical_state_v1", {})
         body = dispatch.get("body", "")
         title = dispatch.get("title", "")
         truncated_body = (body[:200] + "...") if len(body) > 200 else body
@@ -105,19 +134,27 @@ def test_hub_snapshot_json_structure() -> None:
                 "body": truncated_body,
                 "is_handoff": dispatch.get("is_handoff"),
             },
+            "freshness": canonical.get("freshness"),
             "files_count": (
                 len(msg.get("files", [])) if isinstance(msg.get("files"), list) else 0
             ),
         }
 
     snapshot = {
+        "generated_at": mock_repos_response.get("generated_at"),
         "last_scan_at": mock_repos_response.get("last_scan_at"),
+        "freshness": {
+            "repos": mock_repos_response.get("freshness"),
+            "inbox": mock_messages_response.get("freshness"),
+        },
         "repos": [_summarize_repo(repo) for repo in repos],
         "inbox_items": [_summarize_message(msg) for msg in messages_items],
     }
 
     # Verify JSON structure
     assert "last_scan_at" in snapshot
+    assert "generated_at" in snapshot
+    assert "freshness" in snapshot
     assert "repos" in snapshot
     assert isinstance(snapshot["repos"], list)
     assert "inbox_items" in snapshot
@@ -133,6 +170,7 @@ def test_hub_snapshot_json_structure() -> None:
     assert "last_run_id" in repo
     assert "last_run_started_at" in repo
     assert "last_run_finished_at" in repo
+    assert "freshness" in repo
 
     # Verify inbox fields
     item = snapshot["inbox_items"][0]
@@ -143,6 +181,7 @@ def test_hub_snapshot_json_structure() -> None:
     assert "status" in item
     assert "seq" in item
     assert "dispatch" in item
+    assert "freshness" in item
 
     dispatch = item["dispatch"]
     assert "mode" in dispatch

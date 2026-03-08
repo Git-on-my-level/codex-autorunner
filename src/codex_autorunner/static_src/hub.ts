@@ -32,6 +32,16 @@ interface HubTicketFlowDisplay {
   run_id: string | null;
 }
 
+interface FreshnessPayload {
+  generated_at?: string | null;
+  recency_basis?: string | null;
+  basis_at?: string | null;
+  age_seconds?: number | null;
+  stale_threshold_seconds?: number | null;
+  is_stale?: boolean | null;
+  status?: string | null;
+}
+
 interface HubRepo {
   id: string;
   path: string;
@@ -359,6 +369,44 @@ function formatLastActivity(repo: HubRepo): string {
   const time = repo.last_run_finished_at || repo.last_run_started_at;
   if (!time) return "";
   return formatTimeCompact(time);
+}
+
+function formatFreshnessAge(ageSeconds: number | null | undefined): string {
+  if (typeof ageSeconds !== "number" || !Number.isFinite(ageSeconds) || ageSeconds < 0) {
+    return "";
+  }
+  if (ageSeconds < 60) return `${Math.floor(ageSeconds)}s`;
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m`;
+  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h`;
+  return `${Math.floor(ageSeconds / 86400)}d`;
+}
+
+function freshnessBasisLabel(raw: string | null | undefined): string {
+  const value = String(raw || "").trim();
+  if (!value) return "snapshot";
+  return value
+    .replace(/_/g, " ")
+    .replace(/\bat\b/g, "")
+    .trim();
+}
+
+function freshnessSummary(freshness: FreshnessPayload | null | undefined): string {
+  if (!freshness) return "";
+  const basis = freshnessBasisLabel(freshness.recency_basis);
+  const age = formatFreshnessAge(freshness.age_seconds);
+  if (basis && age) return `${basis} ${age} ago`;
+  if (age) return `${age} old`;
+  if (basis) return basis;
+  return "";
+}
+
+function repoFreshness(repo: HubRepo): FreshnessPayload | null {
+  const extendedRepo = repo as HubRepo & {
+    canonical_state_v1?: {
+      freshness?: FreshnessPayload | null;
+    } | null;
+  };
+  return extendedRepo.canonical_state_v1?.freshness || null;
 }
 
 function formatDestinationSummary(
@@ -1643,6 +1691,13 @@ function renderRepos(repos: HubRepo[]): void {
     const statusBadge = buildFlowStatusBadge(statusText, statusValue);
     const mountBadge = buildMountBadge(repo);
     const destinationBadge = buildDestinationBadge(repo.effective_destination);
+    const freshness = repoFreshness(repo);
+    const freshnessBadge =
+      freshness?.is_stale === true
+        ? `<span class="pill pill-small pill-warn" title="${escapeHtml(
+            freshnessSummary(freshness) || "Snapshot data is stale"
+          )}">stale</span>`
+        : "";
     const lockBadge =
       repo.lock_status && repo.lock_status !== "unlocked"
         ? `<span class="pill pill-small pill-warn">${escapeHtml(
@@ -1681,6 +1736,10 @@ function renderRepos(repos: HubRepo[]): void {
     }
     if (lastActivity) {
       infoItems.push(lastActivity);
+    }
+    if (freshness?.is_stale === true) {
+      const staleSummary = freshnessSummary(freshness);
+      infoItems.push(staleSummary ? `Snapshot stale · ${staleSummary}` : "Snapshot stale");
     }
     const infoLine =
       infoItems.length > 0
@@ -1727,6 +1786,7 @@ function renderRepos(repos: HubRepo[]): void {
     const metadataBadges = [
       destinationBadge,
       statusBadge,
+      freshnessBadge,
       mountBadge,
       lockBadge,
       initBadge,

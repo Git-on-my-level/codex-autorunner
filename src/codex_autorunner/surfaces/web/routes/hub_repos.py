@@ -21,15 +21,17 @@ from ....core.destinations import (
 )
 from ....core.flows import FlowEventType, FlowStore
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
+from ....core.freshness import (
+    iso_now,
+    resolve_stale_threshold_seconds,
+    summarize_section_freshness,
+)
 from ....core.git_utils import git_is_clean
 from ....core.logging_utils import safe_log
 from ....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
 from ....core.pma_thread_store import default_pma_threads_db_path
-from ....core.ticket_flow_summary import (
-    build_ticket_flow_summary,
-)
 from ....integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -158,9 +160,6 @@ def build_hub_repo_routes(
         return enricher.enrich_repo(
             snapshot, chat_binding_counts, chat_binding_counts_by_source
         )
-
-    def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict]:
-        return build_ticket_flow_summary(repo_path, include_failure=True)
 
     def _resolve_manifest_repo(repo_id: str):
         manifest = load_manifest(context.config.manifest_path, context.config.root)

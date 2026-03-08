@@ -158,6 +158,44 @@ function formatLastActivity(repo) {
         return "";
     return formatTimeCompact(time);
 }
+function formatFreshnessAge(ageSeconds) {
+    if (typeof ageSeconds !== "number" || !Number.isFinite(ageSeconds) || ageSeconds < 0) {
+        return "";
+    }
+    if (ageSeconds < 60)
+        return `${Math.floor(ageSeconds)}s`;
+    if (ageSeconds < 3600)
+        return `${Math.floor(ageSeconds / 60)}m`;
+    if (ageSeconds < 86400)
+        return `${Math.floor(ageSeconds / 3600)}h`;
+    return `${Math.floor(ageSeconds / 86400)}d`;
+}
+function freshnessBasisLabel(raw) {
+    const value = String(raw || "").trim();
+    if (!value)
+        return "snapshot";
+    return value
+        .replace(/_/g, " ")
+        .replace(/\bat\b/g, "")
+        .trim();
+}
+function freshnessSummary(freshness) {
+    if (!freshness)
+        return "";
+    const basis = freshnessBasisLabel(freshness.recency_basis);
+    const age = formatFreshnessAge(freshness.age_seconds);
+    if (basis && age)
+        return `${basis} ${age} ago`;
+    if (age)
+        return `${age} old`;
+    if (basis)
+        return basis;
+    return "";
+}
+function repoFreshness(repo) {
+    const extendedRepo = repo;
+    return extendedRepo.canonical_state_v1?.freshness || null;
+}
 function formatDestinationSummary(destination) {
     if (!destination || typeof destination !== "object")
         return "local";
@@ -1268,6 +1306,10 @@ function renderRepos(repos) {
         const statusBadge = buildFlowStatusBadge(statusText, statusValue);
         const mountBadge = buildMountBadge(repo);
         const destinationBadge = buildDestinationBadge(repo.effective_destination);
+        const freshness = repoFreshness(repo);
+        const freshnessBadge = freshness?.is_stale === true
+            ? `<span class="pill pill-small pill-warn" title="${escapeHtml(freshnessSummary(freshness) || "Snapshot data is stale")}">stale</span>`
+            : "";
         const lockBadge = repo.lock_status && repo.lock_status !== "unlocked"
             ? `<span class="pill pill-small pill-warn">${escapeHtml(repo.lock_status.replace("_", " "))}</span>`
             : "";
@@ -1300,6 +1342,10 @@ function renderRepos(repos) {
         }
         if (lastActivity) {
             infoItems.push(lastActivity);
+        }
+        if (freshness?.is_stale === true) {
+            const staleSummary = freshnessSummary(freshness);
+            infoItems.push(staleSummary ? `Snapshot stale · ${staleSummary}` : "Snapshot stale");
         }
         const infoLine = infoItems.length > 0
             ? `<span class="hub-repo-info-line">${escapeHtml(infoItems.join(" · "))}</span>`
@@ -1336,6 +1382,7 @@ function renderRepos(repos) {
         const metadataBadges = [
             destinationBadge,
             statusBadge,
+            freshnessBadge,
             mountBadge,
             lockBadge,
             initBadge,

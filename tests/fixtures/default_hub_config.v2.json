@@ -198,6 +198,7 @@
     "default_agent": "codex",
     "docs_max_chars": 12000,
     "enabled": true,
+    "freshness_stale_threshold_seconds": 1800,
     "max_messages": 10,
     "max_repos": 25,
     "max_text_chars": 800,

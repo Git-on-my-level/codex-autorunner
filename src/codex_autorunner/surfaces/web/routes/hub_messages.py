@@ -6,6 +6,11 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 
+from ....core.freshness import (
+    iso_now,
+    resolve_stale_threshold_seconds,
+    summarize_section_freshness,
+)
 from ..app_state import (
     HubAppContext,
     _record_message_resolution,
@@ -37,7 +42,31 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
         items = await asyncio.to_thread(
             hub_gather_service.gather_hub_messages, context, limit=limit
         )
-        return {"items": items}
+        generated_at = iso_now()
+        stale_threshold_seconds = resolve_stale_threshold_seconds(
+            getattr(context.config.pma, "freshness_stale_threshold_seconds", None)
+        )
+        return {
+            "generated_at": generated_at,
+            "freshness": {
+                "schema_version": 1,
+                "generated_at": generated_at,
+                "stale_threshold_seconds": stale_threshold_seconds,
+                "sections": {
+                    "inbox": summarize_section_freshness(
+                        items,
+                        generated_at=generated_at,
+                        stale_threshold_seconds=stale_threshold_seconds,
+                        extractor=lambda item: (
+                            (item.get("canonical_state_v1") or {}).get("freshness")
+                            if isinstance(item, dict)
+                            else None
+                        ),
+                    )
+                },
+            },
+            "items": items,
+        }
 
     @router.post("/hub/messages/dismiss")
     async def dismiss_hub_message(payload: dict[str, Any]):
