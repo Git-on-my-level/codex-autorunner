@@ -119,6 +119,7 @@ from .pma_routes.tail_stream import (
     coerce_dict as _coerce_dict,
     iso_from_event_ms as _iso_from_event_ms,
     normalize_tail_level as _normalize_tail_level,
+    parse_iso_datetime as _parse_iso_datetime,
     resolve_resume_after as _resolve_resume_after,
 )
 from .shared import SSE_HEADERS
@@ -603,14 +604,7 @@ def build_pma_routes() -> APIRouter:
         return {"subscription": created}
 
     # _coerce_dict imported from tail_stream.py
-
-    def _parse_iso_datetime(value: Any) -> Optional[datetime]:
-        if not isinstance(value, str) or not value.strip():
-            return None
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
+    # _parse_iso_datetime imported from tail_stream.py
 
     def _parse_tail_duration_seconds(value: Optional[str]) -> Optional[int]:
         if value is None:
