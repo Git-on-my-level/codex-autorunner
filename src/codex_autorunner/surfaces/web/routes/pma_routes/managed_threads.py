@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -124,7 +122,7 @@ def build_automation_routes(
     @router.post("/automation/timers")
     @router.post("/timers")
     async def create_automation_timer(
-        request: Request, payload: "PmaAutomationTimerCreateRequest"
+        request: Request, payload: PmaAutomationTimerCreateRequest
     ) -> dict[str, Any]:
         from .automation_adapter import (
             call_store_create_with_payload,
@@ -194,7 +192,7 @@ def build_automation_routes(
     async def touch_automation_timer(
         timer_id: str,
         request: Request,
-        payload: Annotated[Optional["PmaAutomationTimerTouchRequest"], Body()] = None,
+        payload: Annotated[Optional[PmaAutomationTimerTouchRequest], Body()] = None,
     ) -> dict[str, Any]:
         from .automation_adapter import (
             call_store_action_with_id,
@@ -233,7 +231,7 @@ def build_automation_routes(
     async def cancel_automation_timer(
         timer_id: str,
         request: Request,
-        payload: Annotated[Optional["PmaAutomationTimerCancelRequest"], Body()] = None,
+        payload: Annotated[Optional[PmaAutomationTimerCancelRequest], Body()] = None,
     ) -> dict[str, Any]:
         from .automation_adapter import (
             call_store_action_with_id,
