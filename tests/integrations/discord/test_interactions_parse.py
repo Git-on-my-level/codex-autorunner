@@ -9,9 +9,12 @@ from codex_autorunner.integrations.discord.interactions import (
     extract_guild_id,
     extract_interaction_id,
     extract_interaction_token,
+    extract_modal_custom_id,
+    extract_modal_values,
     extract_user_id,
     is_autocomplete_interaction,
     is_component_interaction,
+    is_modal_submit_interaction,
 )
 
 
@@ -76,6 +79,11 @@ def test_is_autocomplete_interaction_returns_false_for_type_2() -> None:
     assert is_autocomplete_interaction(payload) is False
 
 
+def test_is_modal_submit_interaction_returns_true_for_type_5() -> None:
+    payload = {"type": 5, "data": {"custom_id": "tickets_modal:abc"}}
+    assert is_modal_submit_interaction(payload) is True
+
+
 def test_extract_component_custom_id() -> None:
     payload = {"data": {"custom_id": "flow:run-123:resume"}}
     assert extract_component_custom_id(payload) == "flow:run-123:resume"
@@ -85,6 +93,11 @@ def test_extract_component_custom_id_returns_none_for_missing_or_blank() -> None
     assert extract_component_custom_id({"data": {}}) is None
     assert extract_component_custom_id({"data": {"custom_id": "   "}}) is None
     assert extract_component_custom_id({"data": "not-a-dict"}) is None
+
+
+def test_extract_modal_custom_id_returns_expected_value() -> None:
+    payload = {"data": {"custom_id": "tickets_modal:abc123"}}
+    assert extract_modal_custom_id(payload) == "tickets_modal:abc123"
 
 
 def test_extract_component_values() -> None:
@@ -100,6 +113,39 @@ def test_extract_component_values_returns_empty_for_no_values() -> None:
 def test_extract_component_values_filters_non_scalar_values() -> None:
     payload = {"data": {"values": ["repo-1", 2, 3.5, None, {"k": "v"}, ["nested"]]}}
     assert extract_component_values(payload) == ["repo-1", "2", "3.5"]
+
+
+def test_extract_modal_values_supports_label_and_action_row_shapes() -> None:
+    payload = {
+        "data": {
+            "components": [
+                {
+                    "type": 18,
+                    "label": "Ticket",
+                    "component": {
+                        "type": 4,
+                        "custom_id": "ticket_body",
+                        "value": "body text",
+                    },
+                },
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 3,
+                            "custom_id": "tickets_filter_select",
+                            "values": ["open"],
+                        }
+                    ],
+                },
+            ]
+        }
+    }
+
+    assert extract_modal_values(payload) == {
+        "ticket_body": "body text",
+        "tickets_filter_select": ["open"],
+    }
 
 
 def test_extract_command_path_and_options_returns_empty_for_malformed_payload() -> None:

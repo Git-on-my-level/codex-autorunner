@@ -1044,6 +1044,8 @@ async def test_flow_status_in_pma_mode_shows_only_active_chat_bound_worktrees(
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "wt-visible" in content
         assert "wt-hidden" not in content
+        assert "\n  -> " in content
+        assert "\n  - " not in content
     finally:
         await store.close()
 

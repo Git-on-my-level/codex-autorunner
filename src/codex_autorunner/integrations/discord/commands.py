@@ -78,6 +78,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "name": "name",
                             "description": "Model name (e.g., gpt-5.3-codex or provider/model)",
                             "required": False,
+                            "autocomplete": True,
                         },
                         {
                             "type": STRING,
@@ -143,6 +144,29 @@ def build_application_commands() -> list[dict[str, Any]]:
                     "type": SUB_COMMAND,
                     "name": "skills",
                     "description": "List available skills",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "search",
+                            "description": "Optional search text to filter skills",
+                            "required": False,
+                            "autocomplete": True,
+                        }
+                    ],
+                },
+                {
+                    "type": SUB_COMMAND,
+                    "name": "tickets",
+                    "description": "Manage tickets via modal",
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "search",
+                            "description": "Optional search text to filter tickets",
+                            "required": False,
+                            "autocomplete": True,
+                        }
+                    ],
                 },
                 {
                     "type": SUB_COMMAND,
@@ -261,6 +285,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "thread_id",
                                     "description": "Thread ID to resume (optional - lists recent threads if omitted)",
                                     "required": False,
+                                    "autocomplete": True,
                                 }
                             ],
                         },
@@ -331,6 +356,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "run_id",
                                     "description": "Flow run id",
                                     "required": False,
+                                    "autocomplete": True,
                                 }
                             ],
                         },
@@ -396,6 +422,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "run_id",
                                     "description": "Flow run id (optional)",
                                     "required": False,
+                                    "autocomplete": True,
                                 }
                             ],
                         },
@@ -409,6 +436,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "run_id",
                                     "description": "Flow run id",
                                     "required": False,
+                                    "autocomplete": True,
                                 }
                             ],
                         },
@@ -422,6 +450,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "run_id",
                                     "description": "Flow run id",
                                     "required": False,
+                                    "autocomplete": True,
                                 }
                             ],
                         },
@@ -435,6 +464,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "run_id",
                                     "description": "Flow run id",
                                     "required": False,
+                                    "autocomplete": True,
                                 }
                             ],
                         },
@@ -448,6 +478,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "run_id",
                                     "description": "Flow run id",
                                     "required": False,
+                                    "autocomplete": True,
                                 }
                             ],
                         },
@@ -467,6 +498,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                                     "name": "run_id",
                                     "description": "Flow run id",
                                     "required": False,
+                                    "autocomplete": True,
                                 },
                             ],
                         },

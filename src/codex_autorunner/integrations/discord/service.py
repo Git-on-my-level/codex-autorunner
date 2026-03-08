@@ -122,6 +122,10 @@ from ...integrations.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
+from ...integrations.chat.picker_filter import (
+    filter_picker_items,
+    find_exact_picker_item,
+)
 from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
@@ -138,7 +142,12 @@ from ...integrations.github.service import (
     GitHubService,
 )
 from ...manifest import load_manifest
-from ...tickets.files import read_ticket
+from ...tickets.files import (
+    list_ticket_paths,
+    read_ticket,
+    read_ticket_frontmatter,
+    safe_relpath,
+)
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ..chat.progress_primitives import TurnProgressTracker, render_progress_text
@@ -172,6 +181,8 @@ from .components import (
     build_model_picker,
     build_review_commit_picker,
     build_session_threads_picker,
+    build_ticket_filter_picker,
+    build_ticket_picker,
     build_update_target_picker,
 )
 from .config import DiscordBotConfig
@@ -186,9 +197,12 @@ from .interactions import (
     extract_guild_id,
     extract_interaction_id,
     extract_interaction_token,
+    extract_modal_custom_id,
+    extract_modal_values,
     extract_user_id,
     is_autocomplete_interaction,
     is_component_interaction,
+    is_modal_submit_interaction,
 )
 from .outbox import DiscordOutboxManager
 from .rendering import (
@@ -222,6 +236,7 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "cannot infer the intention please clarify before proceeding."
 )
 _MODEL_LIST_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
+MODEL_SEARCH_FETCH_LIMIT = 200
 SESSION_RESUME_SELECT_ID = "session_resume_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 UPDATE_TARGET_SELECT_ID = "update_target_select"
@@ -230,6 +245,11 @@ MODEL_EFFORT_SELECT_ID = "model_effort_select"
 BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
+TICKET_PICKER_TOKEN_PREFIX = "ticket@"
+TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
+TICKETS_SELECT_ID = "tickets_select"
+TICKETS_MODAL_PREFIX = "tickets_modal"
+TICKETS_BODY_INPUT_ID = "ticket_body"
 FLOW_ACTIONS_WITH_RUN_PICKER = {
     "status",
     "restart",
@@ -266,11 +286,18 @@ def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
+def _coerce_model_picker_items(
+    result: Any,
+    *,
+    limit: Optional[int] = None,
+) -> list[tuple[str, str]]:
     entries = _coerce_model_entries(result)
     options: list[tuple[str, str]] = []
     seen: set[str] = set()
-    limit = max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1)
+    item_limit = max(
+        1,
+        limit if isinstance(limit, int) else DISCORD_SELECT_OPTION_MAX_OPTIONS - 1,
+    )
     for entry in entries:
         model_id = entry.get("model") or entry.get("id")
         if not isinstance(model_id, str):
@@ -288,68 +315,9 @@ def _coerce_model_picker_items(result: Any) -> list[tuple[str, str]]:
         ):
             label = f"{model_id} ({display_name})"
         options.append((model_id, label))
-        if len(options) >= limit:
+        if len(options) >= item_limit:
             break
     return options
-
-
-def find_exact_picker_item(
-    items: list[tuple[str, str]],
-    query: str,
-) -> Optional[tuple[str, str]]:
-    normalized_query = query.strip().lower()
-    if not normalized_query:
-        return None
-    for value, label in items:
-        if value.strip().lower() == normalized_query:
-            return (value, label)
-        if label.strip().lower() == normalized_query:
-            return (value, label)
-    return None
-
-
-def filter_picker_items(
-    items: list[tuple[str, str]],
-    query: str,
-    *,
-    limit: int,
-    aliases: Optional[dict[str, tuple[str, ...]]] = None,
-) -> list[tuple[str, str]]:
-    normalized_query = query.strip().lower()
-    if limit <= 0:
-        return []
-    if not normalized_query:
-        return items[:limit]
-
-    scored: list[tuple[int, int, tuple[str, str]]] = []
-    for index, (value, label) in enumerate(items):
-        haystacks = [value.lower(), label.lower()]
-        alias_values = aliases.get(value) if isinstance(aliases, dict) else None
-        if isinstance(alias_values, tuple):
-            haystacks.extend(alias.lower() for alias in alias_values if alias)
-        if not any(normalized_query in haystack for haystack in haystacks):
-            continue
-
-        score = 0
-        if value.lower().startswith(normalized_query):
-            score += 30
-        elif normalized_query in value.lower():
-            score += 15
-        if label.lower().startswith(normalized_query):
-            score += 20
-        elif normalized_query in label.lower():
-            score += 10
-        if isinstance(alias_values, tuple):
-            for alias in alias_values:
-                alias_lower = alias.lower()
-                if alias_lower.startswith(normalized_query):
-                    score += 5
-                elif normalized_query in alias_lower:
-                    score += 2
-        scored.append((score, index, (value, label)))
-
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    return [item for _score, _index, item in scored[:limit]]
 
 
 def _is_valid_opencode_model_name(model_name: str) -> bool:
@@ -606,6 +574,9 @@ class DiscordBotService:
             )
         self._pending_model_effort: dict[str, str] = {}
         self._pending_flow_reply_text: dict[str, str] = {}
+        self._pending_ticket_context: dict[str, dict[str, str]] = {}
+        self._pending_ticket_filters: dict[str, str] = {}
+        self._pending_ticket_search_queries: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",
@@ -810,6 +781,22 @@ class DiscordBotService:
             )
             return
 
+        if payload_data.get("type") == "modal_submit":
+            custom_id_raw = payload_data.get("custom_id")
+            modal_values_raw = payload_data.get("values")
+            custom_id = custom_id_raw if isinstance(custom_id_raw, str) else ""
+            modal_values = (
+                modal_values_raw if isinstance(modal_values_raw, dict) else {}
+            )
+            await self._handle_ticket_modal_submit(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                custom_id=custom_id,
+                values=modal_values,
+            )
+            return
+
         if payload_data.get("type") == "autocomplete":
             command_raw = payload_data.get("command")
             command_path = (
@@ -835,6 +822,7 @@ class DiscordBotService:
             await self._handle_command_autocomplete(
                 interaction_id,
                 interaction_token,
+                channel_id=channel_id,
                 command_path=command_path,
                 options=options,
                 focused_name=focused_name,
@@ -2795,6 +2783,20 @@ class DiscordBotService:
                 options=options,
             )
             return
+        if command_path == ("car", "tickets"):
+            workspace_root = await self._require_bound_workspace(
+                interaction_id, interaction_token, channel_id=channel_id
+            )
+            if workspace_root is None:
+                return
+            await self._handle_tickets(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                workspace_root=workspace_root,
+                options=options,
+            )
+            return
         if command_path == ("car", "mcp"):
             workspace_root = await self._require_bound_workspace(
                 interaction_id, interaction_token, channel_id=channel_id
@@ -3595,6 +3597,9 @@ class DiscordBotService:
         return None
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
+        if is_modal_submit_interaction(interaction_payload):
+            await self._handle_modal_submit_interaction(interaction_payload)
+            return
         if is_component_interaction(interaction_payload):
             await self._handle_component_interaction(interaction_payload)
             return
@@ -3720,6 +3725,7 @@ class DiscordBotService:
         await self._handle_command_autocomplete(
             interaction_id,
             interaction_token,
+            channel_id=channel_id,
             command_path=command_path,
             options=options,
             focused_name=focused_name,
@@ -3864,6 +3870,149 @@ class DiscordBotService:
 
         return prompt, components
 
+    def _ticket_dir(self, workspace_root: Path) -> Path:
+        return workspace_root / ".codex-autorunner" / "tickets"
+
+    def _list_ticket_choices(
+        self,
+        workspace_root: Path,
+        *,
+        status_filter: str,
+        search_query: str = "",
+    ) -> list[tuple[str, str, str]]:
+        ticket_dir = self._ticket_dir(workspace_root)
+        choices: list[tuple[str, str, str]] = []
+        normalized_filter = status_filter.strip().lower()
+        if normalized_filter not in {"all", "open", "done"}:
+            normalized_filter = "all"
+        for path in list_ticket_paths(ticket_dir):
+            frontmatter, errors = read_ticket_frontmatter(path)
+            is_done = bool(frontmatter and frontmatter.done and not errors)
+            if normalized_filter == "open" and is_done:
+                continue
+            if normalized_filter == "done" and not is_done:
+                continue
+            title = frontmatter.title if frontmatter and frontmatter.title else ""
+            label = f"{path.name}{' - ' + title if title else ''}"
+            description = "done" if is_done else "open"
+            rel_path = safe_relpath(path, workspace_root)
+            choices.append((rel_path, label, description))
+        normalized_query = search_query.strip()
+        if not normalized_query or not choices:
+            return choices
+        search_items = [
+            (value, f"{label} {description}".strip())
+            for value, label, description in choices
+        ]
+        filtered_items = filter_picker_items(
+            search_items,
+            normalized_query,
+            limit=len(search_items),
+        )
+        choice_by_value = {
+            value: (value, label, description) for value, label, description in choices
+        }
+        return [
+            choice_by_value[value]
+            for value, _label in filtered_items
+            if value in choice_by_value
+        ]
+
+    @staticmethod
+    def _normalize_search_query(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
+
+    @staticmethod
+    def _ticket_prompt_text(*, search_query: str = "") -> str:
+        normalized_query = search_query.strip()
+        if not normalized_query:
+            return "Select a ticket to view or edit."
+        return f"Select a ticket to view or edit. Search: `{normalized_query}`"
+
+    def _ticket_picker_value(self, ticket_rel: str) -> str:
+        normalized = ticket_rel.strip()
+        if len(normalized) <= 100:
+            return normalized
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"{TICKET_PICKER_TOKEN_PREFIX}{digest}"
+
+    def _resolve_ticket_picker_value(
+        self,
+        selected_value: str,
+        *,
+        workspace_root: Path,
+    ) -> Optional[str]:
+        normalized = selected_value.strip()
+        if not normalized:
+            return None
+        if not normalized.startswith(TICKET_PICKER_TOKEN_PREFIX):
+            return normalized
+
+        digest = normalized[len(TICKET_PICKER_TOKEN_PREFIX) :]
+        if not digest:
+            return None
+
+        for path in list_ticket_paths(self._ticket_dir(workspace_root)):
+            rel_path = safe_relpath(path, workspace_root)
+            candidate = self._ticket_picker_value(rel_path)
+            if candidate == normalized:
+                return rel_path
+        return None
+
+    def _build_ticket_components(
+        self,
+        workspace_root: Path,
+        *,
+        status_filter: str,
+        search_query: str = "",
+    ) -> list[dict[str, Any]]:
+        ticket_choices = self._list_ticket_choices(
+            workspace_root,
+            status_filter=status_filter,
+            search_query=search_query,
+        )
+        return [
+            build_ticket_filter_picker(current_filter=status_filter),
+            build_ticket_picker(
+                [
+                    (self._ticket_picker_value(value), label, description)
+                    for value, label, description in ticket_choices
+                ]
+            ),
+        ]
+
+    async def _handle_tickets(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        workspace_root: Path,
+        options: dict[str, Any],
+    ) -> None:
+        status_filter = self._pending_ticket_filters.get(channel_id, "all")
+        normalized_filter = status_filter.strip().lower() if status_filter else "all"
+        if normalized_filter not in {"all", "open", "done"}:
+            normalized_filter = "all"
+        self._pending_ticket_filters[channel_id] = normalized_filter
+        search_query = self._normalize_search_query(options.get("search"))
+        if search_query:
+            self._pending_ticket_search_queries[channel_id] = search_query
+        else:
+            self._pending_ticket_search_queries.pop(channel_id, None)
+        await self._respond_with_components(
+            interaction_id,
+            interaction_token,
+            self._ticket_prompt_text(search_query=search_query),
+            self._build_ticket_components(
+                workspace_root,
+                status_filter=normalized_filter,
+                search_query=search_query,
+            ),
+        )
+
     def _repo_autocomplete_value(self, repo_id: str) -> str:
         normalized_id = repo_id.strip()
         if len(normalized_id) <= 100:
@@ -3979,11 +4128,326 @@ class DiscordBotService:
                 break
         return choices
 
+    @staticmethod
+    def _picker_items_to_autocomplete_choices(
+        items: list[tuple[str, str]],
+    ) -> list[dict[str, str]]:
+        seen: set[str] = set()
+        choices: list[dict[str, str]] = []
+        for value, label in items:
+            normalized_value = value.strip()[:100]
+            if not normalized_value or normalized_value in seen:
+                continue
+            seen.add(normalized_value)
+            choices.append(
+                {
+                    "name": (label or value).strip()[:100],
+                    "value": normalized_value,
+                }
+            )
+            if len(choices) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
+                break
+        return choices
+
+    def _normalize_agent(self, value: Any) -> str:
+        agent = value if isinstance(value, str) else self.DEFAULT_AGENT
+        normalized = agent.strip().lower()
+        if normalized not in self.VALID_AGENT_VALUES:
+            return self.DEFAULT_AGENT
+        return normalized
+
+    async def _list_model_items_for_binding(
+        self,
+        *,
+        binding: dict[str, Any],
+        agent: str,
+        limit: int,
+    ) -> Optional[list[tuple[str, str]]]:
+        if agent == "opencode":
+            return await self._list_opencode_models_for_picker(
+                workspace_path=binding.get("workspace_path")
+            )
+        client = await self._client_for_workspace(binding.get("workspace_path"))
+        if client is None:
+            return None
+        result = await _model_list_with_agent_compat(
+            client,
+            params={
+                "cursor": None,
+                "limit": max(1, limit),
+                "agent": agent,
+            },
+        )
+        return _coerce_model_picker_items(result, limit=max(1, limit))
+
+    async def _build_model_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            return []
+        agent = self._normalize_agent(binding.get("agent"))
+        try:
+            model_items = await self._list_model_items_for_binding(
+                binding=binding,
+                agent=agent,
+                limit=MODEL_SEARCH_FETCH_LIMIT,
+            )
+        except Exception:
+            return []
+        if not model_items:
+            return []
+        filtered = filter_picker_items(
+            model_items,
+            query,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+        )
+        return self._picker_items_to_autocomplete_choices(filtered)
+
+    async def _bound_workspace_root_for_channel(
+        self, channel_id: str
+    ) -> Optional[Path]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None or bool(binding.get("pma_enabled", False)):
+            return None
+        workspace_raw = binding.get("workspace_path")
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            return None
+        workspace_root = canonicalize_path(Path(workspace_raw))
+        if not workspace_root.exists() or not workspace_root.is_dir():
+            return None
+        return workspace_root
+
+    def _extract_skill_entries(
+        self,
+        result: Any,
+        *,
+        workspace_root: Path,
+    ) -> list[tuple[str, str]]:
+        entries: list[dict[str, Any]] = []
+        if isinstance(result, dict):
+            data = result.get("data")
+            if isinstance(data, list):
+                entries = [entry for entry in data if isinstance(entry, dict)]
+        elif isinstance(result, list):
+            entries = [entry for entry in result if isinstance(entry, dict)]
+
+        skills: list[tuple[str, str]] = []
+        seen_names: set[str] = set()
+        resolved_workspace = workspace_root.expanduser().resolve()
+        for entry in entries:
+            cwd = entry.get("cwd")
+            if isinstance(cwd, str):
+                if Path(cwd).expanduser().resolve() != resolved_workspace:
+                    continue
+            items = entry.get("skills")
+            if not isinstance(items, list):
+                continue
+            for skill in items:
+                if not isinstance(skill, dict):
+                    continue
+                name = skill.get("name")
+                if not isinstance(name, str):
+                    continue
+                normalized_name = name.strip()
+                if not normalized_name or normalized_name in seen_names:
+                    continue
+                description = skill.get("shortDescription") or skill.get("description")
+                desc_text = (
+                    description.strip()
+                    if isinstance(description, str) and description
+                    else ""
+                )
+                skills.append((normalized_name, desc_text))
+                seen_names.add(normalized_name)
+        return skills
+
+    @staticmethod
+    def _filter_skill_entries(
+        skill_entries: list[tuple[str, str]],
+        query: str,
+        *,
+        limit: int,
+    ) -> list[tuple[str, str]]:
+        if limit <= 0:
+            return []
+        if not query.strip():
+            return skill_entries[:limit]
+        search_items = [
+            (name, f"{name} - {description}" if description else name)
+            for name, description in skill_entries
+        ]
+        filtered_items = filter_picker_items(search_items, query, limit=limit)
+        skill_by_name = {
+            name: (name, description) for name, description in skill_entries
+        }
+        return [
+            skill_by_name[name]
+            for name, _label in filtered_items
+            if name in skill_by_name
+        ]
+
+    async def _list_skill_entries_for_workspace(
+        self, workspace_root: Path
+    ) -> Optional[list[tuple[str, str]]]:
+        try:
+            client = await self._client_for_workspace(str(workspace_root))
+        except AppServerUnavailableError:
+            return None
+        if client is None:
+            return None
+        try:
+            result = await client.request(
+                "skills/list",
+                {"cwds": [str(workspace_root)], "forceReload": False},
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.skills.failed",
+                workspace_path=str(workspace_root),
+                exc=exc,
+            )
+            return None
+        return self._extract_skill_entries(result, workspace_root=workspace_root)
+
+    async def _build_skills_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        workspace_root = await self._bound_workspace_root_for_channel(channel_id)
+        if workspace_root is None:
+            return []
+        skill_entries = await self._list_skill_entries_for_workspace(workspace_root)
+        if not skill_entries:
+            return []
+        filtered = self._filter_skill_entries(
+            skill_entries,
+            query,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+        )
+        items = [
+            (name, f"{name} - {description}" if description else name)
+            for name, description in filtered
+        ]
+        return self._picker_items_to_autocomplete_choices(items)
+
+    async def _build_ticket_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        workspace_root = await self._bound_workspace_root_for_channel(channel_id)
+        if workspace_root is None:
+            return []
+        status_filter = self._pending_ticket_filters.get(channel_id, "all")
+        filtered_choices = self._list_ticket_choices(
+            workspace_root,
+            status_filter=status_filter,
+            search_query=query,
+        )
+        items = [(value, label) for value, label, _description in filtered_choices]
+        return self._picker_items_to_autocomplete_choices(items)
+
+    async def _build_session_resume_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            return []
+
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            if not workspace_root.exists() or not workspace_root.is_dir():
+                workspace_root = None
+        if workspace_root is None:
+            if pma_enabled:
+                workspace_root = canonicalize_path(Path(self._config.root))
+            else:
+                return []
+
+        thread_items = await self._list_session_threads_for_picker(
+            workspace_root=workspace_root,
+            current_thread_id=None,
+        )
+        if not thread_items:
+            return []
+        filtered = filter_picker_items(
+            thread_items,
+            query,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+        )
+        return self._picker_items_to_autocomplete_choices(filtered)
+
+    async def _build_flow_run_autocomplete_choices(
+        self,
+        *,
+        channel_id: str,
+        action: str,
+        query: str,
+    ) -> list[dict[str, str]]:
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None or bool(binding.get("pma_enabled", False)):
+            return []
+        workspace_raw = binding.get("workspace_path")
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            return []
+        workspace_root = canonicalize_path(Path(workspace_raw))
+        if not workspace_root.exists() or not workspace_root.is_dir():
+            return []
+
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError):
+            return []
+        try:
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+        except (sqlite3.Error, OSError):
+            return []
+        finally:
+            store.close()
+
+        matching_runs = [run for run in runs if _flow_run_matches_action(run, action)]
+        if not matching_runs:
+            return []
+
+        items = [(record.id, record.status.value) for record in matching_runs]
+        search_items = [(record.id, record.id) for record in matching_runs]
+        aliases = {record.id: (record.status.value,) for record in matching_runs}
+        filtered = filter_picker_items(
+            search_items,
+            query,
+            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+            aliases=aliases,
+        )
+        choices: list[dict[str, str]] = []
+        status_by_run_id = {run_id: status for run_id, status in items}
+        for run_id, _label in filtered:
+            status = status_by_run_id.get(run_id, "")
+            choices.append(
+                {"name": f"{run_id} [{status}]"[:100], "value": run_id[:100]}
+            )
+        return choices
+
     async def _handle_command_autocomplete(
         self,
         interaction_id: str,
         interaction_token: str,
         *,
+        channel_id: str,
         command_path: tuple[str, ...],
         options: dict[str, Any],
         focused_name: Optional[str],
@@ -3993,6 +4457,39 @@ class DiscordBotService:
         choices: list[dict[str, str]] = []
         if command_path == ("car", "bind") and focused_name == "workspace":
             choices = self._build_bind_autocomplete_choices(focused_value)
+        elif command_path == ("car", "model") and focused_name == "name":
+            choices = await self._build_model_autocomplete_choices(
+                channel_id=channel_id,
+                query=focused_value,
+            )
+        elif command_path == ("car", "skills") and focused_name == "search":
+            choices = await self._build_skills_autocomplete_choices(
+                channel_id=channel_id,
+                query=focused_value,
+            )
+        elif command_path == ("car", "tickets") and focused_name == "search":
+            choices = await self._build_ticket_autocomplete_choices(
+                channel_id=channel_id,
+                query=focused_value,
+            )
+        elif (
+            command_path == ("car", "session", "resume") and focused_name == "thread_id"
+        ):
+            choices = await self._build_session_resume_autocomplete_choices(
+                channel_id=channel_id,
+                query=focused_value,
+            )
+        elif (
+            len(command_path) == 3
+            and command_path[:2] == ("car", "flow")
+            and command_path[2] in FLOW_ACTIONS_WITH_RUN_PICKER
+            and focused_name == "run_id"
+        ):
+            choices = await self._build_flow_run_autocomplete_choices(
+                channel_id=channel_id,
+                action=command_path[2],
+                query=focused_value,
+            )
         await self._respond_autocomplete(
             interaction_id,
             interaction_token,
@@ -4182,7 +4679,8 @@ class DiscordBotService:
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
             "/car diff [path] - Show git diff",
-            "/car skills - List available skills",
+            "/car skills [search] - List available skills",
+            "/car tickets [search] - Browse and edit tickets",
             "/car mcp - Show MCP server status",
             "/car init - Generate AGENTS.md",
             "/car repos - List available repos",
@@ -4346,11 +4844,8 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        try:
-            client = await self._client_for_workspace(str(workspace_root))
-        except AppServerUnavailableError:
-            client = None
-        if client is None:
+        skill_entries = await self._list_skill_entries_for_workspace(workspace_root)
+        if skill_entries is None:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -4358,69 +4853,14 @@ class DiscordBotService:
             )
             return
 
-        try:
-            result = await client.request(
-                "skills/list",
-                {"cwds": [str(workspace_root)], "forceReload": False},
+        search_query = self._normalize_search_query(options.get("search"))
+        if search_query:
+            filtered_entries = self._filter_skill_entries(
+                skill_entries,
+                search_query,
+                limit=max(len(skill_entries), DEFAULT_SKILLS_LIST_LIMIT),
             )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.skills.failed",
-                workspace_path=str(workspace_root),
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to list skills: {exc}",
-            )
-            return
-
-        search_query = options.get("search")
-        normalized_query = (
-            search_query.strip().lower() if isinstance(search_query, str) else ""
-        )
-        if normalized_query:
-            entries = result.get("data") if isinstance(result, dict) else result
-            skills: list[tuple[str, str]] = []
-            seen_names: set[str] = set()
-            if isinstance(entries, list):
-                resolved_workspace = workspace_root.expanduser().resolve()
-                for entry in entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    cwd = entry.get("cwd")
-                    if (
-                        isinstance(cwd, str)
-                        and Path(cwd).expanduser().resolve() != resolved_workspace
-                    ):
-                        continue
-                    items = entry.get("skills")
-                    if not isinstance(items, list):
-                        continue
-                    for skill in items:
-                        if not isinstance(skill, dict):
-                            continue
-                        name = skill.get("name")
-                        if not isinstance(name, str):
-                            continue
-                        normalized_name = name.strip()
-                        if not normalized_name or normalized_name in seen_names:
-                            continue
-                        description = skill.get("shortDescription") or skill.get(
-                            "description"
-                        )
-                        desc_text = (
-                            description.strip() if isinstance(description, str) else ""
-                        )
-                        haystack = f"{normalized_name} {desc_text}".lower()
-                        if normalized_query not in haystack:
-                            continue
-                        skills.append((normalized_name, desc_text))
-                        seen_names.add(normalized_name)
-            if not skills:
+            if not filtered_entries:
                 await self._respond_ephemeral(
                     interaction_id,
                     interaction_token,
@@ -4428,25 +4868,406 @@ class DiscordBotService:
                 )
                 return
             lines = [f"Skills matching `{search_query}`:"]
-            for name, description in skills[:DEFAULT_SKILLS_LIST_LIMIT]:
-                lines.append(f"{name} - {description}" if description else name)
-            if len(skills) > DEFAULT_SKILLS_LIST_LIMIT:
+            for name, description in filtered_entries[:DEFAULT_SKILLS_LIST_LIMIT]:
+                if description:
+                    lines.append(f"{name} - {description}")
+                else:
+                    lines.append(name)
+            if len(filtered_entries) > DEFAULT_SKILLS_LIST_LIMIT:
                 lines.append(
-                    f"...and {len(skills) - DEFAULT_SKILLS_LIST_LIMIT} more matches."
+                    f"...and {len(filtered_entries) - DEFAULT_SKILLS_LIST_LIMIT} more matches."
                 )
             lines.append("Use $<SkillName> in your next message to invoke a skill.")
+            skills_text = "\n".join(lines)
+        else:
+            if not skill_entries:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "No skills found.",
+                )
+                return
+            skills_text = _format_skills_list(
+                [
+                    {
+                        "cwd": str(workspace_root),
+                        "skills": [
+                            {
+                                "name": name,
+                                "shortDescription": description,
+                            }
+                            for name, description in skill_entries
+                        ],
+                    }
+                ],
+                str(workspace_root),
+            )
+
+        styled_lines: list[str] = []
+        for line in skills_text.splitlines():
+            if (
+                not line
+                or line == "Skills:"
+                or line.startswith("Skills matching ")
+                or line.startswith("...and ")
+                or line.startswith("Use $")
+            ):
+                styled_lines.append(line)
+                continue
+            if " - " in line:
+                name, description = line.split(" - ", 1)
+                styled_lines.append(f"**{name}** - {description}")
+            else:
+                styled_lines.append(f"**{line}**")
+        rendered = format_discord_message("\n".join(styled_lines))
+        chunks = chunk_discord_message(
+            rendered,
+            max_len=self._config.max_message_length,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = ["No skills found."]
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            chunks[0],
+        )
+        for chunk in chunks[1:]:
+            sent = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=chunk,
+            )
+            if not sent:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.skills.followup_failed",
+                    workspace_path=str(workspace_root),
+                )
+                break
+
+    async def _handle_modal_submit_interaction(
+        self, interaction_payload: dict[str, Any]
+    ) -> None:
+        interaction_id = extract_interaction_id(interaction_payload)
+        interaction_token = extract_interaction_token(interaction_payload)
+        channel_id = extract_channel_id(interaction_payload)
+
+        if not interaction_id or not interaction_token or not channel_id:
+            self._logger.warning(
+                "handle_modal_submit_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
+                bool(interaction_id),
+                bool(interaction_token),
+                bool(channel_id),
+            )
+            return
+
+        if not allowlist_allows(interaction_payload, self._allowlist):
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "\n".join(lines),
+                "This Discord interaction is not authorized.",
+            )
+            return
+
+        custom_id = extract_modal_custom_id(interaction_payload)
+        if not custom_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not identify this modal submission. Please retry.",
+            )
+            return
+
+        values = extract_modal_values(interaction_payload)
+        await self._handle_ticket_modal_submit(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            custom_id=custom_id,
+            values=values,
+        )
+
+    async def _handle_ticket_modal_submit(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        custom_id: str,
+        values: dict[str, Any],
+    ) -> None:
+        if not custom_id.startswith(f"{TICKETS_MODAL_PREFIX}:"):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Unknown modal submission.",
+            )
+            return
+
+        token = custom_id.split(":", 1)[1].strip()
+        context = self._pending_ticket_context.pop(token, None)
+        if not context:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This ticket modal has expired. Re-open it and try again.",
+            )
+            return
+
+        ticket_rel = context.get("ticket_rel")
+        if not isinstance(ticket_rel, str) or not ticket_rel or ticket_rel == "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "This ticket selection expired. Re-run `/car tickets` and choose one.",
+            )
+            return
+
+        ticket_body_raw = values.get(TICKETS_BODY_INPUT_ID)
+        ticket_body = ticket_body_raw if isinstance(ticket_body_raw, str) else None
+        if ticket_body is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket content is missing. Please try again.",
+            )
+            return
+
+        workspace_root = Path(context.get("workspace_root", "")).expanduser()
+        ticket_dir = self._ticket_dir(workspace_root).resolve()
+        candidate = (workspace_root / ticket_rel).resolve()
+        try:
+            candidate.relative_to(ticket_dir)
+        except ValueError:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket path is invalid. Re-open the ticket and try again.",
+            )
+            return
+
+        try:
+            candidate.write_text(ticket_body, encoding="utf-8")
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to save ticket: {exc}",
             )
             return
 
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            _format_skills_list(result, str(workspace_root)),
+            f"Saved {safe_relpath(candidate, workspace_root)}.",
         )
+
+    @staticmethod
+    def _extract_modal_single_select(
+        values: dict[str, Any], custom_id: str
+    ) -> Optional[str]:
+        raw = values.get(custom_id)
+        if isinstance(raw, str):
+            normalized = raw.strip()
+            return normalized or None
+        if isinstance(raw, list):
+            for value in raw:
+                if isinstance(value, (str, int, float)):
+                    normalized = str(value).strip()
+                    if normalized:
+                        return normalized
+        return None
+
+    async def _handle_ticket_filter_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        values: Optional[list[str]],
+    ) -> None:
+        if not values:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a filter and try again.",
+            )
+            return
+        workspace_root = await self._require_bound_workspace(
+            interaction_id, interaction_token, channel_id=channel_id
+        )
+        if not workspace_root:
+            return
+        status_filter = values[0].strip().lower()
+        if status_filter not in {"all", "open", "done"}:
+            status_filter = "all"
+        search_query = self._pending_ticket_search_queries.get(channel_id, "")
+        self._pending_ticket_filters[channel_id] = status_filter
+        await self._update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            text=self._ticket_prompt_text(search_query=search_query),
+            components=self._build_ticket_components(
+                workspace_root,
+                status_filter=status_filter,
+                search_query=search_query,
+            ),
+        )
+
+    async def _handle_ticket_select_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        values: Optional[list[str]],
+    ) -> None:
+        if not values:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a ticket and try again.",
+            )
+            return
+        if values[0] == "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No tickets available for this filter.",
+            )
+            return
+        workspace_root = await self._require_bound_workspace(
+            interaction_id, interaction_token, channel_id=channel_id
+        )
+        if not workspace_root:
+            return
+        ticket_rel = self._resolve_ticket_picker_value(
+            values[0],
+            workspace_root=workspace_root,
+        )
+        if not ticket_rel:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket selection is invalid. Re-open the ticket list and try again.",
+            )
+            return
+        await self._open_ticket_modal(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            ticket_rel=ticket_rel,
+        )
+
+    async def _open_ticket_modal(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        ticket_rel: str,
+    ) -> None:
+        ticket_dir = self._ticket_dir(workspace_root).resolve()
+        candidate = (workspace_root / ticket_rel).resolve()
+        try:
+            candidate.relative_to(ticket_dir)
+        except ValueError:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket path is invalid. Re-open the ticket list and try again.",
+            )
+            return
+        if not candidate.exists() or not candidate.is_file():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket file not found. Re-open the ticket list and try again.",
+            )
+            return
+        try:
+            ticket_text = candidate.read_text(encoding="utf-8")
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to read ticket: {exc}",
+            )
+            return
+        max_len = 4000
+        if len(ticket_text) > max_len:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    f"`{ticket_rel}` is too large to edit in a Discord modal "
+                    f"({len(ticket_text)} characters; limit {max_len}). "
+                    "Use the web UI or edit the file directly."
+                ),
+            )
+            return
+
+        token = uuid.uuid4().hex[:12]
+        self._pending_ticket_context[token] = {
+            "workspace_root": str(workspace_root),
+            "ticket_rel": ticket_rel,
+        }
+
+        title = "Edit ticket"
+        await self._respond_modal(
+            interaction_id,
+            interaction_token,
+            custom_id=f"{TICKETS_MODAL_PREFIX}:{token}",
+            title=title,
+            field_label="Ticket",
+            field_value=ticket_text,
+        )
+
+    async def _respond_modal(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        custom_id: str,
+        title: str,
+        field_label: str,
+        field_value: str,
+    ) -> None:
+        payload = {
+            "type": 9,
+            "data": {
+                "custom_id": custom_id[:100],
+                "title": title[:45],
+                "components": [
+                    {
+                        "type": 18,
+                        "label": field_label[:45],
+                        "component": {
+                            "type": 4,
+                            "custom_id": TICKETS_BODY_INPUT_ID,
+                            "style": 2,
+                            "value": field_value[:4000],
+                            "required": True,
+                            "max_length": 4000,
+                        },
+                    },
+                ],
+            },
+        }
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload=payload,
+            )
+        except DiscordAPIError as exc:
+            self._logger.error(
+                "Failed to send modal response: %s (interaction_id=%s)",
+                exc,
+                interaction_id,
+            )
 
     async def _handle_mcp(
         self,
@@ -4475,12 +5296,25 @@ class DiscordBotService:
         try:
             hub_initialized = False
             if (target_root / ".git").exists():
-                await asyncio.to_thread(seed_repo_files, target_root, False, True)
+                await asyncio.to_thread(
+                    seed_repo_files,
+                    target_root,
+                    False,
+                    True,
+                )
                 if find_nearest_hub_config_path(target_root) is None:
-                    await asyncio.to_thread(seed_hub_files, target_root, False)
+                    await asyncio.to_thread(
+                        seed_hub_files,
+                        target_root,
+                        False,
+                    )
                     hub_initialized = True
             elif self._has_nested_git(target_root):
-                await asyncio.to_thread(seed_hub_files, target_root, False)
+                await asyncio.to_thread(
+                    seed_hub_files,
+                    target_root,
+                    False,
+                )
                 hub_initialized = True
             else:
                 await self._respond_ephemeral(
@@ -4871,15 +5705,53 @@ class DiscordBotService:
 
         raw_thread_id = options.get("thread_id")
         thread_id = raw_thread_id.strip() if isinstance(raw_thread_id, str) else None
+        current_thread_id = orchestrator.get_thread_id(session_key)
 
         if thread_id:
+            thread_items = await self._list_session_threads_for_picker(
+                workspace_root=workspace_root,
+                current_thread_id=current_thread_id,
+            )
+            if thread_items:
+                exact_match = find_exact_picker_item(thread_items, thread_id)
+                if exact_match is not None:
+                    thread_id = exact_match[0]
+                else:
+                    filtered_items = filter_picker_items(
+                        thread_items,
+                        thread_id,
+                        limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                    )
+                    if filtered_items:
+                        header = (
+                            f"Current thread: `{current_thread_id}`\n\n"
+                            if current_thread_id
+                            else ""
+                        )
+                        await self._send_or_respond_ephemeral(
+                            interaction_id=interaction_id,
+                            interaction_token=interaction_token,
+                            deferred=deferred,
+                            text=format_discord_message(
+                                header
+                                + (
+                                    f"Matched {len(filtered_items)} threads for "
+                                    f"`{thread_id}`. Select a thread to resume:"
+                                )
+                            ),
+                        )
+                        await self._send_followup_ephemeral(
+                            interaction_token=interaction_token,
+                            content="Choose one thread from the filtered picker below.",
+                            components=[build_session_threads_picker(filtered_items)],
+                        )
+                        return
             orchestrator.set_thread_id(session_key, thread_id)
             mode_label = "PMA" if pma_enabled else "repo"
             text = format_discord_message(
                 f"Resumed {mode_label} session for `{agent}` with thread `{thread_id}`."
             )
         else:
-            current_thread_id = orchestrator.get_thread_id(session_key)
             thread_items = await self._list_session_threads_for_picker(
                 workspace_root=workspace_root,
                 current_thread_id=current_thread_id,
@@ -5116,12 +5988,7 @@ class DiscordBotService:
             )
             return
 
-        current_agent = binding.get("agent") or self.DEFAULT_AGENT
-        if not isinstance(current_agent, str):
-            current_agent = self.DEFAULT_AGENT
-        current_agent = current_agent.strip().lower()
-        if current_agent not in self.VALID_AGENT_VALUES:
-            current_agent = self.DEFAULT_AGENT
+        current_agent = self._normalize_agent(binding.get("agent"))
         agent_name = options.get("name")
 
         if not agent_name:
@@ -5385,6 +6252,50 @@ class DiscordBotService:
             )
             return
 
+        available_model_items: Optional[list[tuple[str, str]]] = None
+        try:
+            available_model_items = await self._list_model_items_for_binding(
+                binding=binding,
+                agent=current_agent,
+                limit=MODEL_SEARCH_FETCH_LIMIT,
+            )
+        except Exception:
+            available_model_items = None
+
+        if available_model_items:
+            exact_match = find_exact_picker_item(available_model_items, model_name)
+            if exact_match is not None:
+                model_name = exact_match[0]
+            else:
+                filtered_items = filter_picker_items(
+                    available_model_items,
+                    model_name,
+                    limit=max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1),
+                )
+                if filtered_items:
+                    lines = [
+                        f"Current agent: {current_agent}",
+                        f"Current model: {current_model or '(default)'}",
+                        "",
+                        f"Matched {len(filtered_items)} models for `{model_name}`:",
+                        "Select a model override:",
+                        "(default model) clears the override.",
+                    ]
+                    if isinstance(current_effort, str) and current_effort.strip():
+                        lines.insert(2, f"Reasoning effort: {current_effort}")
+                    await self._respond_with_components(
+                        interaction_id,
+                        interaction_token,
+                        format_discord_message("\n".join(lines)),
+                        [
+                            build_model_picker(
+                                filtered_items,
+                                current_model=current_model,
+                            )
+                        ],
+                    )
+                    return
+
         if current_agent == "opencode" and not _is_valid_opencode_model_name(
             model_name
         ):
@@ -5458,14 +6369,7 @@ class DiscordBotService:
             return
 
         binding = await self._store.get_binding(channel_id=channel_id)
-        current_agent_raw = (
-            binding.get("agent") if binding else None
-        ) or self.DEFAULT_AGENT
-        if not isinstance(current_agent_raw, str):
-            current_agent_raw = self.DEFAULT_AGENT
-        current_agent = current_agent_raw.strip().lower()
-        if current_agent not in self.VALID_AGENT_VALUES:
-            current_agent = self.DEFAULT_AGENT
+        current_agent = self._normalize_agent(binding.get("agent") if binding else None)
 
         if current_agent == "codex":
             pending_key = self._pending_interaction_scope_key(
@@ -5640,6 +6544,7 @@ class DiscordBotService:
         has_unregistered = any(entry.unregistered for entry in overview_entries)
         for entry in overview_entries:
             line_label = display_label_by_repo_id.get(entry.repo_id, entry.label)
+            line_prefix = "  -> " if entry.is_worktree else ""
             if entry.group not in groups:
                 groups[entry.group] = []
                 group_order.append(entry.group)
@@ -5649,7 +6554,7 @@ class DiscordBotService:
                 groups[entry.group].append(
                     (
                         line_label,
-                        f"{entry.indent}❓ {line_label}: Error reading state",
+                        f"{line_prefix}❓ {line_label}: Error reading state",
                     )
                 )
                 continue
@@ -5666,11 +6571,11 @@ class DiscordBotService:
                 run_id = display.get("run_id")
                 run_suffix = f" run {run_id}" if run_id else ""
                 line = (
-                    f"{entry.indent}{display['status_icon']} {line_label}: "
+                    f"{line_prefix}{display['status_icon']} {line_label}: "
                     f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}"
                 )
             except Exception:
-                line = f"{entry.indent}❓ {line_label}: Error reading state"
+                line = f"{line_prefix}❓ {line_label}: Error reading state"
             finally:
                 store.close()
             groups[entry.group].append((line_label, line))
@@ -7708,6 +8613,26 @@ class DiscordBotService:
             return
 
         try:
+            if custom_id == TICKETS_FILTER_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                await self._handle_ticket_filter_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
+            if custom_id == TICKETS_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                await self._handle_ticket_select_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
             if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
                 page_token = custom_id.split(":", 1)[1].strip()
                 await self._handle_bind_page_component(
@@ -8040,6 +8965,24 @@ class DiscordBotService:
         user_id: Optional[str] = None,
     ) -> None:
         try:
+            if custom_id == TICKETS_FILTER_SELECT_ID:
+                await self._handle_ticket_filter_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
+            if custom_id == TICKETS_SELECT_ID:
+                await self._handle_ticket_select_component(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    values=values,
+                )
+                return
+
             if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
                 page_token = custom_id.split(":", 1)[1].strip()
                 await self._handle_bind_page_component(

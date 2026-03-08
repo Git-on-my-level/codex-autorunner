@@ -33,6 +33,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "ids",
         "diff",
         "skills",
+        "tickets",
         "mcp",
         "init",
         "repos",
@@ -88,11 +89,39 @@ def test_required_options_are_marked_required() -> None:
     bind_workspace = _find_option(bind["options"], "workspace")
     assert bind_workspace["required"] is False
     assert bind_workspace["autocomplete"] is True
+
+    model = _find_option(car_options, "model")
+    model_name = _find_option(model["options"], "name")
+    assert model_name["required"] is False
+    assert model_name["autocomplete"] is True
+
+    skills = _find_option(car_options, "skills")
+    skills_search = _find_option(skills["options"], "search")
+    assert skills_search["required"] is False
+    assert skills_search["autocomplete"] is True
+
+    tickets = _find_option(car_options, "tickets")
+    tickets_search = _find_option(tickets["options"], "search")
+    assert tickets_search["required"] is False
+    assert tickets_search["autocomplete"] is True
+
+    session = _find_option(car_options, "session")
+    session_resume = _find_option(session["options"], "resume")
+    session_thread_id = _find_option(session_resume["options"], "thread_id")
+    assert session_thread_id["required"] is False
+    assert session_thread_id["autocomplete"] is True
+
     update = _find_option(car_options, "update")
     update_target = _find_option(update["options"], "target")
     assert update_target["required"] is False
 
     flow = _find_option(car_options, "flow")
+    for flow_name in ("status", "restart", "resume", "stop", "archive", "recover"):
+        flow_command = _find_option(flow["options"], flow_name)
+        flow_run_id = _find_option(flow_command["options"], "run_id")
+        assert flow_run_id["required"] is False
+        assert flow_run_id["autocomplete"] is True
+
     flow_issue = _find_option(flow["options"], "issue")
     flow_issue_ref = _find_option(flow_issue["options"], "issue_ref")
     assert flow_issue_ref["required"] is True
@@ -118,6 +147,7 @@ def test_required_options_are_marked_required() -> None:
 
     assert text_option["required"] is True
     assert run_id_option["required"] is False
+    assert run_id_option["autocomplete"] is True
 
     pma_options = commands[1]["options"]
     assert [opt["name"] for opt in pma_options] == ["on", "off", "status"]

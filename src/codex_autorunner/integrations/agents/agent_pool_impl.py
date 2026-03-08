@@ -114,7 +114,11 @@ class DefaultAgentPool:
                     {
                         "message": {
                             "method": "outputDelta",
-                            "params": {"delta": event.content, "turnId": turn_id},
+                            "params": {
+                                "delta": event.content,
+                                "deltaType": event.delta_type,
+                                "turnId": turn_id,
+                            },
                         },
                         "turn_id": turn_id,
                     },

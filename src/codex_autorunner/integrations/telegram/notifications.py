@@ -6,6 +6,7 @@ import time
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
+from ...core.ports.run_event import RUN_EVENT_DELTA_TYPE_LOG_LINE
 from ...core.state import now_iso
 from ...core.text_delta_coalescer import TextDeltaCoalescer
 from .constants import (
@@ -189,7 +190,7 @@ class TelegramNotificationHandlers:
                 await self._note_progress_error(params)
                 return
             if isinstance(method, str) and "outputDelta" in method:
-                await self._note_progress_output_delta(params)
+                await self._note_progress_output_delta(method, params)
                 return
 
     async def _update_placeholder_preview(
@@ -403,7 +404,9 @@ class TelegramNotificationHandlers:
         tracker.note_approval(summary)
         await self._schedule_progress_edit(turn_key)
 
-    async def _note_progress_output_delta(self, params: dict[str, Any]) -> None:
+    async def _note_progress_output_delta(
+        self, method: str, params: dict[str, Any]
+    ) -> None:
         turn_id = _coerce_id(params.get("turnId"))
         thread_id = _extract_turn_thread_id(params)
         turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
@@ -415,7 +418,34 @@ class TelegramNotificationHandlers:
         delta = params.get("delta") or params.get("text")
         if not isinstance(delta, str):
             return
-        tracker.note_output(delta)
+        delta_type_raw = params.get("deltaType") or params.get("delta_type")
+        delta_type = delta_type_raw.strip() if isinstance(delta_type_raw, str) else ""
+        has_explicit_delta_type = bool(delta_type)
+        is_log_line = delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE
+        if not is_log_line and not has_explicit_delta_type and method == "outputDelta":
+            # Older emitters may omit deltaType; preserve in-place token usage updates.
+            is_log_line = _progress_item_id_for_log_line(delta) is not None
+        if is_log_line:
+            item_id = _progress_item_id_for_log_line(delta)
+            if item_id:
+                if not tracker.update_action_by_item_id(
+                    item_id,
+                    delta,
+                    "update",
+                    label="output",
+                ):
+                    tracker.add_action(
+                        "output",
+                        delta,
+                        "update",
+                        item_id=item_id,
+                        normalize_text=False,
+                    )
+            else:
+                tracker.note_output(delta, new_segment=True)
+                tracker.end_output_segment()
+        else:
+            tracker.note_output(delta)
         await self._schedule_progress_edit(turn_key)
 
     async def _note_progress_error(self, params: dict[str, Any]) -> None:
@@ -618,3 +648,12 @@ def _extract_turn_completed_final_text(params: dict[str, Any]) -> str:
             if isinstance(value, str) and value.strip():
                 return value
     return ""
+
+
+def _progress_item_id_for_log_line(content: str) -> Optional[str]:
+    normalized = " ".join(content.split()).strip().lower()
+    if normalized.startswith("tokens used"):
+        return "opencode:token-usage"
+    if normalized.startswith("context window:"):
+        return "opencode:context-window"
+    return None

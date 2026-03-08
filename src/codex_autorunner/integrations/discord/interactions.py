@@ -131,11 +131,61 @@ def is_autocomplete_interaction(interaction_payload: dict[str, Any]) -> bool:
     return interaction_type == 4
 
 
+def is_modal_submit_interaction(interaction_payload: dict[str, Any]) -> bool:
+    interaction_type = interaction_payload.get("type")
+    return interaction_type == 5
+
+
 def extract_component_custom_id(interaction_payload: dict[str, Any]) -> Optional[str]:
     data = interaction_payload.get("data")
     if not isinstance(data, dict):
         return None
     return _as_id(data.get("custom_id"))
+
+
+def extract_modal_custom_id(interaction_payload: dict[str, Any]) -> Optional[str]:
+    data = interaction_payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    return _as_id(data.get("custom_id"))
+
+
+def extract_modal_values(interaction_payload: dict[str, Any]) -> dict[str, Any]:
+    data = interaction_payload.get("data")
+    if not isinstance(data, dict):
+        return {}
+    components = data.get("components")
+    if not isinstance(components, list):
+        return {}
+    values: dict[str, Any] = {}
+    for container in components:
+        if not isinstance(container, dict):
+            continue
+        # Modal components can arrive in either legacy action-row form
+        # (`components: [...]`) or label form (`component: {...}`).
+        candidates: list[dict[str, Any]] = []
+        label_component = container.get("component")
+        if isinstance(label_component, dict):
+            candidates.append(label_component)
+        row_components = container.get("components")
+        if isinstance(row_components, list):
+            candidates.extend(item for item in row_components if isinstance(item, dict))
+        for item in candidates:
+            custom_id_raw = item.get("custom_id")
+            if not isinstance(custom_id_raw, str):
+                continue
+            custom_id = custom_id_raw
+            if item.get("type") == 4:
+                value = item.get("value")
+                if isinstance(value, str):
+                    values[custom_id] = value
+            if item.get("type") == 3:
+                selected = item.get("values")
+                if isinstance(selected, list):
+                    values[custom_id] = [
+                        str(v) for v in selected if isinstance(v, (str, int, float))
+                    ]
+    return values
 
 
 def extract_component_values(interaction_payload: dict[str, Any]) -> list[str]:

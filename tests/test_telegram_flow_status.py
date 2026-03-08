@@ -318,6 +318,32 @@ class _TurnCompletionProgressHarness(TelegramNotificationHandlers):
         self.cleared.append(turn_key)
 
 
+class _OutputDeltaProgressHarness(TelegramNotificationHandlers):
+    def __init__(self) -> None:
+        self._turn_key = ("turn-1", "thread-1")
+        self._turn_progress_trackers: dict[tuple[str, str], Any] = {
+            self._turn_key: TurnProgressTracker(
+                started_at=0.0,
+                agent="opencode",
+                model="mock-model",
+                label="working",
+                max_actions=8,
+                max_output_chars=400,
+            )
+        }
+        self._scheduled: list[tuple[str, str]] = []
+
+    def _resolve_turn_key(
+        self, turn_id: Optional[str], *, thread_id: Optional[str] = None
+    ) -> Optional[tuple[str, str]]:
+        if turn_id == self._turn_key[0] and thread_id == self._turn_key[1]:
+            return self._turn_key
+        return None
+
+    async def _schedule_progress_edit(self, turn_key: tuple[str, str]) -> None:
+        self._scheduled.append(turn_key)
+
+
 class _ProgressMarkupHarness(TelegramNotificationHandlers):
     def __init__(self, *, label: str) -> None:
         self._turn_key = ("turn-1", "thread-1")
@@ -482,6 +508,64 @@ async def test_turn_completed_prunes_duplicate_terminal_output_from_progress() -
     assert tracker.finalized is True
     assert harness.edits == [(key, True, "final")]
     assert harness.cleared == [key]
+
+
+@pytest.mark.anyio
+async def test_output_delta_log_line_updates_token_usage_in_place() -> None:
+    harness = _OutputDeltaProgressHarness()
+    key = harness._turn_key
+    tracker: TurnProgressTracker = harness._turn_progress_trackers[key]
+
+    await harness._note_progress_output_delta(
+        "outputDelta",
+        {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "deltaType": "log_line",
+            "delta": "tokens used - input: 66, output: 158, reasoning: 0",
+        },
+    )
+    await harness._note_progress_output_delta(
+        "outputDelta",
+        {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "deltaType": "log_line",
+            "delta": "tokens used - input: 297, cached: 11853, output: 147, reasoning: 0",
+        },
+    )
+
+    output_blocks = [
+        action.text for action in tracker.actions if action.label == "output"
+    ]
+    assert output_blocks == [
+        "tokens used - input: 297, cached: 11853, output: 147, reasoning: 0"
+    ]
+    assert harness._scheduled == [key, key]
+
+
+@pytest.mark.anyio
+async def test_output_delta_with_explicit_assistant_stream_does_not_use_log_fallback() -> (
+    None
+):
+    harness = _OutputDeltaProgressHarness()
+    key = harness._turn_key
+    tracker: TurnProgressTracker = harness._turn_progress_trackers[key]
+
+    await harness._note_progress_output_delta(
+        "outputDelta",
+        {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "deltaType": "assistant_stream",
+            "delta": "tokens used - this is normal assistant text",
+        },
+    )
+
+    output_actions = [action for action in tracker.actions if action.label == "output"]
+    assert len(output_actions) == 1
+    assert output_actions[0].item_id is None
+    assert output_actions[0].text == "tokens used - this is normal assistant text"
 
 
 @pytest.mark.anyio
@@ -1268,6 +1352,8 @@ async def test_flow_hub_overview_shows_only_active_chat_bound_worktrees(
     content = handler.sent[0][0]
     assert "`wt-visible`" in content
     assert "`wt-hidden`" not in content
+    assert "\n  -> " in content
+    assert "\n  - " not in content
 
 
 @pytest.mark.anyio

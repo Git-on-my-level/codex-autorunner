@@ -349,6 +349,61 @@ def build_update_target_picker(
     )
 
 
+def build_ticket_filter_picker(
+    *,
+    current_filter: str,
+    custom_id: str = "tickets_filter_select",
+    placeholder: str = "Filter tickets...",
+) -> dict[str, Any]:
+    normalized = current_filter.strip().lower() if current_filter else "all"
+    if normalized not in {"all", "open", "done"}:
+        normalized = "all"
+    options = [
+        build_select_option(
+            label="open",
+            value="open",
+            description="Only not completed tickets",
+            default=normalized == "open",
+        ),
+        build_select_option(
+            label="done",
+            value="done",
+            description="Only completed tickets",
+            default=normalized == "done",
+        ),
+        build_select_option(
+            label="all",
+            value="all",
+            description="All tickets",
+            default=normalized == "all",
+        ),
+    ]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
+def build_ticket_picker(
+    tickets: list[tuple[str, str, str]],
+    *,
+    custom_id: str = "tickets_select",
+    placeholder: str = "Select a ticket...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option(
+            label=label[:100],
+            value=ticket_id,
+            description=description[:100] if description else None,
+        )
+        for ticket_id, label, description in tickets[:DISCORD_SELECT_OPTION_MAX_OPTIONS]
+    ]
+    if not options:
+        options = [build_select_option("No tickets found", "none", default=True)]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
 def build_cancel_turn_button(
     *,
     custom_id: str = "cancel_turn",

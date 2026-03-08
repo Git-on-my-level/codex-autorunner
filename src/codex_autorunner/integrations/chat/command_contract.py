@@ -121,6 +121,14 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         discord_paths=(("car", "skills"),),
     ),
     CommandContractEntry(
+        id="car.tickets",
+        path=("car", "tickets"),
+        requires_bound_workspace=True,
+        status="partial",
+        discord_paths=(("car", "tickets"),),
+        required_capabilities=("ticket_flow",),
+    ),
+    CommandContractEntry(
         id="car.mcp",
         path=("car", "mcp"),
         requires_bound_workspace=True,
