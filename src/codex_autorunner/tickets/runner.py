@@ -974,27 +974,15 @@ class TicketRunner:
         ticket_id: str,
     ):
         """Create and archive a runner-generated pause dispatch."""
-        try:
-            outbox_paths.dispatch_path.write_text(
-                f"---\nmode: pause\ntitle: {title}\n---\n\n{body}\n",
-                encoding="utf-8",
-            )
-        except OSError:
-            return None
-        next_seq = int(state.get("dispatch_seq") or 0) + 1
-        dispatch_record, dispatch_errors = archive_dispatch(
-            outbox_paths,
-            next_seq=next_seq,
+        return runner_post_turn.create_runner_pause_dispatch(
+            outbox_paths=outbox_paths,
+            state=state,
             ticket_id=ticket_id,
             repo_id=self._repo_id,
             run_id=self._run_id,
-            origin="runner",
+            title=title,
+            body=body,
         )
-        if dispatch_errors:
-            return None
-        if dispatch_record is not None:
-            state["dispatch_seq"] = dispatch_record.seq
-        return dispatch_record
 
     def _build_reply_context(self, *, reply_paths, last_seq: int) -> tuple[str, int]:
         """Render new human replies (reply_history) into a prompt block.
