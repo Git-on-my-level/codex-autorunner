@@ -3,6 +3,7 @@ from __future__ import annotations
 __all__ = [
     "FlowRoutesState",
     "runtime_service",
+    "definitions",
 ]
 
 import threading
@@ -27,4 +28,4 @@ class FlowRoutesState:
         self.lock = threading.Lock()
 
 
-from . import runtime_service
+from . import definitions, runtime_service
