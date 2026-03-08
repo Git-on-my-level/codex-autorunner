@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 
 from codex_autorunner.core.config import (
@@ -102,6 +104,54 @@ def test_build_app_server_supervisor_factory_docker_wraps_command(
     )
 
 
+def test_build_app_server_supervisor_factory_preserves_runtime_policy_settings(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    captured: dict[str, object] = {}
+
+    class _FakeSupervisor:
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            captured["command"] = list(command)
+            captured["kwargs"] = dict(kwargs)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        _FakeSupervisor,
+    )
+
+    logger = logging.getLogger("test.destination_wiring")
+    notification_handler = object()
+    factory = build_app_server_supervisor_factory(config, logger=logger)
+    factory("autorunner", notification_handler)
+
+    kwargs = captured["kwargs"]
+    assert captured["command"] == config.app_server.command
+    assert kwargs["logger"] is logger
+    assert kwargs["notification_handler"] is notification_handler
+    assert kwargs["auto_restart"] == config.app_server.auto_restart
+    assert kwargs["request_timeout"] == config.app_server.request_timeout
+    assert (
+        kwargs["turn_stall_timeout_seconds"]
+        == config.app_server.turn_stall_timeout_seconds
+    )
+    assert (
+        kwargs["turn_stall_poll_interval_seconds"]
+        == config.app_server.turn_stall_poll_interval_seconds
+    )
+    assert (
+        kwargs["turn_stall_recovery_min_interval_seconds"]
+        == config.app_server.turn_stall_recovery_min_interval_seconds
+    )
+    assert (
+        kwargs["turn_stall_max_recovery_attempts"]
+        == config.app_server.turn_stall_max_recovery_attempts
+    )
+    assert kwargs["output_policy"] == config.app_server.output.policy
+
+
 def test_agent_backend_factory_codex_supervisor_wraps_for_docker(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -177,6 +227,64 @@ def test_agent_backend_factory_passes_docker_override_to_opencode_factory(
         "opencode",
         "serve",
     ]
+
+
+def test_agent_backend_factory_reuses_and_closes_cached_supervisors(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    class _FakeSupervisor:
+        def __init__(self, command=None, **kwargs):  # type: ignore[no-untyped-def]
+            self.command = list(command or [])
+            self.kwargs = dict(kwargs)
+            self.close_calls = 0
+
+        async def close_all(self) -> None:
+            self.close_calls += 1
+
+    codex_supervisors: list[_FakeSupervisor] = []
+    opencode_supervisors: list[_FakeSupervisor] = []
+
+    def _fake_workspace_supervisor(command, **kwargs):  # type: ignore[no-untyped-def]
+        supervisor = _FakeSupervisor(command, **kwargs)
+        codex_supervisors.append(supervisor)
+        return supervisor
+
+    def _fake_opencode_supervisor(_config, **kwargs):  # type: ignore[no-untyped-def]
+        supervisor = _FakeSupervisor(["opencode", "serve"], **kwargs)
+        opencode_supervisors.append(supervisor)
+        return supervisor
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        _fake_workspace_supervisor,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.build_opencode_supervisor_from_repo_config",
+        _fake_opencode_supervisor,
+    )
+
+    factory = AgentBackendFactory(repo_root, config)
+
+    codex_first = factory._ensure_codex_supervisor()
+    codex_second = factory._ensure_codex_supervisor()
+    opencode_first = factory._ensure_opencode_supervisor()
+    opencode_second = factory._ensure_opencode_supervisor()
+
+    assert codex_first is codex_second
+    assert opencode_first is opencode_second
+    assert len(codex_supervisors) == 1
+    assert len(opencode_supervisors) == 1
+
+    asyncio.run(factory.close_all())
+    asyncio.run(factory.close_all())
+
+    assert codex_first.close_calls == 1
+    assert opencode_first.close_calls == 1
+    assert factory._codex_supervisor is None
+    assert factory._opencode_supervisor is None
 
 
 def test_derive_repo_config_sets_effective_destination_from_manifest(

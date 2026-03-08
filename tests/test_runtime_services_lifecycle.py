@@ -67,6 +67,38 @@ def test_runtime_services_close_closes_owned_resources(tmp_path: Path) -> None:
     assert opencode_supervisor.closed == 1
 
 
+def test_runtime_services_close_is_idempotent(tmp_path: Path) -> None:
+    pools: list[_FakeAgentPool] = []
+    controllers: list[_FakeController] = []
+
+    def _build(_repo_root: Path):
+        pool = _FakeAgentPool()
+        controller = _FakeController()
+        pools.append(pool)
+        controllers.append(controller)
+        return SimpleNamespace(controller=controller, agent_pool=pool)
+
+    app_server_supervisor = _FakeSupervisor()
+    opencode_supervisor = _FakeSupervisor()
+    services = RuntimeServices(
+        app_server_supervisor=app_server_supervisor,
+        opencode_supervisor=opencode_supervisor,
+        flow_runtime_builder=_build,
+    )
+
+    services.get_ticket_flow_controller(tmp_path)
+
+    asyncio.run(services.close())
+    asyncio.run(services.close())
+
+    assert len(controllers) == 1
+    assert len(pools) == 1
+    assert controllers[0].shutdown_calls == 1
+    assert pools[0].closed == 1
+    assert app_server_supervisor.closed == 1
+    assert opencode_supervisor.closed == 1
+
+
 @pytest.mark.asyncio
 async def test_repo_app_lifespan_closes_runtime_services(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
