@@ -99,8 +99,6 @@ from ..schemas import (
 from ..services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
     normalize_optional_text as service_normalize_optional_text,
-)
-from ..services.pma.common import (
     pma_config_from_raw,
 )
 from .agents import _available_agents, _serialize_model_catalog
@@ -117,6 +115,10 @@ from .pma_routes.automation_adapter import (
 from .pma_routes.managed_threads import _truncate_text
 from .pma_routes.publish import PMA_PUBLISH_RETRY_DELAYS_SECONDS
 from .pma_routes.runtime_state import PmaRuntimeState
+from .pma_routes.tail_stream import (
+    normalize_tail_level as _normalize_tail_level,
+    resolve_resume_after as _resolve_resume_after,
+)
 from .shared import SSE_HEADERS
 
 logger = logging.getLogger(__name__)
@@ -659,33 +661,8 @@ def build_pma_routes() -> APIRouter:
             return None
         return int((datetime.now(timezone.utc).timestamp() - seconds) * 1000)
 
-    def _normalize_tail_level(level: Optional[str]) -> str:
-        normalized = (level or "info").strip().lower() or "info"
-        if normalized not in {"info", "debug"}:
-            raise HTTPException(status_code=400, detail="level must be info or debug")
-        return normalized
-
-    def _resolve_resume_after(
-        request: Request, since_event_id: Optional[int]
-    ) -> Optional[int]:
-        if since_event_id is not None:
-            if since_event_id < 0:
-                raise HTTPException(
-                    status_code=400, detail="since_event_id must be >= 0"
-                )
-            return since_event_id
-        last_event_id = request.headers.get("Last-Event-ID")
-        if not last_event_id:
-            return None
-        try:
-            parsed = int(last_event_id)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail="Invalid Last-Event-ID header"
-            ) from exc
-        if parsed < 0:
-            raise HTTPException(status_code=400, detail="Last-Event-ID must be >= 0")
-        return parsed
+    # _normalize_tail_level imported from tail_stream.py
+    # _resolve_resume_after imported from tail_stream.py
 
     def _iso_from_event_ms(value: Any) -> Optional[str]:
         if not isinstance(value, (int, float)) or value <= 0:
