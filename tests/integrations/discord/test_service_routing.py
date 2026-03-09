@@ -22,6 +22,9 @@ from codex_autorunner.integrations.chat.models import (
     ChatThreadRef,
 )
 from codex_autorunner.integrations.discord import service as discord_service_module
+from codex_autorunner.integrations.discord.car_autocomplete import (
+    repo_autocomplete_value,
+)
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -1205,7 +1208,7 @@ async def test_service_bind_accepts_autocomplete_repo_token(tmp_path: Path) -> N
         outbox_manager=_FakeOutboxManager(),
     )
     service._list_manifest_repos = lambda: [(long_repo_id, str(workspace))]
-    token = service._repo_autocomplete_value(long_repo_id)
+    token = repo_autocomplete_value(long_repo_id)
     assert token.startswith("repo@")
 
     bind_gateway = _FakeGateway(

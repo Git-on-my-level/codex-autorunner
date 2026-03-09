@@ -145,9 +145,7 @@ from .car_autocomplete import (
     handle_command_autocomplete as handle_car_command_autocomplete,
 )
 from .car_autocomplete import (
-    repo_autocomplete_value,
     resolve_workspace_from_token,
-    workspace_autocomplete_value,
 )
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .command_registry import sync_commands
@@ -2957,12 +2955,6 @@ class DiscordBotService:
                 search_query=search_query,
             ),
         )
-
-    def _repo_autocomplete_value(self, repo_id: str) -> str:
-        return repo_autocomplete_value(repo_id)
-
-    def _workspace_autocomplete_value(self, workspace_path: str) -> str:
-        return workspace_autocomplete_value(workspace_path)
 
     def _resolve_workspace_from_token(
         self,
