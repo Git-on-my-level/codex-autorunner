@@ -787,7 +787,9 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert first["managed_thread_id"] == managed_thread_id
     assert first["agent"] == "codex"
     assert first["repo_id"] == hub_env.repo_id
-    assert first["status"] == "active"
+    assert first["status"] == "idle"
+    assert first["lifecycle_status"] == "active"
+    assert first["status_reason"] == "thread_created"
     assert "last_message_preview" in first
     thread_freshness = first.get("freshness") or {}
     assert thread_freshness.get("generated_at")
@@ -799,7 +801,9 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert managed_thread_id in rendered
     assert f"repo_id={hub_env.repo_id}" in rendered
     assert "agent=codex" in rendered
-    assert "status=active" in rendered
+    assert "status=idle" in rendered
+    assert "lifecycle=active" in rendered
+    assert "reason=thread_created" in rendered
     assert "freshness: status=" in rendered
 
 

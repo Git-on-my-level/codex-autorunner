@@ -1094,6 +1094,10 @@ function channelPmaDetails(channel) {
     if (managedId) {
         parts.push(`thread ${managedId.slice(0, 12)}`);
     }
+    const reason = String(channel.provenance?.status_reason_code || channel.meta?.status_reason_code || "").trim();
+    if (reason) {
+        parts.push(reason);
+    }
     return parts.join(" · ");
 }
 function channelDisplayLabel(channel) {

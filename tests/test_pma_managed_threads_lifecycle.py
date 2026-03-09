@@ -132,6 +132,8 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         archived_thread = store.get_thread(managed_thread_id)
         assert archived_thread is not None
         assert archived_thread["status"] == "archived"
+        assert archived_thread["normalized_status"] == "archived"
+        assert archived_thread["status_reason"] == "thread_archived"
 
         blocked = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
@@ -149,6 +151,8 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         resumed_thread = store.get_thread(managed_thread_id)
         assert resumed_thread is not None
         assert resumed_thread["status"] == "active"
+        assert resumed_thread["normalized_status"] == "idle"
+        assert resumed_thread["status_reason"] == "thread_resumed"
         assert resumed_thread["backend_thread_id"] == resume_backend_id
 
         resumed_msg = client.post(

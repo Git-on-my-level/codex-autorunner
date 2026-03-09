@@ -38,7 +38,10 @@ def test_create_managed_thread_with_repo_id(hub_env) -> None:
     assert thread["workspace_root"] == str(hub_env.repo_root.resolve())
     assert thread["name"] == "Primary thread"
     assert thread["backend_thread_id"] == "thread-backend-1"
-    assert thread["status"] == "active"
+    assert thread["status"] == "idle"
+    assert thread["lifecycle_status"] == "active"
+    assert thread["status_reason"] == "thread_created"
+    assert thread["status_terminal"] is False
     assert thread["managed_thread_id"]
 
 
@@ -140,6 +143,28 @@ def test_list_managed_threads_returns_created_thread(hub_env) -> None:
     threads = list_resp.json()["threads"]
     assert isinstance(threads, list)
     assert any(thread["managed_thread_id"] == created_id for thread in threads)
+
+
+def test_list_managed_threads_supports_normalized_status_filter(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+
+        ready_resp = client.get("/hub/pma/threads", params={"status": "idle"})
+        active_resp = client.get(
+            "/hub/pma/threads",
+            params={"lifecycle_status": "active"},
+        )
+
+    assert ready_resp.status_code == 200
+    assert len(ready_resp.json()["threads"]) == 1
+    assert active_resp.status_code == 200
+    assert len(active_resp.json()["threads"]) == 1
 
 
 def test_get_managed_thread_returns_created_thread(hub_env) -> None:
@@ -283,7 +308,8 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
         )
         assert resume_resp.status_code == 200
         resumed_thread = resume_resp.json()["thread"]
-        assert resumed_thread["status"] == "active"
+        assert resumed_thread["status"] == "idle"
+        assert resumed_thread["lifecycle_status"] == "active"
         assert resumed_thread["backend_thread_id"] == resumed_backend_id
 
         send_resp = client.post(
@@ -297,7 +323,8 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
 
         get_resp = client.get(f"/hub/pma/threads/{managed_thread_id}")
         assert get_resp.status_code == 200
-        assert get_resp.json()["thread"]["status"] == "active"
+        assert get_resp.json()["thread"]["status"] == "completed"
+        assert get_resp.json()["thread"]["lifecycle_status"] == "active"
 
     assert fake_supervisor.client.resume_calls == [resumed_backend_id]
     assert fake_supervisor.client.thread_start_calls == 0

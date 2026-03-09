@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
@@ -200,3 +201,85 @@ def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
     assert transition["from_state"] == "running"
     assert transition["to_state"] == "failed"
     assert transition["reason"] == "managed_turn_interrupted"
+
+
+def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_finished(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.transitions: list[dict[str, object]] = []
+
+        def notify_transition(self, payload: dict[str, object]) -> None:
+            self.transitions.append(dict(payload))
+
+    class FakeClient:
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: str | None = None
+        ) -> None:
+            _ = turn_id, thread_id
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    turn = store.create_turn(managed_thread_id, prompt="running turn")
+    managed_turn_id = turn["managed_turn_id"]
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
+
+    original_mark_turn_finished = PmaThreadStore.mark_turn_finished
+
+    def finish_then_report_not_interrupted(
+        self: PmaThreadStore, managed_turn_id_arg: str
+    ) -> bool:
+        assert managed_turn_id_arg == managed_turn_id
+        assert (
+            original_mark_turn_finished(
+                self,
+                managed_turn_id_arg,
+                status="ok",
+                assistant_text="completed before interrupt persisted",
+            )
+            is True
+        )
+        return False
+
+    monkeypatch.setattr(
+        PmaThreadStore,
+        "mark_turn_interrupted",
+        finish_then_report_not_interrupted,
+    )
+
+    with TestClient(app) as client:
+        interrupt_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/interrupt",
+        )
+
+    assert interrupt_resp.status_code == 200
+    payload = interrupt_resp.json()
+    assert payload["status"] == "ok"
+    assert payload["managed_turn_id"] == managed_turn_id
+    assert len(fake_store.transitions) == 0
+
+    updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+    assert updated_turn is not None
+    assert updated_turn["status"] == "ok"
+    assert updated_turn["assistant_text"] == "completed before interrupt persisted"

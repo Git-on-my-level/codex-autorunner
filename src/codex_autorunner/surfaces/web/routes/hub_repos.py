@@ -604,6 +604,9 @@ def build_hub_repo_routes(
                 "name",
                 "backend_thread_id",
                 "status",
+                "normalized_status",
+                "status_reason_code",
+                "status_updated_at",
                 "updated_at",
             ]
             select_exprs = [col for col in select_cols if col in columns]
@@ -664,6 +667,34 @@ def build_hub_repo_routes(
                 has_running_turn = bool(
                     row["has_running_turn"] if has_turns_table else False
                 )
+                normalized_status = (
+                    row["normalized_status"] if "normalized_status" in columns else None
+                )
+                if (
+                    not isinstance(normalized_status, str)
+                    or not normalized_status.strip()
+                ):
+                    normalized_status = "running" if has_running_turn else "idle"
+                else:
+                    normalized_status = normalized_status.strip()
+                status_reason_code = (
+                    row["status_reason_code"]
+                    if "status_reason_code" in columns
+                    else None
+                )
+                if (
+                    not isinstance(status_reason_code, str)
+                    or not status_reason_code.strip()
+                ):
+                    status_reason_code = None
+                status_updated_at = (
+                    row["status_updated_at"] if "status_updated_at" in columns else None
+                )
+                if (
+                    not isinstance(status_updated_at, str)
+                    or not status_updated_at.strip()
+                ):
+                    status_updated_at = updated_at
                 threads.append(
                     {
                         "managed_thread_id": managed_thread_id.strip(),
@@ -674,6 +705,9 @@ def build_hub_repo_routes(
                         "name": name,
                         "updated_at": updated_at,
                         "has_running_turn": has_running_turn,
+                        "normalized_status": normalized_status,
+                        "status_reason_code": status_reason_code,
+                        "status_updated_at": status_updated_at,
                     }
                 )
             return threads

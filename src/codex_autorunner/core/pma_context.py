@@ -483,7 +483,14 @@ def _snapshot_pma_threads(
                 "repo_id": thread.get("repo_id"),
                 "workspace_root": workspace_root,
                 "name": thread.get("name"),
-                "status": thread.get("status"),
+                "status": thread.get("normalized_status") or thread.get("status"),
+                "lifecycle_status": thread.get("lifecycle_status")
+                or thread.get("status"),
+                "status_reason": thread.get("status_reason")
+                or thread.get("status_reason_code"),
+                "status_terminal": bool(thread.get("status_terminal")),
+                "status_changed_at": thread.get("status_changed_at")
+                or thread.get("status_updated_at"),
                 "last_turn_id": thread.get("last_turn_id"),
                 "last_message_preview": _truncate(
                     str(thread.get("last_message_preview") or ""),
@@ -879,6 +886,14 @@ def _render_hub_snapshot(
             repo_id = _truncate(str(thread.get("repo_id") or "-"), max_field_chars)
             agent = _truncate(str(thread.get("agent") or ""), max_field_chars)
             status = _truncate(str(thread.get("status") or ""), max_field_chars)
+            lifecycle_status = _truncate(
+                str(thread.get("lifecycle_status") or "-"),
+                max_field_chars,
+            )
+            status_reason = _truncate(
+                str(thread.get("status_reason") or "-"),
+                max_field_chars,
+            )
             name = _truncate(str(thread.get("name") or "-"), max_field_chars)
             preview = _truncate(
                 str(thread.get("last_message_preview") or "-"),
@@ -886,7 +901,8 @@ def _render_hub_snapshot(
             )
             lines.append(
                 f"- {managed_thread_id} repo_id={repo_id} agent={agent} "
-                f"status={status} name={name} last={preview}"
+                f"status={status} lifecycle={lifecycle_status} "
+                f"reason={status_reason} name={name} last={preview}"
             )
             freshness_summary = _render_freshness_summary(
                 thread.get("freshness"), max_field_chars=max_field_chars

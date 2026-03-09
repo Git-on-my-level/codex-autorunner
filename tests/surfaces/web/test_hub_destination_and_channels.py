@@ -1003,7 +1003,9 @@ def test_hub_channel_directory_route_includes_pma_managed_threads(
     assert pma_row["provenance"]["source"] == "pma_thread"
     assert pma_row["provenance"]["agent"] == "codex"
     assert pma_row["provenance"]["managed_thread_id"] == managed_thread_id
-    assert pma_row["channel_status"] in {"working", "final"}
+    assert pma_row["channel_status"] == "idle"
+    assert pma_row["status_label"] == "idle"
+    assert pma_row["provenance"]["status_reason_code"] == "thread_created"
 
     filtered = client.get("/hub/chat/channels", params={"query": "pma", "limit": 1})
     assert filtered.status_code == 200
