@@ -460,11 +460,7 @@ async def run_agent_turn_for_message(
         if not progress_message_id:
             return
         now = time.monotonic()
-        if (
-            not force
-            and (now - progress_last_updated)
-            < min_edit_interval_seconds
-        ):
+        if not force and (now - progress_last_updated) < min_edit_interval_seconds:
             return
         rendered = render_progress_text(
             tracker,
