@@ -351,6 +351,10 @@ def build_managed_thread_tail_routes(
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
+        # Import lazily to avoid a module-level cycle with managed_threads.py.
+        from .managed_threads import _serialize_managed_thread
+
+        serialized_thread = _serialize_managed_thread(thread)
         turn = store.get_running_turn(managed_thread_id) or next(
             iter(store.list_turns(managed_thread_id, limit=1)), None
         )
@@ -360,21 +364,20 @@ def build_managed_thread_tail_routes(
         turn_status = str(snapshot.get("turn_status") or "")
         return {
             "managed_thread_id": managed_thread_id,
-            "thread": thread,
+            "thread": serialized_thread,
             "is_alive": bool(
-                (thread.get("status") or "") == "active" and turn_status == "running"
+                (serialized_thread.get("lifecycle_status") or "") == "active"
+                and turn_status == "running"
             ),
-            "status": normalize_optional_text(thread.get("normalized_status"))
-            or normalize_optional_text(thread.get("status"))
-            or "",
+            "status": str(serialized_thread.get("status") or ""),
             "status_reason": normalize_optional_text(
-                thread.get("status_reason") or thread.get("status_reason_code")
+                serialized_thread.get("status_reason")
             )
             or "",
             "status_changed_at": normalize_optional_text(
-                thread.get("status_changed_at") or thread.get("status_updated_at")
+                serialized_thread.get("status_changed_at")
             ),
-            "status_terminal": bool(thread.get("status_terminal")),
+            "status_terminal": bool(serialized_thread.get("status_terminal")),
             "turn": {
                 "managed_turn_id": snapshot.get("managed_turn_id"),
                 "status": snapshot.get("turn_status"),

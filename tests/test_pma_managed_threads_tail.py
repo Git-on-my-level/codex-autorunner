@@ -154,6 +154,9 @@ def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> N
         assert payload["status_reason"] == "managed_turn_completed"
         assert payload["status_terminal"] is True
         assert payload["thread"]["lifecycle_status"] == "active"
+        assert payload["thread"]["status"] == "completed"
+        assert payload["thread"]["normalized_status"] == "completed"
+        assert payload["thread"]["accepts_messages"] is True
         assert payload["turn"]["status"] == "ok"
         assert payload["is_alive"] is False
         assert isinstance(payload.get("recent_progress"), list)

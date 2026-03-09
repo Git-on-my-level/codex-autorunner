@@ -4058,6 +4058,87 @@ async def test_message_create_resumes_paused_flow_run_in_repo_mode(
 
 
 @pytest.mark.anyio
+async def test_message_create_bang_shell_resumes_paused_flow_run_in_repo_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!pwd"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    paused = SimpleNamespace(id="run-paused")
+    reply_path = workspace / ".codex-autorunner" / "runs" / paused.id / "USER_REPLY.md"
+    reply_path.parent.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_find_paused(_: Path):
+        return paused
+
+    def _fake_write_reply(_: Path, record: Any, text: str) -> Path:
+        assert record is paused
+        assert text == "!pwd"
+        reply_path.write_text(text, encoding="utf-8")
+        return reply_path
+
+    class _FakeController:
+        async def resume_flow(self, run_id: str):
+            assert run_id == paused.id
+            return SimpleNamespace(
+                id=run_id,
+                status=SimpleNamespace(is_terminal=lambda: False),
+            )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("agent turn should not run while a paused flow is waiting")
+
+    def _should_not_run_shell(*args: Any, **kwargs: Any) -> None:  # pragma: no cover
+        raise AssertionError("bang shell should not bypass paused flow handling")
+
+    monkeypatch.setattr(service, "_find_paused_flow_run", _fake_find_paused)
+    monkeypatch.setattr(service, "_write_user_reply", _fake_write_reply)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
+        lambda _: _FakeController(),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.ensure_worker",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _should_not_run_shell,
+    )
+
+    try:
+        await service.run_forever()
+        assert any(
+            "resumed paused run `run-paused`" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_attachment_only_resumes_paused_flow_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

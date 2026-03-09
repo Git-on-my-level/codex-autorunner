@@ -911,6 +911,21 @@ class DiscordBotService:
                     {"content": content},
                 )
                 return
+            if not bool(binding.get("pma_enabled", False)):
+                paused = await self._find_paused_flow_run(workspace_root)
+                if paused is not None:
+                    await handle_discord_message_event(
+                        self,
+                        event,
+                        context,
+                        channel_id=channel_id,
+                        text=text,
+                        has_attachments=has_attachments,
+                        log_event_fn=log_event,
+                        build_ticket_flow_controller_fn=build_ticket_flow_controller,
+                        ensure_worker_fn=ensure_worker,
+                    )
+                    return
             await self._handle_bang_shell(
                 channel_id=channel_id,
                 message_id=event.message.message_id,
