@@ -45,8 +45,7 @@ def _extract_pr_url_from_ticket(path: Path) -> Optional[str]:
 
 
 def get_latest_ticket_flow_run(store: FlowStore) -> Optional[FlowRunRecord]:
-    runs = store.list_flow_runs(flow_type="ticket_flow")
-    return runs[0] if runs else None
+    return store.get_latest_flow_run(flow_type="ticket_flow")
 
 
 def _load_latest_ticket_flow_run(repo_path: Path) -> Optional[FlowRunRecord]:

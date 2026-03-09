@@ -77,11 +77,10 @@ def _has_active_ticket_flow(repo_root: Path) -> bool | None:
         return False
     try:
         with FlowStore(db_path) as store:
-            runs = store.list_flow_runs(flow_type="ticket_flow")
+            latest = store.get_latest_flow_run(flow_type="ticket_flow")
     except Exception:
         # Fail open if flow state cannot be read so active work is not hidden.
         return None
-    latest = runs[0] if runs else None
     if latest is None:
         return False
     return latest.status in {
