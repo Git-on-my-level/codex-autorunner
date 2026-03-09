@@ -1357,6 +1357,108 @@ async def test_flow_hub_overview_shows_only_active_chat_bound_worktrees(
 
 
 @pytest.mark.anyio
+async def test_flow_hub_overview_includes_manifest_worktree_with_active_flow_without_chat_binding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _StubStore:
+        def initialize(self) -> None: ...
+
+        def list_flow_runs(self, *args, **kwargs):
+            return []
+
+        def close(self) -> None: ...
+
+    class _HubOverviewHandler(FlowCommands):
+        def __init__(self) -> None:
+            self._manifest_path = tmp_path / "manifest.yml"
+            self._hub_root = tmp_path
+            self._store = _TopicStoreStub(None)
+            self.sent: list[tuple[str, Optional[str]]] = []
+
+        async def _resolve_topic_key(
+            self, _chat_id: int, _thread_id: int | None
+        ) -> str:
+            return "topic"
+
+        def _resolve_workspace(self, _arg: str) -> tuple[str, Path] | None:
+            return None
+
+        async def _send_message(
+            self,
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: int | None = None,
+            reply_to: int | None = None,
+            reply_markup: dict[str, object] | None = None,
+            parse_mode: str | None = None,
+        ) -> None:
+            _ = (thread_id, reply_to, reply_markup, parse_mode)
+            self.sent.append((text, parse_mode))
+
+    visible_root = tmp_path / "wt-visible"
+    hidden_root = tmp_path / "wt-hidden"
+    visible_root.mkdir(parents=True)
+    hidden_root.mkdir(parents=True)
+    hidden_store = FlowStore(hidden_root / ".codex-autorunner" / "flows.db")
+    hidden_store.initialize()
+    hidden_store.create_flow_run("run-active", "ticket_flow", {})
+    hidden_store.update_flow_run_status("run-active", FlowRunStatus.RUNNING)
+    hidden_store.close()
+
+    monkeypatch.setattr(flows_module, "_load_flow_store", lambda _root: _StubStore())
+    monkeypatch.setattr(
+        flows_module,
+        "load_manifest",
+        lambda _path, _root: SimpleNamespace(
+            repos=[
+                SimpleNamespace(id="base", enabled=True, path=".", kind="base"),
+                SimpleNamespace(
+                    id="base--wt-visible",
+                    enabled=True,
+                    path="wt-visible",
+                    kind="worktree",
+                    worktree_of="base",
+                ),
+                SimpleNamespace(
+                    id="base--wt-hidden",
+                    enabled=True,
+                    path="wt-hidden",
+                    kind="worktree",
+                    worktree_of="base",
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        hub_overview_module,
+        "active_chat_binding_counts",
+        lambda *, hub_root, raw_config: {},
+    )
+
+    handler = _HubOverviewHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._send_flow_hub_overview(message)
+
+    assert handler.sent
+    content = handler.sent[0][0]
+    assert "`wt-hidden`" in content
+    assert "`wt-visible`" not in content
+    assert "\n  -> " in content
+    assert "\n  - " not in content
+
+
+@pytest.mark.anyio
 async def test_flow_hub_overview_uses_latest_run_not_stale_active(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

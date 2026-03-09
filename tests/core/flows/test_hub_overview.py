@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows import hub_overview as hub_overview_module
 from codex_autorunner.core.flows.hub_overview import build_hub_flow_overview_entries
+from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.manifest import Manifest, ManifestRepo
 
 
@@ -40,6 +42,13 @@ def _manifest_with_worktrees() -> Manifest:
     )
 
 
+def _create_run(repo_root: Path, run_id: str, *, status: FlowRunStatus) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        store.create_flow_run(run_id, "ticket_flow", input_data={}, state={})
+        store.update_flow_run_status(run_id, status)
+
+
 def test_build_hub_overview_filters_inactive_manifest_worktrees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -58,6 +67,28 @@ def test_build_hub_overview_filters_inactive_manifest_worktrees(
 
     repo_ids = [entry.repo_id for entry in entries]
     assert repo_ids == ["base", "base--wt-visible"]
+
+
+def test_build_hub_overview_includes_manifest_worktree_with_active_flow_without_chat_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _manifest_with_worktrees()
+    active_repo_root = tmp_path / "worktrees" / "base--wt-hidden"
+    _create_run(active_repo_root, "run-active", status=FlowRunStatus.RUNNING)
+    monkeypatch.setattr(
+        hub_overview_module,
+        "active_chat_binding_counts",
+        lambda *, hub_root, raw_config: {},
+    )
+
+    entries = build_hub_flow_overview_entries(
+        hub_root=tmp_path,
+        manifest=manifest,
+        raw_config={},
+    )
+
+    repo_ids = [entry.repo_id for entry in entries]
+    assert repo_ids == ["base", "base--wt-hidden"]
 
 
 def test_build_hub_overview_includes_active_unregistered_worktree(
