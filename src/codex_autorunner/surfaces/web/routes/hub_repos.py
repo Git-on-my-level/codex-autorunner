@@ -21,11 +21,6 @@ from ....core.destinations import (
 )
 from ....core.flows import FlowEventType, FlowStore
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
-from ....core.freshness import (
-    iso_now,
-    resolve_stale_threshold_seconds,
-    summarize_section_freshness,
-)
 from ....core.git_utils import git_is_clean
 from ....core.logging_utils import safe_log
 from ....core.pma_context import (
