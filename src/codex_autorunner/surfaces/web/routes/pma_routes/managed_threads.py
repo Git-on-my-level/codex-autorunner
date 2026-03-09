@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -7,10 +12,151 @@ from ...schemas import (
     PmaAutomationTimerCancelRequest,
     PmaAutomationTimerCreateRequest,
     PmaAutomationTimerTouchRequest,
+    PmaManagedThreadCompactRequest,
+    PmaManagedThreadCreateRequest,
+    PmaManagedThreadResumeRequest,
+)
+from .automation_adapter import (
+    call_store_action_with_id,
+    call_store_create_with_payload,
+    call_store_list,
+    get_automation_store,
+    normalize_optional_text,
 )
 
 if TYPE_CHECKING:
     pass
+
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    from .....core.state_roots import is_within_allowed_root
+
+    return is_within_allowed_root(path, allowed_roots=[root], resolve=True)
+
+
+def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
+    cleaned = (workspace_root or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="workspace_root is invalid")
+    if "\\" in cleaned or "\x00" in cleaned or _DRIVE_PREFIX_RE.match(cleaned):
+        raise HTTPException(status_code=400, detail="workspace_root is invalid")
+    normalized = PurePosixPath(cleaned)
+    if ".." in normalized.parts:
+        raise HTTPException(status_code=400, detail="workspace_root is invalid")
+    return normalized
+
+
+def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
+    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    if supervisor is None:
+        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
+    for snapshot in supervisor.list_repos():
+        if getattr(snapshot, "id", None) != repo_id:
+            continue
+        repo_path = getattr(snapshot, "path", None)
+        if isinstance(repo_path, str):
+            repo_path = Path(repo_path)
+        if isinstance(repo_path, Path):
+            return repo_path.absolute()
+    raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
+
+
+def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
+    normalized = _normalize_workspace_root_input(workspace_root)
+    hub_root_resolved = hub_root.absolute()
+    workspace = Path(normalized)
+    if not workspace.is_absolute():
+        workspace = (hub_root_resolved / workspace).absolute()
+    else:
+        workspace = workspace.absolute()
+    if not _is_within_root(workspace, hub_root):
+        raise HTTPException(status_code=400, detail="workspace_root is invalid")
+    return workspace
+
+
+def _normalize_notify_on(value: Any) -> Optional[str]:
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        return None
+    notify_on = normalized.lower()
+    if notify_on != "terminal":
+        raise HTTPException(
+            status_code=400, detail="notify_on must be 'terminal' when provided"
+        )
+    return notify_on
+
+
+def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(thread)
+    lifecycle_status = normalize_optional_text(
+        thread.get("lifecycle_status") or thread.get("status")
+    )
+    normalized_status = normalize_optional_text(thread.get("normalized_status"))
+    payload["lifecycle_status"] = lifecycle_status
+    payload["normalized_status"] = normalized_status or lifecycle_status or ""
+    payload["status"] = payload["normalized_status"]
+    payload["status_reason"] = normalize_optional_text(
+        thread.get("status_reason") or thread.get("status_reason_code")
+    )
+    payload["status_changed_at"] = normalize_optional_text(
+        thread.get("status_changed_at") or thread.get("status_updated_at")
+    )
+    payload["status_terminal"] = bool(thread.get("status_terminal"))
+    payload["status_turn_id"] = normalize_optional_text(thread.get("status_turn_id"))
+    payload["accepts_messages"] = lifecycle_status == "active"
+    return payload
+
+
+def _build_terminal_notify_subscription_payload(
+    *,
+    managed_thread_id: str,
+    lane_id: Optional[str],
+    notify_once: bool,
+    idempotency_key: Optional[str],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "event_types": ["managed_thread_completed", "managed_thread_failed"],
+        "thread_id": managed_thread_id,
+        "lane_id": lane_id,
+        "notify_once": notify_once,
+        "metadata": {"notify_once": notify_once},
+    }
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
+    return payload
+
+
+async def register_managed_thread_terminal_notify(
+    request: Request,
+    *,
+    managed_thread_id: str,
+    lane_id: Optional[str],
+    notify_once: bool,
+    idempotency_key: Optional[str],
+    get_runtime_state,
+) -> Optional[dict[str, Any]]:
+    store = await get_automation_store(request, get_runtime_state())
+    if store is None:
+        return None
+    created = await call_store_create_with_payload(
+        store,
+        (
+            "create_subscription",
+            "add_subscription",
+            "upsert_subscription",
+        ),
+        _build_terminal_notify_subscription_payload(
+            managed_thread_id=managed_thread_id,
+            lane_id=lane_id,
+            notify_once=notify_once,
+            idempotency_key=idempotency_key,
+        ),
+    )
+    if isinstance(created, dict) and "subscription" in created:
+        return created
+    return {"subscription": created}
 
 
 def build_automation_routes(
@@ -24,11 +170,6 @@ def build_automation_routes(
     async def create_automation_subscription(
         request: Request, payload: PmaAutomationSubscriptionCreateRequest
     ) -> dict[str, Any]:
-        from .automation_adapter import (
-            call_store_create_with_payload,
-            get_automation_store,
-        )
-
         store = await get_automation_store(request, get_runtime_state())
         created = await call_store_create_with_payload(
             store,
@@ -53,46 +194,33 @@ def build_automation_routes(
         lane_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
-        from .automation_adapter import (
-            call_store_list,
-            get_automation_store,
-            normalize_optional_text,
-        )
-
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         store = await get_automation_store(request, get_runtime_state())
-        filters = {
-            "repo_id": normalize_optional_text(repo_id),
-            "run_id": normalize_optional_text(run_id),
-            "thread_id": normalize_optional_text(thread_id),
-            "lane_id": normalize_optional_text(lane_id),
-            "limit": limit,
-        }
         subscriptions = await call_store_list(
             store,
-            (
-                "list_subscriptions",
-                "get_subscriptions",
-            ),
-            {k: v for k, v in filters.items() if v is not None},
+            ("list_subscriptions", "get_subscriptions"),
+            {
+                k: v
+                for k, v in {
+                    "repo_id": normalize_optional_text(repo_id),
+                    "run_id": normalize_optional_text(run_id),
+                    "thread_id": normalize_optional_text(thread_id),
+                    "lane_id": normalize_optional_text(lane_id),
+                    "limit": limit,
+                }.items()
+                if v is not None
+            },
         )
         if isinstance(subscriptions, dict) and "subscriptions" in subscriptions:
             return subscriptions
-        if subscriptions is None:
-            subscriptions = []
-        return {"subscriptions": list(subscriptions)}
+        return {"subscriptions": list(subscriptions or [])}
 
     @router.delete("/automation/subscriptions/{subscription_id}")
     @router.delete("/subscriptions/{subscription_id}")
     async def delete_automation_subscription(
         subscription_id: str, request: Request
     ) -> dict[str, Any]:
-        from .automation_adapter import (
-            call_store_action_with_id,
-            get_automation_store,
-        )
-
         normalized_id = (subscription_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="subscription_id is required")
@@ -124,19 +252,10 @@ def build_automation_routes(
     async def create_automation_timer(
         request: Request, payload: PmaAutomationTimerCreateRequest
     ) -> dict[str, Any]:
-        from .automation_adapter import (
-            call_store_create_with_payload,
-            get_automation_store,
-        )
-
         store = await get_automation_store(request, get_runtime_state())
         created = await call_store_create_with_payload(
             store,
-            (
-                "create_timer",
-                "add_timer",
-                "upsert_timer",
-            ),
+            ("create_timer", "add_timer", "upsert_timer"),
             payload.model_dump(exclude_none=True),
         )
         if isinstance(created, dict) and "timer" in created:
@@ -155,37 +274,29 @@ def build_automation_routes(
         lane_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
-        from .automation_adapter import (
-            call_store_list,
-            get_automation_store,
-            normalize_optional_text,
-        )
-
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         store = await get_automation_store(request, get_runtime_state())
-        filters = {
-            "timer_type": normalize_optional_text(timer_type),
-            "subscription_id": normalize_optional_text(subscription_id),
-            "repo_id": normalize_optional_text(repo_id),
-            "run_id": normalize_optional_text(run_id),
-            "thread_id": normalize_optional_text(thread_id),
-            "lane_id": normalize_optional_text(lane_id),
-            "limit": limit,
-        }
         timers = await call_store_list(
             store,
-            (
-                "list_timers",
-                "get_timers",
-            ),
-            {k: v for k, v in filters.items() if v is not None},
+            ("list_timers", "get_timers"),
+            {
+                k: v
+                for k, v in {
+                    "timer_type": normalize_optional_text(timer_type),
+                    "subscription_id": normalize_optional_text(subscription_id),
+                    "repo_id": normalize_optional_text(repo_id),
+                    "run_id": normalize_optional_text(run_id),
+                    "thread_id": normalize_optional_text(thread_id),
+                    "lane_id": normalize_optional_text(lane_id),
+                    "limit": limit,
+                }.items()
+                if v is not None
+            },
         )
         if isinstance(timers, dict) and "timers" in timers:
             return timers
-        if timers is None:
-            timers = []
-        return {"timers": list(timers)}
+        return {"timers": list(timers or [])}
 
     @router.post("/automation/timers/{timer_id}/touch")
     @router.post("/timers/{timer_id}/touch")
@@ -194,27 +305,15 @@ def build_automation_routes(
         request: Request,
         payload: Annotated[Optional[PmaAutomationTimerTouchRequest], Body()] = None,
     ) -> dict[str, Any]:
-        from .automation_adapter import (
-            call_store_action_with_id,
-            get_automation_store,
-        )
-
         normalized_id = (timer_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
         store = await get_automation_store(request, get_runtime_state())
-        resolved_payload = (
-            payload.model_dump(exclude_none=True) if payload is not None else {}
-        )
         touched = await call_store_action_with_id(
             store,
-            (
-                "touch_timer",
-                "refresh_timer",
-                "renew_timer",
-            ),
+            ("touch_timer", "refresh_timer", "renew_timer"),
             normalized_id,
-            payload=resolved_payload,
+            payload=payload.model_dump(exclude_none=True) if payload else {},
             id_aliases=("timer_id", "id"),
         )
         if isinstance(touched, dict):
@@ -233,27 +332,15 @@ def build_automation_routes(
         request: Request,
         payload: Annotated[Optional[PmaAutomationTimerCancelRequest], Body()] = None,
     ) -> dict[str, Any]:
-        from .automation_adapter import (
-            call_store_action_with_id,
-            get_automation_store,
-        )
-
         normalized_id = (timer_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
         store = await get_automation_store(request, get_runtime_state())
-        resolved_payload = (
-            payload.model_dump(exclude_none=True) if payload is not None else {}
-        )
         cancelled = await call_store_action_with_id(
             store,
-            (
-                "cancel_timer",
-                "delete_timer",
-                "remove_timer",
-            ),
+            ("cancel_timer", "delete_timer", "remove_timer"),
             normalized_id,
-            payload=resolved_payload,
+            payload=payload.model_dump(exclude_none=True) if payload else {},
             id_aliases=("timer_id", "id"),
         )
         if isinstance(cancelled, dict):
@@ -269,37 +356,37 @@ def build_managed_thread_crud_routes(
     get_runtime_state,
 ) -> None:
     """Build managed-thread CRUD routes (create, list, get, compact, resume, archive)."""
-    import json
-    import re
-    from pathlib import Path
-
     from .....core.pma_thread_store import PmaThreadStore
-    from .automation_adapter import normalize_optional_text
+    from ...services.pma.common import pma_config_from_raw
 
-    _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+    def _get_pma_config(request: Request) -> dict[str, Any]:
+        raw = getattr(request.app.state.config, "raw", {})
+        return pma_config_from_raw(raw)
 
     @router.post("/threads")
-    async def create_managed_thread(request: Request, payload: Any) -> dict[str, Any]:
+    async def create_managed_thread(
+        request: Request, payload: PmaManagedThreadCreateRequest
+    ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
-        raw_payload = (
-            payload.model_dump(exclude_none=True)
-            if hasattr(payload, "model_dump")
-            else payload
+        repo_id = normalize_optional_text(payload.repo_id)
+        workspace_root = normalize_optional_text(payload.workspace_root)
+        raw_payload: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                raw_payload = parsed
+        except Exception:
+            pass
+        notify_on = _normalize_notify_on(
+            raw_payload.get("notify_on") or raw_payload.get("notifyOn")
         )
-        if isinstance(raw_payload, dict):
-            repo_id = normalize_optional_text(raw_payload.get("repo_id"))
-            workspace_root = normalize_optional_text(raw_payload.get("workspace_root"))
-            agent = raw_payload.get("agent")
-            name = normalize_optional_text(raw_payload.get("name"))
-            backend_thread_id = normalize_optional_text(
-                raw_payload.get("backend_thread_id")
-            )
-        else:
-            repo_id = None
-            workspace_root = None
-            agent = None
-            name = None
-            backend_thread_id = None
+        notify_lane = normalize_optional_text(
+            raw_payload.get("notify_lane") or raw_payload.get("notifyLane")
+        )
+        raw_notify_once = raw_payload.get("notify_once")
+        if raw_notify_once is None:
+            raw_notify_once = raw_payload.get("notifyOnce")
+        notify_once = bool(raw_notify_once) if raw_notify_once is not None else True
 
         if bool(repo_id) == bool(workspace_root):
             raise HTTPException(
@@ -308,23 +395,12 @@ def build_managed_thread_crud_routes(
             )
 
         resolved_repo_id: Optional[str] = None
-        resolved_workspace: Optional[Path] = None
-
         if repo_id:
-            from .....core.state_roots import is_within_allowed_root
-            from .....manifest import load_manifest
-
-            manifest = load_manifest(hub_root)
-            workspace_root_from_manifest = manifest.workspace_for_repo_id(repo_id)
-            if workspace_root_from_manifest:
-                resolved_workspace = workspace_root_from_manifest
-                resolved_repo_id = repo_id
-            if not resolved_workspace or not is_within_allowed_root(
-                resolved_workspace, hub_root
-            ):
+            resolved_workspace = _resolve_workspace_from_repo_id(request, repo_id)
+            resolved_repo_id = repo_id
+            if not _is_within_root(resolved_workspace, hub_root):
                 raise HTTPException(
-                    status_code=400,
-                    detail="Resolved repo path is invalid",
+                    status_code=400, detail="Resolved repo path is invalid"
                 )
         else:
             if workspace_root is None:
@@ -332,46 +408,63 @@ def build_managed_thread_crud_routes(
                     status_code=400,
                     detail="workspace_root is required when repo_id is omitted",
                 )
-            from .....core.state_roots import is_within_allowed_root
-
-            workspace_root_clean = workspace_root.replace("\\", "/")
-            if _DRIVE_PREFIX_RE.match(workspace_root_clean):
-                workspace_root_clean = "/" + workspace_root_clean
-            resolved_workspace = Path(workspace_root_clean).resolve()
-            if not is_within_allowed_root(resolved_workspace, hub_root):
-                raise HTTPException(
-                    status_code=400,
-                    detail="workspace_root must be within allowed roots",
-                )
+            resolved_workspace = _resolve_workspace_from_input(hub_root, workspace_root)
 
         store = PmaThreadStore(hub_root)
         thread = store.create_thread(
-            agent,
+            payload.agent,
             resolved_workspace,
             repo_id=resolved_repo_id,
-            name=name,
-            backend_thread_id=backend_thread_id,
+            name=normalize_optional_text(payload.name),
+            backend_thread_id=normalize_optional_text(payload.backend_thread_id),
         )
-        return {"thread": thread}
+        notification: Optional[dict[str, Any]] = None
+        if notify_on == "terminal":
+            notification = await register_managed_thread_terminal_notify(
+                request,
+                managed_thread_id=str(thread.get("managed_thread_id") or ""),
+                lane_id=notify_lane,
+                notify_once=notify_once,
+                idempotency_key=(
+                    f"managed-thread-notify:{thread.get('managed_thread_id')}"
+                    if notify_once
+                    else None
+                ),
+                get_runtime_state=get_runtime_state,
+            )
+        response: dict[str, Any] = {"thread": _serialize_managed_thread(thread)}
+        if notification is not None:
+            response["notification"] = notification
+        return response
 
     @router.get("/threads")
     def list_managed_threads(
         request: Request,
         agent: Optional[str] = None,
         status: Optional[str] = None,
+        lifecycle_status: Optional[str] = None,
         repo_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        normalized_status = normalize_optional_text(status)
+        normalized_lifecycle_status = normalize_optional_text(lifecycle_status)
+        if (
+            normalized_status in {"active", "archived"}
+            and normalized_lifecycle_status is None
+        ):
+            normalized_lifecycle_status = normalized_status
+            normalized_status = None
         store = PmaThreadStore(request.app.state.config.root)
         threads = store.list_threads(
             agent=normalize_optional_text(agent),
-            status=normalize_optional_text(status),
+            status=normalized_lifecycle_status,
+            normalized_status=normalized_status,
             repo_id=normalize_optional_text(repo_id),
             limit=limit,
         )
-        return {"threads": threads}
+        return {"threads": [_serialize_managed_thread(thread) for thread in threads]}
 
     @router.get("/threads/{managed_thread_id}")
     def get_managed_thread(managed_thread_id: str, request: Request) -> dict[str, Any]:
@@ -379,25 +472,25 @@ def build_managed_thread_crud_routes(
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": thread}
+        return {"thread": _serialize_managed_thread(thread)}
 
     @router.post("/threads/{managed_thread_id}/compact")
     def compact_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: Any,
+        payload: PmaManagedThreadCompactRequest,
     ) -> dict[str, Any]:
-        summary = ""
-        reset_backend = False
-        if hasattr(payload, "model_dump"):
-            summary = (payload.summary or "").strip()
-            reset_backend = bool(payload.reset_backend)
-        elif isinstance(payload, dict):
-            summary = (payload.get("summary") or "").strip()
-            reset_backend = bool(payload.get("reset_backend"))
-
+        summary = (payload.summary or "").strip()
         if not summary:
             raise HTTPException(status_code=400, detail="summary is required")
+        max_text_chars = int(_get_pma_config(request).get("max_text_chars", 0) or 0)
+        if max_text_chars > 0 and len(summary) > max_text_chars:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"summary exceeds max_text_chars ({max_text_chars} characters)"
+                ),
+            )
 
         store = PmaThreadStore(request.app.state.config.root)
         thread = store.get_thread(managed_thread_id)
@@ -405,6 +498,7 @@ def build_managed_thread_crud_routes(
             raise HTTPException(status_code=404, detail="Managed thread not found")
 
         old_backend_thread_id = normalize_optional_text(thread.get("backend_thread_id"))
+        reset_backend = bool(payload.reset_backend)
         store.set_thread_compact_seed(
             managed_thread_id,
             summary,
@@ -425,20 +519,15 @@ def build_managed_thread_crud_routes(
         updated = store.get_thread(managed_thread_id)
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": updated}
+        return {"thread": _serialize_managed_thread(updated)}
 
     @router.post("/threads/{managed_thread_id}/resume")
     def resume_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: Any,
+        payload: PmaManagedThreadResumeRequest,
     ) -> dict[str, Any]:
-        backend_thread_id = ""
-        if hasattr(payload, "model_dump"):
-            backend_thread_id = (payload.backend_thread_id or "").strip()
-        elif isinstance(payload, dict):
-            backend_thread_id = (payload.get("backend_thread_id") or "").strip()
-
+        backend_thread_id = (payload.backend_thread_id or "").strip()
         if not backend_thread_id:
             raise HTTPException(status_code=400, detail="backend_thread_id is required")
 
@@ -466,7 +555,7 @@ def build_managed_thread_crud_routes(
         updated = store.get_thread(managed_thread_id)
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": updated}
+        return {"thread": _serialize_managed_thread(updated)}
 
     @router.post("/threads/{managed_thread_id}/archive")
     def archive_managed_thread(
@@ -482,15 +571,12 @@ def build_managed_thread_crud_routes(
         store.append_action(
             "managed_thread_archive",
             managed_thread_id=managed_thread_id,
-            payload_json=json.dumps(
-                {"old_status": old_status},
-                ensure_ascii=True,
-            ),
+            payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
         )
         updated = store.get_thread(managed_thread_id)
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": updated}
+        return {"thread": _serialize_managed_thread(updated)}
 
     @router.get("/threads/{managed_thread_id}/turns")
     def list_managed_thread_turns(

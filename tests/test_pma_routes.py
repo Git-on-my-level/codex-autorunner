@@ -154,6 +154,27 @@ def test_build_pma_routes_does_not_construct_async_primitives_on_route_build(
     pma_routes.build_pma_routes()
 
 
+def test_build_pma_routes_registers_unique_method_path_pairs() -> None:
+    router = pma_routes.build_pma_routes()
+    seen: set[tuple[str, str]] = set()
+    duplicates: set[tuple[str, str]] = set()
+
+    for route in router.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None) or ()
+        if not isinstance(path, str):
+            continue
+        for method in methods:
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            pair = (str(method), path)
+            if pair in seen:
+                duplicates.add(pair)
+            seen.add(pair)
+
+    assert duplicates == set()
+
+
 @pytest.mark.parametrize(
     ("method", "endpoint", "body"),
     [

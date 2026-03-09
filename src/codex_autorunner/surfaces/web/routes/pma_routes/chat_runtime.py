@@ -25,6 +25,7 @@ from .....core.pma_state import PmaStateStore
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.time_utils import now_iso
 from .....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from .....integrations.github.context_injection import maybe_inject_github_context
 from ...services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
 )
@@ -32,6 +33,7 @@ from ...services.pma.common import pma_config_from_raw
 from ..agents import _available_agents
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
+from .publish import publish_automation_result
 from .runtime_state import PmaRuntimeState
 from .tail_stream import resolve_resume_after
 
@@ -362,13 +364,6 @@ async def _interrupt_active(
 
 
 def _cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        return
-    except Exception:
-        logger.exception("PMA task failed: %s", name)
-
     def _on_done(done_task: asyncio.Future[Any]) -> None:
         if isinstance(done_task, asyncio.Task):
             try:
@@ -377,6 +372,10 @@ def _cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
                 return
             except Exception:
                 logger.exception("PMA task failed: %s", name)
+
+    if task.done():
+        _on_done(task)
+        return
 
     task.add_done_callback(_on_done)
     task.cancel()
@@ -639,6 +638,7 @@ async def _execute_queue_item(
     wake_up = payload.get("wake_up")
     if not isinstance(wake_up, dict):
         wake_up = None
+    automation_trigger = lifecycle_event is not None or wake_up is not None
 
     store = runtime.get_state_store(hub_root)
     defaults = _get_pma_config(request)
@@ -650,6 +650,37 @@ async def _execute_queue_item(
         persist: bool = True,
     ) -> dict[str, Any]:
         payload_result = dict(result_payload or {})
+        if automation_trigger:
+            try:
+                payload_result.update(
+                    await publish_automation_result(
+                        request=request,
+                        result=payload_result,
+                        client_turn_id=(
+                            _normalize_optional_text(client_turn_id) or None
+                        ),
+                        lifecycle_event=lifecycle_event,
+                        wake_up=wake_up,
+                    )
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Failed publishing PMA automation result: client_turn_id=%s",
+                    client_turn_id,
+                )
+                payload_result["delivery_status"] = "failed"
+                payload_result["delivery_outcome"] = {
+                    "published": 0,
+                    "duplicates": 0,
+                    "failed": 1,
+                    "targets": 0,
+                    "repo_id": None,
+                    "correlation_id": (
+                        _normalize_optional_text(client_turn_id)
+                        or f"pma-{uuid.uuid4().hex[:12]}"
+                    ),
+                    "errors": [str(exc)],
+                }
         if persist and started:
             await _finalize_result(
                 runtime,
@@ -719,8 +750,25 @@ async def _execute_queue_item(
     try:
         prompt_base = load_pma_prompt(hub_root)
         supervisor = getattr(request.app.state, "hub_supervisor", None)
-        snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
+        from .. import pma as pma_routes
+
+        snapshot_builder = getattr(pma_routes, "build_hub_snapshot", build_hub_snapshot)
+        github_context_injector = getattr(
+            pma_routes,
+            "maybe_inject_github_context",
+            maybe_inject_github_context,
+        )
+
+        snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
         prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
+        prompt, _ = await github_context_injector(
+            prompt_text=prompt,
+            link_source_text=message,
+            workspace_root=hub_root,
+            logger=logger,
+            event_prefix="web.pma.github_context",
+            allow_cross_repo=True,
+        )
     except Exception as exc:
         error_result = {
             "status": "error",

@@ -131,8 +131,16 @@ async def get_automation_store(
     *,
     required: bool = True,
 ) -> Optional[Any]:
-    pma_automation_store = runtime_state.pma_automation_store
-    pma_automation_root = runtime_state.pma_automation_root
+    pma_automation_store = (
+        getattr(runtime_state, "pma_automation_store", None)
+        if runtime_state is not None
+        else None
+    )
+    pma_automation_root = (
+        getattr(runtime_state, "pma_automation_root", None)
+        if runtime_state is not None
+        else None
+    )
 
     hub_root = request.app.state.config.root
     supervisor = getattr(request.app.state, "hub_supervisor", None)
@@ -170,8 +178,9 @@ async def get_automation_store(
             except Exception:
                 logger.exception("Failed to initialize automation store")
                 break
-            runtime_state.pma_automation_store = store
-            runtime_state.pma_automation_root = hub_root
+            if runtime_state is not None:
+                runtime_state.pma_automation_store = store
+                runtime_state.pma_automation_root = hub_root
             return store
 
     if required:

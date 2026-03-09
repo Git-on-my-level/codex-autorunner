@@ -17,6 +17,7 @@ from .....core.pma_thread_store import (
     PmaThreadStore,
 )
 from .....core.pma_transcripts import PmaTranscriptStore
+from ...schemas import PmaManagedThreadMessageRequest
 from .automation_adapter import (
     call_store_create_with_payload,
     first_callable,
@@ -559,20 +560,9 @@ def build_managed_thread_runtime_routes(
     async def send_managed_thread_message(
         managed_thread_id: str,
         request: Request,
-        payload: Any,
+        payload: PmaManagedThreadMessageRequest,
     ) -> Any:
-        message = ""
-        notify_on = None
-        notify_lane = None
-        notify_once = True
-        defer_execution = False
-        model = None
-        reasoning = None
-
-        if hasattr(payload, "model_dump"):
-            parsed = payload.model_dump(exclude_none=True)
-        else:
-            parsed = payload if isinstance(payload, dict) else {}
+        parsed = payload.model_dump(exclude_none=True)
 
         message = (parsed.get("message") or "").strip()
         if not message:
@@ -1059,30 +1049,31 @@ def build_managed_thread_runtime_routes(
         else:
             backend_error = f"Unknown managed thread agent: {agent}"
 
-        store.mark_turn_interrupted(managed_turn_id)
-        await notify_managed_thread_terminal_transition(
-            request,
-            thread=thread,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-            to_state="failed",
-            reason=backend_error or "managed_turn_interrupted",
-        )
-        store.append_action(
-            "managed_thread_interrupt",
-            managed_thread_id=managed_thread_id,
-            payload_json=json.dumps(
-                {
-                    "agent": agent,
-                    "managed_turn_id": managed_turn_id,
-                    "backend_thread_id": backend_thread_id,
-                    "backend_turn_id": backend_turn_id,
-                    "backend_interrupt_attempted": backend_interrupt_attempted,
-                    "backend_error": backend_error,
-                },
-                ensure_ascii=True,
-            ),
-        )
+        interrupted = store.mark_turn_interrupted(managed_turn_id)
+        if interrupted:
+            await notify_managed_thread_terminal_transition(
+                request,
+                thread=thread,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                to_state="failed",
+                reason=backend_error or "managed_turn_interrupted",
+            )
+            store.append_action(
+                "managed_thread_interrupt",
+                managed_thread_id=managed_thread_id,
+                payload_json=json.dumps(
+                    {
+                        "agent": agent,
+                        "managed_turn_id": managed_turn_id,
+                        "backend_thread_id": backend_thread_id,
+                        "backend_turn_id": backend_turn_id,
+                        "backend_interrupt_attempted": backend_interrupt_attempted,
+                        "backend_error": backend_error,
+                    },
+                    ensure_ascii=True,
+                ),
+            )
         updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
         return {
             "status": "ok",
