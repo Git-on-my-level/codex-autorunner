@@ -249,6 +249,7 @@ def test_hub_api_lists_repos(tmp_path: Path):
     assert data["repos"][0]["effective_destination"] == {"kind": "local"}
 
 
+@pytest.mark.slow
 def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -287,6 +288,7 @@ def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Pat
     assert worktree_payload["effective_destination"] == expected
 
 
+@pytest.mark.slow
 def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -322,6 +324,7 @@ def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
     assert worktree_payload["cleanup_blocked_by_chat_binding"] is False
 
 
+@pytest.mark.slow
 def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
     tmp_path: Path, monkeypatch
 ):
@@ -399,6 +402,7 @@ def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     assert "demo" not in unpin_resp.json()["pinned_parent_repo_ids"]
 
 
+@pytest.mark.slow
 def test_hub_pin_parent_repo_rejects_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -1654,6 +1658,7 @@ def test_cleanup_worktree_force_requires_attestation(tmp_path: Path):
     assert worktree.path.exists()
 
 
+@pytest.mark.slow
 def test_hub_api_marks_chat_bound_worktrees_from_discord_binding_db(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

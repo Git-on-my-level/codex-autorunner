@@ -12,10 +12,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
 from codex_autorunner.core.report_retention import prune_report_directory
+
+pytestmark = pytest.mark.slow
 
 runner = CliRunner()
 

@@ -29,6 +29,8 @@ from codex_autorunner.browser.runtime import BrowserRunResult
 from codex_autorunner.cli import app
 from codex_autorunner.core import optional_dependencies
 
+pytestmark = pytest.mark.slow
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

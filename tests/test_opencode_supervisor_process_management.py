@@ -18,6 +18,8 @@ from codex_autorunner.agents.opencode.supervisor import (
 from codex_autorunner.core.managed_processes.registry import read_process_record
 from codex_autorunner.workspace import canonical_workspace_root, workspace_id_for_path
 
+pytestmark = pytest.mark.slow
+
 
 def _fake_server_script() -> Path:
     return Path(__file__).resolve().parent / "fixtures" / "fake_opencode_server.py"
