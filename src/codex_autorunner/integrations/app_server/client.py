@@ -41,6 +41,12 @@ from ...core.managed_processes.registry import (
 from ...core.retry import retry_transient
 from .event_decoder import decode_notification
 from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
+from .protocol_helpers import (
+    extract_resume_snapshot,
+    normalize_notification,
+    normalize_response,
+    normalize_server_request,
+)
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
@@ -160,15 +166,6 @@ class _ReadLoopState:
     drain_limit_reached: bool = False
     oversize_preview: bytearray = field(default_factory=bytearray)
     oversize_bytes_dropped: int = 0
-
-
-@dataclass
-class _ResumeTurnSnapshot:
-    target_turn_id: str
-    status: Optional[str] = None
-    agent_messages: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    found: bool = False
 
 
 class CodexAppServerClient:
@@ -629,7 +626,7 @@ class CodexAppServerClient:
             state.last_event_at = now
             return
 
-        snapshot = _extract_turn_snapshot_from_resume(resume_result, turn_id)
+        snapshot = extract_resume_snapshot(resume_result, turn_id)
         if snapshot is None:
             self._maybe_fail_stalled_turn(
                 state,
@@ -1153,12 +1150,11 @@ class CodexAppServerClient:
             await self._handle_notification(message)
 
     async def _handle_response(self, message: Dict[str, Any]) -> None:
-        req_id_raw = message.get("id")
-
-        if not isinstance(req_id_raw, (int, str)):
+        normalized = normalize_response(message)
+        if normalized is None:
             return
 
-        req_id = str(req_id_raw) if isinstance(req_id_raw, int) else req_id_raw
+        req_id = normalized.request_id
 
         self._ensure_locks()
         data_lock = self._data_lock
@@ -1179,8 +1175,8 @@ class CodexAppServerClient:
             return
         if future.cancelled():
             return
-        if "error" in message and message["error"] is not None:
-            err = message.get("error") or {}
+        if normalized.error is not None:
+            err = normalized.error
             error_code = err.get("code")
             if error_code == -32600:
                 log_event(
@@ -1220,15 +1216,18 @@ class CodexAppServerClient:
             request_id_type=type(req_id).__name__,
             method=method,
         )
-        future.set_result(message.get("result"))
+        future.set_result(normalized.result)
 
     async def _handle_server_request(self, message: Dict[str, Any]) -> None:
-        method = message.get("method")
-        req_id = message.get("id")
+        normalized = normalize_server_request(message)
+        if normalized is None:
+            return
+
+        method = normalized.method
+        req_id = normalized.request_id
+        params = normalized.params
         decoded_request = decode_notification(message)
-        if isinstance(method, str) and method in APPROVAL_METHODS:
-            params_raw = message.get("params")
-            params: Dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+        if method in APPROVAL_METHODS:
             turn_id = (
                 getattr(decoded_request, "turn_id", None)
                 if decoded_request is not None
@@ -1284,12 +1283,15 @@ class CodexAppServerClient:
         )
 
     async def _handle_notification(self, message: Dict[str, Any]) -> None:
-        method = message.get("method")
-        params = message.get("params") or {}
+        normalized = normalize_notification(message)
+        if normalized is None:
+            return
+
+        method = normalized.method
+        params = normalized.params
         decoded_notification = decode_notification(message)
         handled = False
-        if isinstance(method, str):
-            await self._mark_notification_turn_hint(method=method, params=params)
+        await self._mark_notification_turn_hint(method=method, params=params)
         handler = self._resolve_notification_handler(method)
         if handler is not None:
             handled = await handler(message, params, decoded_notification)
@@ -2345,116 +2347,6 @@ def _extract_agent_messages_from_container(
                 if isinstance(fallback, str) and fallback.strip():
                     agent_messages.append(fallback)
     return agent_messages
-
-
-def _extract_turn_snapshot_from_resume(
-    payload: Any, target_turn_id: str
-) -> Optional[tuple[Optional[str], list[str], list[str]]]:
-    if not isinstance(payload, dict):
-        return None
-    snapshot = _collect_turn_snapshot_data(payload, target_turn_id)
-    if (
-        not snapshot.found
-        and not snapshot.agent_messages
-        and not snapshot.errors
-        and snapshot.status is None
-    ):
-        return None
-    return snapshot.status, snapshot.agent_messages, snapshot.errors
-
-
-def _collect_turn_snapshot_data(
-    payload: Dict[str, Any], target_turn_id: str
-) -> _ResumeTurnSnapshot:
-    snapshot = _ResumeTurnSnapshot(target_turn_id=target_turn_id)
-    if _collect_turn_snapshot_from_entry(payload, snapshot):
-        snapshot.found = True
-    _collect_turn_snapshot_from_payload(payload, snapshot)
-    if snapshot.status is None:
-        snapshot.status = _extract_status_value(payload.get("status"))
-    return snapshot
-
-
-def _collect_turn_snapshot_from_payload(
-    payload: Dict[str, Any], snapshot: _ResumeTurnSnapshot
-) -> None:
-    _collect_turn_snapshot_from_turn_collections(
-        payload, snapshot, ("turns", "data", "results")
-    )
-    _collect_thread_snapshot_payload(payload.get("thread"), snapshot)
-    if _collect_turn_snapshot_from_entry(payload.get("turn"), snapshot):
-        snapshot.found = True
-    _collect_turn_items(payload.get("items"), snapshot)
-
-
-def _collect_turn_snapshot_from_turn_collections(
-    payload: Dict[str, Any], snapshot: _ResumeTurnSnapshot, keys: tuple[str, ...]
-) -> None:
-    for key in keys:
-        values = payload.get(key)
-        if isinstance(values, list):
-            _collect_turn_snapshot_from_list(values, snapshot)
-
-
-def _collect_thread_snapshot_payload(
-    thread: Any, snapshot: _ResumeTurnSnapshot
-) -> None:
-    if not isinstance(thread, dict):
-        return
-    _collect_thread_turn_items(thread, snapshot)
-    _collect_turn_snapshot_from_list(thread.get("turns"), snapshot)
-
-
-def _collect_turn_items(items: Any, snapshot: _ResumeTurnSnapshot) -> None:
-    if not isinstance(items, list):
-        return
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        _collect_turn_snapshot_from_item(item, snapshot)
-
-
-def _collect_turn_snapshot_from_list(turns: Any, snapshot: _ResumeTurnSnapshot) -> None:
-    if not isinstance(turns, list):
-        return
-    for turn in turns:
-        if _collect_turn_snapshot_from_entry(turn, snapshot):
-            snapshot.found = True
-
-
-def _collect_turn_snapshot_from_entry(turn: Any, snapshot: _ResumeTurnSnapshot) -> bool:
-    if not isinstance(turn, dict):
-        return False
-    if extract_turn_id(turn) != snapshot.target_turn_id:
-        return False
-    if snapshot.status is None:
-        snapshot.status = _extract_status_value(turn.get("status"))
-    snapshot.agent_messages.extend(
-        _extract_agent_messages_from_container(turn, snapshot.target_turn_id)
-    )
-    snapshot.errors.extend(_extract_errors_from_container(turn))
-    return True
-
-
-def _collect_turn_snapshot_from_item(item: Any, snapshot: _ResumeTurnSnapshot) -> None:
-    if not isinstance(item, dict):
-        return
-    item_turn_id = extract_turn_id(item)
-    if item_turn_id != snapshot.target_turn_id:
-        return
-    text = _extract_agent_message_text(item)
-    if text:
-        snapshot.agent_messages.append(text)
-
-
-def _collect_thread_turn_items(
-    thread: Dict[str, Any], snapshot: _ResumeTurnSnapshot
-) -> None:
-    thread_items = thread.get("items")
-    if not isinstance(thread_items, list):
-        return
-    for item in thread_items:
-        _collect_turn_snapshot_from_item(item, snapshot)
 
 
 @no_type_check
