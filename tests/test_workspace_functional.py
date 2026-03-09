@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.server import create_hub_app
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture
 def client(hub_env):

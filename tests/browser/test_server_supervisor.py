@@ -20,6 +20,8 @@ from codex_autorunner.browser.server import (
     supervised_server,
 )
 
+pytestmark = pytest.mark.slow
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
