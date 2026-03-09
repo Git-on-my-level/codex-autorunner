@@ -10,6 +10,9 @@ from typing import Any, Callable, Iterable, Sequence
 from .command_contract import COMMAND_CONTRACT, CommandContractEntry
 
 _DISCORD_SERVICE_PATH = Path("src/codex_autorunner/integrations/discord/service.py")
+_DISCORD_CAR_DISPATCH_PATH = Path(
+    "src/codex_autorunner/integrations/discord/car_command_dispatch.py"
+)
 _DISCORD_COMMANDS_PATH = Path("src/codex_autorunner/integrations/discord/commands.py")
 _TELEGRAM_TRIGGER_MODE_PATH = Path(
     "src/codex_autorunner/integrations/telegram/trigger_mode.py"
@@ -56,6 +59,12 @@ def run_parity_checks(
         return _source_unavailable_results(missing=missing)
 
     discord_service_text = _read_text(source_paths["discord_service"])
+    discord_car_dispatch_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_CAR_DISPATCH_PATH,
+        )
+    )
     telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
     telegram_messages_text = _read_text(source_paths["telegram_messages"])
     discord_commands_text = _read_text(
@@ -72,6 +81,7 @@ def run_parity_checks(
     )
 
     discord_service_ast = _parse_module(discord_service_text)
+    discord_car_dispatch_ast = _parse_module(discord_car_dispatch_text)
     telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
     telegram_messages_ast = _parse_module(telegram_messages_text)
     discord_commands_ast = _parse_module(discord_commands_text)
@@ -86,9 +96,11 @@ def run_parity_checks(
         _check_discord_contract_commands_routed(
             contract=contract,
             discord_service_ast=discord_service_ast,
+            discord_car_dispatch_ast=discord_car_dispatch_ast,
         ),
         _check_discord_known_commands_not_in_generic_fallback(
             discord_service_ast=discord_service_ast,
+            discord_car_dispatch_ast=discord_car_dispatch_ast,
         ),
         _check_discord_canonicalize_command_ingress_usage(
             discord_service_ast=discord_service_ast,
@@ -307,6 +319,7 @@ def _check_discord_contract_commands_routed(
     *,
     contract: Sequence[CommandContractEntry],
     discord_service_ast: ast.Module | None,
+    discord_car_dispatch_ast: ast.Module | None,
 ) -> ParityCheckResult:
     expected_stable_ids: list[str] = []
     missing_ids: list[str] = []
@@ -320,7 +333,11 @@ def _check_discord_contract_commands_routed(
         missing_paths = [
             path
             for path in entry.discord_paths
-            if not _is_discord_path_routed_in_service(path, discord_service_ast)
+            if not _is_discord_path_routed_in_service(
+                path,
+                discord_service_ast,
+                discord_car_dispatch_ast,
+            )
         ]
         if not missing_paths:
             continue
@@ -374,14 +391,17 @@ def _check_discord_contract_commands_routed(
 def _is_discord_path_routed_in_service(
     path: tuple[str, ...],
     discord_service_ast: ast.Module | None,
+    discord_car_dispatch_ast: ast.Module | None,
 ) -> bool:
-    if discord_service_ast is None:
+    if discord_service_ast is None and discord_car_dispatch_ast is None:
         return False
 
     prefix = path[0] if path else ""
 
     if prefix == "car":
-        return _module_has_command_path_route(discord_service_ast, path)
+        return _module_has_command_path_route(discord_service_ast, path) or (
+            _module_has_command_path_route(discord_car_dispatch_ast, path)
+        )
 
     if prefix == "pma":
         subcommand = path[1] if len(path) > 1 else ""
@@ -393,6 +413,7 @@ def _is_discord_path_routed_in_service(
 def _check_discord_known_commands_not_in_generic_fallback(
     *,
     discord_service_ast: ast.Module | None,
+    discord_car_dispatch_ast: ast.Module | None,
 ) -> ParityCheckResult:
     normalized_handlers = _find_functions_by_name(
         discord_service_ast,
@@ -430,6 +451,10 @@ def _check_discord_known_commands_not_in_generic_fallback(
         ),
         "car_specific_fallback_present": _module_has_string_literal(
             discord_service_ast,
+            contains="Unknown car subcommand:",
+        )
+        or _module_has_string_literal(
+            discord_car_dispatch_ast,
             contains="Unknown car subcommand:",
         ),
         "pma_specific_fallback_present": _module_has_string_literal(
@@ -867,7 +892,12 @@ def _find_functions_by_name(
     )
 
 
-def _module_has_command_path_route(tree: ast.Module, path: tuple[str, ...]) -> bool:
+def _module_has_command_path_route(
+    tree: ast.Module | None,
+    path: tuple[str, ...],
+) -> bool:
+    if tree is None:
+        return False
     for compare in _iter_compares(tree):
         if _compare_matches_command_path_eq_tuple(compare, path):
             return True

@@ -257,6 +257,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
         "src/codex_autorunner/integrations/discord/commands.py"
     )
     discord_service_path = Path("src/codex_autorunner/integrations/discord/service.py")
+    discord_dispatch_path = Path(
+        "src/codex_autorunner/integrations/discord/car_command_dispatch.py"
+    )
     discord_commands_text = (
         discord_commands_path.read_text(encoding="utf-8")
         if discord_commands_path.exists()
@@ -265,6 +268,11 @@ def test_cross_surface_parity_report(hub_env) -> None:
     discord_service_text = (
         discord_service_path.read_text(encoding="utf-8")
         if discord_service_path.exists()
+        else ""
+    )
+    discord_dispatch_text = (
+        discord_dispatch_path.read_text(encoding="utf-8")
+        if discord_dispatch_path.exists()
         else ""
     )
 
@@ -295,9 +303,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
         '"name": "agent"',
         '"description": "View or set the agent"',
     ) and _contains_all(
-        discord_service_text,
+        discord_dispatch_text,
         'if command_path == ("car", "agent"):',
-        "await self._handle_car_agent(",
+        "await service._handle_car_agent(",
     )
     checks.append(
         ParityCheck(

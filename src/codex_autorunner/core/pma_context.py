@@ -4,16 +4,10 @@ import asyncio
 import json
 import logging
 import shlex
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, TypedDict, cast
 
-from ..bootstrap import (
-    ensure_pma_docs,
-    pma_active_context_content,
-    pma_doc_path,
-    pma_docs_dir,
-)
+from ..bootstrap import ensure_pma_docs, pma_doc_path
 from ..tickets.files import safe_relpath
 from ..tickets.models import Dispatch
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
@@ -32,8 +26,6 @@ from .freshness import (
 )
 from .hub import HubSupervisor
 from .pma_active_context import (
-    ActiveContextAutoPruneMeta,
-    ActiveContextState,
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     get_active_context_auto_prune_meta,
     maybe_auto_prune_active_context,
@@ -42,7 +34,6 @@ from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_projection import build_canonical_state_v1
 from .ticket_flow_summary import build_ticket_flow_summary
-from .utils import atomic_write
 
 _logger = logging.getLogger(__name__)
 
