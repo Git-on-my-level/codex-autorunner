@@ -7,6 +7,8 @@ from typing import Any
 
 from ...manifest import Manifest
 from ..chat_bindings import active_chat_binding_counts
+from .models import FlowRunStatus
+from .store import FlowStore
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,26 @@ def _resolve_worktrees_root(hub_root: Path, raw_config: Mapping[str, Any]) -> Pa
     return worktrees_root
 
 
+def _has_active_ticket_flow(repo_root: Path) -> bool | None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    if not db_path.exists():
+        return False
+    try:
+        with FlowStore(db_path) as store:
+            latest = store.get_latest_flow_run(flow_type="ticket_flow")
+    except Exception:
+        # Fail open if flow state cannot be read so active work is not hidden.
+        return None
+    if latest is None:
+        return False
+    return latest.status in {
+        FlowRunStatus.PENDING,
+        FlowRunStatus.RUNNING,
+        FlowRunStatus.PAUSED,
+        FlowRunStatus.STOPPING,
+    }
+
+
 def build_hub_flow_overview_entries(
     *,
     hub_root: Path,
@@ -94,7 +116,7 @@ def build_hub_flow_overview_entries(
     }
 
     binding_lookup_failed = chat_binding_counts is None
-    active_worktree_repo_ids: set[str] = set()
+    active_chat_bound_worktree_repo_ids: set[str] = set()
     if chat_binding_counts is not None:
         for raw_repo_id, raw_count in chat_binding_counts.items():
             if not isinstance(raw_repo_id, str):
@@ -109,7 +131,7 @@ def build_hub_flow_overview_entries(
             if count <= 0:
                 continue
             if repo_id in manifest_worktree_ids or "--" in repo_id:
-                active_worktree_repo_ids.add(repo_id)
+                active_chat_bound_worktree_repo_ids.add(repo_id)
 
     entries: list[HubFlowOverviewEntry] = []
     for repo in manifest.repos:
@@ -118,14 +140,15 @@ def build_hub_flow_overview_entries(
         repo_id = str(getattr(repo, "id", "") or "").strip()
         if not repo_id:
             continue
-        is_worktree = _is_manifest_worktree(repo)
-        if (
-            is_worktree
-            and not binding_lookup_failed
-            and repo_id not in active_worktree_repo_ids
-        ):
-            continue
         repo_root = (hub_root / repo.path).resolve()
+        is_worktree = _is_manifest_worktree(repo)
+        if is_worktree and not binding_lookup_failed:
+            has_active_flow = _has_active_ticket_flow(repo_root)
+            if (
+                has_active_flow is False
+                and repo_id not in active_chat_bound_worktree_repo_ids
+            ):
+                continue
         label = _worktree_suffix(repo_id) if is_worktree else None
         if not label:
             label = repo_id
@@ -143,7 +166,7 @@ def build_hub_flow_overview_entries(
     worktrees_root = _resolve_worktrees_root(hub_root, raw_config)
     if binding_lookup_failed:
         return entries
-    for repo_id in sorted(active_worktree_repo_ids):
+    for repo_id in sorted(active_chat_bound_worktree_repo_ids):
         if repo_id in manifest_repo_ids:
             continue
         repo_root = worktrees_root / repo_id

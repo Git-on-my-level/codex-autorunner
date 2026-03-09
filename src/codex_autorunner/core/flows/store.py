@@ -332,10 +332,32 @@ class FlowStore:
             query += " AND status = ?"
             params.append(status.value)
 
-        query += " ORDER BY created_at DESC"
+        query += " ORDER BY created_at DESC, rowid DESC"
 
         rows = conn.execute(query, params).fetchall()
         return [self._row_to_flow_run(row) for row in rows]
+
+    def get_latest_flow_run(
+        self, flow_type: Optional[str] = None, status: Optional[FlowRunStatus] = None
+    ) -> Optional[FlowRunRecord]:
+        conn = self._get_conn()
+        query = "SELECT * FROM flow_runs WHERE 1=1"
+        params: List[Any] = []
+
+        if flow_type is not None:
+            query += " AND flow_type = ?"
+            params.append(flow_type)
+
+        if status is not None:
+            query += " AND status = ?"
+            params.append(status.value)
+
+        query += " ORDER BY created_at DESC, rowid DESC LIMIT 1"
+
+        row = conn.execute(query, params).fetchone()
+        if row is None:
+            return None
+        return self._row_to_flow_run(row)
 
     def list_paused_runs_for_supersession(
         self, flow_type: str, exclude_run_id: str

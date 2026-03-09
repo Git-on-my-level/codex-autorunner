@@ -115,3 +115,35 @@ def test_flow_store_context_manager_exception_handling(tmp_path):
         runs = store.list_flow_runs()
         assert len(runs) == 1
         assert runs[0].id == "test-run-1"
+
+
+def test_flow_store_get_latest_flow_run_uses_newest_matching_record(tmp_path):
+    db_path = tmp_path / "flows.db"
+
+    with FlowStore(db_path) as store:
+        store.create_flow_run(
+            "older-run",
+            "ticket_flow",
+            input_data={},
+            state={},
+            metadata={},
+        )
+        store.create_flow_run(
+            "newer-run",
+            "ticket_flow",
+            input_data={},
+            state={},
+            metadata={},
+        )
+        store.create_flow_run(
+            "other-flow-run",
+            "other_flow",
+            input_data={},
+            state={},
+            metadata={},
+        )
+
+        latest = store.get_latest_flow_run(flow_type="ticket_flow")
+
+    assert latest is not None
+    assert latest.id == "newer-run"

@@ -1051,6 +1051,89 @@ async def test_flow_status_in_pma_mode_shows_only_active_chat_bound_worktrees(
 
 
 @pytest.mark.anyio
+async def test_flow_status_in_pma_mode_includes_manifest_worktree_with_active_flow_without_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    hidden_root = tmp_path / "wt-hidden"
+    hidden_root.mkdir(parents=True, exist_ok=True)
+    _create_run(hidden_root, str(uuid.uuid4()), status=FlowRunStatus.RUNNING)
+
+    manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: workspace",
+                "    path: workspace",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+                "  - id: workspace--wt-visible",
+                "    path: wt-visible",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: worktree",
+                "    worktree_of: workspace",
+                "  - id: workspace--wt-hidden",
+                "    path: wt-hidden",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: worktree",
+                "    worktree_of: workspace",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        hub_overview_module,
+        "active_chat_binding_counts",
+        lambda *, hub_root, raw_config: {},
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_pma_state(
+        channel_id="channel-1",
+        pma_enabled=True,
+        pma_prev_workspace_path=str(workspace),
+        pma_prev_repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "wt-hidden" in content
+        assert "wt-visible" not in content
+        assert "\n  -> " in content
+        assert "\n  - " not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_flow_runs_in_pma_mode_shows_hub_overview(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     paused_run_id = str(uuid.uuid4())
