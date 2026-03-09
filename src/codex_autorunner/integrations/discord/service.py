@@ -6802,13 +6802,26 @@ class DiscordBotService:
         last_event_seq = snapshot.get("last_event_seq")
         last_event_at = snapshot.get("last_event_at")
         current_ticket = snapshot.get("effective_current_ticket")
+        ticket_progress = snapshot.get("ticket_progress")
+        progress_label = None
+        if isinstance(ticket_progress, dict):
+            done = ticket_progress.get("done")
+            total = ticket_progress.get("total")
+            if isinstance(done, int) and isinstance(total, int) and total >= 0:
+                progress_label = f"{done}/{total}"
         lines = [
             f"Run: {record.id}",
             f"Status: {record.status.value}",
-            f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
-            f"Worker: {worker_text}",
-            f"Current ticket: {current_ticket or '-'}",
         ]
+        if progress_label:
+            lines.append(f"Tickets: {progress_label}")
+        lines.extend(
+            [
+                f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
+                f"Worker: {worker_text}",
+                f"Current ticket: {current_ticket or '-'}",
+            ]
+        )
         response_text = "\n".join(lines)
         run_mirror = self._flow_run_mirror(workspace_root)
         run_mirror.mirror_inbound(
