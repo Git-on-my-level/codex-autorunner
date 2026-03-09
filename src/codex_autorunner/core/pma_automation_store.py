@@ -1,151 +1,36 @@
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
-from .time_utils import now_iso
-from .utils import atomic_write
-
-PMA_AUTOMATION_STORE_FILENAME = "automation_store.json"
-PMA_AUTOMATION_VERSION = 1
-DEFAULT_PMA_LANE_ID = "pma:default"
-TIMER_TYPE_ONE_SHOT = "one_shot"
-TIMER_TYPE_WATCHDOG = "watchdog"
-DEFAULT_WATCHDOG_IDLE_SECONDS = 300
+from .pma_automation_persistence import PmaAutomationPersistence
+from .pma_automation_types import (
+    DEFAULT_PMA_LANE_ID,
+    DEFAULT_WATCHDOG_IDLE_SECONDS,
+    PMA_AUTOMATION_STORE_FILENAME,
+    PMA_AUTOMATION_VERSION,
+    TIMER_TYPE_ONE_SHOT,
+    TIMER_TYPE_WATCHDOG,
+    _iso_after_seconds,
+    _iso_now,
+    _normalize_bool,
+    _normalize_due_timestamp,
+    _normalize_lane_id,
+    _normalize_non_negative_int,
+    _normalize_positive_int,
+    _normalize_text,
+    _normalize_text_list,
+    _normalize_timer_type,
+    _parse_iso,
+    default_pma_automation_state,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
-def _normalize_lane_id(value: Any) -> str:
-    return _normalize_text(value) or DEFAULT_PMA_LANE_ID
-
-
-def _normalize_state(value: Any, *, fallback: Optional[str] = None) -> Optional[str]:
-    text = _normalize_text(value)
-    if text is None:
-        return fallback
-    return text.lower()
-
-
-def _normalize_timer_type(value: Any) -> str:
-    text = _normalize_state(value, fallback=TIMER_TYPE_ONE_SHOT)
-    if text == TIMER_TYPE_WATCHDOG:
-        return TIMER_TYPE_WATCHDOG
-    return TIMER_TYPE_ONE_SHOT
-
-
-def _normalize_non_negative_int(
-    value: Any, *, fallback: Optional[int] = None
-) -> Optional[int]:
-    if value is None:
-        return fallback
-    try:
-        parsed = int(value)
-    except Exception:
-        return fallback
-    if parsed < 0:
-        return fallback
-    return parsed
-
-
-def _normalize_positive_int(
-    value: Any, *, fallback: Optional[int] = None
-) -> Optional[int]:
-    parsed = _normalize_non_negative_int(value, fallback=fallback)
-    if parsed is None:
-        return None
-    if parsed <= 0:
-        return fallback
-    return parsed
-
-
-def _normalize_bool(value: Any, *, fallback: Optional[bool] = None) -> Optional[bool]:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in {"1", "true", "yes", "y", "on"}:
-            return True
-        if text in {"0", "false", "no", "n", "off"}:
-            return False
-    return fallback
-
-
-def _normalize_text_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        text = _normalize_text(item)
-        if text is None:
-            continue
-        norm = text.lower()
-        if norm in seen:
-            continue
-        seen.add(norm)
-        out.append(norm)
-    return out
-
-
-def _parse_iso(value: Any) -> Optional[datetime]:
-    text = _normalize_text(value)
-    if text is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _normalize_due_timestamp(
-    value: Any, *, field_name: str = "due_at"
-) -> Optional[str]:
-    text = _normalize_text(value)
-    if text is None:
-        return None
-    parsed = _parse_iso(text)
-    if parsed is None:
-        raise ValueError(f"{field_name} must be a valid ISO-8601 timestamp")
-    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _iso_now() -> str:
-    return now_iso()
-
-
-def _iso_after_seconds(seconds: int) -> str:
-    return (datetime.now(timezone.utc) + timedelta(seconds=max(0, seconds))).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-
-
-def default_pma_automation_state() -> dict[str, Any]:
-    return {
-        "version": PMA_AUTOMATION_VERSION,
-        "updated_at": _iso_now(),
-        "subscriptions": [],
-        "timers": [],
-        "wakeups": [],
-    }
 
 
 @dataclass
@@ -467,54 +352,24 @@ class PmaAutomationWakeup:
 
 class PmaAutomationStore:
     def __init__(self, hub_root: Path) -> None:
-        self._path = (
-            hub_root / ".codex-autorunner" / "pma" / PMA_AUTOMATION_STORE_FILENAME
-        )
+        self._persistence = PmaAutomationPersistence(hub_root)
+        self._path = self._persistence.path
 
     @property
     def path(self) -> Path:
         return self._path
 
     def _lock_path(self) -> Path:
-        return self._path.with_suffix(self._path.suffix + ".lock")
+        return self._persistence._lock_path()
 
     def load(self) -> dict[str, Any]:
-        with file_lock(self._lock_path()):
-            state = self._load_unlocked()
-            if state is None:
-                state = default_pma_automation_state()
-                self._save_unlocked(state)
-            return state
+        return self._persistence.load()
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
-        if not self._path.exists():
-            return None
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning(
-                "Failed to read PMA automation store at %s: %s", self._path, exc
-            )
-            return None
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return default_pma_automation_state()
-        if not isinstance(parsed, dict):
-            return default_pma_automation_state()
-        state = default_pma_automation_state()
-        state["version"] = int(parsed.get("version", PMA_AUTOMATION_VERSION) or 1)
-        state["updated_at"] = _normalize_text(parsed.get("updated_at")) or _iso_now()
-        state["subscriptions"] = self._normalize_subscriptions(
-            parsed.get("subscriptions")
-        )
-        state["timers"] = self._normalize_timers(parsed.get("timers"))
-        state["wakeups"] = self._normalize_wakeups(parsed.get("wakeups"))
-        return state
+        return self._persistence._load_unlocked()
 
     def _save_unlocked(self, state: dict[str, Any]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(self._path, json.dumps(state, indent=2) + "\n")
+        self._persistence._save_unlocked(state)
 
     def _load_structured_unlocked(
         self,
