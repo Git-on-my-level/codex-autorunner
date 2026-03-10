@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from codex_autorunner.bootstrap import seed_hub_files
+import yaml
+
+from codex_autorunner.bootstrap import GENERATED_CONFIG_HEADER, seed_hub_files
 from codex_autorunner.core.config import load_hub_config
 
 
@@ -70,7 +72,7 @@ def test_pma_config_defaults(tmp_path: Path) -> None:
     assert pma_config.get("reasoning") is None
     assert pma_config.get("max_repos") == 25
     assert pma_config.get("max_messages") == 10
-    assert pma_config.get("max_text_chars") == 800
+    assert pma_config.get("max_text_chars") == 10_000
 
 
 def test_pma_generated_files_refreshed_without_force(tmp_path: Path) -> None:
@@ -92,6 +94,25 @@ def test_pma_generated_files_refreshed_without_force(tmp_path: Path) -> None:
     assert refreshed_about != "custom about"
     assert "CAR:PMA_DOCS_GENERATED" in refreshed_prompt
     assert "CAR:PMA_DOCS_GENERATED" in refreshed_about
+
+
+def test_pma_generated_config_upgrades_stale_default_without_force(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    config_path = tmp_path / ".codex-autorunner" / "config.yml"
+    config_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config_data["pma"]["max_text_chars"] = 800
+    config_path.write_text(
+        GENERATED_CONFIG_HEADER + yaml.safe_dump(config_data, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    seed_hub_files(tmp_path, force=False)
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert refreshed["pma"]["max_text_chars"] == 10000
 
 
 def test_pma_user_docs_not_overridden_without_force(tmp_path: Path) -> None:

@@ -22,7 +22,7 @@ def test_pma_config_from_raw_uses_defaults_for_missing_values() -> None:
         "model": None,
         "reasoning": None,
         "active_context_max_lines": 200,
-        "max_text_chars": 800,
+        "max_text_chars": 10_000,
     }
 
 

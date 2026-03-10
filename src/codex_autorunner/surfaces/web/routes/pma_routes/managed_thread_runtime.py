@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
 from .....core.pma_context import format_pma_discoverability_preamble
 from .....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
 PMA_TIMEOUT_SECONDS = 7200
-PMA_MAX_TEXT = 5000
+PMA_MAX_TEXT = PMA_DEFAULT_MAX_TEXT_CHARS
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 
@@ -287,7 +288,10 @@ def build_managed_thread_runtime_routes(
         return _pma_config_from_raw(raw)
 
     def _pma_config_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
-        defaults: dict[str, Any] = {"enabled": True, "max_text_chars": 5000}
+        defaults: dict[str, Any] = {
+            "enabled": True,
+            "max_text_chars": PMA_DEFAULT_MAX_TEXT_CHARS,
+        }
         if not isinstance(raw, dict):
             return defaults
         pma = raw.get("pma")

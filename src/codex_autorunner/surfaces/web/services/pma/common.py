@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import Any, Optional
 
+from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
+
 
 def normalize_optional_text(value: Any) -> Optional[str]:
     if not isinstance(value, str):
@@ -24,7 +26,9 @@ def pma_config_from_raw(raw: Any) -> dict[str, Any]:
         "active_context_max_lines": int(
             pma_config.get("active_context_max_lines", 200)
         ),
-        "max_text_chars": int(pma_config.get("max_text_chars", 800)),
+        "max_text_chars": int(
+            pma_config.get("max_text_chars", PMA_DEFAULT_MAX_TEXT_CHARS)
+        ),
     }
 
 

@@ -201,7 +201,7 @@
     "freshness_stale_threshold_seconds": 1800,
     "max_messages": 10,
     "max_repos": 25,
-    "max_text_chars": 800,
+    "max_text_chars": 10000,
     "max_upload_bytes": 10000000,
     "model": null,
     "reactive_debounce_seconds": 300,

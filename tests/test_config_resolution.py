@@ -3,7 +3,9 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
+from codex_autorunner.bootstrap import GENERATED_CONFIG_HEADER
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_REPO_CONFIG,
@@ -51,6 +53,54 @@ def test_load_hub_config_uses_root_override_when_config_missing(tmp_path: Path) 
 
     config = load_hub_config(hub_root)
     assert config.server_port == 6000
+
+
+def test_load_hub_config_upgrades_stale_generated_pma_default(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+
+    config_path = hub_root / CONFIG_FILENAME
+    write_test_config(
+        config_path,
+        {"mode": "hub", "pma": {"max_text_chars": 800}},
+    )
+    config_path.write_text(
+        GENERATED_CONFIG_HEADER + config_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    config = load_hub_config(hub_root)
+
+    assert config.pma.max_text_chars == 10_000
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert persisted["pma"]["max_text_chars"] == 10000
+
+
+def test_load_hub_config_preserves_explicit_root_pma_max_text_chars(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / "codex-autorunner.yml",
+        {"pma": {"max_text_chars": 800}},
+    )
+
+    config_path = hub_root / CONFIG_FILENAME
+    write_test_config(
+        config_path,
+        {"mode": "hub", "pma": {"max_text_chars": 800}},
+    )
+    config_path.write_text(
+        GENERATED_CONFIG_HEADER + config_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    config = load_hub_config(hub_root)
+
+    assert config.pma.max_text_chars == 800
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert persisted["pma"]["max_text_chars"] == 800
 
 
 def test_load_repo_config_inherits_hub_shared_settings(tmp_path: Path) -> None:
