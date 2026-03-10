@@ -369,6 +369,7 @@ def test_pma_context_prune_over_budget(tmp_path: Path):
 
     config_path = tmp_path / ".codex-autorunner" / "config.yml"
     config_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config_data.setdefault("pma", {})
     config_data["pma"]["active_context_max_lines"] = 50
     config_path.write_text(
         yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8"

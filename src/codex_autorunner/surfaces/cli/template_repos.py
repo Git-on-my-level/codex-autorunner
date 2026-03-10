@@ -6,7 +6,12 @@ from typing import Any, Optional
 import typer
 import yaml
 
-from ...core.config import CONFIG_FILENAME, load_hub_config
+from ...core.config import (
+    CONFIG_FILENAME,
+    GENERATED_CONFIG_HEADER,
+    load_hub_config,
+    save_hub_config_data,
+)
 from ...core.locks import file_lock
 
 
@@ -21,6 +26,7 @@ class TemplateReposManager:
         """Initialize the manager with a hub config path."""
         self.hub_config_path = hub_config_path
         self._data: dict[str, Any] = {}
+        self._generated = False
         self._load()
 
     def _load(self) -> None:
@@ -30,12 +36,15 @@ class TemplateReposManager:
                 f"Hub config file not found: {self.hub_config_path}"
             )
         try:
-            data = yaml.safe_load(self.hub_config_path.read_text(encoding="utf-8"))
+            raw_text = self.hub_config_path.read_text(encoding="utf-8")
+            self._generated = raw_text.startswith(GENERATED_CONFIG_HEADER)
+            data = yaml.safe_load(raw_text)
             if not isinstance(data, dict):
                 raise TemplatesConfigError(
                     f"Hub config must be a YAML mapping: {self.hub_config_path}"
                 )
-            self._data = data
+            resolved = load_hub_config(self.hub_config_path.parent.parent.resolve())
+            self._data = dict(resolved.raw) if isinstance(resolved.raw, dict) else data
         except yaml.YAMLError as exc:
             raise TemplatesConfigError(f"Invalid YAML in hub config: {exc}") from exc
         except OSError as exc:
@@ -45,8 +54,10 @@ class TemplateReposManager:
         """Save the hub config YAML."""
         lock_path = self.hub_config_path.parent / (self.hub_config_path.name + ".lock")
         with file_lock(lock_path):
-            self.hub_config_path.write_text(
-                yaml.safe_dump(self._data, sort_keys=False), encoding="utf-8"
+            save_hub_config_data(
+                self.hub_config_path,
+                self._data,
+                generated=self._generated,
             )
 
     def list_repos(self) -> list[dict[str, Any]]:

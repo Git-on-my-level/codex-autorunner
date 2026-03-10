@@ -1,7 +1,15 @@
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
-from codex_autorunner.core.config import CONFIG_FILENAME
+from codex_autorunner.core.config import CONFIG_FILENAME, GENERATED_CONFIG_HEADER
+
+
+def _load_raw_hub_config(config_path):
+    import yaml
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    data.setdefault("templates", {})
+    return data
 
 
 def test_templates_repos_list_empty(hub_env) -> None:
@@ -9,7 +17,7 @@ def test_templates_repos_list_empty(hub_env) -> None:
     config_path = hub_env.hub_root / CONFIG_FILENAME
     import yaml
 
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     data["templates"]["repos"] = []
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
@@ -28,7 +36,7 @@ def test_templates_repos_list_json(hub_env) -> None:
     config_path = hub_env.hub_root / CONFIG_FILENAME
     import yaml
 
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     data["templates"]["repos"] = [
         {
             "id": "test1",
@@ -80,9 +88,12 @@ def test_templates_repos_add(hub_env) -> None:
     import yaml
 
     config_path = hub_env.hub_root / CONFIG_FILENAME
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw_text = config_path.read_text(encoding="utf-8")
+    assert raw_text.startswith(GENERATED_CONFIG_HEADER)
+    data = yaml.safe_load(raw_text)
     repos = data["templates"]["repos"]
     assert any(repo.get("id") == "newrepo" for repo in repos)
+    assert any(repo.get("id") == "blessed" for repo in repos)
 
 
 def test_templates_repos_add_with_trusted(hub_env) -> None:
@@ -105,10 +116,8 @@ def test_templates_repos_add_with_trusted(hub_env) -> None:
     assert result.exit_code == 0
     assert "Added template repo 'trustedrepo' to hub config." in result.stdout
 
-    import yaml
-
     config_path = hub_env.hub_root / CONFIG_FILENAME
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     repos = data["templates"]["repos"]
     repo = next((r for r in repos if r.get("id") == "trustedrepo"), None)
     assert repo is not None
@@ -120,7 +129,7 @@ def test_templates_repos_add_duplicate_id(hub_env) -> None:
     import yaml
 
     config_path = hub_env.hub_root / CONFIG_FILENAME
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     data["templates"]["repos"] = [
         {
             "id": "existing",
@@ -155,7 +164,7 @@ def test_templates_repos_remove(hub_env) -> None:
     import yaml
 
     config_path = hub_env.hub_root / CONFIG_FILENAME
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     data["templates"]["repos"] = [
         {
             "id": "toremove",
@@ -204,7 +213,7 @@ def test_templates_repos_trust(hub_env) -> None:
     import yaml
 
     config_path = hub_env.hub_root / CONFIG_FILENAME
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     data["templates"]["repos"] = [
         {
             "id": "totrust",
@@ -256,7 +265,7 @@ def test_templates_repos_untrust(hub_env) -> None:
     import yaml
 
     config_path = hub_env.hub_root / CONFIG_FILENAME
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     data["templates"]["repos"] = [
         {
             "id": "tountrust",
@@ -297,7 +306,7 @@ def test_templates_repos_add_when_disabled(hub_env) -> None:
     import yaml
 
     config_path = hub_env.hub_root / CONFIG_FILENAME
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data = _load_raw_hub_config(config_path)
     data["templates"]["enabled"] = False
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 

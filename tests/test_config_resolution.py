@@ -73,7 +73,7 @@ def test_load_hub_config_upgrades_stale_generated_pma_default(tmp_path: Path) ->
 
     assert config.pma.max_text_chars == 10_000
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert persisted["pma"]["max_text_chars"] == 10000
+    assert persisted == {"version": 2, "mode": "hub"}
 
 
 def test_load_hub_config_preserves_explicit_root_pma_max_text_chars(
@@ -100,7 +100,7 @@ def test_load_hub_config_preserves_explicit_root_pma_max_text_chars(
 
     assert config.pma.max_text_chars == 800
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert persisted["pma"]["max_text_chars"] == 800
+    assert persisted == {"version": 2, "mode": "hub"}
 
 
 def test_load_repo_config_inherits_hub_shared_settings(tmp_path: Path) -> None:
