@@ -17,10 +17,10 @@ def _json_response(method: str, url: str, payload: dict[str, Any]) -> httpx.Resp
 
 
 def test_hub_inbox_resolve_posts_action(hub_root_only) -> None:
-    calls: list[tuple[str, str, Any]] = []
+    calls: list[tuple[str, str, Any, Any]] = []
 
     def _mock_request(method: str, url: str, **kwargs):
-        calls.append((method, url, kwargs.get("json")))
+        calls.append((method, url, kwargs.get("json"), kwargs.get("timeout")))
         if method == "POST" and url.endswith("/hub/messages/resolve"):
             payload = kwargs.get("json") or {}
             assert payload["repo_id"] == "repo-a"
@@ -56,13 +56,14 @@ def test_hub_inbox_resolve_posts_action(hub_root_only) -> None:
     assert payload["status"] == "ok"
     assert payload["resolved"]["seq"] == 3
     assert len(calls) == 1
+    assert calls[0][3] == 10.0
 
 
 def test_hub_inbox_clear_stale_dry_run_filters_items(hub_root_only) -> None:
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, Any]] = []
 
     def _mock_request(method: str, url: str, **kwargs):
-        calls.append((method, url))
+        calls.append((method, url, kwargs.get("timeout")))
         if method == "GET" and "/hub/messages?limit=2000" in url:
             return _json_response(
                 method,
@@ -115,13 +116,14 @@ def test_hub_inbox_clear_stale_dry_run_filters_items(hub_root_only) -> None:
     assert selected_types == {"run_failed", "run_state_attention"}
     assert payload["resolved"] == []
     assert len(calls) == 1
+    assert calls[0][2] == 10.0
 
 
 def test_hub_inbox_clear_targeted_apply(hub_root_only) -> None:
-    calls: list[tuple[str, str, Any]] = []
+    calls: list[tuple[str, str, Any, Any]] = []
 
     def _mock_request(method: str, url: str, **kwargs):
-        calls.append((method, url, kwargs.get("json")))
+        calls.append((method, url, kwargs.get("json"), kwargs.get("timeout")))
         if method == "GET" and "/hub/messages?limit=0" in url:
             return _json_response(
                 method,
@@ -179,3 +181,5 @@ def test_hub_inbox_clear_targeted_apply(hub_root_only) -> None:
     assert len(payload["resolved"]) == 1
     assert payload["errors"] == []
     assert len(calls) == 2
+    assert calls[0][3] == 10.0
+    assert calls[1][3] == 10.0

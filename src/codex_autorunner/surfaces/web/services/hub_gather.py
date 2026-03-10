@@ -12,7 +12,10 @@ from ....core.flows.models import FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.freshness import resolve_stale_threshold_seconds
 from ....core.pma_context import build_ticket_flow_run_state
-from ....core.ticket_flow_projection import build_canonical_state_v1
+from ....core.ticket_flow_projection import (
+    build_canonical_state_v1,
+    select_authoritative_run_record,
+)
 from ....tickets.files import safe_relpath
 from ....tickets.models import Dispatch
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
@@ -162,30 +165,18 @@ def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dic
                     FlowRunStatus.STOPPED,
                 ]
                 all_runs = store.list_flow_runs(flow_type="ticket_flow")
-                newest_run_id: Optional[str] = None
-                newest_created_at: Optional[str] = None
-                for rec in all_runs:
-                    rec_created = str(rec.created_at or "")
-                    rec_id = str(rec.id)
-                    if (
-                        newest_created_at is None
-                        or rec_created > newest_created_at
-                        or (
-                            rec_created == newest_created_at
-                            and rec_id > (newest_run_id or "")
-                        )
-                    ):
-                        newest_created_at = rec_created
-                        newest_run_id = rec_id
+                authoritative_record = select_authoritative_run_record(
+                    all_runs,
+                    preferred_run_id=(
+                        str(snap.last_run_id) if snap.last_run_id is not None else None
+                    ),
+                )
+                if authoritative_record is None:
+                    continue
+                newest_run_id = str(authoritative_record.id)
 
-                for record in all_runs:
+                for record in [authoritative_record]:
                     if record.status not in active_statuses:
-                        continue
-                    if (
-                        newest_run_id is not None
-                        and str(record.id) != newest_run_id
-                        and record.status == FlowRunStatus.PAUSED
-                    ):
                         continue
                     record_input = dict(record.input_data or {})
                     latest = latest_dispatch(repo_root, str(record.id), record_input)

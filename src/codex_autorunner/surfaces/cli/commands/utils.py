@@ -97,6 +97,8 @@ def request_json(
     url: str,
     payload: Optional[dict] = None,
     token_env: Optional[str] = None,
+    *,
+    timeout_seconds: float = 5.0,
 ) -> dict:
     headers = None
     if token_env:
@@ -106,7 +108,7 @@ def request_json(
         method,
         url,
         json=payload,
-        timeout=2.0,
+        timeout=timeout_seconds,
         headers=headers,
         follow_redirects=True,
     )

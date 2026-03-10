@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
 
 
@@ -244,6 +245,29 @@ def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
         )
 
 
+def test_hub_messages_hide_obsolete_failed_run_when_newer_completed_exists(
+    hub_env,
+) -> None:
+    _seed_failed_run(hub_env.repo_root, "older-failed")
+    _seed_completed_run(hub_env.repo_root, "newer-completed")
+    save_state(
+        hub_env.repo_root / ".codex-autorunner" / "state.sqlite3",
+        RunnerState(
+            last_run_id="older-failed",
+            status="running",
+            last_exit_code=None,
+            last_run_started_at="2026-03-10T00:00:00+00:00",
+            last_run_finished_at=None,
+        ),
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        assert res.json()["items"] == []
+
+
 def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> None:
     run_id = "44444444-4444-4444-4444-444444444444"
     _seed_paused_run(hub_env.repo_root, run_id)
@@ -422,17 +446,9 @@ def test_hub_messages_multi_run_items_keep_canonical_run_identity(hub_env) -> No
         res = client.get("/hub/messages")
         assert res.status_code == 200
         items = res.json()["items"]
-        assert len(items) == 2
-        by_run_id = {str(item.get("run_id")): item for item in items}
-        assert set(by_run_id.keys()) == {older_failed_run_id, newer_paused_run_id}
-
-        failed_item = by_run_id[older_failed_run_id]
-        assert failed_item.get("item_type") == "run_failed"
-        failed_canonical = failed_item.get("canonical_state_v1") or {}
-        assert failed_canonical.get("represented_run_id") == older_failed_run_id
-        assert failed_canonical.get("latest_run_id") == older_failed_run_id
-
-        paused_item = by_run_id[newer_paused_run_id]
+        assert len(items) == 1
+        paused_item = items[0]
+        assert paused_item.get("run_id") == newer_paused_run_id
         assert paused_item.get("item_type") == "run_dispatch"
         paused_canonical = paused_item.get("canonical_state_v1") or {}
         assert paused_canonical.get("represented_run_id") == newer_paused_run_id
