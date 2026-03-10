@@ -399,7 +399,7 @@ def test_hub_repo_list_rewrites_stale_runner_last_run_to_authoritative_flow_run(
         RunnerState(
             last_run_id="older-failed",
             status="running",
-            last_exit_code=None,
+            last_exit_code=137,
             last_run_started_at="2026-03-10T00:00:00+00:00",
             last_run_finished_at=None,
         ),
@@ -411,6 +411,7 @@ def test_hub_repo_list_rewrites_stale_runner_last_run_to_authoritative_flow_run(
 
     repo_entry = next(item for item in response.json()["repos"] if item["id"] == "base")
     assert repo_entry["last_run_id"] == "newer-completed"
+    assert repo_entry["last_exit_code"] is None
     assert repo_entry["ticket_flow"]["run_id"] == "newer-completed"
     assert repo_entry["canonical_state_v1"]["latest_run_id"] == "newer-completed"
 

@@ -1827,6 +1827,8 @@ async def build_hub_snapshot(
             )
             summary["run_state"] = run_state
             if run_record is not None:
+                if str(summary.get("last_run_id")) != str(run_record.id):
+                    summary["last_exit_code"] = None
                 summary["last_run_id"] = run_record.id
                 summary["last_run_started_at"] = run_record.started_at
                 summary["last_run_finished_at"] = run_record.finished_at

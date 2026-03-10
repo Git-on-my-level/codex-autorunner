@@ -16,6 +16,7 @@ from codex_autorunner.core.pma_context import (
     get_active_context_auto_prune_meta,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, save_manifest
 
 
@@ -60,6 +61,24 @@ def _seed_completed_run(repo_root: Path, run_id: str) -> None:
             metadata={},
         )
         store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
+
+
+def _seed_failed_run(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.FAILED)
 
 
 def _write_dispatch_history(
@@ -749,6 +768,36 @@ def test_build_hub_snapshot_marks_stale_start_new_flow_recommendations(hub_env) 
     freshness = canonical.get("freshness") or {}
     assert freshness.get("generated_at")
     assert freshness.get("recency_basis")
+
+
+def test_build_hub_snapshot_clears_stale_exit_code_when_last_run_id_is_rewritten(
+    hub_env,
+) -> None:
+    _seed_failed_run(hub_env.repo_root, "older-failed")
+    _seed_completed_run(hub_env.repo_root, "newer-completed")
+    save_state(
+        hub_env.repo_root / ".codex-autorunner" / "state.sqlite3",
+        RunnerState(
+            last_run_id="older-failed",
+            status="running",
+            last_exit_code=137,
+            last_run_started_at="2026-03-10T00:00:00+00:00",
+            last_run_finished_at=None,
+        ),
+    )
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    repos = snapshot.get("repos") or []
+    repo_entry = next(repo for repo in repos if repo.get("id") == hub_env.repo_id)
+    assert repo_entry["last_run_id"] == "newer-completed"
+    assert repo_entry["last_exit_code"] is None
 
 
 def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
