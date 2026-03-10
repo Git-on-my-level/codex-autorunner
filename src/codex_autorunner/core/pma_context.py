@@ -32,7 +32,10 @@ from .pma_active_context import (
 )
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .state_roots import resolve_hub_templates_root
-from .ticket_flow_projection import build_canonical_state_v1
+from .ticket_flow_projection import (
+    build_canonical_state_v1,
+    select_authoritative_run_record,
+)
 from .ticket_flow_summary import build_ticket_flow_summary
 
 _logger = logging.getLogger(__name__)
@@ -1043,26 +1046,6 @@ def _dispatch_is_actionable(dispatch_payload: Any) -> bool:
     return mode == "pause"
 
 
-def _select_newest_run(
-    records: list[FlowRunRecord], *, preferred_run_id: Optional[str] = None
-) -> Optional[FlowRunRecord]:
-    if not records:
-        return None
-    if preferred_run_id:
-        preferred = next((r for r in records if str(r.id) == preferred_run_id), None)
-        if preferred is not None:
-            return preferred
-    return max(
-        records,
-        key=lambda r: (
-            str(r.created_at or ""),
-            str(r.started_at or ""),
-            str(r.finished_at or ""),
-            str(r.id),
-        ),
-    )
-
-
 def _latest_dispatch(
     repo_root: Path, run_id: str, input_data: dict, *, max_text_chars: int
 ) -> Optional[dict[str, Any]]:
@@ -1336,7 +1319,7 @@ def get_latest_ticket_flow_run_state_with_record(
             records = store.list_flow_runs(flow_type="ticket_flow")
             if not records:
                 return None, None
-            record = _select_newest_run(records)
+            record = select_authoritative_run_record(records)
             if record is None:
                 return None, None
             latest = _latest_dispatch(
@@ -1429,7 +1412,7 @@ def _gather_inbox(
                     FlowRunStatus.STOPPED,
                 ]
                 all_runs = store.list_flow_runs(flow_type="ticket_flow")
-                newest_record = _select_newest_run(
+                newest_record = select_authoritative_run_record(
                     all_runs, preferred_run_id=str(snap.last_run_id or "")
                 )
                 newest_run_id = str(newest_record.id) if newest_record else None
@@ -1843,6 +1826,12 @@ async def build_hub_snapshot(
                 snap.path, snap.id
             )
             summary["run_state"] = run_state
+            if run_record is not None:
+                if str(summary.get("last_run_id")) != str(run_record.id):
+                    summary["last_exit_code"] = None
+                summary["last_run_id"] = run_record.id
+                summary["last_run_started_at"] = run_record.started_at
+                summary["last_run_finished_at"] = run_record.finished_at
             summary["canonical_state_v1"] = build_canonical_state_v1(
                 repo_root=snap.path,
                 repo_id=snap.id,

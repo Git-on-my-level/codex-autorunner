@@ -288,3 +288,47 @@ def test_gather_inbox_hides_older_paused_when_newer_completed_exists(
 
     messages = _gather_inbox(mock_supervisor, max_text_chars=1000)
     assert messages == []
+
+
+def test_gather_inbox_ignores_stale_preferred_failed_run_when_newer_completed_exists(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".codex-autorunner" / "tickets").mkdir(parents=True)
+
+    _create_flow_run(repo_root, "older-failed", FlowRunStatus.FAILED)
+    _create_flow_run(repo_root, "newer-completed", FlowRunStatus.COMPLETED)
+
+    from unittest.mock import MagicMock
+
+    from codex_autorunner.core.hub import RepoSnapshot
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_repos.return_value = [
+        RepoSnapshot(
+            id="test-repo",
+            path=repo_root,
+            display_name="Test Repo",
+            enabled=True,
+            auto_run=False,
+            worktree_setup_commands=None,
+            kind="base",
+            worktree_of=None,
+            branch="main",
+            exists_on_disk=True,
+            is_clean=True,
+            initialized=True,
+            init_error=None,
+            status="running",
+            lock_status="unlocked",
+            last_run_id="older-failed",
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            last_exit_code=None,
+            runner_pid=None,
+        )
+    ]
+
+    messages = _gather_inbox(mock_supervisor, max_text_chars=1000)
+    assert messages == []

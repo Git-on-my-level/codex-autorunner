@@ -20,6 +20,7 @@ from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.integrations.agents.backend_orchestrator import (
     build_backend_orchestrator,
 )
@@ -365,6 +366,54 @@ def test_hub_scan_reuses_repo_summary_enrichment(tmp_path: Path) -> None:
     assert run_state["flow_status"] == "running"
     _assert_repo_canonical_state_v1(repo_entry)
     assert repo_entry["canonical_state_v1"]["represented_run_id"] == "run-running"
+
+
+def test_hub_repo_list_rewrites_stale_runner_last_run_to_authoritative_flow_run(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("base")
+
+    tickets_dir = repo.path / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\ntitle: First\ngoal: ship it\nagent: codex\ndone: true\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    _seed_flow_run(
+        repo.path,
+        run_id="older-failed",
+        status=FlowRunStatus.FAILED,
+        diff_events=[],
+    )
+    _seed_flow_run(
+        repo.path,
+        run_id="newer-completed",
+        status=FlowRunStatus.COMPLETED,
+        diff_events=[],
+    )
+    save_state(
+        repo.path / ".codex-autorunner" / "state.sqlite3",
+        RunnerState(
+            last_run_id="older-failed",
+            status="running",
+            last_exit_code=137,
+            last_run_started_at="2026-03-10T00:00:00+00:00",
+            last_run_finished_at=None,
+        ),
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/repos")
+    assert response.status_code == 200
+
+    repo_entry = next(item for item in response.json()["repos"] if item["id"] == "base")
+    assert repo_entry["last_run_id"] == "newer-completed"
+    assert repo_entry["last_exit_code"] is None
+    assert repo_entry["ticket_flow"]["run_id"] == "newer-completed"
+    assert repo_entry["canonical_state_v1"]["latest_run_id"] == "newer-completed"
 
 
 def test_hub_destination_routes_show_set_and_persist(tmp_path: Path) -> None:

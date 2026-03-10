@@ -14,6 +14,14 @@ def register_inbox_commands(
     request_json: Callable[..., dict],
     raise_exit: Callable[..., None],
 ) -> None:
+    def _hub_request_error(message: str, url: str, exc: BaseException) -> None:
+        raise_exit(
+            f"{message}\nAttempted: {url}\n"
+            "If the hub UI is served under a base path (commonly /car), either set "
+            "`server.base_path` in the hub config or pass `--base-path /car`.",
+            cause=exc,
+        )
+
     @app.command("resolve")
     def hub_inbox_resolve(
         repo_id: str = typer.Option(..., "--repo-id", help="Hub repo id"),
@@ -65,6 +73,7 @@ def register_inbox_commands(
                 resolve_url,
                 payload=payload,
                 token_env=config.server_auth_token_env,
+                timeout_seconds=10.0,
             )
         except (
             httpx.HTTPError,
@@ -72,7 +81,7 @@ def register_inbox_commands(
             httpx.TimeoutException,
             OSError,
         ) as exc:
-            raise_exit("Failed to resolve hub inbox item.", cause=exc)
+            _hub_request_error("Failed to resolve hub inbox item.", resolve_url, exc)
 
         if output_json:
             typer.echo(json.dumps(resolved, indent=2 if pretty else None))
@@ -128,7 +137,10 @@ def register_inbox_commands(
 
         try:
             messages_payload = request_json(
-                "GET", list_url, token_env=config.server_auth_token_env
+                "GET",
+                list_url,
+                token_env=config.server_auth_token_env,
+                timeout_seconds=10.0,
             )
         except (
             httpx.HTTPError,
@@ -136,7 +148,7 @@ def register_inbox_commands(
             httpx.TimeoutException,
             OSError,
         ) as exc:
-            raise_exit("Failed to list hub inbox items.", cause=exc)
+            _hub_request_error("Failed to list hub inbox items.", list_url, exc)
 
         items = (
             messages_payload.get("items", [])
@@ -191,6 +203,7 @@ def register_inbox_commands(
                         resolve_url,
                         payload=payload,
                         token_env=config.server_auth_token_env,
+                        timeout_seconds=10.0,
                     )
                     result_payload["resolved"].append(resolved.get("resolved"))
                 except Exception as exc:

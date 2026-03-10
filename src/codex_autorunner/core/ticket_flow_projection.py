@@ -8,7 +8,7 @@ from ..tickets.files import list_ticket_paths
 from ..tickets.frontmatter import parse_markdown_frontmatter
 from ..tickets.ingest_state import read_ingest_receipt
 from .config import load_repo_config
-from .flows.models import FlowRunRecord
+from .flows.models import FlowRunRecord, FlowRunStatus
 from .flows.store import FlowStore
 from .freshness import build_freshness_payload
 
@@ -38,7 +38,7 @@ def _normalize_optional_int(value: Any) -> Optional[int]:
     return None
 
 
-def _select_newest_run(
+def select_authoritative_run_record(
     records: list[FlowRunRecord],
     *,
     preferred_run_id: Optional[str] = None,
@@ -46,25 +46,39 @@ def _select_newest_run(
 ) -> Optional[FlowRunRecord]:
     if not records:
         return None
+    ordered_records = list(records)
     if represented_run_id:
         represented = next(
-            (r for r in records if str(r.id) == represented_run_id), None
+            (r for r in ordered_records if str(r.id) == represented_run_id), None
         )
         if represented is not None:
             return represented
+    candidates = [
+        record
+        for record in ordered_records
+        if record.status != FlowRunStatus.SUPERSEDED
+    ] or ordered_records
+    latest = candidates[0]
     if preferred_run_id:
-        preferred = next((r for r in records if str(r.id) == preferred_run_id), None)
-        if preferred is not None:
+        preferred = next((r for r in candidates if str(r.id) == preferred_run_id), None)
+        if preferred is not None and preferred.id == latest.id:
             return preferred
-    return max(
-        records,
-        key=lambda r: (
-            str(r.created_at or ""),
-            str(r.started_at or ""),
-            str(r.finished_at or ""),
-            str(r.id),
-        ),
-    )
+        if (
+            preferred is not None
+            and preferred.status
+            in {
+                FlowRunStatus.RUNNING,
+                FlowRunStatus.STOPPING,
+            }
+            and latest.status
+            in {
+                FlowRunStatus.PAUSED,
+                FlowRunStatus.FAILED,
+                FlowRunStatus.STOPPED,
+            }
+        ):
+            return preferred
+    return latest
 
 
 def _is_start_new_flow_action(action: str) -> bool:
@@ -139,7 +153,7 @@ def _resolve_last_event_meta(
 
     if store is not None:
         records = store.list_flow_runs(flow_type="ticket_flow")
-        latest = _select_newest_run(
+        latest = select_authoritative_run_record(
             records,
             preferred_run_id=preferred_run_id,
             represented_run_id=represented_run_id,
@@ -161,7 +175,7 @@ def _resolve_last_event_meta(
         config = load_repo_config(repo_root)
         with FlowStore(db_path, durable=config.durable_writes) as local_store:
             records = local_store.list_flow_runs(flow_type="ticket_flow")
-            latest = _select_newest_run(
+            latest = select_authoritative_run_record(
                 records,
                 preferred_run_id=preferred_run_id,
                 represented_run_id=represented_run_id,

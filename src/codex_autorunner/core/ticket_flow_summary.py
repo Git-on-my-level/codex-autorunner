@@ -11,6 +11,7 @@ from .config import load_repo_config
 from .flows import FlowStore
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
 from .flows.models import FlowRunRecord
+from .ticket_flow_projection import select_authoritative_run_record
 
 _PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.IGNORECASE)
 _FLOW_STATUS_ICONS = {
@@ -45,7 +46,8 @@ def _extract_pr_url_from_ticket(path: Path) -> Optional[str]:
 
 
 def get_latest_ticket_flow_run(store: FlowStore) -> Optional[FlowRunRecord]:
-    return store.get_latest_flow_run(flow_type="ticket_flow")
+    records = store.list_flow_runs(flow_type="ticket_flow")
+    return select_authoritative_run_record(records)
 
 
 def _load_latest_ticket_flow_run(repo_path: Path) -> Optional[FlowRunRecord]:

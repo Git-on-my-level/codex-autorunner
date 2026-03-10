@@ -79,6 +79,12 @@ class HubRepoEnricher:
                 snapshot.path, snapshot.id
             )
             repo_dict["run_state"] = run_state
+            if run_record is not None:
+                if str(repo_dict.get("last_run_id")) != str(run_record.id):
+                    repo_dict["last_exit_code"] = None
+                repo_dict["last_run_id"] = run_record.id
+                repo_dict["last_run_started_at"] = run_record.started_at
+                repo_dict["last_run_finished_at"] = run_record.finished_at
             repo_dict["canonical_state_v1"] = build_canonical_state_v1(
                 repo_root=snapshot.path,
                 repo_id=snapshot.id,
