@@ -701,20 +701,29 @@ class TelegramTicketFlowBridge:
             return None
         config = load_repo_config(workspace_root)
         store = FlowStore(db_path, durable=config.durable_writes)
+        terminal_statuses = (
+            FlowRunStatus.COMPLETED,
+            FlowRunStatus.FAILED,
+            FlowRunStatus.STOPPED,
+        )
+        latest_run: Optional[FlowRunRecord] = None
         try:
             store.initialize()
-            for status in (
-                FlowRunStatus.COMPLETED,
-                FlowRunStatus.FAILED,
-                FlowRunStatus.STOPPED,
-            ):
+            for status in terminal_statuses:
                 runs = store.list_flow_runs(flow_type="ticket_flow", status=status)
-                if runs:
-                    latest = runs[0]
-                    return (latest.id, latest.status.value, latest.error_message)
-            return None
+                for run in runs:
+                    if latest_run is None:
+                        latest_run = run
+                    elif run.finished_at and latest_run.finished_at:
+                        if run.finished_at > latest_run.finished_at:
+                            latest_run = run
+                    elif run.created_at > latest_run.created_at:
+                        latest_run = run
         finally:
             store.close()
+        if latest_run is None:
+            return None
+        return (latest_run.id, latest_run.status.value, latest_run.error_message)
 
     def _format_terminal_notification(
         self, *, run_id: str, status: str, error_message: Optional[str]
