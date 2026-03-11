@@ -1,6 +1,7 @@
 from codex_autorunner.integrations.chat.picker_filter import (
     filter_picker_items,
     find_exact_picker_item,
+    resolve_picker_query,
 )
 
 
@@ -39,3 +40,29 @@ def test_filter_picker_items_supports_multi_token_query() -> None:
         ("run-20260101-a", "alpha"),
         ("run-20260102-b", "beta"),
     ]
+
+
+def test_resolve_picker_query_uses_aliases_for_filter_without_forcing_exact_match() -> (
+    None
+):
+    items = [("run-a", "run-a"), ("run-b", "run-b")]
+    aliases = {"run-a": ("paused",), "run-b": ("paused",)}
+
+    resolution = resolve_picker_query(items, "paused", limit=5, aliases=aliases)
+
+    assert resolution.selected_value is None
+    assert resolution.filtered_items == [("run-a", "run-a"), ("run-b", "run-b")]
+
+
+def test_resolve_picker_query_supports_exact_aliases_separately() -> None:
+    items = [("repo@token", "repo-a")]
+    resolution = resolve_picker_query(
+        items,
+        "/tmp/repo-a",
+        limit=5,
+        exact_aliases={"repo@token": ("/tmp/repo-a",)},
+        aliases={"repo@token": ("/tmp/repo-a", "repo-a", "repo")},
+    )
+
+    assert resolution.selected_value == "repo@token"
+    assert resolution.filtered_items == []

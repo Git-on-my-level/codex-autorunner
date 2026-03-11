@@ -80,21 +80,27 @@ def build_select_option(
 
 
 def build_bind_picker(
-    repos: list[tuple[str, str]],
+    workspaces: list[tuple[str, str] | tuple[str, str, Optional[str]]],
     *,
     custom_id: str = "bind_select",
     placeholder: str = "Select a workspace...",
 ) -> dict[str, Any]:
-    options = [
-        build_select_option(
-            label=repo_id[:100],
-            value=repo_id,
-            description=path[:100] if path else None,
+    options = []
+    for entry in workspaces[:DISCORD_SELECT_OPTION_MAX_OPTIONS]:
+        if len(entry) == 2:
+            value, label = entry
+            description = None
+        else:
+            value, label, description = entry
+        options.append(
+            build_select_option(
+                label=label[:100],
+                value=value,
+                description=description[:100] if description else None,
+            )
         )
-        for repo_id, path in repos[:DISCORD_SELECT_OPTION_MAX_OPTIONS]
-    ]
     if not options:
-        options = [build_select_option("No repos available", "none", default=True)]
+        options = [build_select_option("No workspaces available", "none", default=True)]
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
     )

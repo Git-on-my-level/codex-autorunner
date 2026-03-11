@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 
 def _normalize(value: str) -> str:
@@ -26,6 +27,43 @@ def find_exact_picker_item(
         if normalized_query in candidate_values:
             return value, label
     return None
+
+
+@dataclass(frozen=True)
+class PickerQueryResolution:
+    selected_value: str | None
+    filtered_items: list[tuple[str, str]]
+
+
+def resolve_picker_query(
+    items: Sequence[tuple[str, str]],
+    query: str,
+    *,
+    limit: int,
+    exact_aliases: Mapping[str, Sequence[str]] | None = None,
+    aliases: Mapping[str, Sequence[str]] | None = None,
+) -> PickerQueryResolution:
+    normalized_query = _normalize(query)
+    if not normalized_query:
+        return PickerQueryResolution(selected_value=None, filtered_items=[])
+
+    exact_match = find_exact_picker_item(
+        items,
+        normalized_query,
+        aliases=exact_aliases,
+    )
+    if exact_match is not None:
+        return PickerQueryResolution(selected_value=exact_match[0], filtered_items=[])
+
+    return PickerQueryResolution(
+        selected_value=None,
+        filtered_items=filter_picker_items(
+            items,
+            normalized_query,
+            limit=limit,
+            aliases=aliases,
+        ),
+    )
 
 
 def filter_picker_items(

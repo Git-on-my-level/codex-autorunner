@@ -24,6 +24,7 @@ from codex_autorunner.integrations.chat.models import (
 from codex_autorunner.integrations.discord import service as discord_service_module
 from codex_autorunner.integrations.discord.car_autocomplete import (
     repo_autocomplete_value,
+    workspace_autocomplete_value,
 )
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
@@ -247,7 +248,7 @@ def _pma_interaction(*, name: str, user_id: str = "user-1") -> dict[str, Any]:
 
 
 def _bind_select_interaction(
-    *, selected_repo_id: str = "repo-1", user_id: str = "user-1"
+    *, selected_value: str = "repo-1", user_id: str = "user-1"
 ) -> dict[str, Any]:
     return {
         "id": "inter-component-1",
@@ -259,7 +260,7 @@ def _bind_select_interaction(
         "data": {
             "component_type": 3,
             "custom_id": "bind_select",
-            "values": [selected_repo_id],
+            "values": [selected_value],
         },
     }
 
@@ -853,6 +854,103 @@ async def test_service_bind_accepts_repo_alias_when_manifest_repos_share_workspa
 
 
 @pytest.mark.anyio
+async def test_service_bind_partial_workspace_value_returns_filtered_picker(
+    tmp_path: Path,
+) -> None:
+    stablecoin_workspace = tmp_path / "worktrees" / "stablecoin-engine"
+    stablecoin_workspace.mkdir(parents=True)
+    repos = [
+        ("stablecoin-engine", str(stablecoin_workspace)),
+        ("ios-app-template", str(tmp_path / "repos" / "ios-app-template")),
+    ]
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="bind",
+                options=[{"type": 3, "name": "workspace", "value": "engine"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_manifest_repos = lambda: repos
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        content = payload["data"]["content"].lower()
+        assert "matched 1 workspaces" in content
+        menu = payload["data"]["components"][0]["components"][0]
+        option = menu["options"][0]
+        assert option["label"] == "stablecoin-engine"
+        assert option["value"] == "stablecoin-engine"
+        assert option["description"] == str(stablecoin_workspace.resolve())[:100]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_bind_partial_workspace_value_returns_path_candidate_picker(
+    tmp_path: Path,
+) -> None:
+    engine_workspace = tmp_path / "engine-room"
+    engine_workspace.mkdir()
+    misc_workspace = tmp_path / "misc"
+    misc_workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="bind",
+                options=[{"type": 3, "name": "workspace", "value": "engine"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
+        (None, str(engine_workspace.resolve())),
+        (None, str(misc_workspace.resolve())),
+    ]
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        content = payload["data"]["content"].lower()
+        assert "matched 1 workspaces" in content
+        menu = payload["data"]["components"][0]["components"][0]
+        option = menu["options"][0]
+        assert option["label"] == "engine-room"
+        assert option["value"] == workspace_autocomplete_value(
+            str(engine_workspace.resolve())
+        )
+        assert option["description"] == str(engine_workspace.resolve())[:100]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_service_bind_workspace_autocomplete_long_repo_id_uses_token(
     tmp_path: Path,
 ) -> None:
@@ -889,6 +987,85 @@ async def test_service_bind_workspace_autocomplete_long_repo_id_uses_token(
         assert len(choices) == 1
         assert choices[0]["value"].startswith("repo@")
         assert len(choices[0]["value"]) <= 100
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_routes_bind_picker_component_interaction_for_path_candidate(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "engine-room"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_bind_select_interaction(selected_value=str(workspace.resolve()))]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
+        (None, str(workspace.resolve()))
+    ]
+
+    try:
+        await service.run_forever()
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["repo_id"] is None
+        assert binding["workspace_path"] == str(workspace.resolve())
+
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "bound this channel to workspace" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_routes_bind_picker_component_interaction_for_tokenized_path_candidate(
+    tmp_path: Path,
+) -> None:
+    long_dir = "workspace-" + ("x" * 120)
+    workspace = tmp_path / long_dir
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _bind_select_interaction(
+                selected_value=workspace_autocomplete_value(str(workspace.resolve()))
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
+        (None, str(workspace.resolve()))
+    ]
+
+    try:
+        await service.run_forever()
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["repo_id"] is None
+        assert binding["workspace_path"] == str(workspace.resolve())
     finally:
         await store.close()
 
@@ -1299,7 +1476,7 @@ async def test_service_routes_bind_picker_component_interaction(tmp_path: Path) 
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     rest = _FakeRest()
-    gateway = _FakeGateway([_bind_select_interaction(selected_repo_id="repo-1")])
+    gateway = _FakeGateway([_bind_select_interaction(selected_value="repo-1")])
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
         logger=logging.getLogger("test"),
@@ -2887,6 +3064,63 @@ async def test_car_review_commit_without_sha_returns_picker(tmp_path: Path) -> N
         assert components
         menu = components[0]["components"][0]
         assert menu["custom_id"] == "review_commit_select"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_review_partial_commit_value_returns_filtered_picker(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="review",
+                options=[{"type": 3, "name": "target", "value": "commit fix"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_list_recent_commits(
+        *_args: Any, **_kwargs: Any
+    ) -> list[tuple[str, str]]:
+        return [
+            ("abcdef1234567890", "Fix picker"),
+            ("0123456789abcdef", "Fix search fallback"),
+            ("fedcba9876543210", "Refactor tests"),
+        ]
+
+    service._list_recent_commits_for_picker = _fake_list_recent_commits  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        content = payload["data"]["content"].lower()
+        assert "matched 2 commits" in content
+        menu = payload["data"]["components"][0]["components"][0]
+        values = [option["value"] for option in menu["options"]]
+        assert values == ["abcdef1234567890", "0123456789abcdef"]
     finally:
         await store.close()
 

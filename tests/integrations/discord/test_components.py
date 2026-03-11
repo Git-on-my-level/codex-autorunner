@@ -83,6 +83,20 @@ class TestBuildBindPicker:
         assert menu["custom_id"] == "bind_select"
         assert len(menu["options"]) == 2
 
+    def test_builds_picker_with_explicit_bind_entries(self) -> None:
+        picker = build_bind_picker(
+            [
+                ("repo-token", "repo-a", "/path/one"),
+                ("/path/two", "path-two", "/path/two"),
+            ]
+        )
+        menu = picker["components"][0]
+        assert menu["options"][0]["value"] == "repo-token"
+        assert menu["options"][0]["label"] == "repo-a"
+        assert menu["options"][0]["description"] == "/path/one"
+        assert menu["options"][1]["value"] == "/path/two"
+        assert menu["options"][1]["label"] == "path-two"
+
     def test_builds_picker_with_empty_repos(self) -> None:
         picker = build_bind_picker([])
         menu = picker["components"][0]

@@ -105,57 +105,16 @@ def picker_items_to_autocomplete_choices(
 
 def build_bind_autocomplete_choices(service: Any, query: str) -> list[dict[str, str]]:
     candidates = service._list_bind_workspace_candidates()
-    normalized_query = query.strip().lower()
-    scored: list[tuple[int, int, Optional[str], str]] = []
-
-    for index, (repo_id, path) in enumerate(candidates):
-        rid = repo_id.lower() if isinstance(repo_id, str) else ""
-        basename = Path(path).name.lower()
-        pth = path.lower()
-        if (
-            normalized_query
-            and normalized_query not in rid
-            and normalized_query not in basename
-            and normalized_query not in pth
-        ):
-            continue
-
-        score = 0
-        if normalized_query:
-            if rid.startswith(normalized_query):
-                score += 40
-            elif normalized_query in rid:
-                score += 20
-            if basename.startswith(normalized_query):
-                score += 25
-            elif normalized_query in basename:
-                score += 15
-            if pth.startswith(normalized_query):
-                score += 10
-            elif normalized_query in pth:
-                score += 5
-
-        scored.append((score, -index, repo_id, path))
-
-    scored.sort(key=lambda item: (-item[0], -item[1], item[2] or "", item[3]))
-    seen: set[str] = set()
-    choices: list[dict[str, str]] = []
-    for _score, _neg_index, repo_id, path in scored:
-        value = (
-            repo_autocomplete_value(repo_id)
-            if isinstance(repo_id, str) and repo_id
-            else workspace_autocomplete_value(path)
-        )
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        option_name = (
-            f"{repo_id} - {path}" if repo_id else f"{Path(path).name} - {path}"
-        )
-        choices.append({"name": option_name[:100], "value": value})
-        if len(choices) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
-            break
-    return choices
+    search_items, _exact_aliases, filter_aliases = service._build_bind_search_items(
+        candidates
+    )
+    filtered = filter_picker_items(
+        search_items,
+        query,
+        limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+        aliases=filter_aliases,
+    )
+    return picker_items_to_autocomplete_choices(filtered)
 
 
 async def build_model_autocomplete_choices(

@@ -105,7 +105,7 @@ from ...integrations.chat.models import (
 )
 from ...integrations.chat.picker_filter import (
     filter_picker_items,
-    find_exact_picker_item,
+    resolve_picker_query,
 )
 from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.turn_policy import (
@@ -145,7 +145,9 @@ from .car_autocomplete import (
     handle_command_autocomplete as handle_car_command_autocomplete,
 )
 from .car_autocomplete import (
+    repo_autocomplete_value,
     resolve_workspace_from_token,
+    workspace_autocomplete_value,
 )
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .command_registry import sync_commands
@@ -234,8 +236,6 @@ UPDATE_TARGET_SELECT_ID = "update_target_select"
 REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 MODEL_EFFORT_SELECT_ID = "model_effort_select"
 BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
-REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
-WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
 TICKET_PICKER_TOKEN_PREFIX = "ticket@"
 TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
 TICKETS_SELECT_ID = "tickets_select"
@@ -1789,42 +1789,44 @@ class DiscordBotService:
         items = [(record.id, record.status.value) for record in matching_runs]
         search_items = [(record.id, record.id) for record in matching_runs]
         aliases = {record.id: (record.status.value,) for record in matching_runs}
-        exact_match = find_exact_picker_item(search_items, run_id_value)
-        if exact_match is not None:
-            return exact_match[0]
+        custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
 
-        filtered_search_items = filter_picker_items(
-            search_items,
-            run_id_value,
+        async def _prompt_run_matches(
+            query_text: str,
+            filtered_search_items: list[tuple[str, str]],
+        ) -> None:
+            status_by_run_id = {run_id: status for run_id, status in items}
+            filtered_items = [
+                (run_id, status_by_run_id.get(run_id, ""))
+                for run_id, _label in filtered_search_items
+            ]
+            prompt = (
+                f"Matched {len(filtered_items)} runs for `{query_text}`. "
+                f"Select a run to {_flow_action_label(action)}:"
+            )
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                prompt,
+                [
+                    build_flow_runs_picker(
+                        filtered_items,
+                        custom_id=custom_id,
+                        placeholder=f"Select run to {_flow_action_label(action)}...",
+                    )
+                ],
+            )
+
+        resolved_run_id = await self._resolve_picker_query_or_prompt(
+            query=run_id_value,
+            items=search_items,
             limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
             aliases=aliases,
+            prompt_filtered_items=_prompt_run_matches,
         )
-        if not filtered_search_items:
-            return run_id_value
-
-        status_by_run_id = {run_id: status for run_id, status in items}
-        filtered_items = [
-            (run_id, status_by_run_id.get(run_id, ""))
-            for run_id, _label in filtered_search_items
-        ]
-        custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
-        prompt = (
-            f"Matched {len(filtered_items)} runs for `{run_id_value}`. "
-            f"Select a run to {_flow_action_label(action)}:"
-        )
-        await self._respond_with_components(
-            interaction_id,
-            interaction_token,
-            prompt,
-            [
-                build_flow_runs_picker(
-                    filtered_items,
-                    custom_id=custom_id,
-                    placeholder=f"Select run to {_flow_action_label(action)}...",
-                )
-            ],
-        )
-        return None
+        if resolved_run_id is None:
+            return None
+        return resolved_run_id
 
     async def _run_agent_turn_for_message(
         self,
@@ -2779,6 +2781,85 @@ class DiscordBotService:
 
         return candidates
 
+    @staticmethod
+    def _bind_candidate_value(repo_id: Optional[str], workspace_path: str) -> str:
+        if isinstance(repo_id, str) and repo_id:
+            return repo_autocomplete_value(repo_id)
+        return workspace_autocomplete_value(workspace_path)
+
+    @staticmethod
+    def _bind_candidate_label(repo_id: Optional[str], workspace_path: str) -> str:
+        if isinstance(repo_id, str) and repo_id:
+            return repo_id
+        return Path(workspace_path).name or workspace_path
+
+    def _build_bind_picker_items(
+        self,
+        candidates: list[tuple[Optional[str], str]],
+    ) -> list[tuple[str, str, Optional[str]]]:
+        items: list[tuple[str, str, Optional[str]]] = []
+        for repo_id, workspace_path in candidates:
+            value = self._bind_candidate_value(repo_id, workspace_path)
+            label = self._bind_candidate_label(repo_id, workspace_path)
+            items.append((value, label, workspace_path))
+        return items
+
+    def _build_bind_search_items(
+        self,
+        candidates: list[tuple[Optional[str], str]],
+    ) -> tuple[
+        list[tuple[str, str]],
+        dict[str, tuple[str, ...]],
+        dict[str, tuple[str, ...]],
+    ]:
+        search_items: list[tuple[str, str]] = []
+        exact_aliases: dict[str, tuple[str, ...]] = {}
+        filter_aliases: dict[str, tuple[str, ...]] = {}
+        for repo_id, workspace_path in candidates:
+            value = self._bind_candidate_value(repo_id, workspace_path)
+            label = repo_id if isinstance(repo_id, str) and repo_id else workspace_path
+            search_items.append((value, label))
+            exact_aliases[value] = (workspace_path,)
+            alias_values = [workspace_path]
+            if isinstance(repo_id, str) and repo_id:
+                alias_values.append(repo_id)
+            basename = Path(workspace_path).name
+            if basename:
+                alias_values.append(basename)
+            filter_aliases[value] = tuple(alias_values)
+        return search_items, exact_aliases, filter_aliases
+
+    async def _resolve_picker_query_or_prompt(
+        self,
+        *,
+        query: str,
+        items: list[tuple[str, str]],
+        limit: int,
+        prompt_filtered_items: Callable[
+            [str, list[tuple[str, str]]],
+            Awaitable[None],
+        ],
+        exact_aliases: Optional[dict[str, tuple[str, ...]]] = None,
+        aliases: Optional[dict[str, tuple[str, ...]]] = None,
+    ) -> Optional[str]:
+        normalized_query = query.strip()
+        if not normalized_query:
+            return None
+
+        resolution = resolve_picker_query(
+            items,
+            normalized_query,
+            limit=limit,
+            exact_aliases=exact_aliases,
+            aliases=aliases,
+        )
+        if resolution.selected_value is not None:
+            return resolution.selected_value
+        if resolution.filtered_items:
+            await prompt_filtered_items(normalized_query, resolution.filtered_items)
+            return None
+        return normalized_query
+
     def _build_bind_page_prompt_and_components(
         self,
         repos: list[tuple[str, str]],
@@ -2802,7 +2883,13 @@ class DiscordBotService:
                 "or `/car bind workspace:<path>` for any repo not listed."
             )
 
-        components: list[dict[str, Any]] = [build_bind_picker(page_repos)]
+        components: list[dict[str, Any]] = [
+            build_bind_picker(
+                self._build_bind_picker_items(
+                    [(repo_id, path) for repo_id, path in page_repos]
+                )
+            )
+        ]
         if total_pages > 1:
             components.append(
                 build_action_row(
@@ -3151,15 +3238,66 @@ class DiscordBotService:
         token = raw_path.strip()
         candidates = self._list_bind_workspace_candidates()
         resolved_workspace = self._resolve_workspace_from_token(token, candidates)
-        if resolved_workspace:
-            selected_repo_id, workspace_path = resolved_workspace
-            workspace = canonicalize_path(Path(workspace_path))
-        else:
-            candidate = Path(token)
-            if not candidate.is_absolute():
-                candidate = self._config.root / candidate
-            workspace = canonicalize_path(candidate)
-            selected_repo_id = None
+        if resolved_workspace is None:
+            search_items, exact_aliases, filter_aliases = self._build_bind_search_items(
+                candidates
+            )
+
+            async def _prompt_bind_matches(
+                query_text: str,
+                filtered_items: list[tuple[str, str]],
+            ) -> None:
+                filtered_values = {value for value, _label in filtered_items}
+                filtered_candidates = [
+                    candidate
+                    for candidate in candidates
+                    if self._bind_candidate_value(candidate[0], candidate[1])
+                    in filtered_values
+                ]
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    (
+                        f"Matched {len(filtered_candidates)} workspaces for `{query_text}`. "
+                        "Select a workspace to bind:"
+                    ),
+                    [
+                        build_bind_picker(
+                            self._build_bind_picker_items(filtered_candidates)
+                        )
+                    ],
+                )
+
+            resolved_value = await self._resolve_picker_query_or_prompt(
+                query=token,
+                items=search_items,
+                limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                exact_aliases=exact_aliases,
+                aliases=filter_aliases,
+                prompt_filtered_items=_prompt_bind_matches,
+            )
+            if resolved_value is None:
+                return
+            resolved_workspace = self._resolve_workspace_from_token(
+                resolved_value,
+                candidates,
+            )
+
+        if resolved_workspace is not None:
+            await self._bind_to_workspace_candidate(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                selected_repo_id=resolved_workspace[0],
+                workspace_path=resolved_workspace[1],
+            )
+            return
+
+        candidate = Path(token)
+        if not candidate.is_absolute():
+            candidate = self._config.root / candidate
+        workspace = canonicalize_path(candidate)
 
         if not workspace.exists() or not workspace.is_dir():
             await self._respond_ephemeral(
@@ -3169,16 +3307,13 @@ class DiscordBotService:
             )
             return
 
-        await self._store.upsert_binding(
-            channel_id=channel_id,
-            guild_id=guild_id,
-            workspace_path=str(workspace),
-            repo_id=selected_repo_id,
-        )
-        await self._respond_ephemeral(
+        await self._bind_to_workspace_candidate(
             interaction_id,
             interaction_token,
-            f"Bound this channel to workspace: {workspace}",
+            channel_id=channel_id,
+            guild_id=guild_id,
+            selected_repo_id=None,
+            workspace_path=str(workspace),
         )
 
     async def _handle_status(
@@ -4356,39 +4491,43 @@ class DiscordBotService:
                 current_thread_id=current_thread_id,
             )
             if thread_items:
-                exact_match = find_exact_picker_item(thread_items, thread_id)
-                if exact_match is not None:
-                    thread_id = exact_match[0]
-                else:
-                    filtered_items = filter_picker_items(
-                        thread_items,
-                        thread_id,
-                        limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+
+                async def _prompt_thread_matches(
+                    query_text: str,
+                    filtered_items: list[tuple[str, str]],
+                ) -> None:
+                    header = (
+                        f"Current thread: `{current_thread_id}`\n\n"
+                        if current_thread_id
+                        else ""
                     )
-                    if filtered_items:
-                        header = (
-                            f"Current thread: `{current_thread_id}`\n\n"
-                            if current_thread_id
-                            else ""
-                        )
-                        await self._send_or_respond_ephemeral(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
-                            deferred=deferred,
-                            text=format_discord_message(
-                                header
-                                + (
-                                    f"Matched {len(filtered_items)} threads for "
-                                    f"`{thread_id}`. Select a thread to resume:"
-                                )
-                            ),
-                        )
-                        await self._send_followup_ephemeral(
-                            interaction_token=interaction_token,
-                            content="Choose one thread from the filtered picker below.",
-                            components=[build_session_threads_picker(filtered_items)],
-                        )
-                        return
+                    await self._send_or_respond_ephemeral(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred,
+                        text=format_discord_message(
+                            header
+                            + (
+                                f"Matched {len(filtered_items)} threads for "
+                                f"`{query_text}`. Select a thread to resume:"
+                            )
+                        ),
+                    )
+                    await self._send_followup_ephemeral(
+                        interaction_token=interaction_token,
+                        content="Choose one thread from the filtered picker below.",
+                        components=[build_session_threads_picker(filtered_items)],
+                    )
+
+                resolved_thread_id = await self._resolve_picker_query_or_prompt(
+                    query=thread_id,
+                    items=thread_items,
+                    limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                    prompt_filtered_items=_prompt_thread_matches,
+                )
+                if resolved_thread_id is None:
+                    return
+                thread_id = resolved_thread_id
             orchestrator.set_thread_id(session_key, thread_id)
             mode_label = "PMA" if pma_enabled else "repo"
             text = format_discord_message(
@@ -4906,38 +5045,42 @@ class DiscordBotService:
             available_model_items = None
 
         if available_model_items:
-            exact_match = find_exact_picker_item(available_model_items, model_name)
-            if exact_match is not None:
-                model_name = exact_match[0]
-            else:
-                filtered_items = filter_picker_items(
-                    available_model_items,
-                    model_name,
-                    limit=max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1),
+
+            async def _prompt_model_matches(
+                query_text: str,
+                filtered_items: list[tuple[str, str]],
+            ) -> None:
+                lines = [
+                    f"Current agent: {current_agent}",
+                    f"Current model: {current_model or '(default)'}",
+                    "",
+                    f"Matched {len(filtered_items)} models for `{query_text}`:",
+                    "Select a model override:",
+                    "(default model) clears the override.",
+                ]
+                if isinstance(current_effort, str) and current_effort.strip():
+                    lines.insert(2, f"Reasoning effort: {current_effort}")
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    format_discord_message("\n".join(lines)),
+                    [
+                        build_model_picker(
+                            filtered_items,
+                            current_model=current_model,
+                        )
+                    ],
                 )
-                if filtered_items:
-                    lines = [
-                        f"Current agent: {current_agent}",
-                        f"Current model: {current_model or '(default)'}",
-                        "",
-                        f"Matched {len(filtered_items)} models for `{model_name}`:",
-                        "Select a model override:",
-                        "(default model) clears the override.",
-                    ]
-                    if isinstance(current_effort, str) and current_effort.strip():
-                        lines.insert(2, f"Reasoning effort: {current_effort}")
-                    await self._respond_with_components(
-                        interaction_id,
-                        interaction_token,
-                        format_discord_message("\n".join(lines)),
-                        [
-                            build_model_picker(
-                                filtered_items,
-                                current_model=current_model,
-                            )
-                        ],
-                    )
-                    return
+
+            resolved_model_name = await self._resolve_picker_query_or_prompt(
+                query=model_name,
+                items=available_model_items,
+                limit=max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1),
+                prompt_filtered_items=_prompt_model_matches,
+            )
+            if resolved_model_name is None:
+                return
+            model_name = resolved_model_name
 
         if current_agent == "opencode" and not _is_valid_opencode_model_name(
             model_name
@@ -7224,7 +7367,7 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     guild_id=extract_guild_id(interaction_payload),
-                    selected_repo_id=values[0],
+                    selected_workspace_value=values[0],
                 )
                 return
 
@@ -7573,7 +7716,7 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     guild_id=guild_id,
-                    selected_repo_id=values[0],
+                    selected_workspace_value=values[0],
                 )
                 return
 
@@ -7862,34 +8005,16 @@ class DiscordBotService:
                 "An unexpected error occurred. Please try again later.",
             )
 
-    async def _handle_bind_selection(
+    async def _bind_to_workspace_candidate(
         self,
         interaction_id: str,
         interaction_token: str,
         *,
         channel_id: str,
         guild_id: Optional[str],
-        selected_repo_id: str,
+        selected_repo_id: Optional[str],
+        workspace_path: str,
     ) -> None:
-        if selected_repo_id == "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No workspace selected.",
-            )
-            return
-
-        repos = self._list_manifest_repos()
-        matching = [(rid, path) for rid, path in repos if rid == selected_repo_id]
-        if not matching:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Repo not found: {selected_repo_id}",
-            )
-            return
-
-        _, workspace_path = matching[0]
         workspace = canonicalize_path(Path(workspace_path))
         if not workspace.exists() or not workspace.is_dir():
             await self._respond_ephemeral(
@@ -7905,10 +8030,54 @@ class DiscordBotService:
             workspace_path=str(workspace),
             repo_id=selected_repo_id,
         )
+
+        if selected_repo_id:
+            message = f"Bound this channel to: {selected_repo_id} ({workspace})"
+        else:
+            message = f"Bound this channel to workspace: {workspace}"
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Bound this channel to: {selected_repo_id} ({workspace})",
+            message,
+        )
+
+    async def _handle_bind_selection(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        guild_id: Optional[str],
+        selected_workspace_value: str,
+    ) -> None:
+        if selected_workspace_value == "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No workspace selected.",
+            )
+            return
+
+        candidates = self._list_bind_workspace_candidates()
+        resolved_workspace = self._resolve_workspace_from_token(
+            selected_workspace_value,
+            candidates,
+        )
+        if resolved_workspace is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Workspace not found: {selected_workspace_value}",
+            )
+            return
+
+        await self._bind_to_workspace_candidate(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            selected_repo_id=resolved_workspace[0],
+            workspace_path=resolved_workspace[1],
         )
 
     async def _handle_bind_page_component(
@@ -8149,8 +8318,56 @@ class DiscordBotService:
             elif target_lower == "commit" or target_lower.startswith("commit "):
                 sha = target_text[6:].strip()
                 if sha:
-                    target_type = "commit"
-                    target_value = sha
+                    commits = await self._list_recent_commits_for_picker(workspace_root)
+                    commit_subjects = {
+                        commit_sha: subject for commit_sha, subject in commits
+                    }
+                    search_items = [
+                        (commit_sha, commit_sha) for commit_sha, _ in commits
+                    ]
+                    aliases = {
+                        commit_sha: (subject,) if subject else ()
+                        for commit_sha, subject in commits
+                    }
+
+                    async def _prompt_commit_matches(
+                        query_text: str,
+                        filtered_search_items: list[tuple[str, str]],
+                    ) -> None:
+                        filtered_commits = [
+                            (commit_sha, commit_subjects.get(commit_sha, ""))
+                            for commit_sha, _label in filtered_search_items
+                        ]
+                        await self._respond_with_components(
+                            interaction_id,
+                            interaction_token,
+                            (
+                                f"Matched {len(filtered_commits)} commits for `{query_text}`. "
+                                "Select a commit to review:"
+                            ),
+                            [
+                                build_review_commit_picker(
+                                    filtered_commits,
+                                    custom_id=REVIEW_COMMIT_SELECT_ID,
+                                )
+                            ],
+                        )
+
+                    resolved_commit = await self._resolve_picker_query_or_prompt(
+                        query=sha,
+                        items=search_items,
+                        limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
+                        aliases=aliases,
+                        prompt_filtered_items=_prompt_commit_matches,
+                    )
+                    if resolved_commit is not None:
+                        target_type = "commit"
+                        target_value = resolved_commit
+                    elif commits:
+                        return
+                    else:
+                        target_type = "commit"
+                        target_value = sha
                 else:
                     prompt_commit_picker = True
             elif target_lower in ("uncommitted", ""):
