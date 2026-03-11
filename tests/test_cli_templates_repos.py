@@ -124,6 +124,38 @@ def test_templates_repos_add_with_trusted(hub_env) -> None:
     assert repo.get("trusted") is True
 
 
+def test_templates_repos_add_keeps_non_generated_sparse_config_sparse(hub_env) -> None:
+    """Adding a repo to a hand-authored sparse config should not expand defaults."""
+    import yaml
+
+    config_path = hub_env.hub_root / CONFIG_FILENAME
+    config_path.write_text("version: 2\nmode: hub\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "templates",
+            "repos",
+            "add",
+            "newrepo",
+            "https://github.com/new/repo",
+            "--hub",
+            str(hub_env.hub_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert set(data) == {"version", "mode", "templates"}
+    repos = data["templates"]["repos"]
+    assert any(repo.get("id") == "blessed" for repo in repos)
+    assert any(repo.get("id") == "newrepo" for repo in repos)
+    assert "pma" not in data
+    assert "server" not in data
+
+
 def test_templates_repos_add_duplicate_id(hub_env) -> None:
     """Adding a repo with duplicate ID should fail."""
     import yaml

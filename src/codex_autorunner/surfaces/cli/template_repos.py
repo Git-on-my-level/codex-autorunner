@@ -27,6 +27,8 @@ class TemplateReposManager:
         self.hub_config_path = hub_config_path
         self._data: dict[str, Any] = {}
         self._generated = False
+        self._templates_enabled = True
+        self._repos: list[dict[str, Any]] = []
         self._load()
 
     def _load(self) -> None:
@@ -44,7 +46,17 @@ class TemplateReposManager:
                     f"Hub config must be a YAML mapping: {self.hub_config_path}"
                 )
             resolved = load_hub_config(self.hub_config_path.parent.parent.resolve())
-            self._data = dict(resolved.raw) if isinstance(resolved.raw, dict) else data
+            self._data = data
+            self._templates_enabled = resolved.templates.enabled
+            self._repos = [
+                {
+                    "id": repo.id,
+                    "url": repo.url,
+                    "trusted": bool(repo.trusted),
+                    "default_ref": repo.default_ref,
+                }
+                for repo in resolved.templates.repos
+            ]
         except yaml.YAMLError as exc:
             raise TemplatesConfigError(f"Invalid YAML in hub config: {exc}") from exc
         except OSError as exc:
@@ -62,13 +74,15 @@ class TemplateReposManager:
 
     def list_repos(self) -> list[dict[str, Any]]:
         """List all configured template repos."""
-        templates_config = self._data.get("templates", {})
+        return [dict(repo) for repo in self._repos]
+
+    def _sync_templates_config(self) -> None:
+        templates_config = self._data.setdefault("templates", {})
         if not isinstance(templates_config, dict):
-            templates_config = {}
-        repos = templates_config.get("repos", [])
-        if not isinstance(repos, list):
-            repos = []
-        return repos
+            raise TemplatesConfigError("Invalid templates config in hub config")
+        if not self._templates_enabled or "enabled" in templates_config:
+            templates_config["enabled"] = self._templates_enabled
+        templates_config["repos"] = [dict(repo) for repo in self._repos]
 
     def add_repo(
         self,
@@ -80,16 +94,9 @@ class TemplateReposManager:
         """Add a template repo."""
         self._require_templates_enabled()
 
-        templates_config = self._data.setdefault("templates", {})
-        if not isinstance(templates_config, dict):
-            raise TemplatesConfigError("Invalid templates config in hub config")
-        templates_config.setdefault("enabled", True)
-
-        repos = templates_config.setdefault("repos", [])
-        if not isinstance(repos, list):
-            raise TemplatesConfigError("Invalid repos config in hub config")
-
-        existing_ids = {repo.get("id") for repo in repos if isinstance(repo, dict)}
+        existing_ids = {
+            repo.get("id") for repo in self._repos if isinstance(repo, dict)
+        }
         if repo_id in existing_ids:
             raise TemplatesConfigError(
                 f"Repo ID '{repo_id}' already exists. Use a unique ID."
@@ -105,40 +112,28 @@ class TemplateReposManager:
         if trusted is not None:
             new_repo["trusted"] = trusted
 
-        repos.append(new_repo)
+        self._repos.append(new_repo)
+        self._sync_templates_config()
 
     def remove_repo(self, repo_id: str) -> None:
         """Remove a template repo."""
-        templates_config = self._data.get("templates", {})
-        if not isinstance(templates_config, dict):
-            templates_config = {}
-        repos = templates_config.get("repos", [])
-        if not isinstance(repos, list):
-            repos = []
-
-        original_count = len(repos)
+        original_count = len(self._repos)
         filtered_repos = [
             repo
-            for repo in repos
+            for repo in self._repos
             if isinstance(repo, dict) and repo.get("id") != repo_id
         ]
 
         if len(filtered_repos) == original_count:
             raise TemplatesConfigError(f"Repo ID '{repo_id}' not found in config.")
 
-        templates_config["repos"] = filtered_repos
+        self._repos = filtered_repos
+        self._sync_templates_config()
 
     def set_trusted(self, repo_id: str, trusted: bool) -> None:
         """Set the trusted status of a template repo."""
-        templates_config = self._data.get("templates", {})
-        if not isinstance(templates_config, dict):
-            templates_config = {}
-        repos = templates_config.get("repos", [])
-        if not isinstance(repos, list):
-            repos = []
-
         found = False
-        for repo in repos:
+        for repo in self._repos:
             if isinstance(repo, dict) and repo.get("id") == repo_id:
                 repo["trusted"] = trusted
                 found = True
@@ -146,14 +141,11 @@ class TemplateReposManager:
 
         if not found:
             raise TemplatesConfigError(f"Repo ID '{repo_id}' not found in config.")
+        self._sync_templates_config()
 
     def _require_templates_enabled(self) -> None:
         """Ensure templates are enabled in config."""
-        templates_config = self._data.get("templates", {})
-        if not isinstance(templates_config, dict):
-            templates_config = {}
-        enabled = templates_config.get("enabled", True)
-        if enabled is False:
+        if self._templates_enabled is False:
             raise TemplatesConfigError(
                 "Templates are disabled. Set templates.enabled=true in the hub config to enable."
             )
