@@ -26,6 +26,9 @@ class _TicketFlowBridgeStub:
     async def watch_ticket_flow_pauses(self, _interval: float) -> None:
         await asyncio.Event().wait()
 
+    async def watch_ticket_flow_terminals(self, _interval: float) -> None:
+        await asyncio.Event().wait()
+
 
 class _BotStub:
     async def close(self) -> None:
@@ -79,6 +82,7 @@ class _OwnerStub:
         self._housekeeping_task = None
         self._cache_cleanup_task = None
         self._ticket_flow_watch_task = None
+        self._terminal_flow_watch_task = None
         self._spawned_tasks: set[asyncio.Task[object]] = set()
         self._poller = _PollerStub()
 

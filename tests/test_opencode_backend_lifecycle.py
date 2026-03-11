@@ -27,6 +27,8 @@ class TestOpenCodeBackendClose:
         import inspect
 
         assert inspect.isawaitable(result)
+        if inspect.iscoroutine(result):
+            result.close()
 
     @pytest.mark.anyio
     async def test_close_sets_client_to_none_after_close(self) -> None:
