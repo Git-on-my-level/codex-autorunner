@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from codex_autorunner.integrations.telegram import service as telegram_service_module
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.service import TelegramBotService
 
@@ -71,3 +72,48 @@ def test_telegram_service_closes_opencode_supervisor(
 
     assert stub_supervisor.close_all_called
     service._opencode_supervisor = original_supervisor  # type: ignore[attr-defined]
+
+
+def test_telegram_service_uses_opencode_lifecycle_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    config = TelegramBotConfig.from_raw(
+        {
+            "enabled": True,
+            "mode": "polling",
+            "allowed_chat_ids": [123],
+            "allowed_user_ids": [456],
+            "app_server": {"max_handles": 3, "idle_ttl_seconds": 120},
+        },
+        root=tmp_path,
+        env={
+            "CAR_TELEGRAM_BOT_TOKEN": "test-token",
+            "CAR_TELEGRAM_CHAT_ID": "123",
+        },
+        opencode_raw={"max_handles": 7, "idle_ttl_seconds": 2222},
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_build_opencode_supervisor(**kwargs: Any) -> StubOpenCodeSupervisor:
+        captured.update(kwargs)
+        return StubOpenCodeSupervisor()
+
+    monkeypatch.setattr(
+        telegram_service_module,
+        "build_opencode_supervisor",
+        _fake_build_opencode_supervisor,
+    )
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        service = TelegramBotService(config, hub_root=tmp_path)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    assert isinstance(service._opencode_supervisor, StubOpenCodeSupervisor)
+    assert captured["max_handles"] == 7
+    assert captured["idle_ttl_seconds"] == 2222

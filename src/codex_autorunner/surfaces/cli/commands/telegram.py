@@ -55,6 +55,9 @@ def register_telegram_commands(
                 if isinstance(config.raw, dict)
                 else None
             ),
+            opencode_raw=(
+                config.raw.get("opencode") if isinstance(config.raw, dict) else None
+            ),
         )
         if not telegram_cfg.enabled:
             raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
@@ -129,6 +132,9 @@ def register_telegram_commands(
                 if isinstance(config.raw, dict)
                 else None
             ),
+            opencode_raw=(
+                config.raw.get("opencode") if isinstance(config.raw, dict) else None
+            ),
         )
         if not telegram_cfg.enabled:
             raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
@@ -167,6 +173,9 @@ def register_telegram_commands(
                 config.raw.get("collaboration_policy")
                 if isinstance(config.raw, dict)
                 else None
+            ),
+            opencode_raw=(
+                config.raw.get("opencode") if isinstance(config.raw, dict) else None
             ),
         )
         if not telegram_cfg.enabled:

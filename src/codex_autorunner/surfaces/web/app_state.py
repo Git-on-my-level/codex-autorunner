@@ -604,7 +604,7 @@ def build_app_context(
         opencode_prune_interval = None
     else:
         opencode_prune_interval = _app_server_prune_interval(
-            config.app_server.idle_ttl_seconds
+            config.opencode.idle_ttl_seconds
         )
     runtime_services = RuntimeServices(
         app_server_supervisor=app_server_supervisor,
@@ -857,7 +857,7 @@ def build_hub_context(
         opencode_prune_interval = None
     else:
         opencode_prune_interval = _app_server_prune_interval(
-            config.app_server.idle_ttl_seconds
+            config.opencode.idle_ttl_seconds
         )
     runtime_services = RuntimeServices(
         app_server_supervisor=app_server_supervisor,

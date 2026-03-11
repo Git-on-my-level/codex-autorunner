@@ -50,6 +50,7 @@ from ...core.flows.worker_process import check_worker_health, clear_worker_metad
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
+from ...core.managed_processes import reap_managed_processes
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
 from ...core.ticket_flow_summary import build_ticket_flow_display
@@ -589,6 +590,25 @@ class DiscordBotService:
         )
 
     async def run_forever(self) -> None:
+        try:
+            cleanup = reap_managed_processes(self._config.root)
+            if cleanup.killed or cleanup.signaled or cleanup.removed:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.process_reaper.cleaned",
+                    killed=cleanup.killed,
+                    signaled=cleanup.signaled,
+                    removed=cleanup.removed,
+                    skipped=cleanup.skipped,
+                )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.process_reaper.failed",
+                exc=exc,
+            )
         await self._store.initialize()
         await run_chat_bootstrap_steps(
             platform="discord",

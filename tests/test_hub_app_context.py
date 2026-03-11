@@ -8,10 +8,13 @@ from codex_autorunner.core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
+from codex_autorunner.core.config import CONFIG_FILENAME
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.manifest import load_manifest
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
+from codex_autorunner.surfaces.web import app_state as web_app_state_module
+from tests.conftest import write_test_config
 
 
 def test_hub_app_state_includes_pma_context(hub_env) -> None:
@@ -69,3 +72,29 @@ def test_hub_lifespan_reaper_uses_config_root(hub_env, monkeypatch) -> None:
         pass
 
     assert called_roots == [app.state.config.root]
+
+
+def test_hub_opencode_prune_interval_uses_opencode_ttl(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "app_server": {"idle_ttl_seconds": 120},
+            "opencode": {"idle_ttl_seconds": 240},
+        },
+    )
+
+    monkeypatch.setattr(
+        web_app_state_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda *args, **kwargs: object(),
+    )
+
+    app = create_hub_app(hub_root)
+
+    assert app.state.opencode_prune_interval == 120.0

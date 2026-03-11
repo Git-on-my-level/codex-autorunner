@@ -50,6 +50,34 @@ def test_telegram_bot_config_app_server_command_env_override(tmp_path: Path) -> 
     assert cfg.app_server_command == ["/opt/codex/bin/codex", "app-server", "--flag"]
 
 
+def test_telegram_bot_config_uses_explicit_opencode_lifecycle_settings(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "app_server": {"max_handles": 3, "idle_ttl_seconds": 120},
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "-100",
+    }
+
+    cfg = TelegramBotConfig.from_raw(
+        raw,
+        root=tmp_path,
+        env=env,
+        opencode_raw={"max_handles": 7, "idle_ttl_seconds": 2222},
+    )
+
+    assert cfg.app_server_max_handles == 3
+    assert cfg.app_server_idle_ttl_seconds == 120
+    assert cfg.opencode_max_handles == 7
+    assert cfg.opencode_idle_ttl_seconds == 2222
+
+
 def test_telegram_bot_config_validate_requires_allowlist(tmp_path: Path) -> None:
     raw = {
         "enabled": True,

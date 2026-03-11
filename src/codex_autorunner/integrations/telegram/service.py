@@ -131,8 +131,8 @@ def _build_opencode_supervisor(
         workspace_root=config.root,
         logger=logger,
         request_timeout=None,
-        max_handles=config.app_server_max_handles,
-        idle_ttl_seconds=config.app_server_idle_ttl_seconds,
+        max_handles=config.opencode_max_handles,
+        idle_ttl_seconds=config.opencode_idle_ttl_seconds,
         base_env=None,
         subagent_models=None,
     )
