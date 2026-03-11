@@ -203,10 +203,7 @@ def _derive_effective_current_ticket(
 def select_default_ticket_flow_run(
     store: FlowStore,
 ) -> Optional[FlowRunRecord]:
-    try:
-        records = store.list_flow_runs(flow_type="ticket_flow")
-    except Exception:
-        return None
+    records = store.list_flow_runs(flow_type="ticket_flow")
     return select_authoritative_run_record(records)
 
 
