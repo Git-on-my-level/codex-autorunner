@@ -588,3 +588,166 @@ class TelegramTicketFlowBridge:
                 thread_id=thread_id,
                 reply_to=None,
             )
+
+    async def watch_ticket_flow_terminals(self, interval_seconds: float) -> None:
+        interval = max(interval_seconds, 1.0)
+        while True:
+            try:
+                await self._scan_and_notify_terminals()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.ticket_flow.terminal_watch_failed",
+                    exc=exc,
+                )
+            await asyncio.sleep(interval)
+
+    async def _scan_and_notify_terminals(self) -> None:
+        topics = await self._store.list_topics()
+        workspace_topics = self._get_all_workspaces(topics or {})
+        tasks = []
+        for workspace_root, entries in workspace_topics.items():
+            tasks.append(
+                asyncio.create_task(
+                    self._notify_terminal_for_workspace(workspace_root, entries)
+                )
+            )
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _notify_terminal_for_workspace(
+        self,
+        workspace_root: Path,
+        entries: list[tuple[str, object]],
+    ) -> None:
+        try:
+            terminal_run = await asyncio.to_thread(
+                self._load_latest_terminal_run, workspace_root
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.terminal_scan_failed",
+                exc=exc,
+                workspace_root=str(workspace_root),
+            )
+            return
+        if terminal_run is None:
+            return
+        run_id, status, error_message = terminal_run
+        pending = [
+            (key, record)
+            for key, record in entries
+            if getattr(record, "last_terminal_run_id", None) != run_id
+        ]
+        if not pending:
+            return
+        primary = self._select_ticket_flow_topic(pending)
+        if not primary:
+            return
+        primary_key, primary_record = primary
+        try:
+            chat_id, thread_id, _scope = parse_topic_key(primary_key)
+        except Exception as exc:
+            self._logger.debug("Failed to parse topic key: %s", exc)
+            return
+        message = self._format_terminal_notification(
+            run_id=run_id, status=status, error_message=error_message
+        )
+        try:
+            await self._send_message_with_outbox(
+                chat_id, message, thread_id=thread_id, reply_to=None
+            )
+            run_mirror = ChatRunMirror(workspace_root, logger_=self._logger)
+            run_mirror.mirror_outbound(
+                run_id=run_id,
+                platform="telegram",
+                event_type="flow_terminal_notice",
+                kind="notification",
+                actor="car",
+                text=message,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                meta={"status": status},
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.terminal_notify_failed",
+                exc=exc,
+                topic_key=primary_key,
+                run_id=run_id,
+            )
+            return
+        for key, _record in pending:
+            await self._store.update_topic(key, self._set_terminal_run_marker(run_id))
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.ticket_flow.terminal_notified",
+            topic_key=primary_key,
+            run_id=run_id,
+            status=status,
+        )
+
+    def _load_latest_terminal_run(
+        self, workspace_root: Path
+    ) -> Optional[tuple[str, str, Optional[str]]]:
+        db_path = workspace_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            return None
+        config = load_repo_config(workspace_root)
+        store = FlowStore(db_path, durable=config.durable_writes)
+        terminal_statuses = (
+            FlowRunStatus.COMPLETED,
+            FlowRunStatus.FAILED,
+            FlowRunStatus.STOPPED,
+        )
+        latest_run: Optional[FlowRunRecord] = None
+        try:
+            store.initialize()
+            for status in terminal_statuses:
+                runs = store.list_flow_runs(flow_type="ticket_flow", status=status)
+                for run in runs:
+                    if latest_run is None:
+                        latest_run = run
+                    elif run.finished_at and latest_run.finished_at:
+                        if run.finished_at > latest_run.finished_at:
+                            latest_run = run
+                    elif run.created_at > latest_run.created_at:
+                        latest_run = run
+        finally:
+            store.close()
+        if latest_run is None:
+            return None
+        return (latest_run.id, latest_run.status.value, latest_run.error_message)
+
+    def _format_terminal_notification(
+        self, *, run_id: str, status: str, error_message: Optional[str]
+    ) -> str:
+        if status == FlowRunStatus.COMPLETED.value:
+            return f"Ticket flow completed successfully (run {run_id})."
+        elif status == FlowRunStatus.FAILED.value:
+            error_text = self._truncate_error(error_message)
+            return f"Ticket flow failed (run {run_id}). Error: {error_text}"
+        elif status == FlowRunStatus.STOPPED.value:
+            return f"Ticket flow stopped (run {run_id})."
+        return f"Ticket flow ended (run {run_id}, status: {status})."
+
+    def _truncate_error(self, error_message: Optional[str], limit: int = 200) -> str:
+        if not error_message:
+            return "Unknown error"
+        normalized = " ".join(error_message.split())
+        if len(normalized) > limit:
+            return f"{normalized[: limit - 3]}..."
+        return normalized
+
+    @staticmethod
+    def _set_terminal_run_marker(value: Optional[str]):
+        def apply(topic) -> None:
+            topic.last_terminal_run_id = value
+
+        return apply

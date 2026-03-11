@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 import subprocess
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
 from .....core.config import load_repo_config
-from .....core.flows import FlowController, FlowStore
+from .....core.flows import FlowController, FlowStore, archive_flow_run_artifacts
 from .....core.flows.hub_overview import build_hub_flow_overview_entries
 from .....core.flows.models import FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
@@ -38,7 +37,6 @@ from .....flows.ticket_flow.runtime_helpers import (
 )
 from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
-from .....tickets.outbox import resolve_outbox_paths
 from ....chat.run_mirror import ChatRunMirror
 from ....github.service import GitHubError, GitHubService
 from ...adapter import (
@@ -749,32 +747,23 @@ class FlowCommands(SharedHelpers):
                 store.close()
 
             if error is None:
-                _, artifacts_root = _flow_paths(repo_root)
-                archive_dir = artifacts_root / record.id / "archived_tickets"
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                ticket_dir = _ticket_dir(repo_root)
-                for ticket_path in list_ticket_paths(ticket_dir):
-                    dest = archive_dir / ticket_path.name
-                    shutil.move(str(ticket_path), str(dest))
-
-                runs_dir = Path(
-                    record.input_data.get("runs_dir") or ".codex-autorunner/runs"
-                )
-                outbox_paths = resolve_outbox_paths(
-                    workspace_root=repo_root, runs_dir=runs_dir, run_id=record.id
-                )
-                run_dir = outbox_paths.run_dir
-                if run_dir.exists() and run_dir.is_dir():
-                    archived_runs_dir = artifacts_root / record.id / "archived_runs"
-                    shutil.move(str(run_dir), str(archived_runs_dir))
-
-                store = _load_flow_store(repo_root)
                 try:
-                    store.initialize()
-                    store.delete_flow_run(record.id)
-                finally:
-                    store.close()
-                notice = "Archived."
+                    force_archive = record.status in (
+                        FlowRunStatus.STOPPING,
+                        FlowRunStatus.PAUSED,
+                    )
+                    summary = archive_flow_run_artifacts(
+                        repo_root,
+                        run_id=record.id,
+                        force=force_archive,
+                        delete_run=True,
+                    )
+                    notice = (
+                        f"Archived {summary['archived_tickets']} tickets and "
+                        f"{'moved' if summary['archived_runs'] else 'skipped'} run artifacts."
+                    )
+                except ValueError as exc:
+                    error = str(exc)
         else:
             await self._answer_callback(callback, "Unknown action")
             return
@@ -1888,35 +1877,20 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
 
-        _, artifacts_root = _flow_paths(repo_root)
-        archive_dir = artifacts_root / record.id / "archived_tickets"
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        ticket_dir = _ticket_dir(repo_root)
-        archived_count = 0
-        for ticket_path in list_ticket_paths(ticket_dir):
-            dest = archive_dir / ticket_path.name
-            shutil.move(str(ticket_path), str(dest))
-            archived_count += 1
-
-        runs_dir = Path(record.input_data.get("runs_dir") or ".codex-autorunner/runs")
-        outbox_paths = resolve_outbox_paths(
-            workspace_root=repo_root, runs_dir=runs_dir, run_id=record.id
+        force_archive = record.status in (
+            FlowRunStatus.STOPPING,
+            FlowRunStatus.PAUSED,
         )
-        run_dir = outbox_paths.run_dir
-        if run_dir.exists() and run_dir.is_dir():
-            archived_runs_dir = artifacts_root / record.id / "archived_runs"
-            shutil.move(str(run_dir), str(archived_runs_dir))
-
-        store = _load_flow_store(repo_root)
-        try:
-            store.initialize()
-            store.delete_flow_run(record.id)
-        finally:
-            store.close()
+        summary = archive_flow_run_artifacts(
+            repo_root,
+            run_id=record.id,
+            force=force_archive,
+            delete_run=True,
+        )
 
         await self._send_message(
             message.chat_id,
-            f"Archived run {_code(record.id)} ({archived_count} tickets).",
+            f"Archived run {_code(record.id)} ({summary['archived_tickets']} tickets).",
             thread_id=message.thread_id,
             reply_to=message.message_id,
             parse_mode="Markdown",

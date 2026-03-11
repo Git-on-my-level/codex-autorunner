@@ -48,6 +48,12 @@ def _seed_ticket(repo_root: Path) -> None:
     )
 
 
+def _seed_contextspace(repo_root: Path) -> None:
+    context_dir = repo_root / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+
+
 def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     tmp_path: Path,
 ) -> None:
@@ -58,6 +64,8 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
 
     run_id = "99999999-9999-9999-9999-999999999999"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
+    _seed_ticket(repo_root)
+    _seed_contextspace(repo_root)
 
     run_dir = (
         repo_root / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / "0001"
@@ -85,10 +93,29 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     payload = json.loads(result.stdout)
     assert payload["run_id"] == run_id
     assert payload["archived_runs"] is True
+    assert payload["archived_tickets"] == 1
+    assert payload["archived_contextspace"] is True
     assert payload["deleted_run"] is True
 
     archived_root = repo_root / ".codex-autorunner" / "flows" / run_id / "archived_runs"
     assert archived_root.exists()
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "flows"
+        / run_id
+        / "archived_tickets"
+        / "TICKET-001.md"
+    ).exists()
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "flows"
+        / run_id
+        / "contextspace"
+        / "active_context.md"
+    ).read_text(encoding="utf-8") == "Active context\n"
+    assert not (repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
 
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     with FlowStore(db_path) as store:
@@ -104,6 +131,7 @@ def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
 
     run_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.FAILED)
+    _seed_ticket(repo_root)
 
     run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -128,6 +156,7 @@ def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
     assert payload["archived_runs"] is False
     assert payload["deleted_run"] is False
     assert run_dir.exists()
+    assert (repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
 
 
 def test_ticket_flow_archive_force_requires_attestation(tmp_path: Path) -> None:

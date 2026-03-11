@@ -1,17 +1,63 @@
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from ...tickets.files import list_ticket_paths
 from ...tickets.outbox import resolve_outbox_paths
+from ..archive import (
+    ArchiveEntrySpec,
+    build_common_car_archive_entries,
+    execute_archive_entries,
+)
 from ..config import load_repo_config
-from ..force_attestation import enforce_force_attestation
 from .models import FlowRunStatus
 from .store import FlowStore
 
-logger = logging.getLogger("codex_autorunner.flows.archive_helpers")
+
+def _next_archive_dir(base_dir: Path) -> Path:
+    if not base_dir.exists():
+        return base_dir
+    suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return base_dir.parent / f"{base_dir.name}_{suffix}"
+
+
+def _build_flow_archive_entries(
+    repo_root: Path,
+    *,
+    run_id: str,
+    run_dir: Path,
+) -> tuple[list[ArchiveEntrySpec], dict[str, Any]]:
+    archive_root = repo_root / ".codex-autorunner" / "flows" / run_id
+    target_runs_dir = _next_archive_dir(archive_root / "archived_runs")
+    ticket_paths = list(list_ticket_paths(repo_root / ".codex-autorunner" / "tickets"))
+    entries = build_common_car_archive_entries(
+        repo_root / ".codex-autorunner", archive_root
+    )
+    entries.extend(
+        ArchiveEntrySpec(
+            label=f"archived_tickets/{ticket_path.name}",
+            source=ticket_path,
+            dest=archive_root / "archived_tickets" / ticket_path.name,
+            mode="move",
+        )
+        for ticket_path in ticket_paths
+    )
+    entries.append(
+        ArchiveEntrySpec(
+            label=target_runs_dir.relative_to(archive_root).as_posix(),
+            source=run_dir,
+            dest=target_runs_dir,
+            mode="move",
+        )
+    )
+    summary: dict[str, Any] = {
+        "archive_root": str(archive_root),
+        "archived_runs_dir": str(target_runs_dir),
+        "ticket_count": len(ticket_paths),
+    }
+    return entries, summary
 
 
 def archive_flow_run_artifacts(
@@ -22,12 +68,6 @@ def archive_flow_run_artifacts(
     delete_run: bool,
     force_attestation: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
-    enforce_force_attestation(
-        force=force,
-        force_attestation=force_attestation,
-        logger=logger,
-        action="archive_flow_run_artifacts",
-    )
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     if not db_path.exists():
@@ -60,13 +100,9 @@ def archive_flow_run_artifacts(
             run_id=record.id,
         )
         run_dir = run_paths.run_dir
-
-        artifacts_root = repo_root / ".codex-autorunner" / "flows"
-        archive_root = artifacts_root / record.id
-        target_runs_dir = archive_root / "archived_runs"
-        if target_runs_dir.exists():
-            suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            target_runs_dir = archive_root / f"archived_runs_{suffix}"
+        entries, archive_plan = _build_flow_archive_entries(
+            repo_root, run_id=record.id, run_dir=run_dir
+        )
 
         summary: dict[str, Any] = {
             "repo_root": str(repo_root),
@@ -74,18 +110,29 @@ def archive_flow_run_artifacts(
             "status": record.status.value,
             "run_dir": str(run_dir),
             "run_dir_exists": run_dir.exists() and run_dir.is_dir(),
-            "archive_dir": str(target_runs_dir),
+            "archive_dir": archive_plan["archive_root"],
+            "archived_runs_dir": archive_plan["archived_runs_dir"],
             "delete_run": delete_run,
             "deleted_run": False,
+            "archived_tickets": 0,
             "archived_runs": False,
+            "archived_contextspace": False,
+            "archived_paths": [],
         }
-
-        if run_dir.exists() and run_dir.is_dir():
-            import shutil
-
-            target_runs_dir.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(run_dir), str(target_runs_dir))
-            summary["archived_runs"] = True
+        execution = execute_archive_entries(entries, worktree_root=repo_root)
+        moved_paths = set(execution.moved_paths)
+        copied_paths = set(execution.copied_paths)
+        summary["archived_tickets"] = sum(
+            1 for path in moved_paths if path.startswith("archived_tickets/")
+        )
+        summary["archived_runs"] = "archived_runs" in moved_paths or any(
+            path.startswith("archived_runs_") for path in moved_paths
+        )
+        summary["archived_contextspace"] = "contextspace" in copied_paths
+        summary["archived_paths"] = sorted(
+            list(execution.copied_paths) + list(execution.moved_paths)
+        )
+        summary["missing_paths"] = list(execution.missing_paths)
 
         if delete_run:
             summary["deleted_run"] = bool(store.delete_flow_run(record.id))
@@ -93,4 +140,4 @@ def archive_flow_run_artifacts(
         return summary
 
 
-__all__ = ["archive_flow_run_artifacts"]
+__all__ = ["archive_flow_run_artifacts", "_build_flow_archive_entries"]

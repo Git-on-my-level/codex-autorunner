@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 
-DISCORD_STATE_SCHEMA_VERSION = 4
+DISCORD_STATE_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -111,6 +111,18 @@ class DiscordStateStore:
             channel_id,
             run_id,
             dispatch_seq,
+        )
+
+    async def mark_terminal_run_seen(
+        self,
+        *,
+        channel_id: str,
+        run_id: str,
+    ) -> None:
+        await self._run(
+            self._mark_terminal_run_seen_sync,
+            channel_id,
+            run_id,
         )
 
     async def update_pma_state(
@@ -305,6 +317,10 @@ class DiscordStateStore:
             conn.execute("ALTER TABLE channel_bindings ADD COLUMN sandbox_policy TEXT")
         if "rollout_path" not in names:
             conn.execute("ALTER TABLE channel_bindings ADD COLUMN rollout_path TEXT")
+        if "last_terminal_run_id" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN last_terminal_run_id TEXT"
+            )
 
     def _upsert_binding_sync(
         self,
@@ -359,6 +375,11 @@ class DiscordStateStore:
             row["sandbox_policy"] if "sandbox_policy" in row.keys() else None
         )
         rollout_path_raw = row["rollout_path"] if "rollout_path" in row.keys() else None
+        last_terminal_run_id_raw = (
+            row["last_terminal_run_id"]
+            if "last_terminal_run_id" in row.keys()
+            else None
+        )
         return {
             "channel_id": str(row["channel_id"]),
             "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
@@ -406,6 +427,11 @@ class DiscordStateStore:
             "rollout_path": (
                 rollout_path_raw if isinstance(rollout_path_raw, str) else None
             ),
+            "last_terminal_run_id": (
+                last_terminal_run_id_raw
+                if isinstance(last_terminal_run_id_raw, str)
+                else None
+            ),
             "updated_at": str(row["updated_at"]),
         }
 
@@ -451,6 +477,23 @@ class DiscordStateStore:
                 WHERE channel_id = ?
                 """,
                 (run_id, dispatch_seq, now_iso(), channel_id),
+            )
+
+    def _mark_terminal_run_seen_sync(
+        self,
+        channel_id: str,
+        run_id: str,
+    ) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET last_terminal_run_id = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (run_id, now_iso(), channel_id),
             )
 
     def _update_pma_state_sync(

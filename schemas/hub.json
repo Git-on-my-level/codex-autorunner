@@ -47,6 +47,7 @@
       "telegram_chat_bound_thread_count": {"type": "integer"},
       "non_pma_chat_bound_thread_count": {"type": "integer"},
       "cleanup_blocked_by_chat_binding": {"type": "boolean"},
+      "has_car_state": {"type": "boolean"},
       "mounted": {"type": "boolean"},
       "mount_error": {"type": ["null", "string"]},
       "ticket_flow": {

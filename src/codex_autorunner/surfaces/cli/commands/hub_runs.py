@@ -12,6 +12,9 @@ import typer
 from ....core.config import HubConfig, load_repo_config
 from ....core.flows import FlowStore
 from ....core.flows.archive_helpers import (
+    _build_flow_archive_entries,
+)
+from ....core.flows.archive_helpers import (
     archive_flow_run_artifacts as _archive_flow_run_artifacts_core,
 )
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
@@ -152,15 +155,16 @@ def _archive_flow_run_artifacts(
             "Can only archive completed/stopped/failed runs (use --force for paused/stopping)."
         )
 
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
     run_paths = _resolve_run_paths(record, repo_root)
     run_dir = run_paths.run_dir
-    archive_root = artifacts_root / record.id
-    archived_runs_dir = archive_root / "archived_runs"
-    target_runs_dir = archived_runs_dir
-    if target_runs_dir.exists():
-        suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        target_runs_dir = archive_root / f"archived_runs_{suffix}"
+    entries, archive_plan = _build_flow_archive_entries(
+        repo_root, run_id=record.id, run_dir=run_dir
+    )
+    moved_ticket_count = sum(
+        1
+        for entry in entries
+        if entry.mode == "move" and entry.label.startswith("archived_tickets/")
+    )
 
     summary = {
         "repo_root": str(repo_root),
@@ -168,10 +172,14 @@ def _archive_flow_run_artifacts(
         "status": record.status.value,
         "run_dir": str(run_dir),
         "run_dir_exists": run_dir.exists() and run_dir.is_dir(),
-        "archive_dir": str(target_runs_dir),
+        "archive_dir": archive_plan["archive_root"],
+        "archived_runs_dir": archive_plan["archived_runs_dir"],
         "delete_run": delete_run,
         "deleted_run": False,
+        "archived_tickets": moved_ticket_count,
         "archived_runs": False,
+        "archived_contextspace": False,
+        "archived_paths": [entry.label for entry in entries],
     }
 
     if dry_run:
@@ -179,6 +187,7 @@ def _archive_flow_run_artifacts(
 
     import shutil
 
+    target_runs_dir = Path(str(archive_plan["archived_runs_dir"]))
     if run_dir.exists() and run_dir.is_dir():
         target_runs_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(run_dir), str(target_runs_dir))

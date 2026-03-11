@@ -35,6 +35,18 @@ def _local_flows_root(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows"
 
 
+_LOCAL_ARCHIVE_MARKERS = {
+    "archived_tickets",
+    "archived_runs",
+    "contextspace",
+    "config",
+    "state",
+    "logs",
+    "flows.db",
+    "github_context",
+}
+
+
 def _normalize_component(value: str, label: str) -> str:
     cleaned = (value or "").strip()
     if not cleaned:
@@ -75,16 +87,8 @@ def _normalize_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
     return candidate, rel_posix
 
 
-_LOCAL_ARCHIVE_DIRS = {"archived_tickets", "archived_runs"}
-
-
 def _normalize_local_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
-    target, rel_posix = _normalize_archive_rel_path(base, rel_path)
-    if rel_posix:
-        head = rel_posix.split("/", 1)[0]
-        if head not in _LOCAL_ARCHIVE_DIRS:
-            raise ValueError("invalid archive path")
-    return target, rel_posix
+    return _normalize_archive_rel_path(base, rel_path)
 
 
 def _resolve_snapshot_root(
@@ -240,11 +244,18 @@ def _iter_local_run_archives(repo_root: Path) -> list[LocalRunArchiveSummary]:
         runs_dir = run_dir / "archived_runs"
         has_tickets = tickets_dir.exists() and tickets_dir.is_dir()
         has_runs = runs_dir.exists() and runs_dir.is_dir()
-        if not has_tickets and not has_runs:
+        other_children = [
+            child
+            for child in run_dir.iterdir()
+            if child.name
+            in (_LOCAL_ARCHIVE_MARKERS - {"archived_tickets", "archived_runs"})
+        ]
+        if not has_tickets and not has_runs and not other_children:
             continue
         mtime_candidates = [
             _safe_mtime(tickets_dir) if has_tickets else None,
             _safe_mtime(runs_dir) if has_runs else None,
+            *[_safe_mtime(child) for child in other_children],
         ]
         mtime = max([ts for ts in mtime_candidates if ts is not None], default=0.0)
         summary = LocalRunArchiveSummary(
@@ -313,16 +324,29 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
     target, rel_posix = _normalize_local_archive_rel_path(run_root, rel_path)
     if not rel_posix:
         nodes: list[ArchiveTreeNode] = []
-        for name in sorted(_LOCAL_ARCHIVE_DIRS):
-            candidate = run_root / name
-            if not candidate.exists() or not candidate.is_dir():
+        for candidate in sorted(run_root.iterdir(), key=lambda p: p.name):
+            if candidate.name == "META.json":
                 continue
+            try:
+                resolved = candidate.resolve(strict=False)
+                resolved.relative_to(run_root.resolve(strict=False))
+            except Exception:
+                continue
+            if candidate.is_dir():
+                node_type: Literal["file", "folder"] = "folder"
+                size_bytes: Optional[int] = None
+            else:
+                node_type = "file"
+                try:
+                    size_bytes = candidate.stat().st_size
+                except OSError:
+                    size_bytes = None
             nodes.append(
                 ArchiveTreeNode(
-                    path=name,
-                    name=name,
-                    type="folder",
-                    size_bytes=None,
+                    path=candidate.name,
+                    name=candidate.name,
+                    type=node_type,
+                    size_bytes=size_bytes,
                     mtime=_safe_mtime(candidate),
                 )
             )

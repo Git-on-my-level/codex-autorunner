@@ -211,6 +211,7 @@ class TelegramTopicRecord:
     approval_mode: str = APPROVAL_MODE_YOLO
     last_active_at: Optional[str] = None
     last_ticket_dispatch_seq: Optional[str] = None
+    last_terminal_run_id: Optional[str] = None
 
     @classmethod
     def from_dict(
@@ -325,6 +326,11 @@ class TelegramTopicRecord:
         ) or payload.get("lastTicketDispatchSeq")
         if not isinstance(last_ticket_dispatch_seq, str):
             last_ticket_dispatch_seq = None
+        last_terminal_run_id = payload.get("last_terminal_run_id") or payload.get(
+            "lastTerminalRunId"
+        )
+        if not isinstance(last_terminal_run_id, str):
+            last_terminal_run_id = None
         return cls(
             repo_id=repo_id,
             workspace_path=workspace_path,
@@ -350,6 +356,7 @@ class TelegramTopicRecord:
             approval_mode=approval_mode,
             last_active_at=last_active_at,
             last_ticket_dispatch_seq=last_ticket_dispatch_seq,
+            last_terminal_run_id=last_terminal_run_id,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -381,6 +388,7 @@ class TelegramTopicRecord:
             "approval_mode": self.approval_mode,
             "last_active_at": self.last_active_at,
             "last_ticket_dispatch_seq": self.last_ticket_dispatch_seq,
+            "last_terminal_run_id": self.last_terminal_run_id,
         }
 
 
