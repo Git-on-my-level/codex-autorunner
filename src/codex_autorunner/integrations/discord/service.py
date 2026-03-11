@@ -7108,7 +7108,7 @@ class DiscordBotService:
                 workspace_root,
                 run_id=target.id,
                 force=False,
-                delete_run=False,
+                delete_run=True,
             )
         except ValueError as exc:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
@@ -8822,7 +8822,7 @@ class DiscordBotService:
                     workspace_root,
                     run_id=run_id,
                     force=False,
-                    delete_run=False,
+                    delete_run=True,
                 )
             except ValueError as exc:
                 await self._respond_ephemeral(
