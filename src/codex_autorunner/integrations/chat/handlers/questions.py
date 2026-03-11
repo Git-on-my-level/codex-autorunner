@@ -27,6 +27,11 @@ async def handle_custom_text_input(handlers: Any, event: ChatMessageEvent) -> bo
                 pending.thread_id is None
                 or str(pending.thread_id) == (event.thread.thread_id or "")
             )
+            and (
+                pending.requester_user_id is None
+                or pending.requester_user_id
+                == (str(event.from_user_id) if event.from_user_id is not None else None)
+            )
         ):
             handlers._pending_questions.pop(request_id, None)
             if not pending.future.done():
@@ -135,6 +140,14 @@ class ChatQuestionHandlers:
             and str(pending.message_id) != event_message_id
         ):
             await self._chat_answer_interaction(interaction, "Selection expired")
+            return
+        if (
+            pending.requester_user_id is not None
+            and pending.requester_user_id != context.user_id
+        ):
+            await self._chat_answer_interaction(
+                interaction, "This prompt belongs to another user"
+            )
             return
 
         parsed_type = type(parsed).__name__

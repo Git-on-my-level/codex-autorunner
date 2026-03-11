@@ -32,11 +32,20 @@ class ChatSelectionHandlers:
         """Bind a topic to a repository ID."""
         raise NotImplementedError
 
+    @staticmethod
+    def _selection_belongs_to_user(state: Any, user_id: str | None) -> bool:
+        expected = getattr(state, "requester_user_id", None)
+        if expected is None:
+            return True
+        return expected == user_id
+
     def handle_pending_resume(self, context: ChatContext, text: str) -> bool:
         if not text.isdigit():
             return False
         state = self._resume_options.get(context.topic_key)
         if not state:
+            return False
+        if not self._selection_belongs_to_user(state, context.user_id):
             return False
         page_items = self._selection_page_items(state)
         if not page_items:
@@ -57,6 +66,8 @@ class ChatSelectionHandlers:
             return False
         state = self._bind_options.get(context.topic_key)
         if not state:
+            return False
+        if not self._selection_belongs_to_user(state, context.user_id):
             return False
         page_items = self._selection_page_items(state)
         if not page_items:

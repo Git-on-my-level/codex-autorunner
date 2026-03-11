@@ -1543,6 +1543,11 @@ class GitHubCommands(SharedHelpers):
                         "delivery": delivery,
                         "message_id": prompt_message_id,
                         "prompt_text": prompt_text,
+                        "requester_user_id": (
+                            str(message.from_user_id)
+                            if message.from_user_id is not None
+                            else None
+                        ),
                     }
                     self._touch_cache_timestamp("pending_review_custom", key)
                     return
@@ -1587,7 +1592,13 @@ class GitHubCommands(SharedHelpers):
             items.append((sha, label))
             if subject:
                 subjects[sha] = subject
-        state = ReviewCommitSelectionState(items=items, delivery=delivery)
+        state = ReviewCommitSelectionState(
+            items=items,
+            delivery=delivery,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
+        )
         self._review_commit_options[key] = state
         self._review_commit_subjects[key] = subjects
         self._touch_cache_timestamp("review_commit_options", key)

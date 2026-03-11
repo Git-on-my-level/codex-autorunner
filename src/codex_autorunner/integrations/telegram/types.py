@@ -30,6 +30,7 @@ class PendingQuestion:
     chat_id: int
     thread_id: Optional[int]
     topic_key: Optional[str]
+    requester_user_id: Optional[str]
     message_id: Optional[int]
     created_at: str
     question_index: int
@@ -66,6 +67,7 @@ class SelectionState:
     page: int = 0
     button_labels: Optional[dict[str, str]] = None
     repo_id: Optional[str] = None
+    requester_user_id: Optional[str] = None
 
 
 @dataclass

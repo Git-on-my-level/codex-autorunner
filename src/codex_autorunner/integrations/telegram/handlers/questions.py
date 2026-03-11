@@ -175,6 +175,7 @@ class TelegramQuestionHandlers(ChatQuestionHandlers):
                 chat_id=ctx.chat_id,
                 thread_id=ctx.thread_id,
                 topic_key=ctx.topic_key,
+                requester_user_id=ctx.user_id,
                 message_id=message_id if isinstance(message_id, int) else None,
                 created_at=created_at,
                 question_index=index,

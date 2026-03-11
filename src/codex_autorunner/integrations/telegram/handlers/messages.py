@@ -65,6 +65,40 @@ def _log_message_policy_result(
         logger(message, result)
 
 
+def _has_pending_custom_question(handlers: Any, message: TelegramMessage) -> bool:
+    for pending in handlers._pending_questions.values():
+        if (
+            pending.awaiting_custom_input
+            and pending.chat_id == message.chat_id
+            and (pending.thread_id is None or pending.thread_id == message.thread_id)
+        ):
+            return True
+    return False
+
+
+def _pending_state_belongs_to_actor(state: Any, actor_id: Optional[str]) -> bool:
+    if state is None:
+        return False
+    if isinstance(state, dict):
+        expected = state.get("requester_user_id")
+    else:
+        expected = getattr(state, "requester_user_id", None)
+    if expected is None:
+        return True
+    return expected == actor_id
+
+
+def _pop_pending_state_if_owned(
+    state_map: dict[str, Any],
+    key: str,
+    actor_id: Optional[str],
+) -> Any:
+    state = state_map.get(key)
+    if not _pending_state_belongs_to_actor(state, actor_id):
+        return None
+    return state_map.pop(key, None)
+
+
 @dataclass
 class _CoalescedBuffer:
     message: TelegramMessage
@@ -141,6 +175,18 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
         return
 
     if trimmed_text and not has_media:
+        if _has_pending_custom_question(handlers, message):
+            policy_result = _evaluate_message_policy(
+                handlers,
+                message,
+                text=trimmed_text,
+                is_explicit_command=True,
+            )
+            if not policy_result.command_allowed:
+                _log_message_policy_result(handlers, message, policy_result)
+                if placeholder_id is not None:
+                    await handlers._delete_message(message.chat_id, placeholder_id)
+                return
         custom_handled = await handle_custom_text_input(handlers, message)
         if custom_handled:
             return
@@ -282,23 +328,45 @@ async def handle_message_inner(
     else:
         key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     runtime = handlers._router.runtime_for(key)
+    actor_id = str(message.from_user_id) if message.from_user_id is not None else None
 
-    if text and handlers._handle_pending_resume(key, text):
+    command_policy_result = _evaluate_message_policy(
+        handlers,
+        message,
+        text=text,
+        is_explicit_command=True,
+    )
+
+    if text and not command_policy_result.command_allowed:
+        has_pending_state = (
+            bool(handlers._resume_options.get(key))
+            or bool(handlers._bind_options.get(key))
+            or bool(handlers._review_commit_options.get(key))
+            or bool(handlers._pending_review_custom.get(key))
+        )
+        if has_pending_state:
+            _log_message_policy_result(handlers, message, command_policy_result)
+            await _clear_placeholder()
+            return
+
+    if text and handlers._handle_pending_resume(
+        key,
+        text,
+        user_id=message.from_user_id,
+    ):
         await _clear_placeholder()
         return
-    if text and handlers._handle_pending_bind(key, text):
+    if text and handlers._handle_pending_bind(
+        key,
+        text,
+        user_id=message.from_user_id,
+    ):
         await _clear_placeholder()
         return
 
     if text and is_interrupt_alias(text):
-        policy_result = _evaluate_message_policy(
-            handlers,
-            message,
-            text=text,
-            is_explicit_command=True,
-        )
-        if not policy_result.command_allowed:
-            _log_message_policy_result(handlers, message, policy_result)
+        if not command_policy_result.command_allowed:
+            _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
             return
         await handlers._handle_interrupt(message, runtime)
@@ -306,18 +374,12 @@ async def handle_message_inner(
         return
 
     if text and text.startswith("!") and not has_media:
-        policy_result = _evaluate_message_policy(
-            handlers,
-            message,
-            text=text,
-            is_explicit_command=True,
-        )
-        if not policy_result.command_allowed:
-            _log_message_policy_result(handlers, message, policy_result)
+        if not command_policy_result.command_allowed:
+            _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
             return
-        handlers._resume_options.pop(key, None)
-        handlers._bind_options.pop(key, None)
+        _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
+        _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
         handlers._flow_run_options.pop(key, None)
         handlers._agent_options.pop(key, None)
         handlers._model_options.pop(key, None)
@@ -337,7 +399,10 @@ async def handle_message_inner(
         return
 
     if text and await handlers._handle_pending_review_commit(
-        message, runtime, key, text
+        message,
+        runtime,
+        key,
+        text,
     ):
         await _clear_placeholder()
         return
@@ -357,38 +422,50 @@ async def handle_message_inner(
         return
     if command:
         if command.name != "resume":
-            handlers._resume_options.pop(key, None)
+            _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
         if command.name != "bind":
-            handlers._bind_options.pop(key, None)
+            _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
         if command.name != "agent":
             handlers._agent_options.pop(key, None)
         if command.name != "model":
             handlers._model_options.pop(key, None)
             handlers._model_pending.pop(key, None)
         if command.name != "review":
-            handlers._review_commit_options.pop(key, None)
-            handlers._review_commit_subjects.pop(key, None)
-            pending_review_custom = handlers._pending_review_custom.pop(key, None)
+            review_state = _pop_pending_state_if_owned(
+                handlers._review_commit_options,
+                key,
+                actor_id,
+            )
+            if review_state is not None:
+                handlers._review_commit_subjects.pop(key, None)
+            pending_review_custom = _pop_pending_state_if_owned(
+                handlers._pending_review_custom,
+                key,
+                actor_id,
+            )
             await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     else:
-        handlers._resume_options.pop(key, None)
-        handlers._bind_options.pop(key, None)
+        _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
+        _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
         handlers._agent_options.pop(key, None)
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)
-        handlers._review_commit_options.pop(key, None)
-        handlers._review_commit_subjects.pop(key, None)
-        pending_review_custom = handlers._pending_review_custom.pop(key, None)
+        review_state = _pop_pending_state_if_owned(
+            handlers._review_commit_options,
+            key,
+            actor_id,
+        )
+        if review_state is not None:
+            handlers._review_commit_subjects.pop(key, None)
+        pending_review_custom = _pop_pending_state_if_owned(
+            handlers._pending_review_custom,
+            key,
+            actor_id,
+        )
         await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     if command:
-        policy_result = _evaluate_message_policy(
-            handlers,
-            message,
-            text=text,
-            is_explicit_command=True,
-        )
-        if not policy_result.command_allowed:
-            _log_message_policy_result(handlers, message, policy_result)
+        if not command_policy_result.command_allowed:
+            _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
             return
         spec = handlers._command_specs.get(command.name)

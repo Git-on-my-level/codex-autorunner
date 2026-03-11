@@ -389,6 +389,9 @@ class FlowCommands(SharedHelpers):
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             topic_key=topic_key,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
             message_id=message_id if isinstance(message_id, int) else None,
             created_at=now_iso(),
             question_index=0,
@@ -1273,7 +1276,12 @@ class FlowCommands(SharedHelpers):
             button_labels[run.id] = _truncate_text(button_label, 32)
 
         state = SelectionState(
-            items=items, button_labels=button_labels, repo_id=repo_id
+            items=items,
+            button_labels=button_labels,
+            repo_id=repo_id,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
         )
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._flow_run_options[key] = state

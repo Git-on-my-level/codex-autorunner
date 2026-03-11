@@ -101,6 +101,27 @@ async def test_handle_callback_resume_selection_ok() -> None:
 
 
 @pytest.mark.anyio
+async def test_handle_callback_resume_selection_rejects_other_user() -> None:
+    handlers = _HandlerStub()
+    key = await handlers._resolve_topic_key(10, 11)
+    handlers._resume_options[key] = SelectionState(
+        items=[("thread_1", "One")],
+        requester_user_id="99",
+    )
+    callback = TelegramCallbackQuery(
+        update_id=1,
+        callback_id="cb1",
+        from_user_id=2,
+        data=encode_resume_callback("thread_1"),
+        message_id=3,
+        chat_id=10,
+        thread_id=11,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls == [("answer", "Selection expired")]
+
+
+@pytest.mark.anyio
 async def test_handle_callback_bind_selection_ok() -> None:
     handlers = _HandlerStub()
     key = await handlers._resolve_topic_key(12, None)
@@ -116,6 +137,27 @@ async def test_handle_callback_bind_selection_ok() -> None:
     )
     await handle_callback(handlers, callback)
     assert handlers.calls == [("bind", key, "repo_1")]
+
+
+@pytest.mark.anyio
+async def test_handle_callback_bind_selection_rejects_other_user() -> None:
+    handlers = _HandlerStub()
+    key = await handlers._resolve_topic_key(12, None)
+    handlers._bind_options[key] = SelectionState(
+        items=[("repo_1", "Repo")],
+        requester_user_id="99",
+    )
+    callback = TelegramCallbackQuery(
+        update_id=2,
+        callback_id="cb2",
+        from_user_id=3,
+        data=encode_bind_callback("repo_1"),
+        message_id=4,
+        chat_id=12,
+        thread_id=None,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls == [("answer", "Selection expired")]
 
 
 @pytest.mark.anyio

@@ -108,17 +108,23 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
                 reply_markup=None,
             )
 
-    def _handle_pending_resume(self, key: str, text: str) -> bool:
+    def _handle_pending_resume(
+        self, key: str, text: str, *, user_id: Optional[int] = None
+    ) -> bool:
         context = ChatContext(
             thread=ChatThreadRef(platform="telegram", chat_id="0", thread_id=None),
             topic_key=key,
+            user_id=str(user_id) if user_id is not None else None,
         )
         return self.handle_pending_resume(context, text)
 
-    def _handle_pending_bind(self, key: str, text: str) -> bool:
+    def _handle_pending_bind(
+        self, key: str, text: str, *, user_id: Optional[int] = None
+    ) -> bool:
         context = ChatContext(
             thread=ChatThreadRef(platform="telegram", chat_id="0", thread_id=None),
             topic_key=key,
+            user_id=str(user_id) if user_id is not None else None,
         )
         return self.handle_pending_bind(context, text)
 
@@ -133,7 +139,14 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         parsed: AgentCallback,
     ) -> None:
         state = self._agent_options.get(key)
-        if not state or not _selection_contains(state.items, parsed.agent):
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if (
+            not state
+            or not self._selection_belongs_to_user(state, actor_id)
+            or not _selection_contains(state.items, parsed.agent)
+        ):
             await self._answer_callback(callback, "Selection expired")
             return
         self._agent_options.pop(key, None)
@@ -175,6 +188,11 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             return False
         state = self._review_commit_options.get(key)
         if not state:
+            return False
+        if not self._selection_belongs_to_user(
+            state,
+            str(message.from_user_id) if message.from_user_id is not None else None,
+        ):
             return False
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
         if not page_items:
@@ -220,6 +238,12 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         pending = self._pending_review_custom.get(key)
         if not pending:
             return False
+        actor_id = (
+            str(message.from_user_id) if message.from_user_id is not None else None
+        )
+        requester_user_id = pending.get("requester_user_id")
+        if requester_user_id is not None and requester_user_id != actor_id:
+            return False
         instructions = raw_text if raw_text.strip() else raw_caption
         if not instructions.strip():
             return False
@@ -249,7 +273,10 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         parsed: ModelCallback,
     ) -> None:
         state = self._model_options.get(key)
-        if not state:
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if not state or not self._selection_belongs_to_user(state, actor_id):
             await self._answer_callback(callback, "Selection expired")
             return
         option = state.options.get(parsed.model_id)
@@ -326,7 +353,14 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         parsed: UpdateCallback,
     ) -> None:
         state = self._update_options.get(key)
-        if not state or not _selection_contains(state.items, parsed.target):
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if (
+            not state
+            or not self._selection_belongs_to_user(state, actor_id)
+            or not _selection_contains(state.items, parsed.target)
+        ):
             await self._answer_callback(callback, "Selection expired")
             return
         self._update_options.pop(key, None)
@@ -370,7 +404,14 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
     ) -> None:
         state = self._review_commit_options.get(key)
         subjects = self._review_commit_subjects.get(key, {})
-        if not state or not _selection_contains(state.items, parsed.sha):
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if (
+            not state
+            or not self._selection_belongs_to_user(state, actor_id)
+            or not _selection_contains(state.items, parsed.sha)
+        ):
             await self._answer_callback(callback, "Selection expired")
             return
         if callback.chat_id is None or callback.message_id is None:
@@ -420,7 +461,14 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         parsed: FlowRunCallback,
     ) -> None:
         state = self._flow_run_options.get(key)
-        if not state or not _selection_contains(state.items, parsed.run_id):
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if (
+            not state
+            or not self._selection_belongs_to_user(state, actor_id)
+            or not _selection_contains(state.items, parsed.run_id)
+        ):
             await self._answer_callback(callback, "Selection expired")
             return
         self._flow_run_options.pop(key, None)
@@ -607,33 +655,69 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         parsed: CancelCallback,
         callback: TelegramCallbackQuery,
     ) -> None:
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
         if parsed.kind == "resume":
+            state = self._resume_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._resume_options.pop(key, None)
             text = "Resume selection cancelled."
         elif parsed.kind == "bind":
+            state = self._bind_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._bind_options.pop(key, None)
             text = "Bind selection cancelled."
         elif parsed.kind == "agent":
+            state = self._agent_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._agent_options.pop(key, None)
             text = "Agent selection cancelled."
         elif parsed.kind == "model":
+            state = self._model_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._model_options.pop(key, None)
             self._model_pending.pop(key, None)
             text = "Model selection cancelled."
         elif parsed.kind == "update":
+            state = self._update_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._update_options.pop(key, None)
             text = "Update cancelled."
         elif parsed.kind == "update-confirm":
             self._update_confirm_options.pop(key, None)
             text = "Update cancelled."
         elif parsed.kind == "review-commit":
+            state = self._review_commit_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._review_commit_options.pop(key, None)
             self._review_commit_subjects.pop(key, None)
             text = "Review commit selection cancelled."
         elif parsed.kind == "review-custom":
+            pending = self._pending_review_custom.get(key)
+            requester_user_id = pending.get("requester_user_id") if pending else None
+            if requester_user_id is not None and requester_user_id != actor_id:
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._pending_review_custom.pop(key, None)
             text = "Custom review cancelled."
         elif parsed.kind == "flow-runs":
+            state = self._flow_run_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
             self._flow_run_options.pop(key, None)
             text = "Flow run selection cancelled."
         else:
@@ -683,6 +767,12 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             await self._answer_callback(callback, "Selection expired")
             return
         if not state:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if not self._selection_belongs_to_user(state, actor_id):
             await self._answer_callback(callback, "Selection expired")
             return
         total_pages = _page_count(len(state.items), DEFAULT_PAGE_SIZE)

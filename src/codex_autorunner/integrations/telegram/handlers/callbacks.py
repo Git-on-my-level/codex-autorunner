@@ -30,6 +30,15 @@ def _selection_contains(items: Sequence[tuple[str, str]], value: str) -> bool:
     return any(item_id == value for item_id, _ in items)
 
 
+def _selection_belongs_to_user(state: Any, user_id: int | None) -> bool:
+    expected = getattr(state, "requester_user_id", None)
+    if expected is None:
+        return True
+    if user_id is None:
+        return False
+    return expected == str(user_id)
+
+
 async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> None:
     parsed = parse_callback_data(callback.data)
     if parsed is None:
@@ -52,14 +61,22 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
     elif isinstance(parsed, ResumeCallback):
         if key:
             state = handlers._resume_options.get(key)
-            if not state or not _selection_contains(state.items, parsed.thread_id):
+            if (
+                not state
+                or not _selection_belongs_to_user(state, callback.from_user_id)
+                or not _selection_contains(state.items, parsed.thread_id)
+            ):
                 await handlers._answer_callback(callback, "Selection expired")
                 return
             await handlers._resume_thread_by_id(key, parsed.thread_id, callback)
     elif isinstance(parsed, BindCallback):
         if key:
             state = handlers._bind_options.get(key)
-            if not state or not _selection_contains(state.items, parsed.repo_id):
+            if (
+                not state
+                or not _selection_belongs_to_user(state, callback.from_user_id)
+                or not _selection_contains(state.items, parsed.repo_id)
+            ):
                 await handlers._answer_callback(callback, "Selection expired")
                 return
             await handlers._bind_topic_by_repo_id(key, parsed.repo_id, callback)

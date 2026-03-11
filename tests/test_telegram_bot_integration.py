@@ -14,6 +14,7 @@ from codex_autorunner.integrations.telegram.adapter import (
 )
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.integrations.telegram.types import PendingQuestion, SelectionState
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 
@@ -564,6 +565,152 @@ async def test_private_chat_default_path_runs_without_collaboration_policy(
     finally:
         await service._app_server_supervisor.close_all()
     assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_silent_topic_blocks_pending_bind_reply(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        fixture_command("basic"),
+        collaboration_raw={
+            "telegram": {
+                "destinations": [
+                    {
+                        "chat_id": 123,
+                        "thread_id": 77,
+                        "mode": "silent",
+                    }
+                ]
+            }
+        },
+    )
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    key = await service._resolve_topic_key(123, 77)
+    service._bind_options[key] = SelectionState(
+        items=[("repo-basic", "repo-basic")],
+        requester_user_id="456",
+    )
+    message = build_message(
+        "1",
+        thread_id=77,
+        message_id=10,
+        update_id=10,
+        chat_type="supergroup",
+    )
+    try:
+        await service._handle_message_inner(message)
+        await _drain_spawned_tasks(service)
+        record = await service._router.get_topic(key)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert service._bind_options[key].items == [("repo-basic", "repo-basic")]
+    assert record is None or record.workspace_path is None
+    assert fake_bot.messages == []
+
+
+@pytest.mark.anyio
+async def test_pending_bind_reply_requires_original_user(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        fixture_command("basic"),
+        overrides={"trigger_mode": "disabled"},
+        collaboration_raw={
+            "telegram": {
+                "destinations": [
+                    {
+                        "chat_id": 123,
+                        "thread_id": 77,
+                        "mode": "command_only",
+                    }
+                ],
+                "allowed_user_ids": [456, 789],
+            }
+        },
+    )
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    key = await service._resolve_topic_key(123, 77)
+    service._bind_options[key] = SelectionState(
+        items=[("repo-basic", "repo-basic")],
+        requester_user_id="456",
+    )
+    message = build_message(
+        "1",
+        thread_id=77,
+        user_id=789,
+        message_id=10,
+        update_id=10,
+        chat_type="supergroup",
+    )
+    try:
+        await service._handle_message_inner(message)
+        await _drain_spawned_tasks(service)
+        record = await service._router.get_topic(key)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert service._bind_options[key].items == [("repo-basic", "repo-basic")]
+    assert record is None or record.workspace_path is None
+    assert fake_bot.messages == []
+
+
+@pytest.mark.anyio
+async def test_silent_topic_blocks_pending_custom_question_reply(
+    tmp_path: Path,
+) -> None:
+    config = make_config(
+        tmp_path,
+        fixture_command("basic"),
+        collaboration_raw={
+            "telegram": {
+                "destinations": [
+                    {
+                        "chat_id": 123,
+                        "thread_id": 77,
+                        "mode": "silent",
+                    }
+                ]
+            }
+        },
+    )
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[str | None] = loop.create_future()
+    service._pending_questions["req-1"] = PendingQuestion(
+        request_id="req-1",
+        turn_id="turn-1",
+        codex_thread_id=None,
+        chat_id=123,
+        thread_id=77,
+        topic_key="123:77",
+        requester_user_id="456",
+        message_id=99,
+        created_at="now",
+        question_index=0,
+        prompt="Need input",
+        options=[],
+        future=future,
+        awaiting_custom_input=True,
+    )
+    message = build_message(
+        "custom answer",
+        thread_id=77,
+        message_id=10,
+        update_id=10,
+        chat_type="supergroup",
+    )
+    try:
+        await service._handle_message(message)
+        await _drain_spawned_tasks(service)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert "req-1" in service._pending_questions
+    assert future.done() is False
+    assert fake_bot.messages == []
 
 
 @pytest.mark.anyio

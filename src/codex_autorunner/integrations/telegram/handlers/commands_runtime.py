@@ -925,6 +925,11 @@ class TelegramCommandHandlers(
                             options={
                                 option.model_id: option for option in filtered_options
                             },
+                            requester_user_id=(
+                                str(message.from_user_id)
+                                if message.from_user_id is not None
+                                else None
+                            ),
                         )
                         self._model_options[key] = state
                         self._touch_cache_timestamp("model_options", key)
@@ -1014,7 +1019,13 @@ class TelegramCommandHandlers(
                 return
             items = [(option.model_id, option.label) for option in options]
             state = ModelPickerState(
-                items=items, options={option.model_id: option for option in options}
+                items=items,
+                options={option.model_id: option for option in options},
+                requester_user_id=(
+                    str(message.from_user_id)
+                    if message.from_user_id is not None
+                    else None
+                ),
             )
             self._model_options[key] = state
             self._touch_cache_timestamp("model_options", key)
@@ -2502,7 +2513,12 @@ Summary applied.""",
         self, message: TelegramMessage, *, prompt: str = UPDATE_PICKER_PROMPT
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        state = SelectionState(items=list(self._dynamic_update_target_options()))
+        state = SelectionState(
+            items=list(self._dynamic_update_target_options()),
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
+        )
         keyboard = self._build_update_keyboard(state)
         self._update_options[key] = state
         self._touch_cache_timestamp("update_options", key)
@@ -2521,7 +2537,14 @@ Summary applied.""",
         *,
         prompt: str = UPDATE_PICKER_PROMPT,
     ) -> None:
-        state = SelectionState(items=list(self._dynamic_update_target_options()))
+        state = SelectionState(
+            items=list(self._dynamic_update_target_options()),
+            requester_user_id=(
+                str(callback.from_user_id)
+                if callback.from_user_id is not None
+                else None
+            ),
+        )
         keyboard = self._build_update_keyboard(state)
         self._update_options[key] = state
         self._touch_cache_timestamp("update_options", key)

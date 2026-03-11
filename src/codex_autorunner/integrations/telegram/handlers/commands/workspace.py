@@ -829,7 +829,14 @@ class WorkspaceCommands(SharedHelpers):
                 )
                 return
             items = [(repo_id, repo_id) for repo_id in options]
-            state = SelectionState(items=items)
+            state = SelectionState(
+                items=items,
+                requester_user_id=(
+                    str(message.from_user_id)
+                    if message.from_user_id is not None
+                    else None
+                ),
+            )
             keyboard = self._build_bind_keyboard(state)
             self._bind_options[key] = state
             self._touch_cache_timestamp("bind_options", key)
@@ -1606,7 +1613,12 @@ class WorkspaceCommands(SharedHelpers):
             preview = local_previews.get(thread_id)
             label = _format_missing_thread_label(thread_id, preview)
             items.append((thread_id, label))
-        state = SelectionState(items=items)
+        state = SelectionState(
+            items=items,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
+        )
         keyboard = self._build_resume_keyboard(state)
         self._resume_options[key] = state
         self._touch_cache_timestamp("resume_options", key)
@@ -2072,7 +2084,13 @@ class WorkspaceCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return
-        state = SelectionState(items=items, button_labels=button_labels)
+        state = SelectionState(
+            items=items,
+            button_labels=button_labels,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
+        )
         keyboard = self._build_resume_keyboard(state)
         self._resume_options[key] = state
         self._touch_cache_timestamp("resume_options", key)
