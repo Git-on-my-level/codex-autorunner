@@ -134,6 +134,7 @@ async def test_flow_archive_command_deletes_run_record_by_default(
     rest = _FakeRest()
     service = _service(tmp_path, rest)
     captured: list[dict[str, Any]] = []
+    mirrored_run_exists: list[bool] = []
 
     def _archive_flow_run_artifacts(repo_root: Path, **kwargs: Any) -> dict[str, Any]:
         captured.append({"repo_root": str(repo_root), **kwargs})
@@ -149,6 +150,18 @@ async def test_flow_archive_command_deletes_run_record_by_default(
         "archive_flow_run_artifacts",
         _archive_flow_run_artifacts,
     )
+
+    class _Mirror:
+        def mirror_inbound(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+        def mirror_outbound(self, **kwargs: Any) -> None:
+            _ = kwargs
+            with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
+                store.initialize()
+                mirrored_run_exists.append(store.get_flow_run(run_id) is not None)
+
+    monkeypatch.setattr(service, "_flow_run_mirror", lambda _workspace_root: _Mirror())
 
     try:
         await service._handle_flow_archive(
@@ -167,9 +180,13 @@ async def test_flow_archive_command_deletes_run_record_by_default(
             "repo_root": str(workspace),
             "run_id": run_id,
             "force": False,
-            "delete_run": True,
+            "delete_run": False,
         }
     ]
+    assert mirrored_run_exists == [True]
+    with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
+        store.initialize()
+        assert store.get_flow_run(run_id) is None
     assert "Archived run" in rest.interaction_responses[0]["payload"]["data"]["content"]
 
 
