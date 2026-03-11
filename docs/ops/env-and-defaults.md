@@ -10,6 +10,13 @@ This document centralizes runtime environment variables and default behaviors.
 4. `.codex-autorunner/config.yml` (generated)
 5. Environment variables
 
+Generated `.codex-autorunner/config.yml` is intentionally sparse. CAR keeps
+code-level defaults, `codex-autorunner.yml`, and `codex-autorunner.override.yml`
+as the inherited baseline, then writes only explicit hub-local state or pinned
+overrides into generated config. Existing CAR-generated hub configs are
+normalized toward that sparse form on load, so future default changes do not
+stay pinned just because an older generated file materialized them once.
+
 Repo-local env files are loaded (when present) in this order:
 
 - `<repo>/.env`

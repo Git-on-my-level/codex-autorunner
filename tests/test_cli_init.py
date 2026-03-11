@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
@@ -21,6 +22,7 @@ def test_init_from_subdir_walks_to_repo_root(tmp_path: Path):
     assert not (nested / ".codex-autorunner").exists()
     contents = config_path.read_text(encoding="utf-8")
     assert "mode: hub" in contents
+    assert yaml.safe_load(contents) == {"version": 2, "mode": "hub"}
 
 
 def test_init_allows_child_git_repos_without_parent(tmp_path: Path):
@@ -39,6 +41,7 @@ def test_init_allows_child_git_repos_without_parent(tmp_path: Path):
     assert config_path.exists()
     contents = config_path.read_text(encoding="utf-8")
     assert "mode: hub" in contents
+    assert yaml.safe_load(contents) == {"version": 2, "mode": "hub"}
 
 
 def test_init_walks_nested_child_git_repos(tmp_path: Path):
@@ -54,6 +57,7 @@ def test_init_walks_nested_child_git_repos(tmp_path: Path):
     assert config_path.exists()
     contents = config_path.read_text(encoding="utf-8")
     assert "mode: hub" in contents
+    assert yaml.safe_load(contents) == {"version": 2, "mode": "hub"}
 
 
 def test_create_app_allows_parent_without_git(tmp_path: Path):

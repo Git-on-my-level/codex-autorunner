@@ -13,11 +13,13 @@ from .core.about_car import (
 from .core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
-    GENERATED_CONFIG_HEADER,
     REPO_OVERRIDE_FILENAME,
     ConfigError,
-    maybe_upgrade_generated_hub_pma_defaults,
-    resolve_hub_config_data,
+    normalize_generated_hub_config,
+    save_hub_config_data,
+)
+from .core.config import (
+    GENERATED_CONFIG_HEADER as CORE_GENERATED_CONFIG_HEADER,
 )
 from .core.state import RunnerState, save_state
 from .core.ticket_linter_cli import ensure_ticket_linter
@@ -26,6 +28,7 @@ from .core.utils import atomic_write
 from .manifest import load_manifest
 
 GITIGNORE_CONTENT = "*"
+GENERATED_CONFIG_HEADER = CORE_GENERATED_CONFIG_HEADER
 HUB_CAR_SHIM_MARKER = "# CAR:HUB_CLI_SHIM"
 HUB_CAR_SHIM_REL_PATH = Path(".codex-autorunner/bin/car")
 HUB_CAR_SHIM_ROOT_BASENAME = "car"
@@ -92,16 +95,14 @@ def write_hub_config(hub_root: Path, force: bool = False) -> Path:
                 f"{hub_root / REPO_OVERRIDE_FILENAME} or back up and delete the file, "
                 "then rerun. Use --force to overwrite it."
             )
-        maybe_upgrade_generated_hub_pma_defaults(config_path)
+        normalize_generated_hub_config(config_path)
         return config_path
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with config_path.open("w", encoding="utf-8") as f:
-        f.write(GENERATED_CONFIG_HEADER)
-        yaml.safe_dump(
-            resolve_hub_config_data(hub_root),
-            f,
-            sort_keys=False,
-        )
+    save_hub_config_data(
+        config_path,
+        {"version": DEFAULT_HUB_CONFIG["version"], "mode": "hub"},
+        generated=True,
+    )
     return config_path
 
 
