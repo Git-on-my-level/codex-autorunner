@@ -354,6 +354,36 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                 severity="info",
             )
         )
+        if policy.destinations:
+            checks.append(
+                DoctorCheck(
+                    name="Discord collaboration migration",
+                    passed=True,
+                    message=(
+                        "Explicit Discord collaboration destinations are configured. "
+                        "Use /car ids to copy exact guild/channel IDs and /car status "
+                        "to verify the effective mode and plain-text trigger in each "
+                        "channel."
+                    ),
+                    check_id="discord.collaboration_migration",
+                    severity="info",
+                )
+            )
+        else:
+            checks.append(
+                DoctorCheck(
+                    name="Discord collaboration migration",
+                    passed=True,
+                    message=(
+                        "Legacy dedicated-channel Discord setups still work with the "
+                        "current allowlists and binding flow. For shared guilds, "
+                        "migrate to collaboration_policy.discord with "
+                        "default_mode=command_only and explicit destinations."
+                    ),
+                    check_id="discord.collaboration_migration",
+                    severity="info",
+                )
+            )
         if (
             policy.destinations
             and policy.default_mode == "active"

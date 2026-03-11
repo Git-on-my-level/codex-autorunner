@@ -54,8 +54,14 @@ Why this matters:
 
 Ask the user which pattern they want:
 
-1. **DM with the bot** - fastest to set up.
-2. **Supergroup + topics** - better for team routing and per-topic isolation.
+1. **Personal setup** - DM with the bot, or one dedicated topic for one operator.
+2. **Collaborative setup** - a shared supergroup where different topics may be active, command-only, or silent.
+
+For the personal path:
+- Prefer a DM with the bot when possible.
+- A dedicated topic also works if the group is effectively private to one operator.
+- Legacy `telegram_bot.allowed_chat_ids`, `allowed_user_ids`, `trigger_mode`, and
+  `require_topics` are still valid for this path.
 
 If using supergroups/topics:
 - Enable Topics in Telegram group settings.
@@ -120,6 +126,17 @@ ID discovery notes:
 - If IDs are unknown, start the bot once and send a message, then read `telegram.allowlist.denied` in logs to capture `chat_id` and `user_id`.
 - After allowlisting works, run `/ids` in Telegram to confirm IDs and copy the exact allowlist and `collaboration_policy.telegram.destinations` snippet for the current chat/topic.
 
+Migration notes:
+- Existing DM or dedicated-topic installs do not need to migrate if they already
+  behave the way the operator wants.
+- Existing shared groups should migrate to explicit
+  `collaboration_policy.telegram.destinations` instead of relying on one
+  chat-wide trigger setting.
+- For shared groups, the safest default migration is:
+  1. keep current allowlists
+  2. add `require_topics: true` or a root-chat `mode: silent` destination
+  3. mark only the intended topics as `mode: active` or `mode: command_only`
+
 ### Step 6: Start and Verify First Run
 
 Run:
@@ -170,6 +187,24 @@ Check these first:
 4. Allowlist mismatch:
    - Confirm both `allowed_chat_ids` and `allowed_user_ids` include current values from `/ids`.
    - If using `collaboration_policy.telegram.destinations`, confirm the current `thread_id` matches the snippet from `/ids`.
+
+### Migrating an existing Telegram setup to collaboration mode
+
+Use this when a legacy Telegram install worked for one operator but now needs to
+support a shared supergroup safely:
+
+1. Keep the existing `allowed_chat_ids` and `allowed_user_ids`; they still
+   intersect and remain the admission gate.
+2. Run `/ids` in the root chat and each topic you care about.
+3. Add `collaboration_policy.telegram.destinations` for each active or human-only
+   topic using the exact IDs from `/ids`.
+4. Gate the root chat explicitly with either:
+   - `telegram_bot.require_topics: true`, or
+   - `{ chat_id: <group>, mode: silent }`
+5. Re-run `car doctor` and check the compiled collaboration summary plus any
+   root-chat warning.
+6. Re-test with `/status` in each topic to confirm the effective mode and
+   plain-text trigger.
 
 ### No response at all
 

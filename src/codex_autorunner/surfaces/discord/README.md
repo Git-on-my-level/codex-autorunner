@@ -61,6 +61,15 @@ Unbound but allowlisted channels now stay quiet for ordinary conversation.
 This is intentional: plain-text turns only start when the channel is both
 collaboration-allowed and ready to execute through a bound workspace or PMA.
 
+## Migration guidance
+
+- Existing dedicated-channel installs can keep the legacy `discord_bot`
+  allowlists and binding flow unchanged.
+- Shared guilds should migrate to `collaboration_policy.discord` when operators
+  want explicit `active`, `command_only`, and `silent` channels.
+- The recommended migration pattern is `default_mode: command_only` plus explicit
+  destinations captured from `/car ids`.
+
 ## Example config
 
 ```yaml

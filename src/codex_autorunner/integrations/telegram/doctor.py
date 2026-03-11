@@ -262,6 +262,35 @@ def telegram_doctor_checks(
                     severity="info",
                 )
             )
+            if policy.destinations:
+                checks.append(
+                    DoctorCheck(
+                        name="Telegram collaboration migration",
+                        passed=True,
+                        message=(
+                            "Explicit Telegram collaboration destinations are configured. "
+                            "Use /ids to capture exact chat/topic IDs and /status to verify "
+                            "the effective mode for each root chat or topic."
+                        ),
+                        check_id="telegram.collaboration_migration",
+                        severity="info",
+                    )
+                )
+            else:
+                checks.append(
+                    DoctorCheck(
+                        name="Telegram collaboration migration",
+                        passed=True,
+                        message=(
+                            "Legacy Telegram personal setups still work with the current "
+                            "allowlists. For shared supergroups, migrate to "
+                            "collaboration_policy.telegram.destinations and gate the "
+                            "root chat with require_topics or mode:silent."
+                        ),
+                        check_id="telegram.collaboration_migration",
+                        severity="info",
+                    )
+                )
             if _policy_uses_mentions(policy):
                 checks.append(
                     DoctorCheck(

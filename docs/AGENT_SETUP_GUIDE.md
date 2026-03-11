@@ -13,6 +13,17 @@ Use these only after base setup is complete:
 
 These are optional integrations, not required for baseline CAR setup.
 
+If the user wants Telegram or Discord, ask one more question before opening the
+surface-specific guide:
+
+1. **Personal setup**: one operator talking to CAR in a DM, a dedicated topic, or
+   a dedicated channel.
+2. **Collaborative setup**: multiple humans sharing one Telegram group/topic or
+   Discord guild/channel/thread where CAR should only answer in explicit places.
+
+The personal path should stay short. The collaborative path should use
+`collaboration_policy.*` and explicit destination modes.
+
 ---
 
 ## Instructions for the Agent
@@ -27,6 +38,10 @@ Ask the user which setup they want:
 2. **Single repo mode** — Use CAR to manage agents working on a single specific repository. This mode is primarily used for developing CAR itself and is not recommended for general use.
 
 Recommend hub mode unless the user is explicitly working on CAR development or has a specific reason to use single repo mode.
+
+If they also want Telegram or Discord, make sure you separately capture whether
+that chat surface is personal or collaborative. Do not assume a shared group or
+guild should behave like a personal DM/channel.
 
 ### Step 2: Check Prerequisites
 
@@ -177,6 +192,26 @@ Run `car hub scan` to discover existing git repositories, or use `car hub clone`
 
 ### Configuration Issues
 Check `.codex-autorunner/config.yml` or run `car doctor` for diagnostics.
+
+### Migrating existing Telegram or Discord chat setups
+
+Existing simple installs do not need forced migration:
+
+- Telegram DM or dedicated-topic setups can keep the legacy `telegram_bot`
+  allowlists and trigger settings.
+- Discord dedicated-channel setups can keep the legacy `discord_bot` allowlists
+  and normal `/car bind` or `/pma on` workflow.
+
+Operators should migrate only when they need intentional shared-chat behavior:
+
+- Add `collaboration_policy.telegram.destinations` for Telegram supergroups when
+  some topics should be `active`, `command_only`, or `silent`.
+- Add `collaboration_policy.discord` with `default_mode: command_only` and
+  explicit destinations for shared Discord guilds.
+- Use `/ids` in Telegram or `/car ids` in Discord to capture exact IDs and copy
+  a starter snippet.
+- Re-run `car doctor` after changes to confirm the compiled collaboration policy
+  and any root-chat or default-mode warnings.
 
 ### ticket_flow resume blocked or stale
 If `car flow ticket_flow resume` fails because another run is active, inspect that active run before creating a new one.

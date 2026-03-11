@@ -112,6 +112,31 @@ def test_discord_doctor_reports_collaboration_policy_summary(
     by_id = {check.check_id: check for check in checks}
     assert by_id["discord.collaboration_policy"].passed is True
     assert "destinations" in by_id["discord.collaboration_policy"].message
+    assert by_id["discord.collaboration_migration"].passed is True
+    assert "/car ids" in by_id["discord.collaboration_migration"].message
+
+
+def test_discord_doctor_reports_legacy_collaboration_migration_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
+
+    hub_config = _load_hub_with_discord(
+        tmp_path,
+        {
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "allowed_guild_ids": ["123"],
+        },
+    )
+
+    checks = discord_doctor_checks(hub_config)
+    by_id = {check.check_id: check for check in checks}
+    info = by_id["discord.collaboration_migration"]
+    assert info.passed is True
+    assert "default_mode=command_only" in info.message
 
 
 def test_discord_doctor_warns_when_destinations_leave_default_mode_active(

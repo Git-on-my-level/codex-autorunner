@@ -90,6 +90,15 @@ tradeoffs involved.
 - Use per-user bot tokens for multi-operator setups when possible.
 - Monitor logs for `telegram.allowlist.denied` and `telegram.turn.failed` events.
 
+## Migration guidance
+
+- Legacy personal setups remain valid. A DM or dedicated topic does not need a
+  forced migration to `collaboration_policy.telegram`.
+- Shared groups should migrate when they need intentional topic behavior. The
+  security win is explicit scope: only the topics marked `active` or
+  `command_only` can reach CAR, and the root chat can be made `silent` or
+  topic-only.
+
 ## References
 
 - `docs/telegram/architecture.md`

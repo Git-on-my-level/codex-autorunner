@@ -68,6 +68,16 @@ Set command registration strategy:
 1. **Development:** `guild` scope (fast propagation, recommended while iterating).
 2. **Production:** `global` scope (can take longer for command changes to appear).
 
+Also decide the operating mode for the Discord surface itself:
+
+1. **Personal setup** - one operator in a dedicated channel or thread.
+2. **Collaborative setup** - a shared guild where some channels should be active,
+   some command-only, and some silent.
+
+For the personal path, legacy `discord_bot` allowlists plus `/car bind` or
+`/pma on` remain valid. Use explicit `collaboration_policy.discord` only when
+you need intentional shared-channel behavior.
+
 ### Step 5: Add Minimal Discord Config
 
 In `codex-autorunner.yml` (or repo/hub override), add:
@@ -186,6 +196,18 @@ Recommended starting point for shared servers:
 - Use `mode: active` for channels or threads where CAR should answer plain-text messages.
 - Use `mode: silent` for human-only channels where CAR should ignore both plain text and commands.
 - Run `/car ids` inside a channel to get exact IDs plus a copy-paste collaboration snippet.
+
+Migration notes:
+- Existing dedicated-channel installs do not need to migrate if the current
+  `/car bind` or `/pma on` workflow already matches operator expectations.
+- Existing shared-guild installs should migrate to explicit
+  `collaboration_policy.discord` destinations instead of assuming every
+  allowlisted/bound channel should answer normal messages.
+- The safest migration pattern for a shared guild is:
+  1. keep current allowlists
+  2. set `default_mode: command_only`
+  3. mark only intended collaboration channels as `mode: active`
+  4. mark human-only channels as `mode: silent`
 
 ### Step 6: Register Commands and Verify First Run
 
@@ -335,6 +357,22 @@ If PMA is disabled globally in hub config, `/pma` commands will return an action
    - `/car bind path:<workspace-path>`
 2. Confirm workspace path exists on the CAR host.
 3. Run `car doctor` and check Discord check results for missing deps/env/state file issues.
+
+### Migrating an existing Discord setup to collaboration mode
+
+Use this when a legacy Discord install worked for one operator but now needs to
+support a shared guild safely:
+
+1. Keep the existing `discord_bot.allowed_*` filters; they remain the admission gate.
+2. Run `/car ids` in each channel or thread you care about and collect the exact IDs.
+3. Add `collaboration_policy.discord` with:
+   - `default_mode: command_only`
+   - explicit `mode: active` destinations for collaboration channels
+   - explicit `mode: silent` destinations for human-only channels
+4. Run `/car status` in those channels to verify the effective mode and
+   plain-text trigger.
+5. Re-run `car doctor` and check the compiled collaboration summary and any
+   `default_mode=active` warning.
 
 ### Slash commands work, but normal messages get no response
 

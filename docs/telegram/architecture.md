@@ -79,3 +79,14 @@ The bot logs structured events (e.g. `telegram.update.received`,
 3) Set env vars (`CAR_TELEGRAM_BOT_TOKEN`, optional `CAR_TELEGRAM_CHAT_ID`).
 4) Enable `telegram_bot.enabled` and set `allowed_user_ids`/`allowed_chat_ids`.
 5) Run `car telegram start --path <repo_or_hub>` and send `/status` or `/help`.
+
+## Migration guidance
+
+- Existing DM or single-topic installs can keep the legacy `telegram_bot`
+  allowlists and trigger settings unchanged.
+- Shared supergroups should migrate to explicit
+  `collaboration_policy.telegram.destinations` so root-chat vs topic behavior is
+  no longer implicit.
+- For shared groups, use `/ids` in the root chat and each topic, then gate the
+  root with either `require_topics=true` or an explicit root destination such as
+  `mode: silent`.
