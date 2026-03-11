@@ -5,14 +5,14 @@ from codex_autorunner.core.diagnostics.process_snapshot import (
 )
 
 SAMPLE_PS_OUTPUT = """\
-1234 1000 1000 /usr/bin/opencode serve --port 8080
-1235 1000 1000 /usr/bin/codex_autorunner run
-1236 1100 1100 /usr/bin/codex app-server --port 9000
-1237 1100 1100 /usr/bin/some-other-process --arg
-1238 1200 1200 /Users/user/.local/bin/opencode
-1239 1200 1200 /opt/codex/bin/codex app-server --workspace /tmp/ws
-1240 1300 1300 /bin/bash -c /usr/bin/opencode
-1241 1300 1300 /usr/bin/other-tool
+1234 1000 1000  1024  00:05:30 /usr/bin/opencode serve --port 8080
+1235 1000 1000  2048  00:10:15 /usr/bin/codex_autorunner run
+1236 1100 1100  5120  01:30:00 /usr/bin/codex app-server --port 9000
+1237 1100 1100   256  00:02:45 /usr/bin/some-other-process --arg
+1238 1200 1200  1536  00:08:20 /Users/user/.local/bin/opencode
+1239 1200 1200  4096  00:45:00 /opt/codex/bin/codex app-server --workspace /tmp/ws
+1240 1300 1300   512  00:12:00 /bin/bash -c /usr/bin/opencode
+1241 1300 1300   128  00:01:30 /usr/bin/other-tool
 """
 
 
@@ -80,9 +80,9 @@ class TestParsePsOutput:
 
     def test_malformed_lines_skipped(self):
         malformed = """\
-1234 1000 1000 good command
-not_a_pid 1000 1000 bad line
-1235 1000 1000 another good command
+1234 1000 1000  100 00:01:00 good command
+not_a_pid 1000 1000  100 00:01:00 bad line
+1235 1000 1000  100 00:01:00 another good command
 """
         snapshot = parse_ps_output(malformed)
         assert len(snapshot.opencode_processes) + len(snapshot.other_processes) == 2
@@ -103,3 +103,55 @@ class TestProcessSnapshot:
         snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
         assert snapshot.opencode_count == 4
         assert snapshot.app_server_count == 2
+
+
+class TestProcessInfoFields:
+    def test_rss_captured(self):
+        snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
+        p1234 = next(p for p in snapshot.opencode_processes if p.pid == 1234)
+        assert p1234.rss_kb == 1024
+
+    def test_elapsed_captured(self):
+        snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
+        p1234 = next(p for p in snapshot.opencode_processes if p.pid == 1234)
+        assert p1234.elapsed == "00:05:30"
+
+    def test_to_dict_includes_rss_and_elapsed(self):
+        snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
+        d = snapshot.to_dict()
+        opencode = d["opencode"]
+        p1234 = next(p for p in opencode if p["pid"] == 1234)
+        assert p1234["rss_kb"] == 1024
+        assert p1234["elapsed"] == "00:05:30"
+
+    def test_to_dict_includes_category(self):
+        snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
+        d = snapshot.to_dict()
+        opencode = d["opencode"]
+        assert all(p["category"] == "opencode" for p in opencode)
+
+    def test_missing_rss_handled(self):
+        output = "1234 1000 1000  not_a_number 00:01:00 /usr/bin/opencode"
+        snapshot = parse_ps_output(output)
+        assert snapshot.opencode_processes[0].rss_kb is None
+
+
+class TestEnrichWithOwnership:
+    def test_enrich_returns_same_snapshot(self):
+        from codex_autorunner.core.diagnostics.process_snapshot import (
+            enrich_with_ownership,
+        )
+
+        snapshot = parse_ps_output(SAMPLE_PS_OUTPUT)
+        result = enrich_with_ownership(snapshot, None)
+        assert result is snapshot
+
+    def test_ownership_enum_values(self):
+        from codex_autorunner.core.diagnostics.process_snapshot import (
+            ProcessOwnership,
+        )
+
+        assert ProcessOwnership.MANAGED.value == "managed"
+        assert ProcessOwnership.STALE_RECORD.value == "stale_record"
+        assert ProcessOwnership.UNTRACKED_LIVE_PROCESS.value == "untracked_live_process"
+        assert ProcessOwnership.OWNER_MISSING.value == "owner_missing"

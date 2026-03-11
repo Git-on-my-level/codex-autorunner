@@ -10,6 +10,7 @@ import typer
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
 from ....core.diagnostics.process_snapshot import (
     collect_processes,
+    enrich_with_ownership,
 )
 from ....core.git_utils import run_git
 from ....core.managed_processes import list_process_records
@@ -436,6 +437,8 @@ def register_doctor_commands(
             repo_root = find_repo_root(start_path)
         except RepoNotFoundError:
             pass
+        if repo_root:
+            snapshot = enrich_with_ownership(snapshot, repo_root)
         registry_counts, registry_records = _build_process_registry_payload(repo_root)
 
         if json_output:
@@ -454,16 +457,20 @@ def register_doctor_commands(
 
         typer.echo(f"\nopencode processes: {snapshot.opencode_count}")
         for proc in snapshot.opencode_processes[:top_n]:
+            mem_info = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
+            own_info = f" [{proc.ownership.value}]" if proc.ownership else ""
             typer.echo(
-                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}: "
-                f"{proc.command[:100]}"
+                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem_info}{own_info}: "
+                f"{proc.command[:80]}"
             )
 
         typer.echo(f"\ncodex app-server processes: {snapshot.app_server_count}")
         for proc in snapshot.app_server_processes[:top_n]:
+            mem_info = f" rss={proc.rss_kb}KB" if proc.rss_kb else ""
+            own_info = f" [{proc.ownership.value}]" if proc.ownership else ""
             typer.echo(
-                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}: "
-                f"{proc.command[:100]}"
+                f"  - pid={proc.pid} ppid={proc.ppid} pgid={proc.pgid}{mem_info}{own_info}: "
+                f"{proc.command[:80]}"
             )
 
         typer.echo("\nProcess Registry")
