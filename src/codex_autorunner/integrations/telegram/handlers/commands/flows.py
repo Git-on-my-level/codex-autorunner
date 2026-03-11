@@ -21,6 +21,8 @@ from .....core.flows.ux_helpers import (
     issue_md_path,
     seed_issue_from_github,
     seed_issue_from_text,
+    select_default_ticket_flow_run,
+    summarize_flow_freshness,
     ticket_progress,
 )
 from .....core.flows.worker_process import (
@@ -602,6 +604,15 @@ class FlowCommands(SharedHelpers):
                     callback, error, reply_markup={"inline_keyboard": []}
                 )
                 return
+            if record is not None:
+                record, _updated, locked = reconcile_flow_run(repo_root, record, store)
+                if locked:
+                    await self._edit_callback_message(
+                        callback,
+                        f"Run {_code(record.id)} is locked for reconcile; try again.",
+                        reply_markup={"inline_keyboard": []},
+                    )
+                    return
             text, keyboard = self._build_flow_status_card(
                 repo_root, record, store, repo_id=repo_id
             )
@@ -813,8 +824,7 @@ class FlowCommands(SharedHelpers):
             return None, error
         record = store.get_flow_run(run_id) if run_id else None
         if record is None:
-            runs = store.list_flow_runs(flow_type="ticket_flow")
-            record = runs[0] if runs else None
+            record = select_default_ticket_flow_run(store)
         if record is None:
             return (
                 None,
@@ -892,6 +902,9 @@ class FlowCommands(SharedHelpers):
                 seq_label = str(last_seq) if last_seq is not None else "?"
                 at_label = last_at or "unknown time"
                 lines.append(f"Last event: {seq_label} @ {at_label}")
+            freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
+            if freshness_summary:
+                lines.append(f"Freshness: {freshness_summary}")
         if health is None:
             health = snapshot.get("worker_health") if snapshot else None
         if health is None:
@@ -1050,8 +1063,7 @@ class FlowCommands(SharedHelpers):
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-                latest = runs[0] if runs else None
+                latest = select_default_ticket_flow_run(store)
                 lines.extend(self._format_flow_status_lines(repo_root, latest, store))
             finally:
                 store.close()
@@ -1133,8 +1145,7 @@ class FlowCommands(SharedHelpers):
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-                latest = runs[0] if runs else None
+                latest = select_default_ticket_flow_run(store)
                 progress = ticket_progress(repo_root)
                 display = build_ticket_flow_display(
                     status=latest.status.value if latest else None,
@@ -1142,6 +1153,20 @@ class FlowCommands(SharedHelpers):
                     total_count=progress.get("total", 0),
                     run_id=latest.id if latest else None,
                 )
+                freshness_suffix = ""
+                if latest is not None:
+                    snapshot = build_flow_status_snapshot(repo_root, latest, store)
+                    freshness = snapshot.get("freshness")
+                    freshness_summary = summarize_flow_freshness(freshness)
+                    if (
+                        isinstance(freshness, dict)
+                        and freshness.get("is_stale") is True
+                    ):
+                        freshness_suffix = (
+                            f" · snapshot {freshness_summary}"
+                            if freshness_summary
+                            else " · snapshot stale"
+                        )
                 progress_label = f"{display['done_count']}/{display['total_count']}"
                 status_line = _format_status_line(
                     label,
@@ -1151,6 +1176,7 @@ class FlowCommands(SharedHelpers):
                     run_id=display.get("run_id"),
                     prefix=line_prefix,
                 )
+                status_line += freshness_suffix
             except Exception:
                 status_line = f"{line_prefix}❓ {_code(label)}: Error reading state"
             finally:
@@ -1201,6 +1227,17 @@ class FlowCommands(SharedHelpers):
                     reply_to=message.message_id,
                 )
                 return
+            if record is not None:
+                record, _updated, locked = reconcile_flow_run(repo_root, record, store)
+                if locked:
+                    await self._send_message(
+                        message.chat_id,
+                        f"Run {_code(record.id)} is locked for reconcile; try again.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                        parse_mode="Markdown",
+                    )
+                    return
             text, keyboard = self._build_flow_status_card(
                 repo_root, record, store, repo_id=repo_id
             )

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from ...tickets.files import list_ticket_paths, ticket_is_done
+from ..config import load_repo_config
+from ..freshness import resolve_stale_threshold_seconds
+from ..ticket_flow_projection import (
+    build_canonical_state_v1,
+    select_authoritative_run_record,
+)
 from .models import FlowEventType, FlowRunRecord
 from .store import FlowStore
 from .worker_process import (
@@ -194,6 +200,108 @@ def _derive_effective_current_ticket(
         return None
 
 
+def select_default_ticket_flow_run(
+    store: FlowStore,
+) -> Optional[FlowRunRecord]:
+    try:
+        records = store.list_flow_runs(flow_type="ticket_flow")
+    except Exception:
+        return None
+    return select_authoritative_run_record(records)
+
+
+def _canonical_flow_status_state(
+    repo_root: Path,
+    record: FlowRunRecord,
+    store: Optional[FlowStore],
+) -> Optional[dict[str, Any]]:
+    if store is None:
+        return None
+    try:
+        repo_config = load_repo_config(repo_root)
+        pma_config = getattr(repo_config, "pma", None)
+        stale_threshold_seconds = resolve_stale_threshold_seconds(
+            getattr(pma_config, "freshness_stale_threshold_seconds", None)
+        )
+    except Exception:
+        stale_threshold_seconds = resolve_stale_threshold_seconds(None)
+
+    run_state = None
+    try:
+        from ..pma_context import build_ticket_flow_run_state
+
+        run_state = build_ticket_flow_run_state(
+            repo_root=repo_root,
+            repo_id=repo_root.name,
+            record=record,
+            store=store,
+            has_pending_dispatch=False,
+        )
+    except Exception:
+        run_state = None
+    run_state_payload = dict(run_state) if isinstance(run_state, dict) else None
+    try:
+        return build_canonical_state_v1(
+            repo_root=repo_root,
+            repo_id=repo_root.name,
+            run_state=run_state_payload,
+            record=record,
+            store=store,
+            stale_threshold_seconds=stale_threshold_seconds,
+        )
+    except Exception:
+        return None
+
+
+def _format_age_compact(age_seconds: Any) -> Optional[str]:
+    if not isinstance(age_seconds, int):
+        return None
+    if age_seconds < 60:
+        return f"{age_seconds}s ago"
+    if age_seconds < 3600:
+        return f"{age_seconds // 60}m ago"
+    if age_seconds < 86400:
+        return f"{age_seconds // 3600}h ago"
+    return f"{age_seconds // 86400}d ago"
+
+
+def _freshness_basis_label(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    basis = value.strip()
+    if not basis:
+        return None
+    labels = {
+        "run_state_last_progress_at": "last progress",
+        "last_event_at": "last event",
+        "latest_run_finished_at": "run finished",
+        "latest_run_started_at": "run started",
+        "latest_run_created_at": "run created",
+        "ticket_ingested_at": "ticket ingest",
+        "snapshot_generated_at": "snapshot time",
+    }
+    return labels.get(basis, basis.replace("_", " "))
+
+
+def summarize_flow_freshness(payload: Any) -> Optional[str]:
+    if not isinstance(payload, Mapping):
+        return None
+    status_raw = payload.get("status")
+    status = str(status_raw).strip().lower() if status_raw is not None else ""
+    if not status:
+        return None
+    parts = [status]
+    basis = _freshness_basis_label(payload.get("recency_basis"))
+    age_text = _format_age_compact(payload.get("age_seconds"))
+    if basis and age_text:
+        parts.append(f"{basis} {age_text}")
+    elif basis:
+        parts.append(basis)
+    elif age_text:
+        parts.append(age_text)
+    return " · ".join(parts)
+
+
 def build_flow_status_snapshot(
     repo_root: Path, record: FlowRunRecord, store: Optional[FlowStore]
 ) -> dict:
@@ -225,6 +333,10 @@ def build_flow_status_snapshot(
         ticket_engine["current_ticket"] = effective_ticket
         updated_state = dict(state)
         updated_state["ticket_engine"] = ticket_engine
+    canonical_state = _canonical_flow_status_state(repo_root, record, store)
+    freshness = (
+        canonical_state.get("freshness") if isinstance(canonical_state, dict) else None
+    )
 
     return {
         "last_event_seq": last_event_seq,
@@ -233,6 +345,8 @@ def build_flow_status_snapshot(
         "effective_current_ticket": effective_ticket,
         "ticket_progress": ticket_progress(repo_root),
         "state": updated_state,
+        "canonical_state_v1": canonical_state,
+        "freshness": freshness,
     }
 
 
@@ -273,6 +387,8 @@ __all__ = [
     "format_issue_as_markdown",
     "issue_md_has_content",
     "issue_md_path",
+    "select_default_ticket_flow_run",
+    "summarize_flow_freshness",
     "ticket_progress",
     "seed_issue_from_github",
     "seed_issue_from_text",

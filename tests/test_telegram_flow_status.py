@@ -651,6 +651,11 @@ async def test_flow_status_action_sends_keyboard(
         "build_flow_status_snapshot",
         lambda _root, _record, _store: snapshot,
     )
+    monkeypatch.setattr(
+        flows_module,
+        "reconcile_flow_run",
+        lambda _repo_root, record, _store: (record, False, False),
+    )
 
     handler = _FlowStatusHandler()
     message = TelegramMessage(
@@ -693,6 +698,11 @@ async def test_flow_status_action_callback_keeps_repo_id(
         "build_flow_status_snapshot",
         lambda _root, _record, _store: snapshot,
     )
+    monkeypatch.setattr(
+        flows_module,
+        "reconcile_flow_run",
+        lambda _repo_root, record, _store: (record, False, False),
+    )
 
     handler = _FlowStatusHandler()
     message = TelegramMessage(
@@ -714,6 +724,30 @@ async def test_flow_status_action_callback_keeps_repo_id(
     assert keyboard is not None
     callback = keyboard["inline_keyboard"][0][1]["callback_data"]
     assert callback.endswith(":car-wt-3")
+
+
+def test_flow_status_includes_freshness_summary(tmp_path: Path) -> None:
+    handler = FlowCommands()
+    record = _record(FlowRunStatus.RUNNING)
+    lines = handler._format_flow_status_lines(
+        tmp_path,
+        record,
+        store=None,
+        health=_health(tmp_path),
+        snapshot={
+            "worker_health": _health(tmp_path),
+            "effective_current_ticket": None,
+            "last_event_seq": 7,
+            "last_event_at": "2026-03-11T00:00:00Z",
+            "freshness": {
+                "status": "stale",
+                "recency_basis": "run_state_last_progress_at",
+                "age_seconds": 7200,
+            },
+        },
+    )
+
+    assert any(line == "Freshness: stale · last progress 2h ago" for line in lines)
 
 
 class _TopicStoreStub:

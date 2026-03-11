@@ -45,6 +45,8 @@ from ...core.flows.ux_helpers import (
     issue_md_path,
     seed_issue_from_github,
     seed_issue_from_text,
+    select_default_ticket_flow_run,
+    summarize_flow_freshness,
     ticket_progress,
 )
 from ...core.flows.worker_process import check_worker_health, clear_worker_metadata
@@ -54,6 +56,7 @@ from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
+from ...core.ticket_flow_projection import select_authoritative_run_record
 from ...core.ticket_flow_summary import build_ticket_flow_display
 from ...core.update import (
     UpdateInProgressError,
@@ -5939,8 +5942,7 @@ class DiscordBotService:
                 )
                 continue
             try:
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-                latest = runs[0] if runs else None
+                latest = select_default_ticket_flow_run(store)
                 progress = ticket_progress(entry.repo_root)
                 display = build_ticket_flow_display(
                     status=latest.status.value if latest else None,
@@ -5950,9 +5952,25 @@ class DiscordBotService:
                 )
                 run_id = display.get("run_id")
                 run_suffix = f" run {run_id}" if run_id else ""
+                freshness_suffix = ""
+                if latest is not None:
+                    snapshot = build_flow_status_snapshot(
+                        entry.repo_root, latest, store
+                    )
+                    freshness = snapshot.get("freshness")
+                    freshness_summary = summarize_flow_freshness(freshness)
+                    if (
+                        isinstance(freshness, dict)
+                        and freshness.get("is_stale") is True
+                    ):
+                        freshness_suffix = (
+                            f" · snapshot {freshness_summary}"
+                            if freshness_summary
+                            else " · snapshot stale"
+                        )
                 line = (
                     f"{line_prefix}{display['status_icon']} {line_label}: "
-                    f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}"
+                    f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}{freshness_suffix}"
                 )
             except Exception:
                 line = f"{line_prefix}❓ {line_label}: Error reading state"
@@ -6050,10 +6068,7 @@ class DiscordBotService:
     ) -> Optional[FlowRunRecord]:
         if not records:
             return None
-        for record in records:
-            if record.status in {FlowRunStatus.RUNNING, FlowRunStatus.PAUSED}:
-                return record
-        return records[0]
+        return select_authoritative_run_record(records)
 
     async def _handle_flow_status(
         self,
@@ -6193,6 +6208,10 @@ class DiscordBotService:
         ]
         if progress_label:
             lines.append(f"Tickets: {progress_label}")
+        freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
+        freshness_line = (
+            f"Freshness: {freshness_summary}" if freshness_summary else None
+        )
         lines.extend(
             [
                 f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
@@ -6200,6 +6219,8 @@ class DiscordBotService:
                 f"Current ticket: {current_ticket or '-'}",
             ]
         )
+        if freshness_line:
+            lines.append(freshness_line)
         response_text = "\n".join(lines)
         run_mirror = self._flow_run_mirror(workspace_root)
         run_mirror.mirror_inbound(

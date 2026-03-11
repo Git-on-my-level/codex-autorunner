@@ -240,6 +240,7 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
 
         assert f"Run: {paused_run_id}" in status_payload
         assert "Status: paused" in status_payload
+        assert "Freshness:" in status_payload
         assert "Worker:" in status_payload
         assert "Current ticket:" in status_payload
 
