@@ -91,6 +91,6 @@ async def test_service_startup_reaps_managed_processes(
 
     try:
         await service.run_forever()
-        assert called_roots == [tmp_path]
+        assert called_roots == [tmp_path, tmp_path]
     finally:
         await store.close()

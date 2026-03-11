@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...agents.opencode.harness import OpenCodeHarness
+from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...bootstrap import seed_hub_files, seed_repo_files
 from ...core.config import (
     ConfigError,
@@ -236,6 +237,7 @@ THREAD_LIST_MAX_PAGES = 5
 THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
+DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
 DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
 DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
@@ -340,6 +342,12 @@ def _path_within(*, root: Path, target: Path) -> bool:
     return is_within(root=root, target=target)
 
 
+def _opencode_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]:
+    if not idle_ttl_seconds or idle_ttl_seconds <= 0:
+        return None
+    return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
+
+
 async def _model_list_with_agent_compat(
     client: CodexAppServerClient,
     *,
@@ -435,6 +443,13 @@ class _SavedDiscordAttachment:
     is_image: bool
     transcript_text: Optional[str] = None
     transcript_warning: Optional[str] = None
+
+
+@dataclass
+class _OpenCodeSupervisorCacheEntry:
+    supervisor: OpenCodeSupervisor
+    prune_interval_seconds: Optional[float]
+    last_requested_at: float
 
 
 class DiscordBotService:
@@ -542,8 +557,9 @@ class DiscordBotService:
         self._backend_lock = asyncio.Lock()
         self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
         self._app_server_lock = asyncio.Lock()
-        self._opencode_supervisors: dict[str, Any] = {}
+        self._opencode_supervisors: dict[str, _OpenCodeSupervisorCacheEntry] = {}
         self._opencode_lock = asyncio.Lock()
+        self._opencode_prune_task: Optional[asyncio.Task[None]] = None
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
         self._channel_directory_store = ChannelDirectoryStore(self._config.root)
         self._guild_name_cache: dict[str, str] = {}
@@ -590,25 +606,7 @@ class DiscordBotService:
         )
 
     async def run_forever(self) -> None:
-        try:
-            cleanup = reap_managed_processes(self._config.root)
-            if cleanup.killed or cleanup.signaled or cleanup.removed:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.process_reaper.cleaned",
-                    killed=cleanup.killed,
-                    signaled=cleanup.signaled,
-                    removed=cleanup.removed,
-                    skipped=cleanup.skipped,
-                )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.process_reaper.failed",
-                exc=exc,
-            )
+        self._reap_managed_processes(stage="startup")
         await self._store.initialize()
         await run_chat_bootstrap_steps(
             platform="discord",
@@ -623,6 +621,7 @@ class DiscordBotService:
         )
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
+        self._opencode_prune_task = asyncio.create_task(self._run_opencode_prune_loop())
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
         dispatcher_loop_task = asyncio.create_task(self._run_dispatcher_loop())
         try:
@@ -650,6 +649,11 @@ class DiscordBotService:
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await dispatcher_loop_task
+            if self._opencode_prune_task is not None:
+                self._opencode_prune_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._opencode_prune_task
+                self._opencode_prune_task = None
             pause_watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pause_watch_task
@@ -1750,12 +1754,13 @@ class DiscordBotService:
 
     async def _opencode_supervisor_for_workspace(
         self, workspace_root: Path
-    ) -> Optional[Any]:
+    ) -> Optional[OpenCodeSupervisor]:
         key = str(workspace_root)
         async with self._opencode_lock:
             existing = self._opencode_supervisors.get(key)
             if existing is not None:
-                return existing
+                existing.last_requested_at = time.monotonic()
+                return existing.supervisor
             repo_config = load_repo_config(
                 workspace_root,
                 hub_path=self._hub_config_path,
@@ -1768,8 +1773,125 @@ class DiscordBotService:
             )
             if supervisor is None:
                 return None
-            self._opencode_supervisors[key] = supervisor
+            self._opencode_supervisors[key] = _OpenCodeSupervisorCacheEntry(
+                supervisor=supervisor,
+                prune_interval_seconds=_opencode_prune_interval(
+                    repo_config.opencode.idle_ttl_seconds
+                ),
+                last_requested_at=time.monotonic(),
+            )
             return supervisor
+
+    def _reap_managed_processes(self, *, stage: str) -> None:
+        try:
+            cleanup = reap_managed_processes(self._config.root)
+            if cleanup.killed or cleanup.signaled or cleanup.removed:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.process_reaper.cleaned",
+                    stage=stage,
+                    killed=cleanup.killed,
+                    signaled=cleanup.signaled,
+                    removed=cleanup.removed,
+                    skipped=cleanup.skipped,
+                )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.process_reaper.failed",
+                stage=stage,
+                exc=exc,
+            )
+
+    async def _next_opencode_prune_interval_seconds(self) -> float:
+        async with self._opencode_lock:
+            intervals = [
+                entry.prune_interval_seconds
+                for entry in self._opencode_supervisors.values()
+                if entry.prune_interval_seconds is not None
+            ]
+        if intervals:
+            return min(intervals)
+        return DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
+
+    async def _run_opencode_prune_loop(self) -> None:
+        while True:
+            await asyncio.sleep(await self._next_opencode_prune_interval_seconds())
+            await self._prune_opencode_supervisors()
+
+    async def _prune_opencode_supervisors(self) -> None:
+        async with self._opencode_lock:
+            cached_entries = list(self._opencode_supervisors.items())
+        cached_supervisors = len(cached_entries)
+        if not cached_entries:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.opencode.prune_sweep",
+                cached_supervisors=0,
+                cached_supervisors_after=0,
+                live_handles=0,
+                killed_processes=0,
+                evicted_supervisors=0,
+            )
+            return
+
+        now = time.monotonic()
+        live_handles = 0
+        killed_processes = 0
+        eviction_candidates: list[tuple[str, _OpenCodeSupervisorCacheEntry]] = []
+
+        for workspace_path, entry in cached_entries:
+            try:
+                killed_processes += await entry.supervisor.prune_idle()
+                snapshot = await entry.supervisor.lifecycle_snapshot()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.opencode.prune_failed",
+                    workspace_path=workspace_path,
+                    exc=exc,
+                )
+                continue
+            live_handles += snapshot.cached_handles
+            idle_for = max(0.0, now - entry.last_requested_at)
+            eviction_delay = (
+                entry.prune_interval_seconds
+                or DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
+            )
+            if snapshot.cached_handles == 0 and idle_for >= eviction_delay:
+                eviction_candidates.append((workspace_path, entry))
+
+        evicted_supervisors = 0
+        evicted_objects: list[OpenCodeSupervisor] = []
+        if eviction_candidates:
+            async with self._opencode_lock:
+                for workspace_path, entry in eviction_candidates:
+                    current = self._opencode_supervisors.get(workspace_path)
+                    if current is not entry:
+                        continue
+                    self._opencode_supervisors.pop(workspace_path, None)
+                    evicted_supervisors += 1
+                    evicted_objects.append(entry.supervisor)
+            for supervisor in evicted_objects:
+                with contextlib.suppress(Exception):
+                    await supervisor.close_all()
+
+        async with self._opencode_lock:
+            cached_supervisors_after = len(self._opencode_supervisors)
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "discord.opencode.prune_sweep",
+            cached_supervisors=cached_supervisors,
+            cached_supervisors_after=cached_supervisors_after,
+            live_handles=live_handles,
+            killed_processes=killed_processes,
+            evicted_supervisors=evicted_supervisors,
+        )
 
     async def _list_opencode_models_for_picker(
         self,
@@ -2398,11 +2520,14 @@ class DiscordBotService:
             with contextlib.suppress(Exception):
                 await supervisor.close_all()
         async with self._opencode_lock:
-            opencode_supervisors = list(self._opencode_supervisors.values())
+            opencode_supervisors = [
+                entry.supervisor for entry in self._opencode_supervisors.values()
+            ]
             self._opencode_supervisors.clear()
         for supervisor in opencode_supervisors:
             with contextlib.suppress(Exception):
                 await supervisor.close_all()
+        self._reap_managed_processes(stage="shutdown")
 
     async def _watch_ticket_flow_pauses(self) -> None:
         while True:
