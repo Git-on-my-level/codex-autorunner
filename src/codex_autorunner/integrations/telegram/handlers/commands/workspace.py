@@ -25,6 +25,10 @@ from ...adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
 )
+from ...collaboration_helpers import (
+    collaboration_summary_lines,
+    evaluate_collaboration_summary,
+)
 from ...config import AppServerUnavailableError
 from ...constants import (
     BIND_PICKER_PROMPT,
@@ -2595,6 +2599,11 @@ class WorkspaceCommands(SharedHelpers):
         approval_policy, sandbox_policy = self._effective_policies(record)
         agent = self._effective_agent(record)
         is_pma = bool(getattr(record, "pma_enabled", False))
+        command_policy, plain_text_policy = evaluate_collaboration_summary(
+            self,
+            message,
+            command_text="/status",
+        )
         workspace_label = record.workspace_path or ("hub" if is_pma else "unbound")
         effort_label = (
             record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
@@ -2612,6 +2621,11 @@ class WorkspaceCommands(SharedHelpers):
                 f"Workspace ID: {record.workspace_id or 'unknown'}",
                 f"Active thread: {record.active_thread_id or 'none'}",
                 f"Active turn: {runtime.current_turn_id or 'none'}",
+                *collaboration_summary_lines(
+                    message,
+                    command_result=command_policy,
+                    plain_text_result=plain_text_policy,
+                ),
                 f"Agent: {agent}",
                 f"Resume: {'supported' if self._agent_supports_resume(agent) else 'unsupported'}",
                 f"Model: {record.model or 'default'}",

@@ -29,9 +29,17 @@ tradeoffs involved.
 
 - The bot requires both `allowed_user_ids` and `allowed_chat_ids`. If either is
   empty, it refuses to handle messages.
+- Those actor and chat filters intersect. Adding a group chat id does not grant
+  every member access by itself; the sender must still be in `allowed_user_ids`.
+- `collaboration_policy.telegram.destinations` can further narrow behavior by
+  topic or root chat and assign explicit destination modes:
+  - `active`
+  - `command_only`
+  - `silent`
+  - `denied`
 - Allowlists are enforced for both messages and callback queries.
-- `telegram_bot.require_topics` can force use of forum topics to avoid accidental
-  handling in the root chat.
+- `telegram_bot.require_topics` or an explicit root-chat destination can keep
+  the group root from reaching CAR.
 
 ## Execution surface
 
@@ -73,8 +81,10 @@ tradeoffs involved.
 ## Recommendations
 
 - Treat Telegram as a convenience interface, not a secure enclave.
-- Keep allowlists narrow and avoid adding group chats unless you want every
-  member to have bot access.
+- Keep allowlists narrow and explicitly add only the users who should be able to
+  talk to CAR.
+- For shared supergroups, prefer topic-level destinations plus a silent or
+  denied root-chat destination.
 - Prefer `approval_mode = safe` and a restrictive sandbox for day-to-day use.
 - Disable `telegram_bot.shell.enabled` unless you explicitly need `!<cmd>`.
 - Use per-user bot tokens for multi-operator setups when possible.

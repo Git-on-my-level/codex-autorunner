@@ -61,6 +61,10 @@ If using supergroups/topics:
 - Enable Topics in Telegram group settings.
 - Set `telegram_bot.require_topics: true` so CAR only handles topic messages.
 - Consider `telegram_bot.trigger_mode: mentions` to reduce accidental runs in busy groups.
+- Prefer `collaboration_policy.telegram.destinations` for explicit topic behavior:
+  - `mode: active` for collaboration topics
+  - `mode: command_only` for slash/explicit-command topics
+  - `mode: silent` for human-only topics
 
 ### Step 5: Add Minimal Telegram Config
 
@@ -78,6 +82,32 @@ telegram_bot:
   trigger_mode: all
 ```
 
+For a shared supergroup with one active topic and a silent root chat:
+
+```yaml
+telegram_bot:
+  enabled: true
+  bot_token_env: CAR_TELEGRAM_BOT_TOKEN
+  allowed_chat_ids:
+    - -1001234567890
+  allowed_user_ids:
+    - 123456789
+    - 987654321
+
+collaboration_policy:
+  telegram:
+    allowed_chat_ids:
+      - -1001234567890
+    allowed_user_ids:
+      - 123456789
+      - 987654321
+    require_topics: true
+    destinations:
+      - { chat_id: -1001234567890, thread_id: 111, mode: active, plain_text_trigger: mentions }
+      - { chat_id: -1001234567890, thread_id: 222, mode: silent }
+      - { chat_id: -1001234567890, mode: silent }
+```
+
 Set environment variables:
 
 ```bash
@@ -88,7 +118,7 @@ export CAR_TELEGRAM_BOT_TOKEN="<bot-token>"
 
 ID discovery notes:
 - If IDs are unknown, start the bot once and send a message, then read `telegram.allowlist.denied` in logs to capture `chat_id` and `user_id`.
-- After allowlisting works, run `/ids` in Telegram to confirm IDs and copy the exact allowlist snippet.
+- After allowlisting works, run `/ids` in Telegram to confirm IDs and copy the exact allowlist and `collaboration_policy.telegram.destinations` snippet for the current chat/topic.
 
 ### Step 6: Start and Verify First Run
 
@@ -103,12 +133,14 @@ car telegram start --path <hub_or_repo_root>
 In Telegram, verify this sequence:
 
 1. `/help` responds.
-2. `/ids` shows expected chat/user/thread values.
+2. `/ids` shows expected chat/user/thread values and a copy-paste collaboration snippet.
 3. `/bind <repo_id|path>` binds the topic/chat to a workspace.
-4. `/new` starts a fresh thread.
-5. Send a normal non-command message and confirm agent output.
+4. `/status` shows the effective collaboration mode and plain-text trigger for the current root chat or topic.
+5. `/new` starts a fresh thread.
+6. Send a normal non-command message and confirm agent output.
 
 If `trigger_mode: mentions`, also verify a message without mention does not trigger, while `@<bot_username> ...` does trigger.
+If using topic destinations, also verify a `mode: silent` topic stays quiet and a `mode: command_only` topic only responds to commands.
 
 ### Step 7: Group Permission Checklist
 
@@ -134,8 +166,10 @@ Check these first:
    - Mention the bot or reply to a bot message, or switch back to `all`.
 3. Topic requirement mismatch:
    - If `telegram_bot.require_topics: true`, send messages inside a forum topic (not the root chat).
+   - If you configured topic destinations without `require_topics: true`, add an explicit root-chat destination such as `{ chat_id: <group>, mode: silent }` to keep the root quiet.
 4. Allowlist mismatch:
    - Confirm both `allowed_chat_ids` and `allowed_user_ids` include current values from `/ids`.
+   - If using `collaboration_policy.telegram.destinations`, confirm the current `thread_id` matches the snippet from `/ids`.
 
 ### No response at all
 

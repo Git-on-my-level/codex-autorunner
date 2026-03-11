@@ -220,6 +220,9 @@ The Telegram integration guarantees the following invariants:
 - All incoming updates (messages and callbacks) are validated against allowlists
 - Both `allowed_chat_ids` and `allowed_user_ids` must be non-empty
 - A message is denied if either check fails
+- The shared Telegram collaboration policy can further gate root chat vs topic
+  destinations and decide whether a destination is `active`, `command_only`,
+  `silent`, or `denied`
 
 ### Placeholder Cleanup
 
@@ -235,12 +238,15 @@ The Telegram enforces allowlist-based access control:
 
 ### Required Configuration
 
-Both must be configured and non-empty:
+Both legacy allowlists must be configured and non-empty:
 
 - `allowed_chat_ids`: Set of Telegram chat IDs that can interact with the bot
 - `allowed_user_ids`: Set of Telegram user IDs allowed to use the bot
 
 If either set is empty, the bot refuses to handle all messages.
+
+For shared groups, add `collaboration_policy.telegram.destinations` to make root
+chat and topic behavior explicit instead of relying on one chat-wide default.
 
 ### Allowlist Check
 
@@ -250,7 +256,9 @@ For each incoming update (message or callback):
 2. Verify `chat_id` is in `allowed_chat_ids`
 3. Verify `user_id` is in `allowed_user_ids`
 4. If `require_topics` is true, also verify `thread_id` is not None
-5. If any check fails, log `telegram.allowlist.denied` and ignore the update
+5. Apply any topic/root destination overrides from `collaboration_policy.telegram`
+6. If any check fails, log `telegram.allowlist.denied` or a collaboration-policy
+   outcome and ignore the update
 
 ### Shell Command Gating
 
@@ -288,7 +296,7 @@ Default approval mode is `yolo`, which maps to `full-access` preset.
 
 1. **No auth beyond allowlists**: Telegram provides authentication via chat/user IDs, but there's no additional auth layer
 2. **Multi-user setups**: Each operator should use their own bot token and instance to avoid cross-user interference
-3. **Group chats**: Adding a group chat to `allowed_chat_ids` gives all members access (use with caution)
-4. **Require topics**: Enforcing `require_topics=true` prevents accidental handling in the root of group chats
+3. **Group chats**: Adding a group chat id does not bypass `allowed_user_ids`, but it still widens the surface area to every allowed user in that group
+4. **Root chat vs topics**: Use `require_topics=true` or an explicit root destination (`silent`, `command_only`, or `denied`) to avoid accidental handling in the root of group chats
 5. **Shell commands**: Treat `!<cmd>` as privileged; only enable when explicitly needed
 6. **Data at rest**: State database contains workspace paths and thread IDs; protect accordingly

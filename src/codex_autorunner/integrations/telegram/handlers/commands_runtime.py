@@ -45,6 +45,11 @@ from ..adapter import (
     build_update_confirm_keyboard,
     encode_cancel_callback,
 )
+from ..collaboration_helpers import (
+    build_collaboration_snippet_lines,
+    collaboration_summary_lines,
+    evaluate_collaboration_summary,
+)
 from ..config import AppServerUnavailableError
 from ..constants import (
     COMMAND_DISABLED_TEMPLATE,
@@ -595,6 +600,11 @@ class TelegramCommandHandlers(
         self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        command_policy, plain_text_policy = evaluate_collaboration_summary(
+            self,
+            message,
+            command_text="/debug",
+        )
         record = await self._router.get_topic(key)
         scope = None
         try:
@@ -607,6 +617,13 @@ class TelegramCommandHandlers(
             f"Base key: {base_key}",
             f"Scope: {scope or 'none'}",
         ]
+        lines.extend(
+            collaboration_summary_lines(
+                message,
+                command_result=command_policy,
+                plain_text_result=plain_text_policy,
+            )
+        )
         if record is None:
             lines.append("Record: missing")
             await self._send_message(
@@ -652,16 +669,40 @@ class TelegramCommandHandlers(
         self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        command_policy, plain_text_policy = evaluate_collaboration_summary(
+            self,
+            message,
+            command_text="/ids",
+        )
         lines = [
             f"Chat ID: {message.chat_id}",
             f"Thread ID: {message.thread_id or 'none'}",
             f"User ID: {message.from_user_id or 'unknown'}",
             f"Topic key: {key}",
-            "Allowlist example:",
-            f"telegram_bot.allowed_chat_ids: [{message.chat_id}]",
+            "",
         ]
+        lines.extend(
+            collaboration_summary_lines(
+                message,
+                command_result=command_policy,
+                plain_text_result=plain_text_policy,
+            )
+        )
+        lines.extend(
+            [
+                "",
+                "Legacy allowlist example:",
+                f"telegram_bot.allowed_chat_ids: [{message.chat_id}]",
+            ]
+        )
         if message.from_user_id is not None:
             lines.append(f"telegram_bot.allowed_user_ids: [{message.from_user_id}]")
+        lines.extend(
+            [
+                "",
+                *build_collaboration_snippet_lines(message),
+            ]
+        )
         await self._send_message(
             message.chat_id,
             "\n".join(lines),

@@ -262,6 +262,44 @@ def telegram_doctor_checks(
                     severity="info",
                 )
             )
+            if _policy_uses_mentions(policy):
+                checks.append(
+                    DoctorCheck(
+                        name="Telegram privacy mode guidance",
+                        passed=True,
+                        message=(
+                            "Mentions-based Telegram collaboration is configured. "
+                            "Disable BotFather privacy mode if you want plain-text "
+                            "group messages and @mentions to reach CAR."
+                        ),
+                        check_id="telegram.privacy_mode_guidance",
+                        severity="info",
+                    )
+                )
+            if (
+                _has_topic_destinations(policy)
+                and not policy.require_subdestination
+                and not _has_root_destinations(policy)
+                and policy.default_mode == "active"
+            ):
+                checks.append(
+                    DoctorCheck(
+                        name="Telegram root chat collaboration gap",
+                        passed=False,
+                        message=(
+                            "Topic destinations are configured, but the root chat "
+                            "still inherits default_mode=active. Root-chat messages "
+                            "can still reach CAR unless you gate or silence the root."
+                        ),
+                        check_id="telegram.collaboration_policy.root_chat",
+                        severity="warning",
+                        fix=(
+                            "Set telegram_bot.require_topics: true or add an explicit "
+                            "root destination such as `{ chat_id: <group>, mode: "
+                            "silent }`. Use /ids in Telegram to copy the exact IDs."
+                        ),
+                    )
+                )
         except CollaborationPolicyError as exc:
             checks.append(
                 DoctorCheck(
@@ -378,6 +416,29 @@ def _telegram_voice_ingestion_enabled(telegram_cfg: dict[str, Any]) -> bool:
     media_enabled = bool(media_cfg.get("enabled", True))
     media_voice = bool(media_cfg.get("voice", True))
     return media_enabled and media_voice
+
+
+def _has_topic_destinations(policy: Any) -> bool:
+    return any(
+        getattr(destination, "subdestination_id", None) is not None
+        for destination in getattr(policy, "destinations", ())
+    )
+
+
+def _has_root_destinations(policy: Any) -> bool:
+    return any(
+        getattr(destination, "subdestination_id", None) is None
+        for destination in getattr(policy, "destinations", ())
+    )
+
+
+def _policy_uses_mentions(policy: Any) -> bool:
+    if getattr(policy, "default_plain_text_trigger", None) == "mentions":
+        return True
+    return any(
+        getattr(destination, "plain_text_trigger", None) == "mentions"
+        for destination in getattr(policy, "destinations", ())
+    )
 
 
 def _check_stuck_turns(checks: list[DoctorCheck], state_file_path: Path) -> None:

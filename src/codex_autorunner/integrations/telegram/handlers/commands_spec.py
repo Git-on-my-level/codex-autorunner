@@ -87,7 +87,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "status": CommandSpec(
             "status",
-            "show current binding and thread status",
+            "show current binding, thread, and collaboration status",
             handlers._handle_status,
             allow_during_turn=True,
         ),
@@ -99,13 +99,13 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "debug": CommandSpec(
             "debug",
-            "show topic debug info",
+            "show topic debug info and effective collaboration policy",
             handlers._handle_debug,
             allow_during_turn=True,
         ),
         "ids": CommandSpec(
             "ids",
-            "show chat/user/thread IDs",
+            "show chat/user/thread IDs and collaboration snippets",
             handlers._handle_ids,
             allow_during_turn=True,
         ),

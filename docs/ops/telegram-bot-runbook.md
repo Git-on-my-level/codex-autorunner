@@ -17,6 +17,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - `telegram_bot.shell.enabled` is off by default; set it to `true` to enable `!<cmd>` support.
 - Enabling shell allows remote command execution gated only by the Telegram allowlist.
 - In group chats where the bot is an admin, consider `telegram_bot.trigger_mode: mentions` to avoid reacting to every message.
+- For shared supergroups, prefer `collaboration_policy.telegram.destinations` so each topic is explicitly `active`, `command_only`, or `silent`.
 - Example:
   ```yaml
   telegram_bot:
@@ -32,7 +33,9 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 ## Verify
 
 - In the target topic, send `/status` and confirm the workspace and active thread.
+- Confirm `/status` also reports the expected collaboration mode and plain-text trigger for the current root chat or topic.
 - Send `/help` to confirm command handling.
+- Send `/ids` and confirm the chat/user/thread ids plus the generated collaboration snippet match the intended topic.
 - Send a normal message and verify a single agent response.
 - Send an image with an optional caption and confirm a response (image is stored under the bound workspace).
 - Send a voice note and confirm it transcribes (requires Whisper/voice config).
@@ -44,7 +47,8 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - `/resume`: list recent threads and resume one.
 - `/interrupt`: stop the active turn.
 - `/approvals yolo|safe`: toggle approval mode.
-- `/ids`: show chat/user/thread IDs for allowlisting.
+- `/ids`: show chat/user/thread IDs plus copy-paste collaboration snippets.
+- `/status`: show current workspace/runtime state plus the effective collaboration mode for the current destination.
 - `/update [both|web|chat|telegram|discord]`: update CAR and restart selected services.
 - `!<cmd>`: run a bash command in the bound workspace (controlled by `telegram_bot.shell.enabled`).
 
@@ -79,6 +83,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
   - Confirm the topic is bound via `/bind`.
 - Updates ignored:
   - If `telegram_bot.require_topics` is true, use a topic and not the root chat.
+  - If only some topics should be active, add explicit `collaboration_policy.telegram.destinations` and silence or deny the root chat.
   - Check `telegram.allowlist.denied` events for chat/user ids.
 - Turns failing:
   - Check `telegram.turn.failed` and `app_server.*` logs.

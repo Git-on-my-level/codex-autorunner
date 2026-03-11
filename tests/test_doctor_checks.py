@@ -70,6 +70,46 @@ def test_telegram_doctor_reports_collaboration_policy_summary():
     assert "destinations" in by_id["telegram.collaboration_policy"].message
 
 
+def test_telegram_doctor_reports_mentions_privacy_guidance():
+    cfg = {
+        "telegram_bot": {
+            "enabled": True,
+            "allowed_chat_ids": [-1001],
+            "allowed_user_ids": [42],
+            "trigger_mode": "mentions",
+        }
+    }
+    checks = telegram_doctor_checks(cfg)
+    by_id = {check.check_id: check for check in checks}
+    assert by_id["telegram.privacy_mode_guidance"].passed is True
+    assert "privacy mode" in by_id["telegram.privacy_mode_guidance"].message.lower()
+
+
+def test_telegram_doctor_warns_when_root_chat_remains_active():
+    cfg = {
+        "telegram_bot": {
+            "enabled": True,
+            "allowed_chat_ids": [-1001],
+            "allowed_user_ids": [42],
+        },
+        "collaboration_policy": {
+            "telegram": {
+                "destinations": [
+                    {
+                        "chat_id": -1001,
+                        "thread_id": 7,
+                        "mode": "active",
+                    }
+                ]
+            }
+        },
+    }
+    checks = telegram_doctor_checks(cfg)
+    by_id = {check.check_id: check for check in checks}
+    assert by_id["telegram.collaboration_policy.root_chat"].passed is False
+    assert "root chat" in by_id["telegram.collaboration_policy.root_chat"].message
+
+
 def test_telegram_doctor_checks_local_voice_dependency_missing(monkeypatch):
     """Test Telegram doctor check catches missing local whisper dependency."""
 
