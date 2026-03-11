@@ -367,6 +367,7 @@ class TelegramBotService(
         self._outbox_task: Optional[asyncio.Task[None]] = None
         self._cache_cleanup_task: Optional[asyncio.Task[None]] = None
         self._ticket_flow_watch_task: Optional[asyncio.Task[None]] = None
+        self._terminal_flow_watch_task: Optional[asyncio.Task[None]] = None
         self._cache_timestamps: dict[str, dict[object, float]] = {}
         self._last_update_ids: dict[str, int] = {}
         self._last_update_persisted_at: dict[str, float] = {}

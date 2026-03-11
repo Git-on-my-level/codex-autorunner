@@ -122,6 +122,11 @@ class ChatBotServiceCore:
                     owner.TICKET_FLOW_WATCH_INTERVAL_SECONDS
                 )
             )
+            owner._terminal_flow_watch_task = asyncio.create_task(
+                owner._ticket_flow_bridge.watch_ticket_flow_terminals(
+                    owner.TICKET_FLOW_WATCH_INTERVAL_SECONDS
+                )
+            )
             owner._spawn_task(owner._prewarm_workspace_clients())
             log_event(
                 owner._logger,
@@ -211,6 +216,12 @@ class ChatBotServiceCore:
                     owner._ticket_flow_watch_task.cancel()
                     try:
                         await owner._ticket_flow_watch_task
+                    except asyncio.CancelledError:
+                        pass
+                if owner._terminal_flow_watch_task is not None:
+                    owner._terminal_flow_watch_task.cancel()
+                    try:
+                        await owner._terminal_flow_watch_task
                     except asyncio.CancelledError:
                         pass
                 if owner._spawned_tasks:

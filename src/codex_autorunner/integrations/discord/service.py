@@ -220,6 +220,7 @@ from .state import DiscordStateStore, OutboxRecord
 
 DISCORD_EPHEMERAL_FLAG = 64
 PAUSE_SCAN_INTERVAL_SECONDS = 5.0
+TERMINAL_SCAN_INTERVAL_SECONDS = 5.0
 FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 MESSAGE_TURN_APPROVAL_POLICY = "never"
@@ -604,6 +605,7 @@ class DiscordBotService:
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
+        terminal_watch_task = asyncio.create_task(self._watch_ticket_flow_terminals())
         dispatcher_loop_task = asyncio.create_task(self._run_dispatcher_loop())
         try:
             log_event(
@@ -633,6 +635,9 @@ class DiscordBotService:
             pause_watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pause_watch_task
+            terminal_watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await terminal_watch_task
             outbox_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await outbox_task
@@ -2484,6 +2489,122 @@ class DiscordBotService:
                 dispatch_seq=snapshot.dispatch_seq,
                 chunk_count=len(chunks),
             )
+
+    async def _watch_ticket_flow_terminals(self) -> None:
+        while True:
+            try:
+                await self._scan_and_enqueue_terminal_notifications()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.terminal_watch.scan_failed",
+                    exc=exc,
+                )
+            await asyncio.sleep(TERMINAL_SCAN_INTERVAL_SECONDS)
+
+    async def _scan_and_enqueue_terminal_notifications(self) -> None:
+        bindings = await self._store.list_bindings()
+        for binding in bindings:
+            channel_id = binding.get("channel_id")
+            workspace_raw = binding.get("workspace_path")
+            if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
+                continue
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            terminal_run = await asyncio.to_thread(
+                self._load_latest_terminal_ticket_flow_run, workspace_root
+            )
+            if terminal_run is None:
+                continue
+            run_id, status, error_message = terminal_run
+            if binding.get("last_terminal_run_id") == run_id:
+                continue
+            message = self._format_terminal_notification(
+                run_id=run_id, status=status, error_message=error_message
+            )
+            record_id = f"terminal:{channel_id}:{run_id}"
+            try:
+                await self._store.enqueue_outbox(
+                    OutboxRecord(
+                        record_id=record_id,
+                        channel_id=channel_id,
+                        message_id=None,
+                        operation="send",
+                        payload_json={"content": message},
+                    )
+                )
+                run_mirror = self._flow_run_mirror(workspace_root)
+                run_mirror.mirror_outbound(
+                    run_id=run_id,
+                    platform="discord",
+                    event_type="flow_terminal_notice",
+                    kind="notification",
+                    actor="car",
+                    text=message,
+                    chat_id=channel_id,
+                    message_id=record_id,
+                    meta={"status": status},
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.terminal_watch.enqueue_failed",
+                    exc=exc,
+                    channel_id=channel_id,
+                    run_id=run_id,
+                )
+                continue
+            await self._store.mark_terminal_run_seen(
+                channel_id=channel_id, run_id=run_id
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.terminal_watch.notified",
+                channel_id=channel_id,
+                run_id=run_id,
+                status=status,
+            )
+
+    def _load_latest_terminal_ticket_flow_run(
+        self, workspace_root: Path
+    ) -> Optional[tuple[str, str, Optional[str]]]:
+        db_path = workspace_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            return None
+        config = load_repo_config(workspace_root)
+        with FlowStore(db_path, durable=config.durable_writes) as store:
+            for status in (
+                FlowRunStatus.COMPLETED,
+                FlowRunStatus.FAILED,
+                FlowRunStatus.STOPPED,
+            ):
+                runs = store.list_flow_runs(flow_type="ticket_flow", status=status)
+                if runs:
+                    latest = runs[0]
+                    return (latest.id, latest.status.value, latest.error_message)
+        return None
+
+    def _format_terminal_notification(
+        self, *, run_id: str, status: str, error_message: Optional[str]
+    ) -> str:
+        if status == FlowRunStatus.COMPLETED.value:
+            return f"Ticket flow completed successfully (run {run_id})."
+        elif status == FlowRunStatus.FAILED.value:
+            error_text = self._truncate_error(error_message)
+            return f"Ticket flow failed (run {run_id}). Error: {error_text}"
+        elif status == FlowRunStatus.STOPPED.value:
+            return f"Ticket flow stopped (run {run_id})."
+        return f"Ticket flow ended (run {run_id}, status: {status})."
+
+    def _truncate_error(self, error_message: Optional[str], limit: int = 200) -> str:
+        if not error_message:
+            return "Unknown error"
+        normalized = " ".join(error_message.split())
+        if len(normalized) > limit:
+            return f"{normalized[: limit - 3]}..."
+        return normalized
 
     async def _send_channel_message(
         self, channel_id: str, payload: dict[str, Any]
