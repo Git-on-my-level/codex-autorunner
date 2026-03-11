@@ -3753,6 +3753,7 @@ class DiscordBotService:
             "/car experimental [action] [feature] - Toggle experimental features",
             "/car rollout - Show current thread rollout path",
             "/car feedback <reason> - Send feedback and logs",
+            "/car archive - Archive workspace state for a fresh start",
             "",
             "**Session Commands:**",
             "/car session resume [thread_id] - Resume a previous chat thread",
@@ -6817,7 +6818,12 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
-        outbound_text = f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']})."
+        outbound_text = (
+            f"Archived run {summary['run_id']} "
+            f"(tickets={summary['archived_tickets']}, "
+            f"runs_archived={summary['archived_runs']}, "
+            f"contextspace={summary['archived_contextspace']})."
+        )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
@@ -6832,7 +6838,11 @@ class DiscordBotService:
             text=outbound_text,
             chat_id=channel_id,
             thread_id=guild_id,
-            meta={"archived_runs": summary.get("archived_runs")},
+            meta={
+                "archived_runs": summary.get("archived_runs"),
+                "archived_tickets": summary.get("archived_tickets"),
+                "archived_contextspace": summary.get("archived_contextspace"),
+            },
         )
 
     async def _handle_flow_reply(
@@ -8527,7 +8537,12 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Archived run {summary['run_id']} (runs_archived={summary['archived_runs']}).",
+                (
+                    f"Archived run {summary['run_id']} "
+                    f"(tickets={summary['archived_tickets']}, "
+                    f"runs_archived={summary['archived_runs']}, "
+                    f"contextspace={summary['archived_contextspace']})."
+                ),
             )
         elif action == "restart":
             await self._handle_flow_restart(
@@ -9446,6 +9461,87 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             message_text,
+        )
+
+    async def _handle_car_archive(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        from ...core.archive import (
+            archive_workspace_car_state,
+            resolve_workspace_archive_target,
+        )
+
+        workspace_root = await self._require_bound_workspace(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+        )
+        if workspace_root is None:
+            return
+
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+
+        try:
+            target = resolve_workspace_archive_target(
+                workspace_root,
+                hub_root=self._config.root,
+                manifest_path=self._manifest_path,
+            )
+            result = await asyncio.to_thread(
+                archive_workspace_car_state,
+                base_repo_root=target.base_repo_root,
+                base_repo_id=target.base_repo_id,
+                worktree_repo_root=workspace_root,
+                worktree_repo_id=target.workspace_repo_id,
+                branch=None,
+                worktree_of=target.worktree_of,
+                note="Discord /car archive",
+                source_path=target.source_path,
+            )
+        except ValueError as exc:
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
+            )
+            return
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.archive_state.failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=format_discord_message("Archive failed; check logs for details."),
+            )
+            return
+
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=format_discord_message(
+                "\n".join(
+                    [
+                        f"Archived workspace state to snapshot `{result.snapshot_id}`.",
+                        f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                        "The binding remains active for fresh work.",
+                    ]
+                )
+            ),
         )
 
     async def _handle_car_interrupt(

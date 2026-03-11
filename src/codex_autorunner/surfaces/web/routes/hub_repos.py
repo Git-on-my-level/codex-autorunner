@@ -41,6 +41,7 @@ from ..app_state import HubAppContext
 from ..schemas import (
     HubArchiveWorktreeRequest,
     HubArchiveWorktreeResponse,
+    HubArchiveWorktreeStateResponse,
     HubCleanupWorktreeRequest,
     HubCreateWorktreeRequest,
     HubDestinationSetRequest,
@@ -1098,6 +1099,16 @@ def build_hub_repo_routes(
     @router.post("/hub/worktrees/archive", response_model=HubArchiveWorktreeResponse)
     async def archive_worktree(payload: HubArchiveWorktreeRequest):
         return await worktree.archive_worktree(
+            worktree_repo_id=payload.worktree_repo_id,
+            archive_note=payload.archive_note,
+        )
+
+    @router.post(
+        "/hub/worktrees/archive-state",
+        response_model=HubArchiveWorktreeStateResponse,
+    )
+    async def archive_worktree_state(payload: HubArchiveWorktreeRequest):
+        return await worktree.archive_worktree_state(
             worktree_repo_id=payload.worktree_repo_id,
             archive_note=payload.archive_note,
         )

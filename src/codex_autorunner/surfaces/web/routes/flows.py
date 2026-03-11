@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-import shutil
 import sqlite3
 import subprocess
 import uuid
@@ -24,6 +23,7 @@ from ....core.flows import (
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
+    archive_flow_run_artifacts,
 )
 from ....core.flows.reconciler import reconcile_flow_run
 from ....core.flows.start_policy import (
@@ -1441,36 +1441,23 @@ You are the first ticket in a new ticket_flow run.
                     detail="Can only archive completed/stopped/failed flows (use force=true for stuck flows)",
                 )
 
-        # Move tickets to run artifacts directory
-        _, artifacts_root = _flow_paths(repo_root)
-        archive_dir = artifacts_root / run_id / "archived_tickets"
-        archive_dir.mkdir(parents=True, exist_ok=True)
-
-        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        archived_count = 0
-        for ticket_path in list_ticket_paths(ticket_dir):
-            dest = archive_dir / ticket_path.name
-            shutil.move(str(ticket_path), str(dest))
-            archived_count += 1
-
-        # Archive runs directory (dispatch_history, reply_history, etc.) to dismiss notifications
-        outbox_paths = _resolve_outbox_for_record(record, repo_root)
-        run_dir = outbox_paths.run_dir
-        if run_dir.exists() and run_dir.is_dir():
-            archived_runs_dir = artifacts_root / run_id / "archived_runs"
-            shutil.move(str(run_dir), str(archived_runs_dir))
-
-        # Delete run record if requested
-        if delete_run:
-            store = _require_flow_store(repo_root)
-            if store:
-                store.delete_flow_run(run_id)
-                store.close()
+        try:
+            summary = archive_flow_run_artifacts(
+                repo_root,
+                run_id=run_id,
+                force=force,
+                delete_run=delete_run,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
             "status": "archived",
             "run_id": run_id,
-            "tickets_archived": archived_count,
+            "tickets_archived": summary["archived_tickets"],
+            "archived_runs": summary["archived_runs"],
+            "archived_contextspace": summary["archived_contextspace"],
+            "missing_paths": summary.get("missing_paths", []),
         }
 
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)

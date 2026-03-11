@@ -88,3 +88,42 @@ test("repo cards show chat binding labels instead of raw chat ids", () => {
   assert.match(text, /13m ago/);
   assert.doesNotMatch(text, /ce806ba9-4e19-459a-9e01-2d3d3c6eafd4/);
 });
+
+test("worktree cards show archive state action when CAR state is present", () => {
+  __hubTest.setHubChannelEntries([]);
+  __hubTest.renderRepos([
+    {
+      id: "base--feature",
+      path: "/tmp/base--feature",
+      display_name: "base--feature",
+      enabled: true,
+      auto_run: false,
+      worktree_setup_commands: [],
+      kind: "worktree",
+      worktree_of: "base",
+      branch: "feature",
+      exists_on_disk: true,
+      is_clean: true,
+      initialized: true,
+      init_error: null,
+      status: "idle",
+      lock_status: "unlocked",
+      last_run_id: null,
+      last_exit_code: null,
+      last_run_started_at: null,
+      last_run_finished_at: null,
+      runner_pid: null,
+      effective_destination: { kind: "local" },
+      mounted: false,
+      mount_error: null,
+      cleanup_blocked_by_chat_binding: false,
+      has_car_state: true,
+      ticket_flow: null,
+      ticket_flow_display: null,
+    },
+  ]);
+
+  const text = document.getElementById("hub-repo-list")?.textContent || "";
+  assert.match(text, /Archive state/);
+  assert.match(text, /Cleanup/);
+});

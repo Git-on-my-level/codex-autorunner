@@ -729,6 +729,14 @@ function buildActions(repo) {
     }
     if (!missing && kind === "worktree") {
         const cleanupBlockedByChatBinding = isCleanupBlockedByChatBinding(repo);
+        if (repo.has_car_state) {
+            actions.push({
+                key: "archive_state",
+                label: "Archive state",
+                kind: "ghost",
+                title: "Archive CAR runtime state and reset the worktree for fresh work",
+            });
+        }
         actions.push({
             key: "cleanup_worktree",
             label: "Cleanup",
@@ -2057,6 +2065,22 @@ async function handleRepoAction(repoId, action) {
                 startedMessage: "Worktree cleanup queued",
             });
             flash(`Removed worktree: ${repoId}`, "success");
+            await refreshHub();
+            return;
+        }
+        if (action === "archive_state") {
+            const repo = hubData.repos.find((item) => item.id === repoId);
+            if (!repo || !repo.has_car_state)
+                return;
+            const displayName = repo.display_name || repoId;
+            const ok = await confirmModal(`Archive worktree state "${displayName}"?\n\nCAR will archive tickets, dispatches, contextspace, and other dirty runtime state for later viewing in the Archive tab. The worktree and chat bindings will remain active for fresh work.`, { confirmText: "Archive state" });
+            if (!ok)
+                return;
+            await api("/hub/worktrees/archive-state", {
+                method: "POST",
+                body: { worktree_repo_id: repoId, archive_note: null },
+            });
+            flash(`Archived state for worktree: ${repoId}`, "success");
             await refreshHub();
             return;
         }

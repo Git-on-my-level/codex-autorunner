@@ -23,7 +23,11 @@ from ..manifest import (
     save_manifest,
 )
 from ..tickets.outbox import set_lifecycle_emitter
-from .archive import archive_worktree_snapshot, build_snapshot_id
+from .archive import (
+    archive_workspace_car_state,
+    archive_worktree_snapshot,
+    build_snapshot_id,
+)
 from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .destinations import (
@@ -142,6 +146,7 @@ class RepoSnapshot:
     telegram_chat_bound_thread_count: int = 0
     non_pma_chat_bound_thread_count: int = 0
     cleanup_blocked_by_chat_binding: bool = False
+    has_car_state: bool = False
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         try:
@@ -177,6 +182,7 @@ class RepoSnapshot:
             "telegram_chat_bound_thread_count": self.telegram_chat_bound_thread_count,
             "non_pma_chat_bound_thread_count": self.non_pma_chat_bound_thread_count,
             "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
+            "has_car_state": self.has_car_state,
         }
 
 
@@ -1418,6 +1424,55 @@ class HubSupervisor:
             "total_bytes": result.total_bytes,
             "flow_run_count": result.flow_run_count,
             "latest_flow_run_id": result.latest_flow_run_id,
+        }
+
+    def archive_worktree_state(
+        self,
+        *,
+        worktree_repo_id: str,
+        archive_note: Optional[str] = None,
+    ) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(worktree_repo_id)
+        if not entry or entry.kind != "worktree":
+            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
+        if not entry.worktree_of:
+            raise ValueError("Worktree repo is missing worktree_of metadata")
+        base = manifest.get(entry.worktree_of)
+        if not base or base.kind != "base":
+            raise ValueError(f"Base repo not found: {entry.worktree_of}")
+
+        base_path = (self.hub_config.root / base.path).resolve()
+        worktree_path = (self.hub_config.root / entry.path).resolve()
+        if not worktree_path.exists():
+            raise ValueError(f"Worktree path does not exist: {worktree_path}")
+
+        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
+        if runner:
+            runner.stop()
+
+        branch_name = entry.branch or git_branch(worktree_path) or "unknown"
+        result = archive_workspace_car_state(
+            base_repo_root=base_path,
+            base_repo_id=base.id,
+            worktree_repo_root=worktree_path,
+            worktree_repo_id=worktree_repo_id,
+            branch=branch_name,
+            worktree_of=entry.worktree_of,
+            note=archive_note,
+            source_path=entry.path,
+        )
+        return {
+            "snapshot_id": result.snapshot_id,
+            "snapshot_path": str(result.snapshot_path),
+            "meta_path": str(result.meta_path),
+            "status": result.status,
+            "file_count": result.file_count,
+            "total_bytes": result.total_bytes,
+            "flow_run_count": result.flow_run_count,
+            "latest_flow_run_id": result.latest_flow_run_id,
+            "archived_paths": list(result.archived_paths),
+            "reset_paths": list(result.reset_paths),
         }
 
     def check_repo_removal(self, repo_id: str) -> Dict[str, object]:

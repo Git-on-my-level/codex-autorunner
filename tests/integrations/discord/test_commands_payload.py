@@ -43,6 +43,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "experimental",
         "rollout",
         "feedback",
+        "archive",
         "session",
         "files",
         "flow",

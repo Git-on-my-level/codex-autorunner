@@ -80,9 +80,9 @@ let fileRequestToken = 0;
 let artifactRequestToken = 0;
 
 const SNAPSHOT_QUICK_LINKS: Array<{ label: string; path: string; kind: "file" | "folder" }> = [
-  { label: "Active Context", path: "workspace/active_context.md", kind: "file" },
-  { label: "Decisions", path: "workspace/decisions.md", kind: "file" },
-  { label: "Spec", path: "workspace/spec.md", kind: "file" },
+  { label: "Active Context", path: "contextspace/active_context.md", kind: "file" },
+  { label: "Decisions", path: "contextspace/decisions.md", kind: "file" },
+  { label: "Spec", path: "contextspace/spec.md", kind: "file" },
   { label: "Tickets", path: "tickets", kind: "folder" },
   { label: "Runs", path: "runs", kind: "folder" },
   { label: "Flows", path: "flows", kind: "folder" },
@@ -650,7 +650,7 @@ function renderFileList(): void {
       dlBtn.addEventListener("click", (evt) => {
         evt.stopPropagation();
         if (!fileState) return;
-        downloadArchiveFile(fileState.snapshotId, fileState.worktreeRepoId, node.path);
+        downloadFileForState(fileState, node.path);
       });
       actions.appendChild(dlBtn);
     }

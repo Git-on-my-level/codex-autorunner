@@ -25,9 +25,9 @@ def _write_snapshot(
         / snapshot_id
     )
     snapshot_root.mkdir(parents=True, exist_ok=True)
-    workspace_dir = snapshot_root / "workspace"
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    (workspace_dir / "active_context.md").write_text(
+    contextspace_dir = snapshot_root / "contextspace"
+    contextspace_dir.mkdir(parents=True, exist_ok=True)
+    (contextspace_dir / "active_context.md").write_text(
         "Archived context", encoding="utf-8"
     )
     if with_meta:
@@ -108,7 +108,7 @@ def test_archive_traversal_is_rejected(tmp_path: Path) -> None:
     _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
 
     res = client.get(
-        "/api/archive/tree", params={"snapshot_id": "../snap1", "path": "workspace"}
+        "/api/archive/tree", params={"snapshot_id": "../snap1", "path": "contextspace"}
     )
     assert res.status_code == 400
 
@@ -132,23 +132,50 @@ def test_archive_tree_and_file_reads(tmp_path: Path) -> None:
     _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
 
     tree = client.get(
-        "/api/archive/tree", params={"snapshot_id": "snap1", "path": "workspace"}
+        "/api/archive/tree", params={"snapshot_id": "snap1", "path": "contextspace"}
     )
     assert tree.status_code == 200
     nodes = {node["path"]: node for node in tree.json()["nodes"]}
-    assert "workspace/active_context.md" in nodes
-    assert nodes["workspace/active_context.md"]["type"] == "file"
+    assert "contextspace/active_context.md" in nodes
+    assert nodes["contextspace/active_context.md"]["type"] == "file"
 
     read = client.get(
         "/api/archive/file",
-        params={"snapshot_id": "snap1", "path": "workspace/active_context.md"},
+        params={"snapshot_id": "snap1", "path": "contextspace/active_context.md"},
     )
     assert read.status_code == 200
     assert read.text.strip() == "Archived context"
 
     download = client.get(
         "/api/archive/download",
-        params={"snapshot_id": "snap1", "path": "workspace/active_context.md"},
+        params={"snapshot_id": "snap1", "path": "contextspace/active_context.md"},
     )
     assert download.status_code == 200
     assert download.content == b"Archived context"
+
+
+def test_local_archive_tree_reads_any_archived_run_content(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    run_root = repo_root / ".codex-autorunner" / "flows" / "run-123"
+    (run_root / "contextspace").mkdir(parents=True, exist_ok=True)
+    (run_root / "contextspace" / "active_context.md").write_text(
+        "Local archived context", encoding="utf-8"
+    )
+    (run_root / "chat").mkdir(parents=True, exist_ok=True)
+    (run_root / "chat" / "outbound.jsonl").write_text("{}", encoding="utf-8")
+
+    tree = client.get("/api/archive/local/tree", params={"run_id": "run-123"})
+    assert tree.status_code == 200
+    nodes = {node["path"]: node for node in tree.json()["nodes"]}
+    assert "contextspace" in nodes
+    assert "chat" in nodes
+
+    read = client.get(
+        "/api/archive/local/file",
+        params={"run_id": "run-123", "path": "contextspace/active_context.md"},
+    )
+    assert read.status_code == 200
+    assert read.text.strip() == "Local archived context"

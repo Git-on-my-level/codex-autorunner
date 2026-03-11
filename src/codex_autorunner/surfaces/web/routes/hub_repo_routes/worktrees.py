@@ -183,3 +183,25 @@ class HubWorktreeService:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return result
+
+    async def archive_worktree_state(
+        self,
+        worktree_repo_id: str,
+        archive_note: Optional[str],
+    ) -> dict:
+        from .....core.logging_utils import safe_log
+
+        safe_log(
+            self._context.logger,
+            logging.INFO,
+            "Hub archive worktree state id=%s" % (worktree_repo_id,),
+        )
+        try:
+            result = await asyncio.to_thread(
+                self._context.supervisor.archive_worktree_state,
+                worktree_repo_id=str(worktree_repo_id),
+                archive_note=archive_note,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return result
