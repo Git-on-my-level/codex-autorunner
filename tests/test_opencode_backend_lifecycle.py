@@ -100,8 +100,9 @@ class TestOpenCodeBackendLifecycle:
         client = await backend._ensure_client()
 
         assert client is mock_client
-        assert backend._client is mock_client
         mock_supervisor.get_client.assert_called_once()
+        # When using supervisor, backend does not cache the client
+        # to handle supervisor restarts properly
 
 
 class TestSafeCloseClient:
@@ -135,3 +136,72 @@ class TestSafeCloseClient:
 
         # Should not raise
         await supervisor._safe_close_client(mock_client)
+
+
+class TestOpenCodeBackendTurnLifecycle:
+    def test_mark_turn_started_called_when_supervisor_configured(self) -> None:
+        mock_supervisor = MagicMock()
+        mock_supervisor.mark_turn_started = AsyncMock()
+        mock_supervisor.mark_turn_finished = AsyncMock()
+
+        backend = OpenCodeBackend(
+            supervisor=mock_supervisor, workspace_root=Path("/tmp")
+        )
+
+        # Check that _mark_turn_started calls the supervisor
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(backend._mark_turn_started())
+
+        mock_supervisor.mark_turn_started.assert_called_once()
+
+    def test_mark_turn_finished_called_when_supervisor_configured(self) -> None:
+        mock_supervisor = MagicMock()
+        mock_supervisor.mark_turn_started = AsyncMock()
+        mock_supervisor.mark_turn_finished = AsyncMock()
+
+        backend = OpenCodeBackend(
+            supervisor=mock_supervisor, workspace_root=Path("/tmp")
+        )
+
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(backend._mark_turn_finished())
+
+        mock_supervisor.mark_turn_finished.assert_called_once()
+
+    def test_mark_turn_not_called_when_no_supervisor(self) -> None:
+        backend = OpenCodeBackend(base_url="http://localhost:8080")
+
+        import asyncio
+
+        # Should not raise
+        asyncio.get_event_loop().run_until_complete(backend._mark_turn_started())
+        asyncio.get_event_loop().run_until_complete(backend._mark_turn_finished())
+
+    def test_ensure_client_no_cache_when_using_supervisor(self) -> None:
+        mock_supervisor = MagicMock()
+        mock_client = _make_mock_client()
+        mock_supervisor.get_client = AsyncMock(return_value=mock_client)
+
+        backend = OpenCodeBackend(
+            supervisor=mock_supervisor, workspace_root=Path("/tmp")
+        )
+
+        # When using supervisor, _client should remain None
+        # because we always get fresh clients from supervisor
+        assert backend._client is None
+
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(backend._ensure_client())
+
+        # Client should NOT be cached when using supervisor
+        assert backend._client is None
+        mock_supervisor.get_client.assert_called_once()
+
+    def test_ensure_client_uses_cache_when_no_supervisor(self) -> None:
+        backend = OpenCodeBackend(base_url="http://localhost:8080")
+
+        # When using base_url (no supervisor), client should be cached
+        assert backend._client is not None
