@@ -238,6 +238,7 @@ def archive_worktree_snapshot(
     curated: list[tuple[Path, Path]] = [
         (source_root / "workspace", snapshot_root / "workspace"),
         (source_root / "tickets", snapshot_root / "tickets"),
+        (source_root / "contextspace", snapshot_root / "contextspace"),
         (source_root / "runs", snapshot_root / "runs"),
         (source_root / "flows", snapshot_root / "flows"),
         (source_root / "flows.db", snapshot_root / "flows.db"),
@@ -347,3 +348,26 @@ def archive_worktree_snapshot(
         missing_paths=tuple(missing_paths),
         skipped_symlinks=tuple(skipped_symlinks),
     )
+
+
+CAR_STATE_PATHS = [
+    "tickets",
+    "contextspace",
+    "runs",
+    "flows",
+    "flows.db",
+    "state.sqlite3",
+    "workspace",
+]
+
+
+def has_car_state(worktree_root: Path) -> bool:
+    """Check if a worktree has any CAR runtime state that could be archived."""
+    car_root = worktree_root / ".codex-autorunner"
+    if not car_root.exists():
+        return False
+    for rel_path in CAR_STATE_PATHS:
+        candidate = car_root / rel_path
+        if candidate.exists():
+            return True
+    return False

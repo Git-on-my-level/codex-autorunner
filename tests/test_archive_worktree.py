@@ -18,11 +18,13 @@ def _setup_worktree(tmp_path: Path) -> tuple[Path, Path]:
     car_root = worktree_repo / ".codex-autorunner"
     (car_root / "workspace").mkdir(parents=True)
     (car_root / "tickets").mkdir(parents=True)
+    (car_root / "contextspace").mkdir(parents=True)
     (car_root / "runs" / "run-1" / "dispatch").mkdir(parents=True)
     (car_root / "flows").mkdir(parents=True)
 
     _write(car_root / "workspace" / "notes.txt", "hello")
     _write(car_root / "tickets" / "TICKET-001.md", "ticket")
+    _write(car_root / "contextspace" / "active_context.md", "context")
     _write(car_root / "runs" / "run-1" / "dispatch" / "DISPATCH.md", "dispatch")
     _write(car_root / "flows.db", "flows-db")
     _write(car_root / "config.yml", "config")
@@ -111,7 +113,7 @@ def test_archive_summary_counts_files_and_flows(tmp_path: Path) -> None:
     assert result.flow_run_count == 2
     assert result.latest_flow_run_id == "22222222-2222-2222-2222-222222222222"
 
-    expected_files = 10
+    expected_files = 11
     assert result.file_count == expected_files
 
     total_bytes = 0

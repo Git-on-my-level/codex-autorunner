@@ -1267,6 +1267,111 @@ class WorkspaceCommands(SharedHelpers):
             reply_to=message.message_id,
         )
 
+    async def _handle_archive(self, message: TelegramMessage) -> None:
+        import shutil
+
+        from .....core.archive import (
+            CAR_STATE_PATHS,
+            archive_worktree_snapshot,
+            has_car_state,
+        )
+
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        workspace_root = self._canonical_workspace_root(record.workspace_path)
+        if workspace_root is None:
+            await self._send_message(
+                message.chat_id,
+                "Workspace unavailable.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        if not has_car_state(workspace_root):
+            await self._send_message(
+                message.chat_id,
+                "No CAR state to archive. Workspace is already clean.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        repo_id: Optional[str] = None
+        base_repo_id: Optional[str] = None
+        manifest_path = getattr(self, "_manifest_path", None)
+        hub_root = getattr(self, "_hub_root", None)
+        if manifest_path and manifest_path.exists() and hub_root:
+            try:
+                manifest = load_manifest(manifest_path, hub_root)
+                for repo in manifest.repos:
+                    repo_path = canonicalize_path(hub_root / repo.path)
+                    if repo_path == workspace_root:
+                        repo_id = repo.id
+                        if repo.kind == "worktree" and repo.worktree_of:
+                            base_repo_id = repo.worktree_of
+                        else:
+                            base_repo_id = repo.id
+                        break
+            except Exception:
+                pass
+
+        if repo_id is None:
+            repo_id = workspace_root.name
+            base_repo_id = repo_id
+
+        try:
+            result = await asyncio.to_thread(
+                archive_worktree_snapshot,
+                base_repo_root=hub_root or workspace_root,
+                base_repo_id=base_repo_id or repo_id,
+                worktree_repo_root=workspace_root,
+                worktree_repo_id=repo_id,
+                branch=None,
+                worktree_of=base_repo_id or repo_id,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.archive.failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                f"Archive failed: {exc}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        car_root = workspace_root / ".codex-autorunner"
+        for rel_path in CAR_STATE_PATHS:
+            target = car_root / rel_path
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+
+        await self._send_message(
+            message.chat_id,
+            f"Archived workspace state to snapshot `{result.snapshot_id}`.\n"
+            f"You can now start fresh work. The binding remains active.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     async def _handle_newt(self, message: TelegramMessage) -> None:
         import re
 

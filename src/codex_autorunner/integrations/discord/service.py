@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -1761,7 +1762,15 @@ class DiscordBotService:
         action: str,
         run_id_opt: Any,
     ) -> Optional[str]:
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+        run_id_value = None
+        if isinstance(run_id_opt, str) and run_id_opt.strip():
+            run_id_value = run_id_opt.strip()
+
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError):
+            if run_id_value:
+                return run_id_value
             await self._prompt_flow_action_picker(
                 interaction_id,
                 interaction_token,
@@ -1770,27 +1779,55 @@ class DiscordBotService:
             )
             return None
 
-        run_id_value = run_id_opt.strip()
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError):
-            return run_id_value
         try:
             runs = store.list_flow_runs(flow_type="ticket_flow")
         except (sqlite3.Error, OSError):
-            return run_id_value
-        finally:
             store.close()
+            if run_id_value:
+                return run_id_value
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action=action,
+            )
+            return None
 
         matching_runs = [run for run in runs if _flow_run_matches_action(run, action)]
         if not matching_runs:
-            return run_id_value
+            store.close()
+            if run_id_value:
+                return run_id_value
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action=action,
+            )
+            return None
+
+        if action == "archive" and run_id_value is None:
+            for record in matching_runs:
+                if record.status.is_terminal() or record.status == FlowRunStatus.PAUSED:
+                    store.close()
+                    return record.id
+
+        if run_id_value is None:
+            store.close()
+            await self._prompt_flow_action_picker(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action=action,
+            )
+            return None
 
         items = [(record.id, record.status.value) for record in matching_runs]
         search_items = [(record.id, record.id) for record in matching_runs]
         aliases = {record.id: (record.status.value,) for record in matching_runs}
         exact_match = find_exact_picker_item(search_items, run_id_value)
         if exact_match is not None:
+            store.close()
             return exact_match[0]
 
         filtered_search_items = filter_picker_items(
@@ -1800,6 +1837,7 @@ class DiscordBotService:
             aliases=aliases,
         )
         if not filtered_search_items:
+            store.close()
             return run_id_value
 
         status_by_run_id = {run_id: status for run_id, status in items}
@@ -1812,6 +1850,7 @@ class DiscordBotService:
             f"Matched {len(filtered_items)} runs for `{run_id_value}`. "
             f"Select a run to {_flow_action_label(action)}:"
         )
+        store.close()
         await self._respond_with_components(
             interaction_id,
             interaction_token,
@@ -3318,6 +3357,7 @@ class DiscordBotService:
             "/car status - Show binding status",
             "/car new - Start a fresh chat session",
             "/car newt - Reset current workspace branch from origin default branch and start session",
+            "/car archive - Archive workspace state for fresh start",
             "/car debug - Show debug info",
             "/car help - Show this help",
             "/car ids - Show channel/user IDs for debugging",
@@ -8899,6 +8939,113 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             message_text,
+        )
+
+    async def _handle_car_archive(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+    ) -> None:
+        from ...core.archive import (
+            CAR_STATE_PATHS,
+            archive_worktree_snapshot,
+            has_car_state,
+        )
+
+        binding = await self._store.get_binding(channel_id=channel_id)
+        if binding is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<workspace>` first."
+            )
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            return
+
+        workspace_raw = binding.get("workspace_path")
+        workspace_root: Optional[Path] = None
+        if isinstance(workspace_raw, str) and workspace_raw.strip():
+            candidate = canonicalize_path(Path(workspace_raw))
+            if candidate.exists() and candidate.is_dir():
+                workspace_root = candidate
+
+        if workspace_root is None:
+            text = format_discord_message(
+                "Binding is invalid. Run `/car bind path:<workspace>` first."
+            )
+            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            return
+
+        if not has_car_state(workspace_root):
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No CAR state to archive. Workspace is already clean.",
+            )
+            return
+
+        repo_id: Optional[str] = None
+        base_repo_id: Optional[str] = None
+        if self._manifest_path and self._manifest_path.exists():
+            try:
+                manifest = load_manifest(self._manifest_path, self._config.root)
+                for repo in manifest.repos:
+                    repo_path = canonicalize_path(self._config.root / repo.path)
+                    if repo_path == workspace_root:
+                        repo_id = repo.id
+                        if repo.kind == "worktree" and repo.worktree_of:
+                            base_repo_id = repo.worktree_of
+                        else:
+                            base_repo_id = repo.id
+                        break
+            except Exception:
+                pass
+
+        if repo_id is None:
+            repo_id = workspace_root.name
+            base_repo_id = repo_id
+
+        try:
+            result = await asyncio.to_thread(
+                archive_worktree_snapshot,
+                base_repo_root=self._config.root,
+                base_repo_id=base_repo_id or repo_id,
+                worktree_repo_root=workspace_root,
+                worktree_repo_id=repo_id,
+                branch=None,
+                worktree_of=base_repo_id or repo_id,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.archive.failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Archive failed: {exc}",
+            )
+            return
+
+        car_root = workspace_root / ".codex-autorunner"
+        for rel_path in CAR_STATE_PATHS:
+            target = car_root / rel_path
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            format_discord_message(
+                f"Archived workspace state to snapshot `{result.snapshot_id}`.\n"
+                f"You can now start fresh work. The binding remains active."
+            ),
         )
 
     async def _handle_car_interrupt(

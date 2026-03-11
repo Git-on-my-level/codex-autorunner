@@ -729,6 +729,16 @@ function buildActions(repo) {
     }
     if (!missing && kind === "worktree") {
         const cleanupBlockedByChatBinding = isCleanupBlockedByChatBinding(repo);
+        const hasCarState = Boolean(repo.has_car_state);
+        if (hasCarState) {
+            actions.push({
+                key: "archive_worktree",
+                label: "Archive",
+                kind: "ghost",
+                title: "Archive CAR state for fresh start",
+                disabled: false,
+            });
+        }
         actions.push({
             key: "cleanup_worktree",
             label: "Cleanup",
@@ -1975,6 +1985,21 @@ async function handleRepoAction(repoId, action) {
             if (updated) {
                 await refreshHub();
             }
+            return;
+        }
+        if (action === "archive_worktree") {
+            const displayName = repoId.includes("--")
+                ? repoId.split("--").pop()
+                : repoId;
+            const ok = await confirmModal(`Archive worktree state "${displayName}"?\n\nCAR will archive tickets, contextspace, flows, and state files for later viewing in the Archive tab. The worktree and chat binding will remain active for new work.`, { confirmText: "Archive state" });
+            if (!ok)
+                return;
+            await api("/hub/worktrees/archive", {
+                method: "POST",
+                body: { worktree_repo_id: repoId, archive_note: null },
+            });
+            flash(`Archived state for worktree: ${repoId}`, "success");
+            await refreshHub();
             return;
         }
         if (action === "cleanup_worktree") {

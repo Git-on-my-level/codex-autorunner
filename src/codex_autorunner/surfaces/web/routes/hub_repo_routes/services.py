@@ -18,6 +18,7 @@ class HubRepoEnricher:
         chat_binding_counts: Optional[dict[str, int]] = None,
         chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
     ) -> dict:
+        from .....core.archive import has_car_state
         from .....core.freshness import resolve_stale_threshold_seconds
         from .....core.pma_context import (
             get_latest_ticket_flow_run_state_with_record,
@@ -50,6 +51,11 @@ class HubRepoEnricher:
         repo_dict["telegram_chat_bound_thread_count"] = telegram_binding_count
         repo_dict["non_pma_chat_bound_thread_count"] = non_pma_binding_count
         repo_dict["cleanup_blocked_by_chat_binding"] = non_pma_binding_count > 0
+        repo_dict["has_car_state"] = (
+            has_car_state(self._context.config.root / snapshot.path)
+            if snapshot.exists_on_disk
+            else False
+        )
         if snapshot.initialized and snapshot.exists_on_disk:
             ticket_flow = build_ticket_flow_summary(snapshot.path, include_failure=True)
             repo_dict["ticket_flow"] = ticket_flow
