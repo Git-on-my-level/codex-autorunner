@@ -1335,6 +1335,11 @@ main {
   min-width: 0;
 }
 
+.hub-chat-binding-summary {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
 .hub-chat-binding-source {
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -1382,6 +1387,10 @@ main {
   text-overflow: ellipsis;
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.hub-chat-binding-more {
+  white-space: nowrap;
 }
 
 .hub-chat-binding-meta {
