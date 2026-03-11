@@ -207,6 +207,19 @@ class HubArchiveWorktreeResponse(ResponseModel):
     latest_flow_run_id: Optional[str]
 
 
+class HubArchiveWorktreeStateResponse(ResponseModel):
+    snapshot_id: str
+    snapshot_path: str
+    meta_path: str
+    status: str
+    file_count: int
+    total_bytes: int
+    flow_run_count: int
+    latest_flow_run_id: Optional[str]
+    archived_paths: list[str]
+    reset_paths: list[str]
+
+
 class AppServerThreadResetRequest(Payload):
     key: str = Field(
         validation_alias=AliasChoices("key", "feature", "feature_key", "featureKey")

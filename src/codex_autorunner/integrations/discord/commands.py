@@ -271,6 +271,11 @@ def build_application_commands() -> list[dict[str, Any]]:
                     ],
                 },
                 {
+                    "type": SUB_COMMAND,
+                    "name": "archive",
+                    "description": "Archive workspace state for a fresh start",
+                },
+                {
                     "type": SUB_COMMAND_GROUP,
                     "name": "session",
                     "description": "Session management commands",

@@ -374,6 +374,73 @@ def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
     assert worktree_payload["cleanup_blocked_by_chat_binding"] is False
 
 
+@pytest.mark.slow
+def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/archive-state",
+        start_point="HEAD",
+    )
+    worktree_car = worktree.path / ".codex-autorunner"
+    (worktree_car / "tickets" / "TICKET-123-demo.md").write_text(
+        "demo ticket", encoding="utf-8"
+    )
+    (worktree_car / "contextspace" / "active_context.md").write_text(
+        "active context", encoding="utf-8"
+    )
+    dispatch_dir = worktree_car / "runs" / "run-1" / "dispatch"
+    dispatch_dir.mkdir(parents=True, exist_ok=True)
+    (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    repos_resp = client.get("/hub/repos")
+    assert repos_resp.status_code == 200
+    worktree_payload = next(
+        item for item in repos_resp.json()["repos"] if item["id"] == worktree.id
+    )
+    assert worktree_payload["has_car_state"] is True
+
+    archive_resp = client.post(
+        "/hub/worktrees/archive-state",
+        json={"worktree_repo_id": worktree.id},
+    )
+    assert archive_resp.status_code == 200
+    payload = archive_resp.json()
+    assert "tickets" in payload["archived_paths"]
+    assert "runs" in payload["archived_paths"]
+
+    snapshot_root = Path(payload["snapshot_path"])
+    assert (snapshot_root / "tickets" / "TICKET-123-demo.md").exists()
+    assert (snapshot_root / "runs" / "run-1" / "dispatch" / "DISPATCH.md").exists()
+    assert (worktree_car / "contextspace" / "active_context.md").read_text(
+        encoding="utf-8"
+    ) == ""
+    assert not (worktree_car / "tickets" / "TICKET-123-demo.md").exists()
+    assert not (worktree_car / "runs").exists()
+
+    repos_after_resp = client.get("/hub/repos")
+    assert repos_after_resp.status_code == 200
+    worktree_after = next(
+        item for item in repos_after_resp.json()["repos"] if item["id"] == worktree.id
+    )
+    assert worktree_after["has_car_state"] is False
+
+
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

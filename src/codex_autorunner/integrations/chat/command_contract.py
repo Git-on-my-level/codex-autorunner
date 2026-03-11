@@ -152,6 +152,14 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         telegram_commands=("repos",),
         discord_paths=(("car", "repos"),),
     ),
+    CommandContractEntry(
+        id="car.archive",
+        path=("car", "archive"),
+        requires_bound_workspace=True,
+        status="stable",
+        telegram_commands=("archive",),
+        discord_paths=(("car", "archive"),),
+    ),
     # Commands with cross-surface shape differences (partial parity).
     CommandContractEntry(
         id="car.files.inbox",

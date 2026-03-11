@@ -26,7 +26,10 @@ from ....core.flows.worker_process import (
     write_worker_crash_info,
     write_worker_exit_info,
 )
-from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
+from ....core.force_attestation import (
+    FORCE_ATTESTATION_REQUIRED_PHRASE,
+    validate_force_attestation,
+)
 from ....core.managed_processes import reap_managed_processes
 from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
@@ -1093,6 +1096,7 @@ You are the first ticket in a new ticket_flow run.
                         force_attestation,
                         target_scope=f"flow.ticket_flow.archive:{run_id_str}",
                     )
+                    validate_force_attestation(force_attestation_payload)
                     archive_kwargs["force_attestation"] = force_attestation_payload
                 summary = archive_flow_run_artifacts(**archive_kwargs)
             except ValueError as exc:
@@ -1105,7 +1109,9 @@ You are the first ticket in a new ticket_flow run.
             return
         typer.echo(
             f"Archived run {summary.get('run_id')} status={summary.get('status')} "
+            f"archived_tickets={summary.get('archived_tickets')} "
             f"archived_runs={summary.get('archived_runs')} "
+            f"archived_contextspace={summary.get('archived_contextspace')} "
             f"deleted_run={summary.get('deleted_run')} dry_run={dry_run}"
         )
 

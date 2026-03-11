@@ -73,6 +73,7 @@ interface HubRepo {
   telegram_chat_bound_thread_count?: number | null;
   non_pma_chat_bound_thread_count?: number | null;
   cleanup_blocked_by_chat_binding?: boolean;
+  has_car_state?: boolean;
   ticket_flow?: HubTicketFlow | null;
   ticket_flow_display?: HubTicketFlowDisplay | null;
 }
@@ -1012,6 +1013,14 @@ function buildActions(repo: HubRepo): RepoAction[] {
   }
   if (!missing && kind === "worktree") {
     const cleanupBlockedByChatBinding = isCleanupBlockedByChatBinding(repo);
+    if (repo.has_car_state) {
+      actions.push({
+        key: "archive_state",
+        label: "Archive state",
+        kind: "ghost",
+        title: "Archive CAR runtime state and reset the worktree for fresh work",
+      });
+    }
     actions.push({
       key: "cleanup_worktree",
       label: "Cleanup",
@@ -2562,6 +2571,23 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         startedMessage: "Worktree cleanup queued",
       });
       flash(`Removed worktree: ${repoId}`, "success");
+      await refreshHub();
+      return;
+    }
+    if (action === "archive_state") {
+      const repo = hubData.repos.find((item) => item.id === repoId);
+      if (!repo || !repo.has_car_state) return;
+      const displayName = repo.display_name || repoId;
+      const ok = await confirmModal(
+        `Archive worktree state "${displayName}"?\n\nCAR will archive tickets, dispatches, contextspace, and other dirty runtime state for later viewing in the Archive tab. The worktree and chat bindings will remain active for fresh work.`,
+        { confirmText: "Archive state" }
+      );
+      if (!ok) return;
+      await api("/hub/worktrees/archive-state", {
+        method: "POST",
+        body: { worktree_repo_id: repoId, archive_note: null },
+      });
+      flash(`Archived state for worktree: ${repoId}`, "success");
       await refreshHub();
       return;
     }

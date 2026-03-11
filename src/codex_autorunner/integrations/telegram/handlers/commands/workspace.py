@@ -1522,6 +1522,111 @@ class WorkspaceCommands(SharedHelpers):
             reply_to=message.message_id,
         )
 
+    async def _handle_archive(self, message: TelegramMessage) -> None:
+        from .....core.archive import (
+            archive_workspace_car_state,
+            resolve_workspace_archive_target,
+        )
+
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
+        if bool(record and record.pma_enabled):
+            await self._send_message(
+                message.chat_id,
+                "/archive is not available in PMA mode. Use /new instead.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        workspace_root = self._canonical_workspace_root(record.workspace_path)
+        if workspace_root is None:
+            await self._send_message(
+                message.chat_id,
+                "Workspace unavailable.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        manifest_path = (
+            self._hub_root / ".codex-autorunner" / "manifest.yml"
+            if self._hub_root is not None
+            else None
+        )
+        try:
+            target = resolve_workspace_archive_target(
+                workspace_root,
+                hub_root=self._hub_root,
+                manifest_path=manifest_path,
+            )
+            result = await asyncio.to_thread(
+                archive_workspace_car_state,
+                base_repo_root=target.base_repo_root,
+                base_repo_id=target.base_repo_id,
+                worktree_repo_root=workspace_root,
+                worktree_repo_id=target.workspace_repo_id,
+                branch=None,
+                worktree_of=target.worktree_of,
+                note="Telegram /archive",
+                source_path=target.source_path,
+            )
+        except ValueError as exc:
+            await self._send_message(
+                message.chat_id,
+                str(exc),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.archive_state.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                workspace_path=record.workspace_path,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Archive failed; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        def apply(topic_record: "TelegramTopicRecord") -> None:
+            topic_record.active_thread_id = None
+            topic_record.thread_ids = []
+            topic_record.thread_summaries = {}
+            topic_record.rollout_path = None
+            topic_record.pending_compact_seed = None
+            topic_record.pending_compact_seed_thread_id = None
+
+        await self._router.update_topic(message.chat_id, message.thread_id, apply)
+        await self._send_message(
+            message.chat_id,
+            "\n".join(
+                [
+                    f"Archived workspace state to snapshot `{result.snapshot_id}`.",
+                    f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                    "The binding remains active for fresh work.",
+                ]
+            ),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     async def _handle_opencode_resume(
         self,
         message: TelegramMessage,

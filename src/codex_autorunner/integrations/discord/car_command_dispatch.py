@@ -237,6 +237,13 @@ async def handle_car_command(
             channel_id=channel_id,
         )
         return
+    if command_path == ("car", "archive"):
+        await service._handle_car_archive(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+        )
+        return
 
     if command_path[:2] == ("car", "session"):
         if command_path == ("car", "session", "resume"):
