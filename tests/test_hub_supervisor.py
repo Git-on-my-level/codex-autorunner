@@ -250,6 +250,7 @@ def test_hub_api_lists_repos(tmp_path: Path):
 
 
 @pytest.mark.slow
+@pytest.mark.docker_managed_cleanup
 def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -277,8 +278,8 @@ def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Pat
     save_manifest(manifest_path, manifest, hub_root)
 
     app = create_hub_app(hub_root)
-    client = TestClient(app)
-    resp = client.get("/hub/repos")
+    with TestClient(app) as client:
+        resp = client.get("/hub/repos")
     assert resp.status_code == 200
     data = resp.json()
     base_payload = next(item for item in data["repos"] if item["id"] == "base")
@@ -1381,6 +1382,7 @@ def test_cleanup_worktree_continues_when_docker_cleanup_errors(
     assert not worktree.path.exists()
 
 
+@pytest.mark.docker_managed_cleanup
 def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1441,11 +1443,11 @@ def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
     monkeypatch.setattr(HubSupervisor, "_run_docker_command", _fake_run_docker)
 
     app = create_hub_app(hub_root)
-    client = TestClient(app)
-    resp = client.post(
-        "/hub/worktrees/cleanup",
-        json={"worktree_repo_id": worktree.id, "archive": False},
-    )
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/worktrees/cleanup",
+            json={"worktree_repo_id": worktree.id, "archive": False},
+        )
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["status"] == "ok"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import fnmatch
+import json
 import logging
 import os
 import shlex
@@ -49,6 +50,42 @@ class DockerContainerSpec:
     mounts: tuple[DockerMount, ...]
     env: dict[str, str]
     workdir: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerContainerMountInfo:
+    source: str
+    target: str
+    type: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerContainerInfo:
+    name: str
+    running: bool
+    status: str
+    created_at: Optional[dt.datetime]
+    started_at: Optional[dt.datetime]
+    mounts: tuple[DockerContainerMountInfo, ...]
+    labels: Mapping[str, str]
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerManagedContainerAction:
+    name: str
+    reason: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerManagedContainerReapResult:
+    scanned_count: int
+    eligible_count: int
+    removed: tuple[DockerManagedContainerAction, ...]
+    errors: tuple[str, ...] = ()
+
+    @property
+    def removed_count(self) -> int:
+        return len(self.removed)
 
 
 def _expand_template(value: str, *, repo_root: Path, home_dir: Path) -> str:
@@ -247,6 +284,19 @@ def _split_preflight_csv(value: str) -> tuple[str, ...]:
     if not value.strip():
         return ()
     return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def _parse_docker_datetime(value: object) -> Optional[dt.datetime]:
+    raw = str(value or "").strip()
+    if not raw or raw.startswith("0001-01-01T00:00:00"):
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
 
 
 def normalize_mounts(
@@ -618,6 +668,160 @@ class DockerRuntime:
         self._run(cmd, timeout_seconds=30)
         return True
 
+    def list_container_names(
+        self,
+        *,
+        all_containers: bool = False,
+        filters: Sequence[str] = (),
+    ) -> tuple[str, ...]:
+        args: list[str] = ["ps"]
+        if all_containers:
+            args.append("-a")
+        for item in filters:
+            value = str(item).strip()
+            if not value:
+                continue
+            args.extend(["--filter", value])
+        args.extend(["--format", "{{.Names}}"])
+        proc = self._run(args, timeout_seconds=30)
+        names = [
+            line.strip() for line in (proc.stdout or "").splitlines() if line.strip()
+        ]
+        return tuple(names)
+
+    def inspect_container(self, container_name: str) -> Optional[DockerContainerInfo]:
+        proc = self._run(
+            ["inspect", container_name],
+            check=False,
+            timeout_seconds=30,
+        )
+        if proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").lower()
+            if "no such object" in details or "no such container" in details:
+                return None
+            raise DockerRuntimeError(
+                f"Unable to inspect container {container_name}: "
+                f"{(proc.stderr or proc.stdout or '').strip()}"
+            )
+        try:
+            payload = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise DockerRuntimeError(
+                f"Unable to parse docker inspect output for {container_name}: {exc}"
+            ) from exc
+        if not isinstance(payload, list) or not payload:
+            return None
+        data = payload[0]
+        if not isinstance(data, Mapping):
+            raise DockerRuntimeError(
+                f"Unexpected docker inspect payload for {container_name}: {type(data).__name__}"
+            )
+        state_raw = data.get("State")
+        state = state_raw if isinstance(state_raw, Mapping) else {}
+        config_raw = data.get("Config")
+        config = config_raw if isinstance(config_raw, Mapping) else {}
+        labels_raw = config.get("Labels")
+        labels = labels_raw if isinstance(labels_raw, Mapping) else {}
+        mounts_raw = data.get("Mounts")
+        mounts: list[DockerContainerMountInfo] = []
+        if isinstance(mounts_raw, list):
+            for item in mounts_raw:
+                if not isinstance(item, Mapping):
+                    continue
+                mounts.append(
+                    DockerContainerMountInfo(
+                        source=str(item.get("Source") or "").strip(),
+                        target=str(item.get("Destination") or "").strip(),
+                        type=str(item.get("Type") or "").strip(),
+                    )
+                )
+        return DockerContainerInfo(
+            name=container_name,
+            running=bool(state.get("Running", False)),
+            status=str(state.get("Status") or "").strip(),
+            created_at=_parse_docker_datetime(data.get("Created")),
+            started_at=_parse_docker_datetime(state.get("StartedAt")),
+            mounts=tuple(mounts),
+            labels={
+                str(key): str(value)
+                for key, value in labels.items()
+                if isinstance(key, str) and value is not None
+            },
+        )
+
+    def reap_managed_containers(
+        self,
+        *,
+        ttl_seconds: int,
+        now: Optional[dt.datetime] = None,
+        label: str = "ca.managed=true",
+    ) -> DockerManagedContainerReapResult:
+        names = self.list_container_names(
+            all_containers=True,
+            filters=[f"label={label}"],
+        )
+        if ttl_seconds <= 0 and not names:
+            return DockerManagedContainerReapResult(
+                scanned_count=0,
+                eligible_count=0,
+                removed=(),
+            )
+
+        now_dt = now or dt.datetime.now(dt.timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=dt.timezone.utc)
+
+        eligible_count = 0
+        removed: list[DockerManagedContainerAction] = []
+        errors: list[str] = []
+        for name in names:
+            try:
+                info = self.inspect_container(name)
+            except DockerRuntimeError as exc:
+                errors.append(str(exc))
+                continue
+            if info is None:
+                continue
+
+            missing_sources = sorted(
+                {
+                    mount.source
+                    for mount in info.mounts
+                    if mount.type == "bind"
+                    and mount.source
+                    and not Path(mount.source).exists()
+                }
+            )
+            reason: Optional[str] = None
+            if missing_sources:
+                reason = "missing_mount"
+            elif not info.running and ttl_seconds > 0:
+                reference_time = info.started_at or info.created_at
+                if reference_time is not None:
+                    age_seconds = (now_dt - reference_time).total_seconds()
+                    if age_seconds >= float(ttl_seconds):
+                        reason = "stopped_ttl"
+            if reason is None:
+                continue
+
+            eligible_count += 1
+            try:
+                if info.running:
+                    self.stop_container(name, remove=True)
+                else:
+                    self.remove_container(name, force=True)
+            except DockerRuntimeError as exc:
+                errors.append(str(exc))
+                continue
+            removed.append(DockerManagedContainerAction(name=name, reason=reason))
+
+        return DockerManagedContainerReapResult(
+            scanned_count=len(names),
+            eligible_count=eligible_count,
+            removed=tuple(removed),
+            errors=tuple(errors),
+        )
+
     def reap_container_if_expired(
         self,
         container_name: str,
@@ -668,9 +872,13 @@ class DockerRuntime:
 
 
 __all__ = [
+    "DockerContainerInfo",
+    "DockerContainerMountInfo",
     "DockerContainerSpec",
     "DockerMount",
     "DockerReadiness",
+    "DockerManagedContainerAction",
+    "DockerManagedContainerReapResult",
     "DockerRuntime",
     "DockerRuntimeError",
     "DockerUnavailableError",

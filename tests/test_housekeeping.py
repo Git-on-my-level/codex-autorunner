@@ -8,10 +8,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 from codex_autorunner.housekeeping import (
+    DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS,
     HousekeepingConfig,
     HousekeepingRule,
+    reap_managed_docker_containers,
     run_housekeeping_for_roots,
     run_housekeeping_once,
+)
+from codex_autorunner.integrations.docker.runtime import (
+    DockerManagedContainerAction,
+    DockerManagedContainerReapResult,
+    DockerRuntimeError,
 )
 
 
@@ -396,3 +403,54 @@ def test_error_samples_included_in_log_events(tmp_path: Path, caplog) -> None:
     assert log_data["event"] == "housekeeping.rule"
     assert "error_samples" in log_data
     assert log_data["error_samples"] == result.error_samples
+
+
+def test_reap_managed_docker_containers_maps_runtime_summary(caplog) -> None:
+    class _StubRuntime:
+        def reap_managed_containers(self, *, ttl_seconds, now=None):
+            _ = ttl_seconds, now
+            return DockerManagedContainerReapResult(
+                scanned_count=3,
+                eligible_count=2,
+                removed=(
+                    DockerManagedContainerAction(name="one", reason="missing_mount"),
+                    DockerManagedContainerAction(name="two", reason="stopped_ttl"),
+                ),
+                errors=("boom-1", "boom-2"),
+            )
+
+    logger = logging.getLogger("test_housekeeping.docker")
+    with caplog.at_level(logging.INFO):
+        result = reap_managed_docker_containers(
+            logger=logger,
+            docker_runtime=_StubRuntime(),  # type: ignore[arg-type]
+        )
+
+    assert result.name == "managed_docker_containers"
+    assert result.kind == "docker"
+    assert result.scanned_count == 3
+    assert result.eligible_count == 2
+    assert result.deleted_count == 2
+    assert result.errors == 2
+    assert result.error_samples == ["boom-1", "boom-2"]
+    docker_logs = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if "housekeeping.docker" in record.getMessage()
+    ]
+    assert len(docker_logs) == 1
+    assert docker_logs[0]["ttl_seconds"] == DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS
+
+
+def test_reap_managed_docker_containers_records_runtime_error() -> None:
+    class _StubRuntime:
+        def reap_managed_containers(self, *, ttl_seconds, now=None):
+            _ = ttl_seconds, now
+            raise DockerRuntimeError("docker unavailable")
+
+    result = reap_managed_docker_containers(
+        docker_runtime=_StubRuntime(),  # type: ignore[arg-type]
+    )
+    assert result.deleted_count == 0
+    assert result.errors == 1
+    assert result.error_samples == ["docker unavailable"]

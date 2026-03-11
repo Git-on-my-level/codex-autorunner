@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import logging
 import os
 import time
@@ -8,7 +9,15 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Optional, Protocol, cast
 
+from .integrations.docker.runtime import (
+    DockerManagedContainerReapResult,
+    DockerRuntime,
+    DockerRuntimeError,
+    DockerUnavailableError,
+)
+
 _MAX_ERROR_SAMPLES = 5
+DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS = 12 * 60 * 60
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,6 +179,49 @@ def run_housekeeping_once(
             dry_run=config.dry_run,
         )
     return HousekeepingSummary(root=root, rules=results)
+
+
+def reap_managed_docker_containers(
+    *,
+    logger: Optional[logging.Logger] = None,
+    docker_runtime: Optional[DockerRuntime] = None,
+    ttl_seconds: int = DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS,
+    now: Optional[dt.datetime] = None,
+) -> HousekeepingRuleResult:
+    start = time.monotonic()
+    result = HousekeepingRuleResult(
+        name="managed_docker_containers",
+        kind="docker",
+    )
+    runtime = docker_runtime or DockerRuntime()
+    try:
+        summary: DockerManagedContainerReapResult = runtime.reap_managed_containers(
+            ttl_seconds=ttl_seconds,
+            now=now,
+        )
+    except (DockerUnavailableError, DockerRuntimeError) as exc:
+        result.errors = 1
+        result.error_samples = [str(exc)]
+    else:
+        result.scanned_count = summary.scanned_count
+        result.eligible_count = summary.eligible_count
+        result.deleted_count = summary.removed_count
+        result.errors = len(summary.errors)
+        result.error_samples = list(summary.errors[:_MAX_ERROR_SAMPLES])
+    result.duration_ms = int((time.monotonic() - start) * 1000)
+    if logger is not None:
+        payload: dict[str, Any] = {
+            "scanned_count": result.scanned_count,
+            "eligible_count": result.eligible_count,
+            "deleted_count": result.deleted_count,
+            "errors": result.errors,
+            "duration_ms": result.duration_ms,
+            "ttl_seconds": ttl_seconds,
+        }
+        if result.error_samples:
+            payload["error_samples"] = result.error_samples
+        _log_event(logger, logging.INFO, "housekeeping.docker", **payload)
+    return result
 
 
 def _apply_directory_rule(

@@ -404,6 +404,144 @@ def test_remove_container_uses_non_forced_rm_by_default() -> None:
     assert calls[1] == ["docker", "rm", "demo"]
 
 
+def test_list_container_names_filters_and_returns_names() -> None:
+    calls: list[list[str]] = []
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        _ = kwargs
+        return _proc(cmd, stdout="one\ntwo\n")
+
+    runtime = DockerRuntime(run_fn=_run)
+    names = runtime.list_container_names(
+        all_containers=True,
+        filters=["label=ca.managed=true"],
+    )
+    assert names == ("one", "two")
+    assert calls == [
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            "label=ca.managed=true",
+            "--format",
+            "{{.Names}}",
+        ]
+    ]
+
+
+def test_inspect_container_returns_structured_info() -> None:
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return _proc(
+            cmd,
+            stdout=(
+                '[{"Created":"2020-01-01T00:00:00Z","State":{"Running":true,'
+                '"Status":"running","StartedAt":"2020-01-01T00:01:00Z"},'
+                '"Config":{"Labels":{"ca.managed":"true"}},'
+                '"Mounts":[{"Type":"bind","Source":"/tmp/repo","Destination":"/tmp/repo"}]}]'
+            ),
+        )
+
+    runtime = DockerRuntime(run_fn=_run)
+    info = runtime.inspect_container("demo")
+    assert info is not None
+    assert info.name == "demo"
+    assert info.running is True
+    assert info.status == "running"
+    assert info.labels["ca.managed"] == "true"
+    assert info.mounts[0].source == "/tmp/repo"
+
+
+def test_reap_managed_containers_removes_running_container_with_missing_mount(
+    tmp_path: Path,
+) -> None:
+    existing_repo = tmp_path / "repo"
+    existing_repo.mkdir()
+    missing_repo = tmp_path / "missing"
+    calls: list[list[str]] = []
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        _ = kwargs
+        if cmd[1] == "ps":
+            return _proc(cmd, stdout="keep\nstale\n")
+        if cmd[1] == "inspect" and len(cmd) == 3:
+            if cmd[2] == "keep":
+                return _proc(
+                    cmd,
+                    stdout=(
+                        f'[{{"Created":"2020-01-01T00:00:00Z","State":{{"Running":true,'
+                        f'"Status":"running","StartedAt":"2020-01-01T00:01:00Z"}},'
+                        f'"Config":{{"Labels":{{"ca.managed":"true"}}}},'
+                        f'"Mounts":[{{"Type":"bind","Source":"{existing_repo}","Destination":"{existing_repo}"}}]}}]'
+                    ),
+                )
+            if cmd[2] == "stale":
+                return _proc(
+                    cmd,
+                    stdout=(
+                        f'[{{"Created":"2020-01-01T00:00:00Z","State":{{"Running":true,'
+                        f'"Status":"running","StartedAt":"2020-01-01T00:01:00Z"}},'
+                        f'"Config":{{"Labels":{{"ca.managed":"true"}}}},'
+                        f'"Mounts":[{{"Type":"bind","Source":"{missing_repo}","Destination":"{missing_repo}"}}]}}]'
+                    ),
+                )
+        if cmd[1] == "inspect":
+            return _proc(cmd, stdout="true\n")
+        if cmd[1] == "stop":
+            return _proc(cmd, stdout="stale\n")
+        if cmd[1] == "rm":
+            return _proc(cmd, stdout="stale\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    result = runtime.reap_managed_containers(ttl_seconds=3600)
+    assert result.scanned_count == 2
+    assert result.eligible_count == 1
+    assert result.removed_count == 1
+    assert result.removed[0].name == "stale"
+    assert result.removed[0].reason == "missing_mount"
+    assert ["docker", "stop", "-t", "10", "stale"] in calls
+    assert ["docker", "rm", "-f", "stale"] in calls
+
+
+def test_reap_managed_containers_removes_stopped_expired_container() -> None:
+    calls: list[list[str]] = []
+
+    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        _ = kwargs
+        if cmd[1] == "ps":
+            return _proc(cmd, stdout="expired\n")
+        if cmd[1] == "inspect" and len(cmd) == 3:
+            return _proc(
+                cmd,
+                stdout=(
+                    '[{"Created":"2020-01-01T00:00:00Z","State":{"Running":false,'
+                    '"Status":"exited","StartedAt":"2020-01-01T00:01:00Z"},'
+                    '"Config":{"Labels":{"ca.managed":"true"}},"Mounts":[]}]'
+                ),
+            )
+        if cmd[1] == "inspect":
+            return _proc(cmd, stdout="container-id\n")
+        if cmd[1] == "rm":
+            return _proc(cmd, stdout="expired\n")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    runtime = DockerRuntime(run_fn=_run)
+    result = runtime.reap_managed_containers(
+        ttl_seconds=60,
+        now=dt.datetime(2020, 1, 1, 1, 0, 0, tzinfo=dt.timezone.utc),
+    )
+    assert result.scanned_count == 1
+    assert result.eligible_count == 1
+    assert result.removed_count == 1
+    assert result.removed[0].reason == "stopped_ttl"
+    assert ["docker", "rm", "-f", "expired"] in calls
+
+
 def test_reap_container_if_expired_stops_container() -> None:
     calls: list[list[str]] = []
     started_at = "2020-01-01T00:00:00Z"

@@ -12,7 +12,7 @@ from starlette.types import ASGIApp
 
 from ...core.logging_utils import safe_log
 from ...core.managed_processes import reap_managed_processes
-from ...housekeeping import run_housekeeping_once
+from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
 from .app_state import ServerOverrides, apply_hub_context, build_hub_context
@@ -114,6 +114,24 @@ def create_hub_app(
             )
         if app.state.config.housekeeping.enabled:
             interval = max(app.state.config.housekeeping.interval_seconds, 1)
+            initial_delay = min(interval, 60)
+
+            async def _managed_docker_reaper_loop():
+                await asyncio.sleep(initial_delay)
+                while True:
+                    try:
+                        await asyncio.to_thread(
+                            reap_managed_docker_containers,
+                            logger=app.state.logger,
+                        )
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Managed docker container reaper failed",
+                            exc,
+                        )
+                    await asyncio.sleep(interval)
 
             async def _housekeeping_loop():
                 while True:
@@ -133,6 +151,7 @@ def create_hub_app(
                         )
                     await asyncio.sleep(interval)
 
+            tasks.append(asyncio.create_task(_managed_docker_reaper_loop()))
             tasks.append(asyncio.create_task(_housekeeping_loop()))
         app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
         app_server_prune_interval = getattr(

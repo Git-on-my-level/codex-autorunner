@@ -9,7 +9,9 @@ Ensure tests always import the in-repo code.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,12 +43,16 @@ def write_test_config(path: Path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
-def pytest_configure() -> None:
+def pytest_configure(config: pytest.Config) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     src_dir = repo_root / "src"
     src_path = str(src_dir)
     if sys.path[:1] != [src_path] and src_path not in sys.path:
         sys.path.insert(0, src_path)
+    config.addinivalue_line(
+        "markers",
+        "docker_managed_cleanup: snapshot CAR-managed docker containers and remove any new ones after the test",
+    )
 
 
 def pytest_collection_modifyitems(
@@ -63,6 +69,138 @@ def pytest_collection_modifyitems(
         if item.get_closest_marker("integration") is not None:
             continue
         item.add_marker(pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS))
+
+
+def _list_car_managed_docker_containers() -> dict[str, tuple[str, ...]] | None:
+    try:
+        version_proc = subprocess.run(
+            ["docker", "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if version_proc.returncode != 0:
+        return None
+
+    try:
+        ps_proc = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-aq",
+                "--filter",
+                "label=ca.managed=true",
+                "--format",
+                "{{.Names}}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if ps_proc.returncode != 0:
+        return None
+    names = [line.strip() for line in ps_proc.stdout.splitlines() if line.strip()]
+    if not names:
+        return {}
+
+    try:
+        inspect_proc = subprocess.run(
+            ["docker", "inspect", *names],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if inspect_proc.returncode != 0:
+        return None
+
+    try:
+        payload = json.loads(inspect_proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+
+    containers: dict[str, tuple[str, ...]] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("Name") or "").strip().lstrip("/")
+        if not name:
+            continue
+        mounts = item.get("Mounts")
+        sources: list[str] = []
+        if isinstance(mounts, list):
+            for mount in mounts:
+                if not isinstance(mount, dict):
+                    continue
+                if str(mount.get("Type") or "").strip() != "bind":
+                    continue
+                source = str(mount.get("Source") or "").strip()
+                if source:
+                    sources.append(source)
+        containers[name] = tuple(sources)
+    return containers
+
+
+def _path_is_within(candidate: str, root: Path) -> bool:
+    try:
+        candidate_path = Path(candidate).expanduser().resolve(strict=False)
+    except Exception:
+        return False
+    root_path = root.expanduser().resolve(strict=False)
+    return candidate_path == root_path or root_path in candidate_path.parents
+
+
+def _remove_car_managed_docker_containers(container_names: set[str]) -> list[str]:
+    failures: list[str] = []
+    for name in sorted(container_names):
+        try:
+            proc = subprocess.run(
+                ["docker", "rm", "-f", name],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            failures.append(f"{name}: docker rm -f timed out or docker is unavailable")
+            continue
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip() or "unknown error"
+            failures.append(f"{name}: {detail}")
+    return failures
+
+
+@pytest.fixture(autouse=True)
+def docker_managed_cleanup(request: pytest.FixtureRequest) -> None:
+    if request.node.get_closest_marker("docker_managed_cleanup") is None:
+        yield
+        return
+
+    tmp_path = request.getfixturevalue("tmp_path")
+    yield
+    after = _list_car_managed_docker_containers()
+    if after is None:
+        return
+    leaked = {
+        name
+        for name, sources in after.items()
+        if any(_path_is_within(source, tmp_path) for source in sources)
+    }
+    if not leaked:
+        return
+    failures = _remove_car_managed_docker_containers(leaked)
+    if failures:
+        pytest.fail(
+            "Failed to clean up CAR-managed docker containers: " + "; ".join(failures)
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)

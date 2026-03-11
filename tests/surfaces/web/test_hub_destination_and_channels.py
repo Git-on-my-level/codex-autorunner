@@ -3,6 +3,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
@@ -32,6 +33,8 @@ from codex_autorunner.integrations.chat.channel_directory import ChannelDirector
 from codex_autorunner.integrations.telegram.state import topic_key as telegram_topic_key
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
+
+pytestmark = pytest.mark.docker_managed_cleanup
 
 
 def _init_git_repo(path: Path) -> None:
