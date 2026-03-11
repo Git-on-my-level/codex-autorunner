@@ -6,6 +6,7 @@ import fnmatch
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -290,8 +291,15 @@ def _parse_docker_datetime(value: object) -> Optional[dt.datetime]:
     raw = str(value or "").strip()
     if not raw or raw.startswith("0001-01-01T00:00:00"):
         return None
+    # Docker commonly emits RFC3339Nano timestamps, but Python only accepts
+    # microsecond precision. Truncate the fractional component to 6 digits.
+    normalized = re.sub(
+        r"\.(\d{6})\d+(?=(?:Z|[+-]\d{2}:\d{2})$)",
+        r".\1",
+        raw,
+    )
     try:
-        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError:
         return None
     if parsed.tzinfo is None:

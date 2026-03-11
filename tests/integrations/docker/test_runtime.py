@@ -11,6 +11,7 @@ from codex_autorunner.integrations.docker.runtime import (
     DockerRuntime,
     DockerRuntimeError,
     DockerUnavailableError,
+    _parse_docker_datetime,
     build_docker_container_spec,
     normalize_mounts,
     select_passthrough_env,
@@ -454,6 +455,13 @@ def test_inspect_container_returns_structured_info() -> None:
     assert info.mounts[0].source == "/tmp/repo"
 
 
+def test_parse_docker_datetime_accepts_rfc3339nano() -> None:
+    parsed = _parse_docker_datetime("2026-03-11T17:32:36.123456789Z")
+    assert parsed == dt.datetime(
+        2026, 3, 11, 17, 32, 36, 123456, tzinfo=dt.timezone.utc
+    )
+
+
 def test_reap_managed_containers_removes_running_container_with_missing_mount(
     tmp_path: Path,
 ) -> None:
@@ -519,8 +527,8 @@ def test_reap_managed_containers_removes_stopped_expired_container() -> None:
             return _proc(
                 cmd,
                 stdout=(
-                    '[{"Created":"2020-01-01T00:00:00Z","State":{"Running":false,'
-                    '"Status":"exited","StartedAt":"2020-01-01T00:01:00Z"},'
+                    '[{"Created":"2020-01-01T00:00:00.123456789Z","State":{"Running":false,'
+                    '"Status":"exited","StartedAt":"2020-01-01T00:01:00.987654321Z"},'
                     '"Config":{"Labels":{"ca.managed":"true"}},"Mounts":[]}]'
                 ),
             )
