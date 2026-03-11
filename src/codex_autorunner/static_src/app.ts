@@ -233,7 +233,14 @@ async function initRepoShell(): Promise<void> {
   }
 }
 
+function dismissBootLoader(): void {
+  const el = document.getElementById("car-boot-loader");
+  if (el) el.remove();
+}
+
 function bootstrap() {
+  dismissBootLoader();
+
   if (!REPO_ID) {
     void initHubShell();
     return;

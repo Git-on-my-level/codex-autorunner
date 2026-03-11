@@ -10,10 +10,19 @@
   <meta content="yes" name="apple-mobile-web-app-capable" />
   <meta content="black-translucent" name="apple-mobile-web-app-status-bar-style" />
   <meta content="#0a0c12" name="theme-color" />
+  <meta name="description" content="Codex Autorunner – autonomous coding agent orchestrator" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c12'/%3E%3Cpath d='M11 8l14 8-14 8z' fill='%236cf5d8'/%3E%3C/svg%3E" />
   <title>Codex Autorunner</title>
+  <style>
+    .car-boot-loader{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0a0c12;z-index:99999}
+    .car-boot-loader .spinner{width:28px;height:28px;border:3px solid #1a2033;border-top-color:#6cf5d8;border-radius:50%;animation:car-spin .7s linear infinite}
+    @keyframes car-spin{to{transform:rotate(360deg)}}
+  </style>
 </head>
 
 <body>
+  <div class="car-boot-loader" id="car-boot-loader"><div class="spinner"></div></div>
+  <noscript><div style="color:#e5ecff;background:#0a0c12;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui,sans-serif">JavaScript is required to run Codex Autorunner.</div></noscript>
   <div class="hub-shell hidden" id="hub-shell">
     <header class="hub-hero">
       <div class="hub-hero-text">

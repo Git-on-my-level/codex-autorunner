@@ -204,7 +204,13 @@ async function initRepoShell() {
         }
     }
 }
+function dismissBootLoader() {
+    const el = document.getElementById("car-boot-loader");
+    if (el)
+        el.remove();
+}
 function bootstrap() {
+    dismissBootLoader();
     if (!REPO_ID) {
         void initHubShell();
         return;

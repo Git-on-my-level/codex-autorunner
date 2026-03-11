@@ -5,7 +5,11 @@ import { JSDOM } from "jsdom";
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
-globalThis.navigator = dom.window.navigator;
+try {
+  globalThis.navigator = dom.window.navigator;
+} catch {
+  // Node 24+ has a read-only globalThis.navigator; skip (renderMarkdown doesn't need it)
+}
 globalThis.HTMLElement = dom.window.HTMLElement;
 
 const { renderMarkdown } = await import("../../src/codex_autorunner/static/generated/messages.js");
