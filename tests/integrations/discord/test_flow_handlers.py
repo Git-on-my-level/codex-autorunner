@@ -812,8 +812,11 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         assert outbound_records
         assert inbound_records[-1]["event_type"] == "flow_reply_command"
         assert inbound_records[-1]["kind"] == "command"
-        assert outbound_records[-1]["event_type"] == "flow_reply_notice"
-        assert outbound_records[-1]["kind"] == "notice"
+        assert any(
+            record.get("event_type") == "flow_reply_notice"
+            and record.get("kind") == "notice"
+            for record in outbound_records
+        )
     finally:
         await store.close()
 

@@ -204,8 +204,13 @@ class OpenCodeBackend(AgentBackend):
 
         turn_started = False
         try:
-            await self._mark_turn_started()
-            turn_started = True
+            if self._supervisor is not None and self._workspace_root is not None:
+                # Ensure the supervisor has created the workspace handle before the
+                # active-turn counter is incremented, otherwise first-turn pruning
+                # can still reap the process while the turn is in flight.
+                await self._ensure_client()
+                await self._mark_turn_started()
+                turn_started = True
 
             async for event in self._run_turn_events_impl(session_id, message):
                 yield event

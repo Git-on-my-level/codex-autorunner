@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisor
+from codex_autorunner.core.ports.run_event import Started
 from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
@@ -207,3 +208,42 @@ class TestOpenCodeBackendTurnLifecycle:
 
         # When using base_url (no supervisor), client should be cached
         assert backend._client is not None
+
+    @pytest.mark.anyio
+    async def test_run_turn_events_ensures_client_before_marking_turn_started(
+        self,
+    ) -> None:
+        backend = OpenCodeBackend(
+            supervisor=MagicMock(),
+            workspace_root=Path("/tmp"),
+        )
+        observed: list[str] = []
+
+        async def _fake_ensure_client():
+            observed.append("ensure_client")
+            return _make_mock_client()
+
+        async def _fake_mark_turn_started():
+            observed.append("mark_turn_started")
+
+        async def _fake_mark_turn_finished():
+            observed.append("mark_turn_finished")
+
+        async def _fake_run_turn_events_impl(_session_id: str, _message: str):
+            observed.append("run_turn_events_impl")
+            yield Started(timestamp="now", session_id="session-1")
+
+        backend._ensure_client = _fake_ensure_client  # type: ignore[method-assign]
+        backend._mark_turn_started = _fake_mark_turn_started  # type: ignore[method-assign]
+        backend._mark_turn_finished = _fake_mark_turn_finished  # type: ignore[method-assign]
+        backend._run_turn_events_impl = _fake_run_turn_events_impl  # type: ignore[method-assign]
+
+        events = [event async for event in backend.run_turn_events("session-1", "Ping")]
+
+        assert len(events) == 1
+        assert observed == [
+            "ensure_client",
+            "mark_turn_started",
+            "run_turn_events_impl",
+            "mark_turn_finished",
+        ]
