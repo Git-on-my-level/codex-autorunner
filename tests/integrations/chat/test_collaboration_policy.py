@@ -146,6 +146,30 @@ def test_mentions_trigger_ignores_plain_text_without_invocation() -> None:
     assert result.reason == "plain_text_trigger_mentions"
 
 
+def test_telegram_policy_requires_subdestination_when_topics_are_required() -> None:
+    policy = build_telegram_collaboration_policy(
+        allowed_chat_ids=[-1001],
+        allowed_user_ids=[42],
+        require_topics=True,
+        trigger_mode="all",
+    )
+    result = evaluate_collaboration_policy(
+        policy,
+        CollaborationEvaluationContext(
+            actor_id="42",
+            container_id="-1001",
+            destination_id="-1001",
+            plain_text=PlainTextTurnContext(
+                text="hello",
+                chat_type="supergroup",
+            ),
+        ),
+    )
+    assert result.outcome == "denied_destination"
+    assert result.reason == "subdestination_required"
+    assert result.command_allowed is False
+
+
 def test_builder_accepts_trigger_alias_and_destination_rules() -> None:
     policy = build_telegram_collaboration_policy(
         allowed_chat_ids=[-1001],

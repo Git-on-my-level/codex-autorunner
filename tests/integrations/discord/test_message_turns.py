@@ -452,7 +452,9 @@ def _message_create(
 
 
 @pytest.mark.anyio
-async def test_message_create_runs_turn_for_bound_workspace(tmp_path: Path) -> None:
+async def test_message_create_personal_bound_channel_runs_without_collaboration_policy(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -3352,6 +3354,90 @@ async def test_message_create_streaming_turn_exception_marks_progress_failed(
 
 
 @pytest.mark.anyio
+async def test_message_create_silent_destination_ignores_plain_text_and_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            ("MESSAGE_CREATE", _message_create("hello team")),
+            ("MESSAGE_CREATE", _message_create("!pwd", message_id="m-2")),
+        ]
+    )
+    policy = build_discord_collaboration_policy(
+        allowed_guild_ids=("guild-1",),
+        allowed_channel_ids=(),
+        allowed_user_ids=(),
+        collaboration_raw={
+            "destinations": [
+                {
+                    "guild_id": "guild-1",
+                    "channel_id": "channel-1",
+                    "mode": "silent",
+                }
+            ]
+        },
+    )
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allowed_channel_ids=frozenset(),
+            collaboration_policy=policy,
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("silent destinations should not run turns")
+
+    def _should_not_run_shell(*args: Any, **kwargs: Any) -> None:  # pragma: no cover
+        raise AssertionError("silent destinations should not run shell commands")
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.subprocess.run",
+        _should_not_run_shell,
+    )
+
+    try:
+        with caplog.at_level(logging.INFO):
+            await service.run_forever()
+        assert rest.channel_messages == []
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            '"policy_outcome":"silent_destination"' in message
+            and '"message_id":"m-1"' in message
+            for message in messages
+        )
+        assert any(
+            '"policy_outcome":"silent_destination"' in message
+            and '"message_id":"m-2"' in message
+            for message in messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_honors_shared_turn_policy_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3398,6 +3484,58 @@ async def test_message_create_honors_shared_turn_policy_gate(
         await service.run_forever()
         assert calls == [("always", "ship it")]
         assert rest.channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_denied_by_user_allowlist_logs_policy_outcome(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    denied_payload = _message_create("hello", message_id="m-denied")
+    denied_payload["author"] = {"id": "unauthorized", "bot": False}
+    gateway = _FakeGateway([("MESSAGE_CREATE", denied_payload)])
+    policy = build_discord_collaboration_policy(
+        allowed_guild_ids=("guild-1",),
+        allowed_channel_ids=("channel-1",),
+        allowed_user_ids=("user-1",),
+    )
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allowed_channel_ids=frozenset({"channel-1"}),
+            collaboration_policy=policy,
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        with caplog.at_level(logging.INFO):
+            await service.run_forever()
+        assert rest.channel_messages == []
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            '"event":"discord.collaboration_policy.evaluated"' in message
+            and '"policy_outcome":"denied_actor"' in message
+            for message in messages
+        )
     finally:
         await store.close()
 
