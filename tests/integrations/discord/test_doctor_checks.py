@@ -114,6 +114,37 @@ def test_discord_doctor_reports_collaboration_policy_summary(
     assert "destinations" in by_id["discord.collaboration_policy"].message
 
 
+def test_discord_doctor_warns_when_destinations_leave_default_mode_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
+
+    hub_config = _load_hub_with_discord(
+        tmp_path,
+        {
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "allowed_guild_ids": ["123"],
+        },
+    )
+    assert isinstance(hub_config.raw, dict)
+    hub_config.raw["collaboration_policy"] = {
+        "discord": {
+            "destinations": [{"guild_id": "123", "channel_id": "456", "mode": "active"}]
+        }
+    }
+
+    checks = discord_doctor_checks(hub_config)
+    by_id = {check.check_id: check for check in checks}
+    warning = by_id["discord.collaboration_policy.default_mode"]
+    assert warning.passed is True
+    assert warning.severity == "warning"
+    assert warning.fix is not None
+    assert "command_only" in warning.fix
+
+
 def test_discord_doctor_checks_legacy_message_content_intent_is_actionable_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

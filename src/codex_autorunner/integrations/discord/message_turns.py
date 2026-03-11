@@ -29,6 +29,7 @@ from ...core.ports.run_event import (
     ToolCall,
 )
 from ...core.utils import canonicalize_path
+from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
 from ...integrations.chat.dispatcher import DispatchContext
 from ...integrations.chat.models import ChatMessageEvent
 from ..chat.progress_primitives import TurnProgressTracker, render_progress_text
@@ -89,6 +90,7 @@ async def handle_message_event(
     channel_id: str,
     text: str,
     has_attachments: bool,
+    policy_result: Optional[CollaborationEvaluationResult] = None,
     log_event_fn: Any,
     build_ticket_flow_controller_fn: Any,
     ensure_worker_fn: Any,
@@ -98,12 +100,15 @@ async def handle_message_event(
         channel_id=channel_id,
     )
     if binding is None:
-        content = format_discord_message(
-            "This channel is not bound. Run `/car bind path:<workspace>` or `/pma on`."
-        )
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": content},
+        log_event_fn(
+            service._logger,
+            logging.INFO,
+            "discord.message.unbound_plain_text_ignored",
+            channel_id=channel_id,
+            guild_id=context.thread_id,
+            user_id=event.from_user_id,
+            message_id=event.message.message_id,
+            **(policy_result.log_fields() if policy_result is not None else {}),
         )
         return
 

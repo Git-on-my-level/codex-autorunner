@@ -11,6 +11,9 @@ Discord bot surface and adapters.
    - `applications.commands`
    - Recommended permissions integer: `2322563695115328`
 4. Configure `discord_bot.enabled: true` and allowlists in `codex-autorunner.yml`.
+   - For a personal dedicated channel, legacy allowlists are enough.
+   - For shared-guild collaboration, prefer `collaboration_policy.discord` with
+     `default_mode: command_only` and explicit `destinations`.
 5. Configure command registration:
    - development: `command_registration.scope: guild` with at least one `guild_id`
    - production: `command_registration.scope: global`
@@ -43,12 +46,20 @@ In PMA mode (or when unbound), `/car flow status` and `/car flow runs` default t
 
 ## Common Failure Mode: Slash Works, Messages Do Not
 
-If `/car ...` works but normal channel messages do not get replies, the bot usually lacks effective guild/channel access.
+If `/car ...` works but normal channel messages do not get replies, check both
+Discord permissions and CAR collaboration state:
 
 1. Re-invite bot with scopes `bot` + `applications.commands`.
 2. Use permissions integer `2322563695115328`.
 3. Ensure channel permissions allow `View Channels`, `Send Messages`, and `Read Message History`.
-4. Restart the Discord bot process and retest.
+4. Run `/car status` to confirm the channel is bound or PMA-enabled.
+5. Run `/car ids` to inspect the effective collaboration mode and generate a
+   copy-paste `collaboration_policy.discord` snippet.
+6. Restart the Discord bot process and retest.
+
+Unbound but allowlisted channels now stay quiet for ordinary conversation.
+This is intentional: plain-text turns only start when the channel is both
+collaboration-allowed and ready to execute through a bound workspace or PMA.
 
 ## Example config
 
@@ -66,6 +77,20 @@ discord_bot:
     scope: guild
     guild_ids:
       - "123456789012345678"
+
+collaboration_policy:
+  discord:
+    allowed_guild_ids:
+      - "123456789012345678"
+    default_mode: command_only
+    destinations:
+      - guild_id: "123456789012345678"
+        channel_id: "234567890123456789"
+        mode: active
+        plain_text_trigger: mentions
+      - guild_id: "123456789012345678"
+        channel_id: "345678901234567890"
+        mode: silent
 ```
 
 ## Example environment variables

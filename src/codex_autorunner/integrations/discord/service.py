@@ -154,6 +154,12 @@ from .car_autocomplete import (
     resolve_workspace_from_token,
 )
 from .car_command_dispatch import handle_car_command as dispatch_car_command
+from .collaboration_helpers import (
+    build_collaboration_snippet_lines,
+    collaboration_probe_text,
+    collaboration_summary_lines,
+    evaluate_collaboration_summary,
+)
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
@@ -667,9 +673,79 @@ class DiscordBotService:
                 container_id=event.thread.thread_id,
                 destination_id=event.thread.chat_id,
                 is_explicit_command=is_explicit_command,
-                plain_text=PlainTextTurnContext(text=text),
+                plain_text=self._build_plain_text_turn_context(
+                    text=text,
+                    guild_id=event.thread.thread_id,
+                ),
             ),
             plain_text_turn_fn=should_trigger_plain_text_turn,
+        )
+
+    def _build_plain_text_turn_context(
+        self,
+        *,
+        text: str,
+        guild_id: Optional[str],
+    ) -> PlainTextTurnContext:
+        application_id = str(self._config.application_id or "").strip()
+        normalized_text = text
+        bot_username: Optional[str] = None
+        if application_id:
+            bot_username = "codexautorunner"
+            normalized_text = normalized_text.replace(
+                f"<@{application_id}>",
+                f"@{bot_username}",
+            ).replace(
+                f"<@!{application_id}>",
+                f"@{bot_username}",
+            )
+        return PlainTextTurnContext(
+            text=normalized_text,
+            chat_type="private" if guild_id is None else "group",
+            bot_username=bot_username,
+        )
+
+    def _evaluate_plain_text_collaboration_policy(
+        self,
+        *,
+        channel_id: Optional[str],
+        guild_id: Optional[str],
+        user_id: Optional[str],
+        text: str,
+    ) -> CollaborationEvaluationResult:
+        return evaluate_collaboration_policy(
+            self._collaboration_policy,
+            CollaborationEvaluationContext(
+                actor_id=user_id,
+                container_id=guild_id,
+                destination_id=channel_id,
+                plain_text=self._build_plain_text_turn_context(
+                    text=text,
+                    guild_id=guild_id,
+                ),
+            ),
+            plain_text_turn_fn=should_trigger_plain_text_turn,
+        )
+
+    def _evaluate_channel_collaboration_summary(
+        self,
+        *,
+        channel_id: str,
+        guild_id: Optional[str],
+        user_id: Optional[str],
+    ) -> tuple[CollaborationEvaluationResult, CollaborationEvaluationResult]:
+        return (
+            self._evaluate_interaction_collaboration_policy(
+                channel_id=channel_id,
+                guild_id=guild_id,
+                user_id=user_id,
+            ),
+            self._evaluate_plain_text_collaboration_policy(
+                channel_id=channel_id,
+                guild_id=guild_id,
+                user_id=user_id,
+                text=collaboration_probe_text(self._config.application_id),
+            ),
         )
 
     def _evaluate_context_admission(
@@ -740,6 +816,15 @@ class DiscordBotService:
         )
         return result.should_start_turn
 
+    async def _can_start_message_turn_in_channel(self, event: ChatMessageEvent) -> bool:
+        if not self._is_turn_candidate_message_event(event):
+            return False
+        binding, workspace_root = await resolve_bound_workspace_root(
+            self,
+            channel_id=event.thread.chat_id,
+        )
+        return binding is not None and workspace_root is not None
+
     async def _maybe_send_queued_notice(
         self, event: ChatEvent, dispatch_result: DispatchResult
     ) -> None:
@@ -747,7 +832,7 @@ class DiscordBotService:
             return
         if not isinstance(event, ChatMessageEvent):
             return
-        if not self._is_turn_candidate_message_event(event):
+        if not await self._can_start_message_turn_in_channel(event):
             return
         channel_id = dispatch_result.context.chat_id
         await self._send_channel_message_safe(
@@ -1040,6 +1125,7 @@ class DiscordBotService:
                         channel_id=channel_id,
                         text=text,
                         has_attachments=has_attachments,
+                        policy_result=policy_result,
                         log_event_fn=log_event,
                         build_ticket_flow_controller_fn=build_ticket_flow_controller,
                         ensure_worker_fn=ensure_worker,
@@ -1072,6 +1158,7 @@ class DiscordBotService:
             channel_id=channel_id,
             text=text,
             has_attachments=has_attachments,
+            policy_result=policy_result,
             log_event_fn=log_event,
             build_ticket_flow_controller_fn=build_ticket_flow_controller,
             ensure_worker_fn=ensure_worker,
@@ -3331,14 +3418,33 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        guild_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
+        command_result, plain_text_result = evaluate_collaboration_summary(
+            self,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=user_id,
+        )
         if binding is None:
-            text = (
-                "This channel is not bound. Use /car bind workspace:<workspace>. "
-                "Then use /car flow status once flow commands are enabled."
+            lines = [
+                "This channel is not bound.",
+                "Use /car bind workspace:<workspace> or /pma on to enable plain-text turns here.",
+                *collaboration_summary_lines(
+                    channel_id=channel_id,
+                    command_result=command_result,
+                    plain_text_result=plain_text_result,
+                    binding=None,
+                ),
+                "Then use /car flow status once flow commands are enabled.",
+            ]
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "\n".join(lines),
             )
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
 
         lines = []
@@ -3372,6 +3478,14 @@ class DiscordBotService:
         if active_flow_info:
             lines.append(f"Active flow: {active_flow_info}")
 
+        lines.extend(
+            collaboration_summary_lines(
+                channel_id=channel_id,
+                command_result=command_result,
+                plain_text_result=plain_text_result,
+                binding=binding,
+            )
+        )
         lines.append("Use /car flow status for ticket flow details.")
         await self._respond_ephemeral(
             interaction_id, interaction_token, "\n".join(lines)
@@ -3404,14 +3518,30 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        guild_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
+        command_result, plain_text_result = evaluate_collaboration_summary(
+            self,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=user_id,
+        )
         lines = [
             f"Channel ID: {channel_id}",
         ]
         if binding is None:
             lines.append("Binding: none (unbound)")
             lines.append("Use /car bind path:<workspace> to bind this channel.")
+            lines.extend(
+                collaboration_summary_lines(
+                    channel_id=channel_id,
+                    command_result=command_result,
+                    plain_text_result=plain_text_result,
+                    binding=None,
+                )
+            )
             await self._respond_ephemeral(
                 interaction_id, interaction_token, "\n".join(lines)
             )
@@ -3445,6 +3575,14 @@ class DiscordBotService:
         outbox_items = await self._store.list_outbox()
         pending_outbox = [r for r in outbox_items if r.channel_id == channel_id]
         lines.append(f"Pending outbox items: {len(pending_outbox)}")
+        lines.extend(
+            collaboration_summary_lines(
+                channel_id=channel_id,
+                command_result=command_result,
+                plain_text_result=plain_text_result,
+                binding=binding,
+            )
+        )
 
         await self._respond_ephemeral(
             interaction_id, interaction_token, "\n".join(lines)
@@ -3538,6 +3676,30 @@ class DiscordBotService:
             lines.append(f"discord_bot.allowed_guild_ids: [{guild_id}]")
         if user_id:
             lines.append(f"discord_bot.allowed_user_ids: [{user_id}]")
+        command_result, plain_text_result = evaluate_collaboration_summary(
+            self,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=user_id,
+        )
+        binding = await self._store.get_binding(channel_id=channel_id)
+        lines.extend(
+            [
+                "",
+                *collaboration_summary_lines(
+                    channel_id=channel_id,
+                    command_result=command_result,
+                    plain_text_result=plain_text_result,
+                    binding=binding,
+                ),
+                "",
+                *build_collaboration_snippet_lines(
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                ),
+            ]
+        )
         await self._respond_ephemeral(
             interaction_id, interaction_token, "\n".join(lines)
         )

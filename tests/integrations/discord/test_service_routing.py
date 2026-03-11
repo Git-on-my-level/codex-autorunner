@@ -15,6 +15,10 @@ from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_PREFIX,
     PMA_OPENCODE_KEY,
 )
+from codex_autorunner.integrations.chat.collaboration_policy import (
+    CollaborationPolicy,
+    build_discord_collaboration_policy,
+)
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.chat.models import (
     ChatInteractionEvent,
@@ -134,6 +138,7 @@ def _config(
     command_registration_enabled: bool = True,
     command_scope: str = "guild",
     command_guild_ids: tuple[str, ...] = ("guild-1",),
+    collaboration_policy: CollaborationPolicy | None = None,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -155,6 +160,7 @@ def _config(
         max_message_length=2000,
         message_overflow="split",
         pma_enabled=True,
+        collaboration_policy=collaboration_policy,
     )
 
 
@@ -572,6 +578,112 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         assert status_payload["data"]["flags"] == 64
         assert "bound this channel" in bind_payload["data"]["content"].lower()
         assert "channel is bound" in status_payload["data"]["content"].lower()
+        assert "policy mode:" in status_payload["data"]["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_status_reports_effective_collaboration_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="bind",
+                options=[{"type": 3, "name": "workspace", "value": str(workspace)}],
+            ),
+            _interaction(name="status", options=[]),
+        ]
+    )
+    policy = build_discord_collaboration_policy(
+        allowed_guild_ids=("guild-1",),
+        allowed_channel_ids=(),
+        allowed_user_ids=("user-1",),
+        collaboration_raw={
+            "default_mode": "command_only",
+            "destinations": [
+                {
+                    "guild_id": "guild-1",
+                    "channel_id": "channel-1",
+                    "mode": "active",
+                    "plain_text_trigger": "mentions",
+                }
+            ],
+        },
+    )
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allow_user_ids=frozenset({"user-1"}),
+            collaboration_policy=policy,
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        status_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
+        lowered = status_payload.lower()
+        assert "policy mode: active" in lowered
+        assert "policy plain-text trigger: mentions" in lowered
+        assert "binding/pma: bound workspace" in lowered
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_ids_reports_collaboration_snippet(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="ids", options=[])])
+    policy = build_discord_collaboration_policy(
+        allowed_guild_ids=("guild-1",),
+        allowed_channel_ids=(),
+        allowed_user_ids=("user-1",),
+        collaboration_raw={
+            "default_mode": "command_only",
+            "destinations": [
+                {
+                    "guild_id": "guild-1",
+                    "channel_id": "channel-1",
+                    "mode": "active",
+                    "plain_text_trigger": "mentions",
+                }
+            ],
+        },
+    )
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allow_user_ids=frozenset({"user-1"}),
+            collaboration_policy=policy,
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Suggested collaboration config:" in content
+        assert "default_mode: command_only" in content
+        assert "channel_id: channel-1" in content
+        assert "mode: silent" in content
     finally:
         await store.close()
 

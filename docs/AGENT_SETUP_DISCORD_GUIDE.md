@@ -159,6 +159,34 @@ Allowlist behavior:
 - Any non-empty allowlist acts as a required filter.
 - Example: if both `allowed_guild_ids` and `allowed_user_ids` are set, both must match.
 
+For a quick personal setup, the legacy allowlists above are enough.
+For shared guild collaboration, prefer an explicit `collaboration_policy.discord`
+block so plain-text turns only happen where you intend them to:
+
+```yaml
+collaboration_policy:
+  discord:
+    allowed_guild_ids:
+      - "123456789012345678"
+    allowed_user_ids:
+      - "222222222222222222"
+    default_mode: command_only
+    destinations:
+      - guild_id: "123456789012345678"
+        channel_id: "333333333333333333"
+        mode: active
+        plain_text_trigger: mentions
+      - guild_id: "123456789012345678"
+        channel_id: "444444444444444444"
+        mode: silent
+```
+
+Recommended starting point for shared servers:
+- `default_mode: command_only` keeps slash commands usable in other allowlisted channels without passive replies.
+- Use `mode: active` for channels or threads where CAR should answer plain-text messages.
+- Use `mode: silent` for human-only channels where CAR should ignore both plain text and commands.
+- Run `/car ids` inside a channel to get exact IDs plus a copy-paste collaboration snippet.
+
 ### Step 6: Register Commands and Verify First Run
 
 Run:
@@ -241,7 +269,8 @@ For repo/workspace mode:
 
 1. Run `/car bind path:<workspace-path>`.
 2. Optional: set agent/model with `/car agent ...` and `/car model ...`.
-3. Send a normal channel message (do not start with `/`).
+3. Confirm the effective collaboration policy with `/car status` or `/car ids`.
+4. Send a normal channel message (do not start with `/`) only in a destination whose collaboration mode is `active`.
 4. The bot runs a turn and replies in-channel (non-ephemeral).
 
 For PMA mode:
@@ -256,7 +285,9 @@ Notes:
 - In PMA mode, `/car flow status` and `/car flow runs` report hub-wide flow status (manifest-driven) without requiring `/pma off`.
 - If a ticket flow run is paused in repo mode, the next free-text message is treated as the flow reply and resumes that run.
 - `/car ...` and `/pma ...` slash commands are normalized through CAR's shared command-ingress parser before dispatch.
-- Direct-chat turns use the shared plain-text turn policy in `always` mode, so non-command messages trigger turns while slash commands stay command-only.
+- Plain-text turns now require both collaboration-policy approval and an active execution target (`/car bind ...` or `/pma on`).
+- `plain_text_trigger: mentions` uses Discord bot mentions such as `<@bot-id>` and is the recommended trigger for shared channels.
+- Unbound but allowlisted channels stay quiet for ordinary conversation instead of replying with repeated "not bound" notices.
 - `!<cmd>` runs a local non-interactive shell command in the bound workspace when `discord_bot.shell.enabled` is `true`.
 
 ### PMA Commands
@@ -296,6 +327,7 @@ If PMA is disabled globally in hub config, `/pma` commands will return an action
    - `allowed_channel_ids`
    - `allowed_user_ids`
 2. Remember all non-empty allowlists must match the interaction.
+3. If you use `collaboration_policy.discord`, check `/car status` or `/car ids` in the channel to see the effective mode and trigger behavior.
 
 ### Bot running but no useful flow output
 
@@ -306,7 +338,10 @@ If PMA is disabled globally in hub config, `/pma` commands will return an action
 
 ### Slash commands work, but normal messages get no response
 
-This usually means Discord command registration is fine, but the bot user cannot actually access guild/channel message events.
+This usually means one of three things:
+- the bot user cannot actually access guild/channel message events
+- the channel is not bound and PMA is not enabled
+- collaboration policy is set to `command_only`, `silent`, or `mentions` and the current message does not satisfy that policy
 
 1. Re-invite the bot with both scopes:
    - `bot`
@@ -320,6 +355,7 @@ This usually means Discord command registration is fine, but the bot user cannot
 4. Restart Discord bot process after re-invite/permission changes.
 5. Re-test with:
    - `/car status` (slash path)
+   - `/car ids` (effective IDs + suggested collaboration snippet)
    - plain text message (non-slash turn path)
 
 High-signal diagnostics for this failure mode:

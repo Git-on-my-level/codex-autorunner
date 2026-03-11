@@ -354,6 +354,31 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                 severity="info",
             )
         )
+        if (
+            policy.destinations
+            and policy.default_mode == "active"
+            and policy.allowed_container_ids
+            and not policy.allowed_destination_ids
+        ):
+            checks.append(
+                DoctorCheck(
+                    name="Discord collaboration default mode",
+                    passed=True,
+                    message=(
+                        "Discord collaboration destinations are configured, but "
+                        "default_mode=active still leaves other allowlisted guild "
+                        "channels eligible for plain-text turns after they are bound "
+                        "or switched into PMA."
+                    ),
+                    check_id="discord.collaboration_policy.default_mode",
+                    severity="warning",
+                    fix=(
+                        "Set collaboration_policy.discord.default_mode to "
+                        "`command_only` when you want explicit active channels plus "
+                        "low-noise slash-command access elsewhere."
+                    ),
+                )
+            )
     except CollaborationPolicyError as exc:
         checks.append(
             DoctorCheck(

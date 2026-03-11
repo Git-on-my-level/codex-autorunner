@@ -40,6 +40,10 @@ from codex_autorunner.integrations.app_server.threads import (
     PMA_KEY,
     normalize_feature_key,
 )
+from codex_autorunner.integrations.chat.collaboration_policy import (
+    CollaborationPolicy,
+    build_discord_collaboration_policy,
+)
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordBotMediaConfig,
@@ -359,6 +363,7 @@ def _config(
     media_enabled: bool = True,
     media_voice: bool = True,
     media_max_voice_bytes: int = 10 * 1024 * 1024,
+    collaboration_policy: CollaborationPolicy | None = None,
 ) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -390,6 +395,7 @@ def _config(
             voice=media_voice,
             max_voice_bytes=media_max_voice_bytes,
         ),
+        collaboration_policy=collaboration_policy,
     )
 
 
@@ -3392,6 +3398,205 @@ async def test_message_create_honors_shared_turn_policy_gate(
         await service.run_forever()
         assert calls == [("always", "ship it")]
         assert rest.channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_unbound_channel_stays_silent_and_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("hello team"))])
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset()),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("unbound plain-text messages should stay silent")
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            await service.run_forever()
+        assert rest.channel_messages == []
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            '"event":"discord.message.unbound_plain_text_ignored"' in message
+            for message in messages
+        )
+        assert any('"policy_outcome":"turn_started"' in message for message in messages)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_mentions_only_destination_requires_discord_mention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            ("MESSAGE_CREATE", _message_create("ship it")),
+            ("MESSAGE_CREATE", _message_create("<@app-1> ship it", message_id="m-2")),
+        ]
+    )
+    policy = build_discord_collaboration_policy(
+        allowed_guild_ids=("guild-1",),
+        allowed_channel_ids=(),
+        allowed_user_ids=(),
+        collaboration_raw={
+            "default_plain_text_trigger": "mentions",
+            "destinations": [
+                {
+                    "guild_id": "guild-1",
+                    "channel_id": "channel-1",
+                    "mode": "active",
+                    "plain_text_trigger": "mentions",
+                }
+            ],
+        },
+    )
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allowed_channel_ids=frozenset(),
+            collaboration_policy=policy,
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    prompts: list[str] = []
+
+    async def _fake_run_turn(self: DiscordBotService, *args: Any, **kwargs: Any) -> str:
+        _ = args
+        prompts.append(str(kwargs["prompt_text"]))
+        return "mention ok"
+
+    monkeypatch.setattr(
+        service,
+        "_run_agent_turn_for_message",
+        _fake_run_turn.__get__(service, DiscordBotService),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(prompts) == 1
+        assert prompts[0].endswith("<@app-1> ship it")
+        assert any(
+            "mention ok" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_command_only_destination_allows_bang_commands_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            ("MESSAGE_CREATE", _message_create("ship it")),
+            ("MESSAGE_CREATE", _message_create("!pwd", message_id="m-2")),
+        ]
+    )
+    policy = build_discord_collaboration_policy(
+        allowed_guild_ids=("guild-1",),
+        allowed_channel_ids=(),
+        allowed_user_ids=(),
+        collaboration_raw={
+            "destinations": [
+                {
+                    "guild_id": "guild-1",
+                    "channel_id": "channel-1",
+                    "mode": "command_only",
+                }
+            ]
+        },
+    )
+    service = DiscordBotService(
+        _config(
+            tmp_path,
+            allowed_channel_ids=frozenset(),
+            collaboration_policy=policy,
+        ),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _should_not_run_turn(
+        *args: Any, **kwargs: Any
+    ) -> str:  # pragma: no cover
+        raise AssertionError("plain-text should be disabled in command_only channels")
+
+    shell_calls: list[str] = []
+
+    async def _fake_bang_shell(
+        *,
+        channel_id: str,
+        message_id: str,
+        text: str,
+        workspace_root: Path,
+    ) -> None:
+        _ = channel_id, message_id, workspace_root
+        shell_calls.append(text)
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
+    monkeypatch.setattr(service, "_handle_bang_shell", _fake_bang_shell)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            await service.run_forever()
+        assert shell_calls == ["!pwd"]
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            '"policy_outcome":"command_only_destination"' in message
+            and '"message_id":"m-1"' in message
+            for message in messages
+        )
     finally:
         await store.close()
 

@@ -30,6 +30,8 @@ async def handle_car_command(
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=user_id,
         )
         return
     if command_path == ("car", "new"):
@@ -52,6 +54,8 @@ async def handle_car_command(
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=user_id,
         )
         return
     if command_path == ("car", "help"):
