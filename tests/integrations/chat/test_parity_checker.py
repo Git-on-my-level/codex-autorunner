@@ -276,6 +276,21 @@ def test_parity_checker_accepts_truthy_ingress_guard_and_named_context(
     assert results_by_id["chat.shared_plain_text_turn_policy_usage"].passed
 
 
+def test_parity_checker_accepts_collaboration_policy_bridge(
+    tmp_path: Path,
+) -> None:
+    repo_root = _write_fixture_repo(
+        tmp_path,
+        use_discord_collaboration_policy_bridge=True,
+    )
+
+    results_by_id = {
+        result.id: result for result in run_parity_checks(repo_root=repo_root)
+    }
+
+    assert results_by_id["chat.shared_plain_text_turn_policy_usage"].passed
+
+
 def test_parity_checker_skips_when_source_files_are_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(
         parity_checker,
@@ -308,6 +323,7 @@ def _write_fixture_repo(
     use_early_ingress_none_guard_in_normalized: bool = False,
     use_truthy_ingress_guard_in_normalized: bool = False,
     use_named_plain_text_context: bool = False,
+    use_discord_collaboration_policy_bridge: bool = False,
 ) -> Path:
     discord_service = _build_discord_service_fixture(
         include_car_model_route=include_car_model_route,
@@ -325,6 +341,7 @@ def _write_fixture_repo(
         use_canonicalize_temporary_names=use_canonicalize_temporary_names,
         use_early_ingress_none_guard_in_normalized=use_early_ingress_none_guard_in_normalized,
         use_truthy_ingress_guard_in_normalized=use_truthy_ingress_guard_in_normalized,
+        use_discord_collaboration_policy_bridge=use_discord_collaboration_policy_bridge,
     )
     telegram_trigger_mode = _build_telegram_trigger_mode_fixture(
         include_telegram_turn_policy=include_telegram_turn_policy,
@@ -367,10 +384,16 @@ def _build_discord_service_fixture(
     use_canonicalize_temporary_names: bool,
     use_early_ingress_none_guard_in_normalized: bool,
     use_truthy_ingress_guard_in_normalized: bool,
+    use_discord_collaboration_policy_bridge: bool,
 ) -> str:
     import_line = (
         "from ...integrations.chat.command_ingress import canonicalize_command_ingress\n"
         if include_canonicalize_usage
+        else ""
+    )
+    collaboration_policy_import = (
+        "from ...integrations.chat.collaboration_policy import evaluate_collaboration_policy\n"
+        if use_discord_collaboration_policy_bridge
         else ""
     )
 
@@ -463,6 +486,21 @@ def _build_discord_service_fixture(
     discord_turn_policy = (
         """
 
+def _evaluate_message_collaboration_policy(text: str) -> object:
+    return evaluate_collaboration_policy(
+        policy=None,
+        context=None,
+        plain_text_turn_fn=should_trigger_plain_text_turn,
+    )
+
+
+def _handle_message_event(text: str) -> None:
+    _evaluate_message_collaboration_policy(text)
+"""
+        if include_discord_turn_policy and use_discord_collaboration_policy_bridge
+        else (
+            """
+
 def _handle_message_event(text: str) -> None:
     if not should_trigger_plain_text_turn(
         mode="always",
@@ -470,8 +508,9 @@ def _handle_message_event(text: str) -> None:
     ):
         return
 """
-        if include_discord_turn_policy
-        else ""
+            if include_discord_turn_policy
+            else ""
+        )
     )
 
     normalized_pma_status_branch = (
@@ -548,6 +587,7 @@ def _handle_message_event(text: str) -> None:
 
     return (
         "from ...integrations.chat.turn_policy import PlainTextTurnContext, should_trigger_plain_text_turn\n"
+        + collaboration_policy_import
         + import_line
         + """
 

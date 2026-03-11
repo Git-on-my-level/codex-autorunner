@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional, Sequence
 
 from ....core.logging_utils import log_event
@@ -28,6 +29,40 @@ COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
 COALESCE_LONG_MESSAGE_THRESHOLD = TELEGRAM_MAX_MESSAGE_LENGTH - 256
 MEDIA_BATCH_WINDOW_SECONDS = 1.0
 MAX_BATCH_ITEMS = 10
+
+
+def _evaluate_message_policy(
+    handlers: Any,
+    message: TelegramMessage,
+    *,
+    text: str,
+    is_explicit_command: bool,
+) -> Any:
+    evaluator = getattr(handlers, "_evaluate_collaboration_message_policy", None)
+    if callable(evaluator):
+        return evaluator(
+            message,
+            text=text,
+            is_explicit_command=is_explicit_command,
+        )
+    if is_explicit_command:
+        return SimpleNamespace(command_allowed=True, should_start_turn=False)
+    trigger_mode = getattr(getattr(handlers, "_config", None), "trigger_mode", "all")
+    if trigger_mode == "mentions" and not should_trigger_run(
+        message,
+        text=text,
+        bot_username=getattr(handlers, "_bot_username", None),
+    ):
+        return SimpleNamespace(command_allowed=True, should_start_turn=False)
+    return SimpleNamespace(command_allowed=True, should_start_turn=True)
+
+
+def _log_message_policy_result(
+    handlers: Any, message: TelegramMessage, result: Any
+) -> None:
+    logger = getattr(handlers, "_log_collaboration_policy_result", None)
+    if callable(logger):
+        logger(message, result)
 
 
 @dataclass
@@ -256,11 +291,31 @@ async def handle_message_inner(
         return
 
     if text and is_interrupt_alias(text):
+        policy_result = _evaluate_message_policy(
+            handlers,
+            message,
+            text=text,
+            is_explicit_command=True,
+        )
+        if not policy_result.command_allowed:
+            _log_message_policy_result(handlers, message, policy_result)
+            await _clear_placeholder()
+            return
         await handlers._handle_interrupt(message, runtime)
         await _clear_placeholder()
         return
 
     if text and text.startswith("!") and not has_media:
+        policy_result = _evaluate_message_policy(
+            handlers,
+            message,
+            text=text,
+            is_explicit_command=True,
+        )
+        if not policy_result.command_allowed:
+            _log_message_policy_result(handlers, message, policy_result)
+            await _clear_placeholder()
+            return
         handlers._resume_options.pop(key, None)
         handlers._bind_options.pop(key, None)
         handlers._flow_run_options.pop(key, None)
@@ -326,6 +381,16 @@ async def handle_message_inner(
         pending_review_custom = handlers._pending_review_custom.pop(key, None)
         await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     if command:
+        policy_result = _evaluate_message_policy(
+            handlers,
+            message,
+            text=text,
+            is_explicit_command=True,
+        )
+        if not policy_result.command_allowed:
+            _log_message_policy_result(handlers, message, policy_result)
+            await _clear_placeholder()
+            return
         spec = handlers._command_specs.get(command.name)
 
         async def work() -> None:
@@ -379,24 +444,14 @@ async def handle_message_inner(
         await _clear_placeholder()
         return
 
-    if (
-        handlers._config.trigger_mode == "mentions"
-        and not paused
-        and not should_trigger_run(
-            message,
-            text=text,
-            bot_username=handlers._bot_username,
-        )
-    ):
-        log_event(
-            handlers._logger,
-            logging.INFO,
-            "telegram.trigger.ignored",
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            reason="mentions_only",
-        )
+    policy_result = _evaluate_message_policy(
+        handlers,
+        message,
+        text=text,
+        is_explicit_command=False,
+    )
+    if not paused and not policy_result.should_start_turn:
+        _log_message_policy_result(handlers, message, policy_result)
         await _clear_placeholder()
         return
 

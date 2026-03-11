@@ -556,19 +556,14 @@ def _check_shared_plain_text_turn_policy_usage(
     telegram_trigger_mode_ast: ast.Module | None,
     telegram_messages_ast: ast.Module | None,
 ) -> ParityCheckResult:
-    discord_message_handlers = _find_functions_by_name(
-        discord_service_ast,
-        "_handle_message_event",
-    )
     telegram_trigger_handlers = _find_functions_by_name(
         telegram_trigger_mode_ast,
         "should_trigger_run",
     )
 
     checks = {
-        "discord_shared_policy_call": _has_plain_text_turn_policy_call(
-            discord_message_handlers,
-            mode="always",
+        "discord_shared_policy_call": _has_discord_shared_plain_text_turn_policy_usage(
+            discord_service_ast
         ),
         "telegram_shared_policy_call": _has_plain_text_turn_policy_call(
             telegram_trigger_handlers,
@@ -1126,6 +1121,34 @@ def _has_plain_text_turn_policy_call(
         required_keywords={
             "mode": lambda expr: _is_string_constant(expr, mode),
             "context": _is_plain_text_context_call,
+        },
+    )
+
+
+def _has_discord_shared_plain_text_turn_policy_usage(
+    tree: ast.Module | None,
+) -> bool:
+    message_handlers = _find_functions_by_name(tree, "_handle_message_event")
+    if _has_plain_text_turn_policy_call(message_handlers, mode="always"):
+        return True
+    if not _has_call_in_functions(
+        message_handlers,
+        callee_name="_evaluate_message_collaboration_policy",
+        required_keywords={},
+    ):
+        return False
+    evaluation_helpers = _find_functions_by_name(
+        tree,
+        "_evaluate_message_collaboration_policy",
+    )
+    return _has_call_in_functions(
+        evaluation_helpers,
+        callee_name="evaluate_collaboration_policy",
+        required_keywords={
+            "plain_text_turn_fn": lambda expr: _is_name(
+                expr,
+                "should_trigger_plain_text_turn",
+            ),
         },
     )
 

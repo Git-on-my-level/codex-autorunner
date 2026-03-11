@@ -82,6 +82,11 @@ def register_discord_commands(
                 root=config.root,
                 raw=discord_raw if isinstance(discord_raw, dict) else {},
                 pma_enabled=pma_enabled,
+                collaboration_raw=(
+                    config.raw.get("collaboration_policy")
+                    if isinstance(config.raw, dict)
+                    else None
+                ),
             )
             if not discord_cfg.enabled:
                 raise_exit("discord_bot is disabled; set discord_bot.enabled: true")
@@ -138,6 +143,11 @@ def register_discord_commands(
                 root=config.root,
                 raw=discord_raw if isinstance(discord_raw, dict) else {},
                 pma_enabled=pma_enabled,
+                collaboration_raw=(
+                    config.raw.get("collaboration_policy")
+                    if isinstance(config.raw, dict)
+                    else None
+                ),
             )
             if not discord_cfg.enabled:
                 raise_exit("discord_bot is disabled; set discord_bot.enabled: true")

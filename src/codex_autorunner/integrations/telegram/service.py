@@ -38,7 +38,14 @@ from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from ..chat.channel_directory import ChannelDirectoryStore
+from ..chat.collaboration_policy import (
+    CollaborationEvaluationContext,
+    CollaborationEvaluationResult,
+    build_telegram_collaboration_policy,
+    evaluate_collaboration_policy,
+)
 from ..chat.service import ChatBotServiceCore
+from ..chat.turn_policy import PlainTextTurnContext
 from ..chat.update_notifier import ChatUpdateStatusNotifier
 from .adapter import (
     TelegramBotClient,
@@ -225,6 +232,15 @@ class TelegramBotService(
         self._update_backend = update_backend
         self._update_linux_service_names = update_linux_service_names or {}
         self._app_server_auto_restart = app_server_auto_restart
+        self._collaboration_policy = (
+            config.collaboration_policy
+            or build_telegram_collaboration_policy(
+                allowed_chat_ids=config.allowed_chat_ids,
+                allowed_user_ids=config.allowed_user_ids,
+                require_topics=config.require_topics,
+                trigger_mode=config.trigger_mode,
+            )
+        )
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
@@ -520,6 +536,55 @@ class TelegramBotService(
                     exc=exc,
                 )
             await asyncio.sleep(interval)
+
+    def _evaluate_collaboration_message_policy(
+        self,
+        message: TelegramMessage,
+        *,
+        text: str,
+        is_explicit_command: bool,
+    ) -> CollaborationEvaluationResult:
+        return evaluate_collaboration_policy(
+            self._collaboration_policy,
+            CollaborationEvaluationContext(
+                actor_id=(
+                    str(message.from_user_id)
+                    if message.from_user_id is not None
+                    else None
+                ),
+                container_id=str(message.chat_id),
+                destination_id=str(message.chat_id),
+                subdestination_id=(
+                    str(message.thread_id) if message.thread_id is not None else None
+                ),
+                is_explicit_command=is_explicit_command,
+                plain_text=PlainTextTurnContext(
+                    text=text,
+                    chat_type=message.chat_type,
+                    bot_username=self._bot_username,
+                    reply_to_is_bot=message.reply_to_is_bot,
+                    reply_to_username=message.reply_to_username,
+                    reply_to_message_id=message.reply_to_message_id,
+                    thread_id=message.thread_id,
+                ),
+            ),
+        )
+
+    def _log_collaboration_policy_result(
+        self,
+        message: TelegramMessage,
+        result: CollaborationEvaluationResult,
+    ) -> None:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.collaboration_policy.evaluated",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            user_id=message.from_user_id,
+            **result.log_fields(),
+        )
 
     def _ensure_outbox_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()

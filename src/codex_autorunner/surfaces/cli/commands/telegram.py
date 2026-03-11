@@ -50,6 +50,11 @@ def register_telegram_commands(
             root=config.root,
             agent_binaries=getattr(config, "agents", None)
             and {name: agent.binary for name, agent in config.agents.items()},
+            collaboration_raw=(
+                config.raw.get("collaboration_policy")
+                if isinstance(config.raw, dict)
+                else None
+            ),
         )
         if not telegram_cfg.enabled:
             raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
@@ -119,6 +124,11 @@ def register_telegram_commands(
             root=config.root,
             agent_binaries=getattr(config, "agents", None)
             and {name: agent.binary for name, agent in config.agents.items()},
+            collaboration_raw=(
+                config.raw.get("collaboration_policy")
+                if isinstance(config.raw, dict)
+                else None
+            ),
         )
         if not telegram_cfg.enabled:
             raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
@@ -153,6 +163,11 @@ def register_telegram_commands(
             root=config.root,
             agent_binaries=getattr(config, "agents", None)
             and {name: agent.binary for name, agent in config.agents.items()},
+            collaboration_raw=(
+                config.raw.get("collaboration_policy")
+                if isinstance(config.raw, dict)
+                else None
+            ),
         )
         if not telegram_cfg.enabled:
             raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")

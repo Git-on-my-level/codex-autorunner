@@ -21,6 +21,11 @@ from ...core.circuit_breaker import CircuitBreaker
 from ...core.exceptions import CodexError, PermanentError, TransientError
 from ...core.logging_utils import log_event
 from ...core.retry import retry_transient
+from ..chat.collaboration_policy import (
+    CollaborationEvaluationContext,
+    build_telegram_collaboration_policy,
+    evaluate_collaboration_admission,
+)
 from ..chat.text_chunking import chunk_text
 from .api_schemas import (
     TelegramAudioSchema,
@@ -571,8 +576,6 @@ def _parse_entities(payload: Any) -> tuple[TelegramMessageEntity, ...]:
 
 
 def allowlist_allows(update: TelegramUpdate, allowlist: TelegramAllowlist) -> bool:
-    if not allowlist.allowed_chat_ids or not allowlist.allowed_user_ids:
-        return False
     chat_id = None
     user_id = None
     thread_id = None
@@ -584,15 +587,22 @@ def allowlist_allows(update: TelegramUpdate, allowlist: TelegramAllowlist) -> bo
         chat_id = update.callback.chat_id
         user_id = update.callback.from_user_id
         thread_id = update.callback.thread_id
-    if chat_id is None or user_id is None:
-        return False
-    if chat_id not in allowlist.allowed_chat_ids:
-        return False
-    if user_id not in allowlist.allowed_user_ids:
-        return False
-    if allowlist.require_topic and thread_id is None:
-        return False
-    return True
+    policy = build_telegram_collaboration_policy(
+        allowed_chat_ids=allowlist.allowed_chat_ids,
+        allowed_user_ids=allowlist.allowed_user_ids,
+        require_topics=allowlist.require_topic,
+        trigger_mode="all",
+    )
+    result = evaluate_collaboration_admission(
+        policy,
+        CollaborationEvaluationContext(
+            actor_id=str(user_id) if user_id is not None else None,
+            container_id=str(chat_id) if chat_id is not None else None,
+            destination_id=str(chat_id) if chat_id is not None else None,
+            subdestination_id=str(thread_id) if thread_id is not None else None,
+        ),
+    )
+    return result.command_allowed
 
 
 def chunk_message(

@@ -200,3 +200,61 @@ def test_discord_bot_config_media_invalid_voice_raises(tmp_path) -> None:
                 "media": {"voice": "false"},
             },
         )
+
+
+def test_discord_bot_config_builds_shared_collaboration_policy(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "1234567890")
+    cfg = DiscordBotConfig.from_raw(
+        root=tmp_path,
+        raw={
+            "enabled": True,
+            "bot_token_env": "TEST_DISCORD_TOKEN",
+            "app_id_env": "TEST_DISCORD_APP_ID",
+            "allowed_guild_ids": ["guild-1"],
+        },
+        collaboration_raw={
+            "discord": {
+                "default_plain_text_trigger": "mentions",
+                "destinations": [
+                    {
+                        "guild_id": "guild-1",
+                        "channel_id": "channel-1",
+                        "mode": "silent",
+                    }
+                ],
+            }
+        },
+    )
+    assert cfg.collaboration_policy is not None
+    assert cfg.collaboration_policy.default_plain_text_trigger == "mentions"
+    assert cfg.collaboration_policy.destinations[0].mode == "silent"
+
+
+def test_discord_bot_config_rejects_invalid_collaboration_policy(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
+    monkeypatch.setenv("TEST_DISCORD_APP_ID", "1234567890")
+    with pytest.raises(DiscordBotConfigError):
+        DiscordBotConfig.from_raw(
+            root=tmp_path,
+            raw={
+                "enabled": True,
+                "bot_token_env": "TEST_DISCORD_TOKEN",
+                "app_id_env": "TEST_DISCORD_APP_ID",
+                "allowed_guild_ids": ["guild-1"],
+            },
+            collaboration_raw={
+                "discord": {
+                    "destinations": [
+                        {
+                            "channel_id": "channel-1",
+                            "plain_text_trigger": "sometimes",
+                        }
+                    ]
+                }
+            },
+        )

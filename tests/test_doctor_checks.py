@@ -49,6 +49,27 @@ def test_telegram_doctor_checks_mode_validation():
     assert any(c.check_id == "telegram.mode" for c in checks)
 
 
+def test_telegram_doctor_reports_collaboration_policy_summary():
+    cfg = {
+        "telegram_bot": {
+            "enabled": True,
+            "allowed_chat_ids": [-1001],
+            "allowed_user_ids": [42],
+        },
+        "collaboration_policy": {
+            "telegram": {
+                "destinations": [
+                    {"chat_id": -1001, "thread_id": 7, "mode": "command_only"}
+                ]
+            }
+        },
+    }
+    checks = telegram_doctor_checks(cfg)
+    by_id = {check.check_id: check for check in checks}
+    assert by_id["telegram.collaboration_policy"].passed is True
+    assert "destinations" in by_id["telegram.collaboration_policy"].message
+
+
 def test_telegram_doctor_checks_local_voice_dependency_missing(monkeypatch):
     """Test Telegram doctor check catches missing local whisper dependency."""
 

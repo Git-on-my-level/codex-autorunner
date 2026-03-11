@@ -40,6 +40,23 @@ def _contains_all(text: str, *snippets: str) -> bool:
     return all(snippet in text for snippet in snippets)
 
 
+def _discord_uses_shared_turn_policy(text: str) -> bool:
+    return _contains_all(
+        text,
+        "should_trigger_plain_text_turn(",
+        "PlainTextTurnContext(",
+        'mode="always"',
+    ) or _contains_all(
+        text,
+        "def _evaluate_message_collaboration_policy(",
+        "evaluate_collaboration_policy(",
+        "plain_text_turn_fn=should_trigger_plain_text_turn",
+        "def _handle_message_event(",
+        "_evaluate_message_collaboration_policy(",
+        "PlainTextTurnContext(",
+    )
+
+
 def _write_parity_report(*, repo_root: Path, checks: list[ParityCheck]) -> Path:
     lines: list[str] = [
         "# Cross-Surface Parity Report",
@@ -330,18 +347,13 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    discord_shared_turn_policy = _contains_all(
-        discord_service_text,
-        "should_trigger_plain_text_turn(",
-        "PlainTextTurnContext(",
-        'mode="always"',
-    )
+    discord_shared_turn_policy = _discord_uses_shared_turn_policy(discord_service_text)
     checks.append(
         ParityCheck(
             entrypoint="discord",
             primitive="shared_turn_policy",
             passed=discord_shared_turn_policy,
-            details="direct-chat path uses shared plain-text turn policy",
+            details="direct-chat path routes through the shared plain-text turn policy",
         )
     )
 

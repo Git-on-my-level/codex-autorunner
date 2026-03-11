@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from ..chat.collaboration_policy import (
+    CollaborationPolicy,
+    CollaborationPolicyError,
+    build_telegram_collaboration_policy,
+)
 from .adapter import TelegramAllowlist
 from .constants import (
     CACHE_CLEANUP_INTERVAL_SECONDS,
@@ -221,6 +226,7 @@ class TelegramBotConfig:
     ticket_flow_auto_resume: bool
     pause_dispatch_notifications: PauseDispatchNotifications
     default_notification_chat_id: Optional[int]
+    collaboration_policy: Optional[CollaborationPolicy] = None
 
     @classmethod
     def from_raw(
@@ -230,6 +236,7 @@ class TelegramBotConfig:
         root: Path,
         agent_binaries: Optional[dict[str, str]] = None,
         env: Optional[dict[str, str]] = None,
+        collaboration_raw: Optional[dict[str, Any]] = None,
     ) -> "TelegramBotConfig":
         env = env or dict(os.environ)
         cfg: dict[str, Any] = raw if isinstance(raw, dict) else {}
@@ -673,6 +680,28 @@ class TelegramBotConfig:
         else:
             poll_allowed_updates = list(DEFAULT_ALLOWED_UPDATES)
 
+        try:
+            collaboration_policy = build_telegram_collaboration_policy(
+                allowed_chat_ids=allowed_chat_ids,
+                allowed_user_ids=allowed_user_ids,
+                require_topics=require_topics,
+                trigger_mode=(
+                    trigger_mode
+                    if trigger_mode in TRIGGER_MODE_OPTIONS
+                    else DEFAULT_TRIGGER_MODE
+                ),
+                collaboration_raw=(
+                    collaboration_raw.get("telegram")
+                    if isinstance(collaboration_raw, dict)
+                    else None
+                ),
+                shared_raw=(
+                    collaboration_raw if isinstance(collaboration_raw, dict) else None
+                ),
+            )
+        except CollaborationPolicyError as exc:
+            raise TelegramBotConfigError(str(exc)) from exc
+
         return cls(
             root=root,
             enabled=enabled,
@@ -713,6 +742,7 @@ class TelegramBotConfig:
             ticket_flow_auto_resume=ticket_flow_auto_resume,
             pause_dispatch_notifications=pause_dispatch_notifications,
             default_notification_chat_id=default_notification_chat_id,
+            collaboration_policy=collaboration_policy,
         )
 
     def validate(self) -> None:

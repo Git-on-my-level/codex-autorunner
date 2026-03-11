@@ -355,3 +355,66 @@ def test_telegram_bot_config_validate_trigger_mode(tmp_path: Path) -> None:
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     with pytest.raises(TelegramBotConfigError):
         cfg.validate()
+
+
+def test_telegram_bot_config_builds_shared_collaboration_policy(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "allowed_chat_ids": [-1001],
+    }
+    env = {"TEST_BOT_TOKEN": "token", "TEST_CHAT_ID": ""}
+    cfg = TelegramBotConfig.from_raw(
+        raw,
+        root=tmp_path,
+        env=env,
+        collaboration_raw={
+            "telegram": {
+                "default_mode": "active",
+                "destinations": [
+                    {
+                        "chat_id": -1001,
+                        "thread_id": 7,
+                        "mode": "command_only",
+                        "trigger_mode": "all",
+                    }
+                ],
+            }
+        },
+    )
+    assert cfg.collaboration_policy is not None
+    assert cfg.collaboration_policy.default_plain_text_trigger == "always"
+    assert cfg.collaboration_policy.destinations[0].mode == "command_only"
+
+
+def test_telegram_bot_config_rejects_invalid_collaboration_policy(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "allowed_chat_ids": [-1001],
+    }
+    env = {"TEST_BOT_TOKEN": "token", "TEST_CHAT_ID": ""}
+    with pytest.raises(TelegramBotConfigError):
+        TelegramBotConfig.from_raw(
+            raw,
+            root=tmp_path,
+            env=env,
+            collaboration_raw={
+                "telegram": {
+                    "destinations": [
+                        {
+                            "chat_id": -1001,
+                            "mode": "nope",
+                        }
+                    ]
+                }
+            },
+        )

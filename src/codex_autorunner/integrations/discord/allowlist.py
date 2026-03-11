@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..chat.collaboration_policy import (
+    CollaborationEvaluationContext,
+    build_discord_collaboration_policy,
+    evaluate_collaboration_admission,
+)
+
 
 @dataclass(frozen=True)
 class DiscordAllowlist:
@@ -32,25 +38,20 @@ def _extract_user_id(payload: dict) -> str | None:
 
 
 def allowlist_allows(interaction_payload: dict, allowlist: DiscordAllowlist) -> bool:
-    if (
-        not allowlist.allowed_guild_ids
-        and not allowlist.allowed_channel_ids
-        and not allowlist.allowed_user_ids
-    ):
-        return False
-
     guild_id = _as_id(interaction_payload.get("guild_id"))
     channel_id = _as_id(interaction_payload.get("channel_id"))
     user_id = _extract_user_id(interaction_payload)
-
-    if allowlist.allowed_guild_ids and guild_id not in allowlist.allowed_guild_ids:
-        return False
-    if (
-        allowlist.allowed_channel_ids
-        and channel_id not in allowlist.allowed_channel_ids
-    ):
-        return False
-    if allowlist.allowed_user_ids and user_id not in allowlist.allowed_user_ids:
-        return False
-
-    return True
+    policy = build_discord_collaboration_policy(
+        allowed_guild_ids=allowlist.allowed_guild_ids,
+        allowed_channel_ids=allowlist.allowed_channel_ids,
+        allowed_user_ids=allowlist.allowed_user_ids,
+    )
+    result = evaluate_collaboration_admission(
+        policy,
+        CollaborationEvaluationContext(
+            actor_id=user_id,
+            container_id=guild_id,
+            destination_id=channel_id,
+        ),
+    )
+    return result.command_allowed

@@ -14,6 +14,10 @@ from ...voice.provider_catalog import (
     local_voice_provider_spec,
     missing_local_voice_runtime_commands,
 )
+from ..chat.collaboration_policy import (
+    CollaborationPolicyError,
+    build_discord_collaboration_policy,
+)
 from .config import (
     DEFAULT_APP_ID_ENV,
     DEFAULT_BOT_TOKEN_ENV,
@@ -31,6 +35,7 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     raw = config.raw if isinstance(config.raw, dict) else {}
     discord_bot_raw = raw.get("discord_bot")
+    collaboration_cfg = raw.get("collaboration_policy", {})
     discord_cfg: dict[str, Any] = (
         discord_bot_raw if isinstance(discord_bot_raw, dict) else {}
     )
@@ -316,6 +321,51 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                 ),
                 check_id="discord.allowlists",
                 severity="info",
+            )
+        )
+    try:
+        policy = build_discord_collaboration_policy(
+            allowed_guild_ids=allowed_guild_ids,
+            allowed_channel_ids=allowed_channel_ids,
+            allowed_user_ids=allowed_user_ids,
+            collaboration_raw=(
+                collaboration_cfg.get("discord")
+                if isinstance(collaboration_cfg, dict)
+                else None
+            ),
+            shared_raw=(
+                collaboration_cfg if isinstance(collaboration_cfg, dict) else None
+            ),
+        )
+        checks.append(
+            DoctorCheck(
+                name="Discord collaboration policy",
+                passed=True,
+                message=(
+                    "Shared policy compiled: "
+                    f"{len(policy.allowed_actor_ids)} users, "
+                    f"{len(policy.allowed_container_ids)} guilds, "
+                    f"{len(policy.allowed_destination_ids)} channels, "
+                    f"{len(policy.destinations)} destinations, "
+                    f"default_mode={policy.default_mode}, "
+                    f"default_plain_text_trigger={policy.default_plain_text_trigger}"
+                ),
+                check_id="discord.collaboration_policy",
+                severity="info",
+            )
+        )
+    except CollaborationPolicyError as exc:
+        checks.append(
+            DoctorCheck(
+                name="Discord collaboration policy",
+                passed=False,
+                message=f"Discord collaboration policy is invalid: {exc}",
+                check_id="discord.collaboration_policy",
+                severity="error",
+                fix=(
+                    "Fix collaboration_policy.discord values so IDs, destination modes, "
+                    "and plain-text triggers are valid."
+                ),
             )
         )
 

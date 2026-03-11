@@ -196,6 +196,188 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
                     )
 
 
+def _validate_collaboration_policy_config(cfg: Dict[str, Any]) -> None:
+    collaboration_cfg = cfg.get("collaboration_policy")
+    if collaboration_cfg is None:
+        return
+    if not isinstance(collaboration_cfg, dict):
+        raise ConfigError("collaboration_policy section must be a mapping if provided")
+
+    actors_cfg = collaboration_cfg.get("actors")
+    if actors_cfg is not None and not isinstance(actors_cfg, dict):
+        raise ConfigError("collaboration_policy.actors must be a mapping if provided")
+    if isinstance(actors_cfg, dict):
+        _validate_id_list(
+            actors_cfg,
+            "allowed_user_ids",
+            path="collaboration_policy.actors.allowed_user_ids",
+        )
+
+    _validate_collaboration_surface_config(
+        collaboration_cfg.get("telegram"),
+        surface="telegram",
+        id_fields=("allowed_chat_ids", "allowed_user_ids"),
+        destination_id_field="chat_id",
+        container_id_field=None,
+        subdestination_field="thread_id",
+        allow_require_topics=True,
+    )
+    _validate_collaboration_surface_config(
+        collaboration_cfg.get("discord"),
+        surface="discord",
+        id_fields=("allowed_guild_ids", "allowed_channel_ids", "allowed_user_ids"),
+        destination_id_field="channel_id",
+        container_id_field="guild_id",
+        subdestination_field=None,
+        allow_require_topics=False,
+    )
+
+
+def _validate_collaboration_surface_config(
+    raw: Any,
+    *,
+    surface: str,
+    id_fields: tuple[str, ...],
+    destination_id_field: str,
+    container_id_field: str | None,
+    subdestination_field: str | None,
+    allow_require_topics: bool,
+) -> None:
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"collaboration_policy.{surface} must be a mapping if provided"
+        )
+    for key in id_fields:
+        _validate_id_list(raw, key, path=f"collaboration_policy.{surface}.{key}")
+    if "default_mode" in raw:
+        _validate_str_choice(
+            raw,
+            "default_mode",
+            {"active", "command_only", "silent", "denied"},
+            path=f"collaboration_policy.{surface}.default_mode",
+        )
+    for key in ("default_plain_text_trigger", "trigger_mode"):
+        if key in raw:
+            _validate_str_choice(
+                raw,
+                key,
+                {"always", "mentions", "disabled", "all"},
+                path=f"collaboration_policy.{surface}.{key}",
+            )
+    if (
+        allow_require_topics
+        and "require_topics" in raw
+        and not isinstance(raw.get("require_topics"), bool)
+    ):
+        raise ConfigError(
+            f"collaboration_policy.{surface}.require_topics must be boolean"
+        )
+
+    destinations = raw.get("destinations")
+    if destinations is None:
+        return
+    if not isinstance(destinations, list):
+        raise ConfigError(f"collaboration_policy.{surface}.destinations must be a list")
+    for index, item in enumerate(destinations):
+        if not isinstance(item, dict):
+            raise ConfigError(
+                f"collaboration_policy.{surface}.destinations[{index}] must be a mapping"
+            )
+        _validate_destination_id(
+            item,
+            destination_id_field,
+            path=(
+                f"collaboration_policy.{surface}.destinations[{index}]."
+                f"{destination_id_field}"
+            ),
+        )
+        if container_id_field is not None and container_id_field in item:
+            _validate_destination_id(
+                item,
+                container_id_field,
+                path=(
+                    f"collaboration_policy.{surface}.destinations[{index}]."
+                    f"{container_id_field}"
+                ),
+            )
+        if subdestination_field is not None and subdestination_field in item:
+            _validate_destination_id(
+                item,
+                subdestination_field,
+                path=(
+                    f"collaboration_policy.{surface}.destinations[{index}]."
+                    f"{subdestination_field}"
+                ),
+                allow_none=True,
+            )
+        if "mode" in item:
+            _validate_str_choice(
+                item,
+                "mode",
+                {"active", "command_only", "silent", "denied"},
+                path=f"collaboration_policy.{surface}.destinations[{index}].mode",
+            )
+        for key in ("plain_text_trigger", "trigger_mode"):
+            if key in item:
+                _validate_str_choice(
+                    item,
+                    key,
+                    {"always", "mentions", "disabled", "all"},
+                    path=(
+                        f"collaboration_policy.{surface}.destinations[{index}].{key}"
+                    ),
+                )
+        if (
+            "name" in item
+            and item.get("name") is not None
+            and not isinstance(item.get("name"), str)
+        ):
+            raise ConfigError(
+                f"collaboration_policy.{surface}.destinations[{index}].name must be a string"
+            )
+
+
+def _validate_id_list(cfg: Dict[str, Any], key: str, *, path: str) -> None:
+    value = cfg.get(key)
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise ConfigError(f"{path} must be a list")
+    for entry in value:
+        if not isinstance(entry, (str, int)):
+            raise ConfigError(f"{path} must contain only string/int IDs")
+
+
+def _validate_str_choice(
+    cfg: Dict[str, Any],
+    key: str,
+    allowed: set[str],
+    *,
+    path: str,
+) -> None:
+    value = cfg.get(key)
+    if not isinstance(value, str):
+        raise ConfigError(f"{path} must be a string")
+    if value not in allowed:
+        raise ConfigError(f"{path} must be one of {sorted(allowed)}")
+
+
+def _validate_destination_id(
+    cfg: Dict[str, Any],
+    key: str,
+    *,
+    path: str,
+    allow_none: bool = False,
+) -> None:
+    value = cfg.get(key)
+    if allow_none and value is None:
+        return
+    if not isinstance(value, (str, int)):
+        raise ConfigError(f"{path} must be a string/int ID")
+
+
 def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
     opencode_cfg = cfg.get("opencode")
     if opencode_cfg is None:
@@ -644,6 +826,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
         if max_cache_age_days < 0:
             raise ConfigError("static_assets.max_cache_age_days must be >= 0")
     _validate_housekeeping_config(cfg)
+    _validate_collaboration_policy_config(cfg)
     _validate_telegram_bot_config(cfg)
     _validate_discord_bot_config(cfg)
 
@@ -734,6 +917,7 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
                 raise ConfigError(f"server_log.{key} must be an integer")
     _validate_static_assets_config(cfg, scope="hub")
     _validate_housekeeping_config(cfg)
+    _validate_collaboration_policy_config(cfg)
     _validate_telegram_bot_config(cfg)
     _validate_discord_bot_config(cfg)
 

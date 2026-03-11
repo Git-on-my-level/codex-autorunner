@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from ..chat.collaboration_policy import (
+    CollaborationPolicy,
+    CollaborationPolicyError,
+    build_discord_collaboration_policy,
+)
 from .constants import (
     DISCORD_INTENT_GUILD_MESSAGES,
     DISCORD_INTENT_GUILDS,
@@ -74,10 +79,16 @@ class DiscordBotConfig:
     pma_enabled: bool
     shell: DiscordBotShellConfig = field(default_factory=DiscordBotShellConfig)
     media: DiscordBotMediaConfig = field(default_factory=DiscordBotMediaConfig)
+    collaboration_policy: Optional[CollaborationPolicy] = None
 
     @classmethod
     def from_raw(
-        cls, *, root: Path, raw: dict[str, Any], pma_enabled: bool = True
+        cls,
+        *,
+        root: Path,
+        raw: dict[str, Any],
+        pma_enabled: bool = True,
+        collaboration_raw: Optional[dict[str, Any]] = None,
     ) -> "DiscordBotConfig":
         cfg: dict[str, Any] = raw if isinstance(raw, dict) else {}
         enabled = bool(cfg.get("enabled", False))
@@ -195,6 +206,23 @@ class DiscordBotConfig:
                     f"Discord bot is enabled but env var {app_id_env} is unset"
                 )
 
+        try:
+            collaboration_policy = build_discord_collaboration_policy(
+                allowed_guild_ids=_parse_string_ids(cfg.get("allowed_guild_ids")),
+                allowed_channel_ids=_parse_string_ids(cfg.get("allowed_channel_ids")),
+                allowed_user_ids=_parse_string_ids(cfg.get("allowed_user_ids")),
+                collaboration_raw=(
+                    collaboration_raw.get("discord")
+                    if isinstance(collaboration_raw, dict)
+                    else None
+                ),
+                shared_raw=(
+                    collaboration_raw if isinstance(collaboration_raw, dict) else None
+                ),
+            )
+        except CollaborationPolicyError as exc:
+            raise DiscordBotConfigError(str(exc)) from exc
+
         return cls(
             root=root,
             enabled=enabled,
@@ -217,6 +245,7 @@ class DiscordBotConfig:
             pma_enabled=pma_enabled,
             shell=shell,
             media=media,
+            collaboration_policy=collaboration_policy,
         )
 
 

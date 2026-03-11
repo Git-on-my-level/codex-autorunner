@@ -209,6 +209,61 @@ def test_repo_override_rejects_mode_and_version(tmp_path: Path) -> None:
         load_repo_config(repo_root, hub_path=hub_root)
 
 
+def test_load_hub_config_accepts_collaboration_policy(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "collaboration_policy": {
+                "discord": {
+                    "default_mode": "denied",
+                    "destinations": [
+                        {
+                            "guild_id": "123",
+                            "channel_id": "456",
+                            "mode": "active",
+                            "plain_text_trigger": "mentions",
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    config = load_hub_config(hub_root)
+    assert isinstance(config.raw, dict)
+    assert config.raw["collaboration_policy"]["discord"]["default_mode"] == "denied"
+
+
+def test_load_hub_config_rejects_invalid_collaboration_policy(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "collaboration_policy": {
+                "telegram": {
+                    "destinations": [
+                        {
+                            "chat_id": -1001,
+                            "mode": "invalid",
+                        }
+                    ]
+                }
+            },
+        },
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match="collaboration_policy.telegram.destinations\\[0\\]\\.mode",
+    ):
+        load_hub_config(hub_root)
+
+
 def test_repo_env_overrides_hub_env(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

@@ -85,6 +85,13 @@ from ...integrations.app_server.threads import (
 )
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.channel_directory import ChannelDirectoryStore
+from ...integrations.chat.collaboration_policy import (
+    CollaborationEvaluationContext,
+    CollaborationEvaluationResult,
+    build_discord_collaboration_policy,
+    evaluate_collaboration_admission,
+    evaluate_collaboration_policy,
+)
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
@@ -140,7 +147,6 @@ from ..chat.thread_summaries import (
 from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
 from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
-from .allowlist import DiscordAllowlist, allowlist_allows
 from .car_autocomplete import (
     handle_command_autocomplete as handle_car_command_autocomplete,
 )
@@ -498,12 +504,14 @@ class DiscordBotService:
                 logger=logger,
             )
         )
-        self._allowlist = DiscordAllowlist(
-            allowed_guild_ids=config.allowed_guild_ids,
-            allowed_channel_ids=config.allowed_channel_ids,
-            allowed_user_ids=config.allowed_user_ids,
+        self._collaboration_policy = (
+            config.collaboration_policy
+            or build_discord_collaboration_policy(
+                allowed_guild_ids=config.allowed_guild_ids,
+                allowed_channel_ids=config.allowed_channel_ids,
+                allowed_user_ids=config.allowed_user_ids,
+            )
         )
-
         self._chat_adapter = (
             chat_adapter
             if chat_adapter is not None
@@ -637,19 +645,100 @@ class DiscordBotService:
         await self._maybe_send_queued_notice(event, dispatch_result)
 
     @staticmethod
-    def _is_turn_candidate_message_event(event: ChatMessageEvent) -> bool:
+    def _is_explicit_message_command(event: ChatMessageEvent) -> bool:
+        text = (event.text or "").strip()
+        if not text:
+            return False
+        if text.startswith("/"):
+            return True
+        return text.startswith("!")
+
+    def _evaluate_message_collaboration_policy(
+        self,
+        event: ChatMessageEvent,
+        *,
+        is_explicit_command: bool,
+    ) -> CollaborationEvaluationResult:
+        text = (event.text or "").strip()
+        return evaluate_collaboration_policy(
+            self._collaboration_policy,
+            CollaborationEvaluationContext(
+                actor_id=event.from_user_id,
+                container_id=event.thread.thread_id,
+                destination_id=event.thread.chat_id,
+                is_explicit_command=is_explicit_command,
+                plain_text=PlainTextTurnContext(text=text),
+            ),
+            plain_text_turn_fn=should_trigger_plain_text_turn,
+        )
+
+    def _evaluate_context_admission(
+        self,
+        *,
+        chat_id: Optional[str],
+        guild_id: Optional[str],
+        user_id: Optional[str],
+    ) -> CollaborationEvaluationResult:
+        return evaluate_collaboration_admission(
+            self._collaboration_policy,
+            CollaborationEvaluationContext(
+                actor_id=user_id,
+                container_id=guild_id,
+                destination_id=chat_id,
+            ),
+        )
+
+    def _evaluate_interaction_collaboration_policy(
+        self,
+        *,
+        channel_id: Optional[str],
+        guild_id: Optional[str],
+        user_id: Optional[str],
+    ) -> CollaborationEvaluationResult:
+        return evaluate_collaboration_policy(
+            self._collaboration_policy,
+            CollaborationEvaluationContext(
+                actor_id=user_id,
+                container_id=guild_id,
+                destination_id=channel_id,
+                is_explicit_command=True,
+            ),
+        )
+
+    def _log_collaboration_policy_result(
+        self,
+        *,
+        channel_id: Optional[str],
+        guild_id: Optional[str],
+        user_id: Optional[str],
+        message_id: Optional[str] = None,
+        interaction_id: Optional[str] = None,
+        result: CollaborationEvaluationResult,
+    ) -> None:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.collaboration_policy.evaluated",
+            channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=user_id,
+            message_id=message_id,
+            interaction_id=interaction_id,
+            **result.log_fields(),
+        )
+
+    def _is_turn_candidate_message_event(self, event: ChatMessageEvent) -> bool:
         text = (event.text or "").strip()
         has_attachments = bool(event.attachments)
         if not text and not has_attachments:
             return False
         if text.startswith("/"):
             return False
-        if text and not should_trigger_plain_text_turn(
-            mode="always",
-            context=PlainTextTurnContext(text=text),
-        ):
-            return False
-        return True
+        result = self._evaluate_message_collaboration_policy(
+            event,
+            is_explicit_command=False,
+        )
+        return result.should_start_turn
 
     async def _maybe_send_queued_notice(
         self, event: ChatEvent, dispatch_result: DispatchResult
@@ -691,15 +780,20 @@ class DiscordBotService:
             # Interaction denials should return an ephemeral response rather than
             # being dropped at dispatcher level.
             return True
-        return self._allowlist_allows_context(context)
-
-    def _allowlist_allows_context(self, context: DispatchContext) -> bool:
-        fake_payload = {
-            "channel_id": context.chat_id,
-            "guild_id": context.thread_id if context.thread_id else None,
-            "member": {"user": {"id": context.user_id}} if context.user_id else None,
-        }
-        return allowlist_allows(fake_payload, self._allowlist)
+        result = self._evaluate_context_admission(
+            chat_id=context.chat_id,
+            guild_id=context.thread_id,
+            user_id=context.user_id,
+        )
+        if not result.command_allowed:
+            self._log_collaboration_policy_result(
+                channel_id=context.chat_id,
+                guild_id=context.thread_id,
+                user_id=context.user_id,
+                message_id=context.message_id,
+                result=result,
+            )
+        return result.command_allowed
 
     def _bypass_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
         if isinstance(event, ChatInteractionEvent):
@@ -732,7 +826,19 @@ class DiscordBotService:
             )
             return
 
-        if not self._allowlist_allows_context(context):
+        policy_result = self._evaluate_interaction_collaboration_policy(
+            channel_id=context.chat_id,
+            guild_id=context.thread_id,
+            user_id=context.user_id,
+        )
+        if not policy_result.command_allowed:
+            self._log_collaboration_policy_result(
+                channel_id=context.chat_id,
+                guild_id=context.thread_id,
+                user_id=context.user_id,
+                interaction_id=interaction_id,
+                result=policy_result,
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -889,6 +995,19 @@ class DiscordBotService:
         if text.startswith("/"):
             return
         if text.startswith("!") and not event.attachments:
+            policy_result = self._evaluate_message_collaboration_policy(
+                event,
+                is_explicit_command=True,
+            )
+            if not policy_result.command_allowed:
+                self._log_collaboration_policy_result(
+                    channel_id=channel_id,
+                    guild_id=context.thread_id,
+                    user_id=event.from_user_id,
+                    message_id=event.message.message_id,
+                    result=policy_result,
+                )
+                return
             binding, workspace_root = await resolve_bound_workspace_root(
                 self,
                 channel_id=channel_id,
@@ -933,10 +1052,18 @@ class DiscordBotService:
                 workspace_root=workspace_root,
             )
             return
-        if text and not should_trigger_plain_text_turn(
-            mode="always",
-            context=PlainTextTurnContext(text=text),
-        ):
+        policy_result = self._evaluate_message_collaboration_policy(
+            event,
+            is_explicit_command=False,
+        )
+        if not policy_result.should_start_turn:
+            self._log_collaboration_policy_result(
+                channel_id=channel_id,
+                guild_id=context.thread_id,
+                user_id=event.from_user_id,
+                message_id=event.message.message_id,
+                result=policy_result,
+            )
             return
         await handle_discord_message_event(
             self,
@@ -2579,7 +2706,19 @@ class DiscordBotService:
             )
             return
 
-        if not allowlist_allows(interaction_payload, self._allowlist):
+        policy_result = self._evaluate_interaction_collaboration_policy(
+            channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=extract_user_id(interaction_payload),
+        )
+        if not policy_result.command_allowed:
+            self._log_collaboration_policy_result(
+                channel_id=channel_id,
+                guild_id=guild_id,
+                user_id=extract_user_id(interaction_payload),
+                interaction_id=interaction_id,
+                result=policy_result,
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -2668,7 +2807,12 @@ class DiscordBotService:
             )
             return
 
-        if not allowlist_allows(interaction_payload, self._allowlist):
+        policy_result = self._evaluate_interaction_collaboration_policy(
+            channel_id=channel_id,
+            guild_id=extract_guild_id(interaction_payload),
+            user_id=extract_user_id(interaction_payload),
+        )
+        if not policy_result.command_allowed:
             await self._respond_autocomplete(
                 interaction_id, interaction_token, choices=[]
             )
@@ -3606,7 +3750,19 @@ class DiscordBotService:
             )
             return
 
-        if not allowlist_allows(interaction_payload, self._allowlist):
+        policy_result = self._evaluate_interaction_collaboration_policy(
+            channel_id=channel_id,
+            guild_id=extract_guild_id(interaction_payload),
+            user_id=extract_user_id(interaction_payload),
+        )
+        if not policy_result.command_allowed:
+            self._log_collaboration_policy_result(
+                channel_id=channel_id,
+                guild_id=extract_guild_id(interaction_payload),
+                user_id=extract_user_id(interaction_payload),
+                interaction_id=interaction_id,
+                result=policy_result,
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -7159,7 +7315,19 @@ class DiscordBotService:
             )
             return
 
-        if not allowlist_allows(interaction_payload, self._allowlist):
+        policy_result = self._evaluate_interaction_collaboration_policy(
+            channel_id=channel_id,
+            guild_id=extract_guild_id(interaction_payload),
+            user_id=user_id,
+        )
+        if not policy_result.command_allowed:
+            self._log_collaboration_policy_result(
+                channel_id=channel_id,
+                guild_id=extract_guild_id(interaction_payload),
+                user_id=user_id,
+                interaction_id=interaction_id,
+                result=policy_result,
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
