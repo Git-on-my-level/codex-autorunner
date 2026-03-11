@@ -856,9 +856,11 @@ class OpenCodeSupervisor:
             event_prefix="opencode.supervisor.terminate_record",
         )
 
-    async def _safe_close_client(self, client: OpenCodeClient) -> None:
+    async def _safe_close_client(self, client: Optional[OpenCodeClient]) -> None:
+        if client is None:
+            return
         try:
-            await self._safe_close_client(client)
+            await client.close()
         except Exception:
             pass
 

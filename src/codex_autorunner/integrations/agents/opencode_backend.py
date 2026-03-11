@@ -90,6 +90,37 @@ class OpenCodeBackend(AgentBackend):
         self._session_id = None
         self._last_turn_id = None
 
+    async def aclose(self) -> None:
+        """Async close method that properly handles exceptions."""
+        if self._client is None:
+            return
+        client = self._client
+        self._client = None
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+    def close(self) -> Optional[Any]:
+        """Close the backend client if created directly (base_url mode).
+
+        This method is called by AgentBackendFactory.close_all() to release
+        backend-owned clients. When a supervisor is used, the supervisor's
+        close_all() is called separately by the factory.
+        """
+        if self._client is None:
+            return None
+        client = self._client
+        self._client = None
+
+        async def _do_close() -> None:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+        return _do_close()
+
     def configure(self, **options: Any) -> None:
         self._model = options.get("model")
         reasoning = options.get("reasoning")
