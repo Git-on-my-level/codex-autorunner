@@ -129,6 +129,19 @@ function formatNumber(n: number): string {
   return n.toString();
 }
 
+function diffStatsSignature(
+  diffStats?:
+    | { insertions?: number; deletions?: number; files_changed?: number }
+    | null
+): string {
+  if (!diffStats) return "";
+  return [
+    diffStats.insertions || 0,
+    diffStats.deletions || 0,
+    diffStats.files_changed || 0,
+  ].join(",");
+}
+
 type TicketListPayload = {
   ticket_dir?: string;
   tickets?: TicketFile[];
@@ -199,7 +212,8 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
       const agent = fm?.agent ? String(fm.agent) : "";
       const mtime = (ticket as { mtime?: string | number | null }).mtime ?? "";
       const errors = Array.isArray(ticket.errors) ? ticket.errors.join(",") : "";
-      return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors].join("|");
+      const diff = diffStatsSignature(ticket.diff_stats);
+      return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors, diff].join("|");
     });
     return [
       payload.ticket_dir ?? "",
@@ -221,7 +235,11 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
       { restoreOnNextFrame: true }
     );
   },
-  onSkip: () => {
+  onSkip: (payload) => {
+    ticketListCache = {
+      ticket_dir: payload.ticket_dir,
+      tickets: payload.tickets,
+    };
     updateScrollFade();
   },
 });
@@ -229,8 +247,21 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
 const dispatchHistoryRefresh = createSmartRefresh<DispatchHistoryPayload>({
   getSignature: (payload) => {
     const entries = payload.history || [];
-    const latestSeq = entries[0]?.seq ?? "";
-    return [payload.runId ?? "", latestSeq, entries.length].join("::");
+    const pieces = entries.map((entry) => {
+      const diffStats =
+        entry.dispatch?.diff_stats ||
+        (entry.dispatch?.extra?.diff_stats as
+          | { insertions?: number; deletions?: number; files_changed?: number }
+          | undefined);
+      return [
+        entry.seq ?? "",
+        entry.dispatch?.mode ?? "",
+        entry.dispatch?.title ?? "",
+        entry.created_at ?? "",
+        diffStatsSignature(diffStats),
+      ].join("|");
+    });
+    return [payload.runId ?? "", entries.length, pieces.join(";")].join("::");
   },
   render: (payload) => {
     const { history } = els();

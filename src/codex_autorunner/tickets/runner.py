@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..contextspace.paths import contextspace_doc_path
+from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats
 from . import runner_post_turn, runner_prompt, runner_selection
@@ -512,6 +513,7 @@ class TicketRunner:
         # Post-turn: archive outbox if DISPATCH.md exists.
         dispatch_seq = int(state.get("dispatch_seq") or 0)
         current_ticket_id = safe_relpath(current_path, self._workspace_root)
+        current_ticket_key = ticket_instance_token(current_path)
         dispatch, dispatch_errors = archive_dispatch(
             outbox_paths,
             next_seq=dispatch_seq + 1,
@@ -578,6 +580,8 @@ class TicketRunner:
                         FlowEventType.DIFF_UPDATED,
                         {
                             "ticket_id": current_ticket_id,
+                            "ticket_key": current_ticket_key,
+                            "ticket_path": current_ticket_id,
                             "dispatch_seq": turn_summary.seq,
                             "insertions": int(turn_diff_stats.get("insertions") or 0),
                             "deletions": int(turn_diff_stats.get("deletions") or 0),

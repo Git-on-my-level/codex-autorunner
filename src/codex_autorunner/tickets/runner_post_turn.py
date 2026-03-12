@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
 from .frontmatter import parse_markdown_frontmatter
@@ -29,6 +30,7 @@ def archive_dispatch_and_create_summary(
     agent_id: str,
     turn_number: int,
     head_before_turn: Optional[str],
+    current_ticket_path: Optional[Path] = None,
     emit_event: Optional[Any] = None,
 ) -> tuple[Optional[Any], Optional[dict[str, Any]]]:
     """Archive DISPATCH and create turn summary."""
@@ -74,17 +76,21 @@ def archive_dispatch_and_create_summary(
 
     if emit_event is not None and isinstance(turn_diff_stats, dict):
         try:
+            event_payload = {
+                "ticket_id": current_ticket_id,
+                "ticket_path": current_ticket_id,
+                "dispatch_seq": (
+                    turn_summary.seq if turn_summary else turn_summary_seq
+                ),
+                "insertions": int(turn_diff_stats.get("insertions") or 0),
+                "deletions": int(turn_diff_stats.get("deletions") or 0),
+                "files_changed": int(turn_diff_stats.get("files_changed") or 0),
+            }
+            if current_ticket_path is not None:
+                event_payload["ticket_key"] = ticket_instance_token(current_ticket_path)
             emit_event(
                 FlowEventType.DIFF_UPDATED,
-                {
-                    "ticket_id": current_ticket_id,
-                    "dispatch_seq": (
-                        turn_summary.seq if turn_summary else turn_summary_seq
-                    ),
-                    "insertions": int(turn_diff_stats.get("insertions") or 0),
-                    "deletions": int(turn_diff_stats.get("deletions") or 0),
-                    "files_changed": int(turn_diff_stats.get("files_changed") or 0),
-                },
+                event_payload,
             )
         except Exception:
             pass
