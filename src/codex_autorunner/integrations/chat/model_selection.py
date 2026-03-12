@@ -6,10 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
-from .agents import chat_agent_supports_effort
-
 if TYPE_CHECKING:
-    from ...app_server.client import CodexAppServerClient
+    from ..app_server.client import CodexAppServerClient
 
 VALID_REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh"}
@@ -51,16 +49,6 @@ def _is_valid_opencode_model_name(model_name: str) -> bool:
         return False
     provider_id, model_id = model_name.split("/", 1)
     return bool(provider_id.strip() and model_id.strip())
-
-
-def validate_effort(effort: Optional[str], agent: Any) -> Optional[str]:
-    if not effort:
-        return None
-    if effort not in VALID_REASONING_EFFORTS:
-        return f"Unknown effort '{effort}'. Allowed: {', '.join(sorted(VALID_REASONING_EFFORTS))}."
-    if not chat_agent_supports_effort(agent):
-        return "Effort not supported for current agent. Use /agent codex to enable reasoning effort."
-    return None
 
 
 def _coerce_model_options(
@@ -129,7 +117,7 @@ async def _model_list_with_agent_compat(
     *,
     params: dict[str, Any],
 ) -> Any:
-    from ...app_server.client import CodexAppServerResponseError
+    from ..app_server.client import CodexAppServerResponseError
 
     request_params = {key: value for key, value in params.items() if value is not None}
     requested_agent = request_params.get("agent")
@@ -170,5 +158,4 @@ __all__ = [
     "_model_list_with_agent_compat",
     "_normalize_model_name",
     "format_model_set_message",
-    "validate_effort",
 ]
