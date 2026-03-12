@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
+from ...core.config import ConfigError, load_repo_config
+from ...core.flows import FlowStore
 from .state import DiscordStateStore, OutboxRecord
 
 OUTBOX_RETRY_INTERVAL_SECONDS = 5.0
@@ -43,6 +46,23 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
                     pass
         current = current.__cause__ or current.__context__
     return None
+
+
+def _terminal_run_id(record_id: str) -> Optional[str]:
+    parts = record_id.split(":", 2)
+    if len(parts) != 3 or parts[0] != "terminal":
+        return None
+    run_id = parts[2].strip()
+    return run_id or None
+
+
+def _has_archived_run_artifacts(workspace_root: Path, run_id: str) -> bool:
+    archive_root = workspace_root / ".codex-autorunner" / "flows" / run_id
+    if not archive_root.exists():
+        return False
+    if (archive_root / "archived_tickets").exists():
+        return True
+    return any(archive_root.glob("archived_runs*"))
 
 
 class DiscordOutboxManager:
@@ -141,6 +161,13 @@ class DiscordOutboxManager:
         if current.attempts >= self._max_attempts:
             await self._drop_exhausted(current)
             return False
+        if await self._should_drop_terminal_notification(current):
+            await self._store.mark_outbox_delivered(current.record_id)
+            self._logger.info(
+                "discord.outbox.dropped_stale_terminal record_id=%s",
+                current.record_id,
+            )
+            return False
         if not await self._mark_inflight(current.record_id):
             return False
         try:
@@ -199,6 +226,37 @@ class DiscordOutboxManager:
             record.last_error,
         )
         await self._store.mark_outbox_delivered(record.record_id)
+
+    async def _should_drop_terminal_notification(self, record: OutboxRecord) -> bool:
+        if record.operation != "send":
+            return False
+        run_id = _terminal_run_id(record.record_id)
+        if run_id is None:
+            return False
+        try:
+            binding = await self._store.get_binding(channel_id=record.channel_id)
+        except Exception:
+            return False
+        workspace_raw = (
+            binding.get("workspace_path") if isinstance(binding, dict) else None
+        )
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            return False
+        workspace_root = Path(workspace_raw)
+        if _has_archived_run_artifacts(workspace_root, run_id):
+            return True
+        db_path = workspace_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            return True
+        try:
+            durable_writes = load_repo_config(workspace_root).durable_writes
+        except ConfigError:
+            durable_writes = False
+        try:
+            with FlowStore(db_path, durable=durable_writes) as store:
+                return store.get_flow_run(run_id) is None
+        except Exception:
+            return False
 
     async def _mark_inflight(self, key: str) -> bool:
         if self._lock is None:
