@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
+    preferred_non_pma_chat_notification_sources_by_workspace,
 )
 from ...core.config import ConfigError, load_hub_config, load_repo_config
 from ...core.flows import FlowStore
@@ -116,18 +117,28 @@ class TelegramTicketFlowBridge:
             return
         topics = await self._store.list_topics()
         workspace_topics = self._get_all_workspaces(topics or {})
+        preferred_sources = self._preferred_bound_sources_by_workspace()
 
         tasks = []
         for workspace_root, entries in workspace_topics.items():
             if entries:
                 tasks.append(
                     asyncio.create_task(
-                        self._notify_ticket_flow_pause(workspace_root, entries)
+                        self._notify_ticket_flow_pause(
+                            workspace_root,
+                            entries,
+                            preferred_source=preferred_sources.get(str(workspace_root)),
+                        )
                     )
                 )
             else:
                 tasks.append(
-                    asyncio.create_task(self._notify_via_default_chat(workspace_root))
+                    asyncio.create_task(
+                        self._notify_via_default_chat(
+                            workspace_root,
+                            preferred_source=preferred_sources.get(str(workspace_root)),
+                        )
+                    )
                 )
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -136,8 +147,13 @@ class TelegramTicketFlowBridge:
         self,
         workspace_root: Path,
         entries: list[tuple[str, object]],
+        *,
+        preferred_source: Optional[str] = None,
     ) -> None:
-        preferred_source = self._preferred_bound_source_for_workspace(workspace_root)
+        if preferred_source is None:
+            preferred_source = self._preferred_bound_source_for_workspace(
+                workspace_root
+            )
         if preferred_source == "discord":
             return
         try:
@@ -314,10 +330,18 @@ class TelegramTicketFlowBridge:
                 workspace_root=str(workspace_root),
             )
 
-    async def _notify_via_default_chat(self, workspace_root: Path) -> None:
+    async def _notify_via_default_chat(
+        self,
+        workspace_root: Path,
+        *,
+        preferred_source: Optional[str] = None,
+    ) -> None:
         if not self._pause_config.enabled or self._default_notification_chat_id is None:
             return
-        preferred_source = self._preferred_bound_source_for_workspace(workspace_root)
+        if preferred_source is None:
+            preferred_source = self._preferred_bound_source_for_workspace(
+                workspace_root
+            )
         if preferred_source in {"telegram", "discord"}:
             return
         try:
@@ -388,6 +412,30 @@ class TelegramTicketFlowBridge:
                 workspace_root=str(workspace_root),
             )
             return None
+
+    def _preferred_bound_sources_by_workspace(self) -> dict[str, str]:
+        if self._hub_root is None:
+            return {}
+        raw_config = self._hub_raw_config
+        if raw_config is None:
+            try:
+                raw_config = load_hub_config(self._hub_root).raw
+            except Exception:
+                raw_config = {}
+            self._hub_raw_config = raw_config
+        try:
+            return preferred_non_pma_chat_notification_sources_by_workspace(
+                hub_root=self._hub_root,
+                raw_config=raw_config,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.route_lookup_failed",
+                exc=exc,
+            )
+            return {}
 
     async def _send_full_dispatch(
         self,

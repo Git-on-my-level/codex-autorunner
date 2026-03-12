@@ -19,6 +19,7 @@ from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...bootstrap import seed_repo_files
 from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
+    preferred_non_pma_chat_notification_sources_by_workspace,
 )
 from ...core.config import (
     ConfigError,
@@ -2564,15 +2565,18 @@ class DiscordBotService:
 
     async def _scan_and_enqueue_pause_notifications(self) -> None:
         bindings = await self._store.list_bindings()
+        preferred_sources = self._preferred_bound_sources_by_workspace()
         for binding in bindings:
             channel_id = binding.get("channel_id")
             workspace_raw = binding.get("workspace_path")
             if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
                 continue
             workspace_root = canonicalize_path(Path(workspace_raw))
-            preferred_source = self._preferred_bound_source_for_workspace(
-                workspace_root
-            )
+            preferred_source = preferred_sources.get(str(workspace_root))
+            if preferred_source is None:
+                preferred_source = self._preferred_bound_source_for_workspace(
+                    workspace_root
+                )
             if preferred_source == "telegram":
                 continue
             run_mirror = self._flow_run_mirror(workspace_root)
@@ -2678,6 +2682,28 @@ class DiscordBotService:
                 workspace_root=str(workspace_root),
             )
             return None
+
+    def _preferred_bound_sources_by_workspace(self) -> dict[str, str]:
+        raw_config = self._hub_raw_config_cache
+        if raw_config is None:
+            try:
+                raw_config = load_hub_config(self._config.root).raw
+            except Exception:
+                raw_config = {}
+            self._hub_raw_config_cache = raw_config
+        try:
+            return preferred_non_pma_chat_notification_sources_by_workspace(
+                hub_root=self._config.root,
+                raw_config=raw_config,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.pause_watch.route_lookup_failed",
+                exc=exc,
+            )
+            return {}
 
     async def _watch_ticket_flow_terminals(self) -> None:
         while True:

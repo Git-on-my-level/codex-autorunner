@@ -284,7 +284,7 @@ async def test_default_chat_skips_when_discord_binding_is_preferred(
         hub_root=hub_root,
         manifest_path=None,
         config_root=workspace,
-        hub_raw_config={},
+        hub_raw_config={"discord_bot": {"enabled": True}},
     )
 
     bridge._load_ticket_flow_pause = lambda path: ("run2", "0002", "body", None)  # type: ignore

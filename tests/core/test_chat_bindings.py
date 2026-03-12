@@ -441,6 +441,8 @@ def test_preferred_non_pma_chat_notification_source_uses_freshest_binding(
 ) -> None:
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["discord_bot"]["enabled"] = True
+    cfg["telegram_bot"]["enabled"] = True
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     workspace = (hub_root / "worktrees" / "repo-a").resolve()
@@ -478,6 +480,44 @@ def test_preferred_non_pma_chat_notification_source_uses_freshest_binding(
         workspace_path=str(workspace),
         updated_at="2026-03-12T03:00:00Z",
         last_active_at="2026-03-12T03:30:00Z",
+    )
+
+    assert (
+        preferred_non_pma_chat_notification_source_for_workspace(
+            hub_root=hub_root,
+            raw_config=cfg,
+            workspace_root=workspace,
+        )
+        == "telegram"
+    )
+
+
+def test_preferred_notification_source_ignores_disabled_surfaces(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["telegram_bot"]["enabled"] = True
+    cfg["discord_bot"]["enabled"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    workspace = (hub_root / "worktrees" / "repo-b").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-stale",
+        repo_id="repo-b",
+        workspace_path=str(workspace),
+        updated_at="2026-03-12T05:00:00Z",
+    )
+    _write_telegram_binding(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        topic_key="300:400",
+        repo_id="repo-b",
+        workspace_path=str(workspace),
+        updated_at="2026-03-12T01:00:00Z",
+        last_active_at="2026-03-12T01:30:00Z",
     )
 
     assert (

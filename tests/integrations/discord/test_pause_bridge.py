@@ -310,6 +310,7 @@ async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
+    service._hub_raw_config_cache = {"telegram_bot": {"enabled": True}}
 
     try:
         await service._scan_and_enqueue_pause_notifications()
