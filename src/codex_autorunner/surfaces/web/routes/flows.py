@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ....core.config import load_repo_config
-from ....core.file_chat_keys import ticket_chat_scope
+from ....core.file_chat_keys import ticket_chat_scope, ticket_instance_token
 from ....core.flows import (
     FlowController,
     FlowDefinition,
@@ -407,10 +407,39 @@ def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecor
     return None
 
 
-def _latest_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-    if not records:
+def _coerce_ticket_diff_ref(value: object) -> Optional[str]:
+    if not isinstance(value, str):
         return None
-    return records[0]
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _ticket_diff_event_ref(data: dict[str, object]) -> Optional[str]:
+    for key in ("ticket_key", "ticket_path", "ticket_id"):
+        ref = _coerce_ticket_diff_ref(data.get(key))
+        if ref:
+            return ref
+    return None
+
+
+def _merge_ticket_diff_stats(
+    refs: list[str], diff_by_ref: dict[str, dict[str, int]]
+) -> Optional[dict[str, int]]:
+    merged = {"insertions": 0, "deletions": 0, "files_changed": 0}
+    matched = False
+    seen: set[str] = set()
+    for ref in refs:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        stats = diff_by_ref.get(ref)
+        if not isinstance(stats, dict):
+            continue
+        matched = True
+        merged["insertions"] += int(stats.get("insertions") or 0)
+        merged["deletions"] += int(stats.get("deletions") or 0)
+        merged["files_changed"] += int(stats.get("files_changed") or 0)
+    return merged if matched else None
 
 
 def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
@@ -1005,39 +1034,47 @@ You are the first ticket in a new ticket_flow run.
     async def list_ticket_files():
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        # Compute cumulative diff stats per ticket for the latest ticket_flow run.
-        # This keeps ticket-level +/- counters visible after a run reaches COMPLETED.
+        # Compute cumulative diff stats per ticket across ticket_flow runs.
+        # Use stable ticket identity where available so restarts and reorders do
+        # not drop line-change history for the same logical ticket.
         runs = _safe_list_flow_runs(
             repo_root, flow_type="ticket_flow", recover_stuck=True
         )
-        latest_run = _latest_run(runs)
-        diff_by_ticket: dict[str, dict[str, int]] = {}
-        if latest_run:
+        diff_by_ref: dict[str, dict[str, int]] = {}
+        if runs:
             store = _require_flow_store(repo_root)
             if store is not None:
                 try:
-                    events = store.get_events_by_type(
-                        latest_run.id, FlowEventType.DIFF_UPDATED
-                    )
-                except Exception:
-                    events = []
+                    for run in runs:
+                        try:
+                            events = store.get_events_by_type(
+                                run.id, FlowEventType.DIFF_UPDATED
+                            )
+                        except Exception:
+                            continue
+                        for ev in events:
+                            data = ev.data or {}
+                            ref = _ticket_diff_event_ref(data)
+                            if not ref:
+                                continue
+                            stats = diff_by_ref.setdefault(
+                                ref,
+                                {
+                                    "insertions": 0,
+                                    "deletions": 0,
+                                    "files_changed": 0,
+                                },
+                            )
+                            stats["insertions"] += int(data.get("insertions") or 0)
+                            stats["deletions"] += int(data.get("deletions") or 0)
+                            stats["files_changed"] += int(
+                                data.get("files_changed") or 0
+                            )
                 finally:
                     try:
                         store.close()
                     except Exception:
                         pass
-                for ev in events:
-                    data = ev.data or {}
-                    ticket_id = data.get("ticket_id")
-                    if not isinstance(ticket_id, str) or not ticket_id.strip():
-                        continue
-                    stats = diff_by_ticket.setdefault(
-                        ticket_id,
-                        {"insertions": 0, "deletions": 0, "files_changed": 0},
-                    )
-                    stats["insertions"] += int(data.get("insertions") or 0)
-                    stats["deletions"] += int(data.get("deletions") or 0)
-                    stats["files_changed"] += int(data.get("files_changed") or 0)
 
         tickets = []
         for path in list_ticket_paths(ticket_dir):
@@ -1052,6 +1089,7 @@ You are the first ticket in a new ticket_flow run.
             except Exception:
                 parsed_body = None
             rel_path = safe_relpath(path, repo_root)
+            diff_refs = [ticket_instance_token(path), rel_path]
             tickets.append(
                 {
                     "path": rel_path,
@@ -1060,7 +1098,7 @@ You are the first ticket in a new ticket_flow run.
                     "frontmatter": asdict(doc.frontmatter) if doc else None,
                     "body": doc.body if doc else parsed_body,
                     "errors": errors,
-                    "diff_stats": diff_by_ticket.get(rel_path),
+                    "diff_stats": _merge_ticket_diff_stats(diff_refs, diff_by_ref),
                 }
             )
         return {
