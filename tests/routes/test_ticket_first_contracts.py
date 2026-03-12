@@ -439,6 +439,75 @@ def test_ticket_list_matches_diff_stats_by_stable_ticket_identity(
         }
 
 
+def test_ticket_list_ignores_legacy_path_stats_when_ticket_has_stable_id(
+    tmp_path, monkeypatch
+):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_key = "tkt_reused_path"
+    ticket_path = ticket_dir / "TICKET-002.md"
+    ticket_path.write_text(
+        "---\n"
+        "agent: codex\n"
+        "done: false\n"
+        f'ticket_id: "{ticket_key}"\n'
+        "title: Demo\n"
+        "---\n\n"
+        "Body\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+
+    run_id = str(uuid.uuid4())
+    store.create_flow_run(
+        run_id=run_id, flow_type="ticket_flow", input_data={}, state={}
+    )
+    store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
+    store.create_event(
+        event_id=str(uuid.uuid4()),
+        run_id=run_id,
+        event_type=FlowEventType.DIFF_UPDATED,
+        data={
+            "ticket_id": ".codex-autorunner/tickets/TICKET-002.md",
+            "insertions": 99,
+            "deletions": 44,
+            "files_changed": 7,
+        },
+    )
+    store.create_event(
+        event_id=str(uuid.uuid4()),
+        run_id=run_id,
+        event_type=FlowEventType.DIFF_UPDATED,
+        data={
+            "ticket_key": ticket_key,
+            "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
+            "ticket_id": ".codex-autorunner/tickets/TICKET-001.md",
+            "insertions": 8,
+            "deletions": 5,
+            "files_changed": 1,
+        },
+    )
+    store.close()
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["tickets"][0]["diff_stats"] == {
+            "insertions": 8,
+            "deletions": 5,
+            "files_changed": 1,
+        }
+
+
 def test_reorder_ticket_moves_source_before_destination(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)

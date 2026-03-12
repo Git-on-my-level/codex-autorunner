@@ -15,7 +15,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ....core.config import load_repo_config
-from ....core.file_chat_keys import ticket_chat_scope, ticket_instance_token
+from ....core.file_chat_keys import (
+    ticket_chat_scope,
+    ticket_stable_id,
+)
 from ....core.flows import (
     FlowController,
     FlowDefinition,
@@ -1089,7 +1092,8 @@ You are the first ticket in a new ticket_flow run.
             except Exception:
                 parsed_body = None
             rel_path = safe_relpath(path, repo_root)
-            diff_refs = [ticket_instance_token(path), rel_path]
+            stable_ticket_id = ticket_stable_id(path)
+            diff_refs = [stable_ticket_id] if stable_ticket_id else [rel_path]
             tickets.append(
                 {
                     "path": rel_path,
