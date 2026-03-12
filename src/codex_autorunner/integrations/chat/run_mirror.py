@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from ...core.config import load_repo_config
+from ...core.config import ConfigError, load_repo_config
 from ...core.flows import FlowStore
 from ...core.locks import file_lock
 from ...core.logging_utils import log_event
@@ -248,10 +248,14 @@ class ChatRunMirror:
             store.close()
 
     def _open_flow_store(self) -> FlowStore:
-        config = load_repo_config(self._repo_root)
+        try:
+            config = load_repo_config(self._repo_root)
+            durable_writes = config.durable_writes
+        except ConfigError:
+            durable_writes = False
         store = FlowStore(
             self._repo_root / ".codex-autorunner" / "flows.db",
-            durable=config.durable_writes,
+            durable=durable_writes,
         )
         store.initialize()
         return store

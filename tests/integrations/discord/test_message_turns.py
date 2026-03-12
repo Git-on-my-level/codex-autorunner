@@ -13,6 +13,7 @@ from typing import Any, Optional
 import pytest
 
 import codex_autorunner.integrations.discord.service as discord_service_module
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.context_awareness import (
     CAR_AWARENESS_BLOCK,
     PROMPT_WRITING_HINT,
@@ -4011,6 +4012,7 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
 async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapshot(
     tmp_path: Path,
 ) -> None:
+    seed_hub_files(tmp_path, force=True)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 

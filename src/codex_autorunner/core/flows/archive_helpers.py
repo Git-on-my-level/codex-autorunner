@@ -11,9 +11,17 @@ from ..archive import (
     build_common_car_archive_entries,
     execute_archive_entries,
 )
-from ..config import load_repo_config
+from ..config import ConfigError, load_repo_config
 from .models import FlowRunStatus
 from .store import FlowStore
+
+
+def _get_durable_writes(repo_root: Path) -> bool:
+    """Get durable_writes from repo config, defaulting to False if uninitialized."""
+    try:
+        return load_repo_config(repo_root).durable_writes
+    except ConfigError:
+        return False
 
 
 def _next_archive_dir(base_dir: Path) -> Path:
@@ -73,8 +81,7 @@ def archive_flow_run_artifacts(
     if not db_path.exists():
         raise ValueError("Flow database not found.")
 
-    config = load_repo_config(repo_root)
-    with FlowStore(db_path, durable=config.durable_writes) as store:
+    with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
         record = store.get_flow_run(run_id)
         if record is None:
             raise ValueError(f"Flow run {run_id} not found.")

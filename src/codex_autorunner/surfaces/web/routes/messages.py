@@ -27,6 +27,7 @@ from urllib.parse import quote
 import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
+from ....core.config import ConfigError, load_repo_config
 from ....core.filebox import ensure_structure, save_file
 from ....core.flows.failure_diagnostics import (
     format_failure_summary,
@@ -248,21 +249,25 @@ def _ticket_state_snapshot(record: FlowRunRecord) -> dict[str, Any]:
     return {k: ticket_state.get(k) for k in allowed_keys if k in ticket_state}
 
 
+def _get_durable_writes(repo_root: Path) -> bool:
+    """Get durable_writes from repo config, defaulting to False if uninitialized."""
+    try:
+        return load_repo_config(repo_root).durable_writes
+    except ConfigError:
+        return False
+
+
 def build_messages_routes() -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/messages/active")
     def get_active_message(request: Request):
-        from ....core.config import load_repo_config
-
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             return {"active": False}
         try:
-            with FlowStore(
-                db_path, durable=load_repo_config(repo_root).durable_writes
-            ) as store:
+            with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
                 paused = store.list_flow_runs(
                     flow_type="ticket_flow", status=FlowRunStatus.PAUSED
                 )
@@ -300,16 +305,12 @@ def build_messages_routes() -> APIRouter:
 
     @router.get("/api/messages/threads")
     def list_threads():
-        from ....core.config import load_repo_config
-
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             return {"conversations": []}
         try:
-            with FlowStore(
-                db_path, durable=load_repo_config(repo_root).durable_writes
-            ) as store:
+            with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
                 runs = store.list_flow_runs(flow_type="ticket_flow")
         except Exception:
             return {"conversations": []}
@@ -356,8 +357,6 @@ def build_messages_routes() -> APIRouter:
 
     @router.get("/api/messages/threads/{run_id}")
     def get_thread(run_id: str):
-        from ....core.config import load_repo_config
-
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         empty_response = {
@@ -369,9 +368,7 @@ def build_messages_routes() -> APIRouter:
         if not db_path.exists():
             return empty_response
         try:
-            with FlowStore(
-                db_path, durable=load_repo_config(repo_root).durable_writes
-            ) as store:
+            with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
                 record = store.get_flow_run(run_id)
         except Exception:
             raise HTTPException(
@@ -421,16 +418,12 @@ def build_messages_routes() -> APIRouter:
         # as a non-list value.
         files: list[UploadFile] = File(default=[]),  # noqa: B006,B008
     ):
-        from ....core.config import load_repo_config
-
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             raise HTTPException(status_code=404, detail="No flows database")
         try:
-            with FlowStore(
-                db_path, durable=load_repo_config(repo_root).durable_writes
-            ) as store:
+            with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
                 record = store.get_flow_run(run_id)
         except Exception:
             raise HTTPException(

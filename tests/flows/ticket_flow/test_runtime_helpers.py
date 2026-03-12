@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.flows.ticket_flow.runtime_helpers import (
     build_ticket_flow_controller,
 )
@@ -13,6 +13,7 @@ def _init_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
+    seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=False)
     return repo_root
 

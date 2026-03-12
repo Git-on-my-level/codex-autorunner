@@ -16,9 +16,10 @@ from typing import Any, Awaitable, Callable, Optional
 
 from ...agents.opencode.harness import OpenCodeHarness
 from ...agents.opencode.supervisor import OpenCodeSupervisor
-from ...bootstrap import seed_hub_files, seed_repo_files
+from ...bootstrap import seed_repo_files
 from ...core.config import (
     ConfigError,
+    ensure_hub_config_at,
     find_nearest_hub_config_path,
     load_repo_config,
     resolve_env_for_root,
@@ -4678,19 +4679,15 @@ class DiscordBotService:
                     True,
                 )
                 if find_nearest_hub_config_path(target_root) is None:
-                    await asyncio.to_thread(
-                        seed_hub_files,
+                    _, hub_initialized = await asyncio.to_thread(
+                        ensure_hub_config_at,
                         target_root,
-                        False,
                     )
-                    hub_initialized = True
             elif self._has_nested_git(target_root):
-                await asyncio.to_thread(
-                    seed_hub_files,
+                _, hub_initialized = await asyncio.to_thread(
+                    ensure_hub_config_at,
                     target_root,
-                    False,
                 )
-                hub_initialized = True
             else:
                 await self._respond_ephemeral(
                     interaction_id,

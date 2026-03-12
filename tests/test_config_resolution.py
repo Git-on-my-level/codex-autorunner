@@ -663,3 +663,86 @@ def test_load_repo_config_fails_when_manifest_yaml_is_invalid(tmp_path: Path) ->
         ConfigError, match="Failed to resolve effective destination from hub manifest"
     ):
         load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_load_hub_config_raises_when_no_config_in_git_repo(tmp_path: Path) -> None:
+    """Test that load_hub_config raises ConfigError without creating hub config."""
+    git_repo = tmp_path / "repo"
+    git_repo.mkdir()
+    (git_repo / ".git").mkdir()
+
+    config_path = git_repo / ".codex-autorunner" / "config.yml"
+    assert not config_path.exists(), "Precondition: no config should exist"
+
+    with pytest.raises(ConfigError, match="Missing hub config file"):
+        load_hub_config(git_repo)
+
+    assert not config_path.exists(), "load_hub_config should not create config file"
+
+
+def test_load_hub_config_raises_without_seeding_in_empty_dir(tmp_path: Path) -> None:
+    """Test that load_hub_config raises ConfigError in empty directory."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    config_path = empty_dir / ".codex-autorunner" / "config.yml"
+    assert not config_path.exists(), "Precondition: no config should exist"
+
+    with pytest.raises(ConfigError, match="Missing hub config file"):
+        load_hub_config(empty_dir)
+
+    assert not config_path.exists(), "load_hub_config should not create config file"
+
+
+def test_load_repo_config_raises_when_no_hub_config(tmp_path: Path) -> None:
+    """Test that load_repo_config raises ConfigError when no hub config exists."""
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    (hub_root / ".git").mkdir()
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    config_path = hub_root / ".codex-autorunner" / "config.yml"
+    assert not config_path.exists(), "Precondition: no hub config should exist"
+
+    with pytest.raises(ConfigError, match="Hub config not found"):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+    assert not config_path.exists(), "load_repo_config should not create hub config"
+
+
+def test_ensure_hub_config_at_seeds_when_missing(tmp_path: Path) -> None:
+    """Test that ensure_hub_config_at seeds hub config when missing."""
+    from codex_autorunner.core.config import ensure_hub_config_at
+
+    git_repo = tmp_path / "repo"
+    git_repo.mkdir()
+    (git_repo / ".git").mkdir()
+
+    config_path = git_repo / ".codex-autorunner" / "config.yml"
+    assert not config_path.exists(), "Precondition: no config should exist"
+
+    result_path, did_init = ensure_hub_config_at(git_repo)
+
+    assert did_init is True, "Should have initialized hub config"
+    assert result_path == config_path
+    assert config_path.exists(), "ensure_hub_config_at should create config file"
+    data = yaml.safe_load(config_path.read_text())
+    assert data.get("mode") == "hub"
+
+
+def test_ensure_hub_config_at_returns_existing_without_seeding(tmp_path: Path) -> None:
+    """Test that ensure_hub_config_at returns existing config without seeding."""
+    from codex_autorunner.core.config import ensure_hub_config_at
+
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    config_path = hub_root / CONFIG_FILENAME
+    write_test_config(config_path, {"mode": "hub"})
+
+    result_path, did_init = ensure_hub_config_at(hub_root)
+
+    assert did_init is False, "Should not have initialized when config exists"
+    assert result_path == config_path

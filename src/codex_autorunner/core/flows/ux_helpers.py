@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol
 
 from ...tickets.files import list_ticket_paths, ticket_is_done
-from ..config import load_repo_config
+from ..config import ConfigError, load_repo_config
 from ..freshness import resolve_stale_threshold_seconds
 from ..ticket_flow_projection import (
     build_canonical_state_v1,
@@ -220,7 +220,7 @@ def _canonical_flow_status_state(
         stale_threshold_seconds = resolve_stale_threshold_seconds(
             getattr(pma_config, "freshness_stale_threshold_seconds", None)
         )
-    except Exception:
+    except ConfigError:
         stale_threshold_seconds = resolve_stale_threshold_seconds(None)
 
     run_state = None

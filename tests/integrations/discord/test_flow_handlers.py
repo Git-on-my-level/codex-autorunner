@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows import hub_overview as hub_overview_module
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
@@ -122,6 +122,7 @@ def _workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
     (workspace / ".git").mkdir()
+    seed_hub_files(workspace, force=True)
     seed_repo_files(workspace, git_required=False)
     return workspace
 

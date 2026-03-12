@@ -2,11 +2,10 @@
 
 from pathlib import Path
 
-import pytest
-
 from codex_autorunner.core.config import (
     DEFAULT_HUB_CONFIG,
     DEFAULT_REPO_CONFIG,
+    load_repo_config,
 )
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.sqlite_utils import (
@@ -129,15 +128,43 @@ def test_default_config_has_durable_writes() -> None:
     assert DEFAULT_HUB_CONFIG["storage"]["durable_writes"] is False
 
 
-def test_load_repo_config_with_durable_writes() -> None:
-    """Test that load_repo_config correctly reads durable_writes setting."""
-    # This test is skipped due to hub config detection complexity
-    # The functionality is tested via the config defaults test below
-    pytest.skip("Skipping due to hub config detection in test env")
+def test_load_repo_config_with_durable_writes(tmp_path: Path) -> None:
+    """Test that load_repo_config correctly reads durable_writes setting from repo override."""
+    from tests.conftest import write_test_config
+
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / ".codex-autorunner" / "config.yml",
+        {"mode": "hub"},
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+    write_test_config(
+        repo_root / ".codex-autorunner" / "repo.override.yml",
+        {"storage": {"durable_writes": True}},
+    )
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    assert config.durable_writes is True
 
 
-def test_load_repo_config_default_durable_writes() -> None:
+def test_load_repo_config_default_durable_writes(tmp_path: Path) -> None:
     """Test that load_repo_config defaults durable_writes to False."""
-    # This test is skipped due to hub config detection complexity
-    # The functionality is tested via the config defaults test below
-    pytest.skip("Skipping due to hub config detection in test env")
+    from tests.conftest import write_test_config
+
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / ".codex-autorunner" / "config.yml",
+        {"mode": "hub"},
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    assert config.durable_writes is False

@@ -29,6 +29,32 @@ def test_doctor_versions_json_output(hub_root_only) -> None:
     assert "mismatch" in payload
 
 
+def test_doctor_versions_json_in_uninitialized_repo(tmp_path: Path) -> None:
+    """Test that doctor versions --json reports config error without seeding hub config."""
+    uninit_repo = tmp_path / "repo"
+    uninit_repo.mkdir()
+    (uninit_repo / ".git").mkdir()
+
+    config_path = uninit_repo / ".codex-autorunner" / "config.yml"
+    assert not config_path.exists(), "Precondition: no config should exist"
+
+    result = runner.invoke(
+        app,
+        ["doctor", "versions", "--repo", str(uninit_repo), "--json"],
+    )
+
+    assert (
+        result.exit_code == 0
+    ), f"Expected exit code 0, got {result.exit_code}: {result.output}"
+    payload = json.loads(result.stdout)
+
+    assert "hub" in payload
+    hub_info = payload["hub"]
+    assert "error" in hub_info or "config_error" in hub_info
+
+    assert not config_path.exists(), "doctor versions should not create hub config"
+
+
 def test_doctor_help_lists_versions_subcommand() -> None:
     result = runner.invoke(app, ["doctor", "--help"])
     assert result.exit_code == 0

@@ -4,11 +4,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.web.app import create_repo_app
 
 
 def _client_for_repo(repo_root: Path) -> TestClient:
+    seed_hub_files(repo_root.parent, force=True)
     seed_repo_files(repo_root, git_required=False)
     (repo_root / ".git").mkdir(exist_ok=True)
     app = create_repo_app(repo_root)

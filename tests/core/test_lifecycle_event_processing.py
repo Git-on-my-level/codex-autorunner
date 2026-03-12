@@ -18,15 +18,18 @@ def _write_hub_config(
     extra_lines: list[str] | None = None,
 ) -> None:
     hub_root.mkdir(parents=True, exist_ok=True)
-    config_path = hub_root / "codex-autorunner.yml"
+    config_dir = hub_root / ".codex-autorunner"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.yml"
     lines = [
+        "version: 2",
+        "mode: hub",
         "pma:",
         "  enabled: true",
         f"  dispatch_interception_enabled: {'true' if dispatch_interception else 'false'}",
     ]
     if extra_lines:
         lines.extend(extra_lines)
-    lines.append("")
     config_path.write_text("\n".join(lines), encoding="utf-8")
 
 

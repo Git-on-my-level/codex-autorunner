@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
-from .....core.config import load_repo_config
+from .....core.config import ConfigError, load_repo_config
 from .....core.flows import FlowController, FlowStore, archive_flow_run_artifacts
 from .....core.flows.hub_overview import build_hub_flow_overview_entries
 from .....core.flows.models import FlowRunStatus
@@ -86,8 +86,12 @@ def _ticket_dir(repo_root: Path) -> Path:
 
 
 def _load_flow_store(repo_root: Path, hub_root: Optional[Path] = None) -> FlowStore:
-    config = load_repo_config(repo_root, hub_root)
-    return FlowStore(_flow_paths(repo_root)[0], durable=config.durable_writes)
+    try:
+        config = load_repo_config(repo_root, hub_root)
+        durable_writes = config.durable_writes
+    except ConfigError:
+        durable_writes = False
+    return FlowStore(_flow_paths(repo_root)[0], durable=durable_writes)
 
 
 def _normalize_run_id(value: str) -> Optional[str]:
@@ -744,8 +748,10 @@ class FlowCommands(SharedHelpers):
                 if error is None and record is None:
                     record = _select_latest_run(
                         store,
-                        lambda run: run.status.is_terminal()
-                        or run.status == FlowRunStatus.PAUSED,
+                        lambda run: (
+                            run.status.is_terminal()
+                            or run.status == FlowRunStatus.PAUSED
+                        ),
                     )
                 if error is None and record is None:
                     error = "No paused or terminal ticket flow run found."
@@ -1124,7 +1130,7 @@ class FlowCommands(SharedHelpers):
             repo_config = load_repo_config(self._hub_root)
             if isinstance(repo_config.raw, dict):
                 raw_config = repo_config.raw
-        except Exception:
+        except ConfigError:
             raw_config = {}
         overview_entries = build_hub_flow_overview_entries(
             hub_root=self._hub_root,
@@ -1888,9 +1894,11 @@ You are the first ticket in a new ticket_flow run.
             if record is None:
                 record = _select_latest_run(
                     store,
-                    lambda run: run.status.is_terminal()
-                    or run.status == FlowRunStatus.PAUSED
-                    or (force and run.status == FlowRunStatus.STOPPING),
+                    lambda run: (
+                        run.status.is_terminal()
+                        or run.status == FlowRunStatus.PAUSED
+                        or (force and run.status == FlowRunStatus.STOPPING)
+                    ),
                 )
             if record is None:
                 await self._send_message(

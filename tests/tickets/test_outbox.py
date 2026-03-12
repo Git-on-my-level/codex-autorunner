@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.lifecycle_events import (
@@ -97,6 +99,7 @@ def test_archive_dispatch_invalid_frontmatter_does_not_delete(
     assert parse_errors
 
 
+@pytest.mark.integration
 def test_archive_dispatch_emits_lifecycle_event(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

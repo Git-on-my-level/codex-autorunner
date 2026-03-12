@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from ...core.config import load_repo_config
+from ...core.config import ConfigError, load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.pause_dispatch import load_latest_paused_ticket_flow_dispatch
@@ -262,8 +262,12 @@ class TelegramTicketFlowBridge:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
             return None
-        config = load_repo_config(workspace_root)
-        store = FlowStore(db_path, durable=config.durable_writes)
+        try:
+            config = load_repo_config(workspace_root)
+            durable_writes = config.durable_writes
+        except ConfigError:
+            durable_writes = False
+        store = FlowStore(db_path, durable=durable_writes)
         try:
             store.initialize()
             if preferred_run_id:
@@ -699,8 +703,12 @@ class TelegramTicketFlowBridge:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
             return None
-        config = load_repo_config(workspace_root)
-        store = FlowStore(db_path, durable=config.durable_writes)
+        try:
+            config = load_repo_config(workspace_root)
+            durable_writes = config.durable_writes
+        except ConfigError:
+            durable_writes = False
+        store = FlowStore(db_path, durable=durable_writes)
         terminal_statuses = (
             FlowRunStatus.COMPLETED,
             FlowRunStatus.FAILED,

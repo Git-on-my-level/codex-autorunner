@@ -4,10 +4,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from ..config import load_repo_config
+from ..config import ConfigError, load_repo_config
 from ..redaction import redact_text
 from .models import FlowRunRecord, FlowRunStatus
 from .store import FlowStore
+
+
+def _get_durable_writes(repo_root: Path) -> bool:
+    """Get durable_writes from repo config, defaulting to False if uninitialized."""
+    try:
+        return load_repo_config(repo_root).durable_writes
+    except ConfigError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -60,8 +68,7 @@ def load_latest_paused_ticket_flow_dispatch(
     if not db_path.exists():
         return None
 
-    config = load_repo_config(workspace_root)
-    with FlowStore(db_path, durable=config.durable_writes) as store:
+    with FlowStore(db_path, durable=_get_durable_writes(workspace_root)) as store:
         runs = store.list_flow_runs(
             flow_type="ticket_flow", status=FlowRunStatus.PAUSED
         )

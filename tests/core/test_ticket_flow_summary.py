@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.ticket_flow_summary import (
     build_ticket_flow_display,
@@ -14,6 +14,7 @@ def test_build_ticket_flow_summary_includes_pr_and_final_review(tmp_path: Path) 
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
+    seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=False)
 
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -64,6 +65,7 @@ def test_build_ticket_flow_summary_uses_latest_final_review_ticket(
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
+    seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=False)
 
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -92,6 +94,7 @@ def test_build_ticket_flow_summary_pr_url_only_from_open_pr_ticket(
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
+    seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=False)
 
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"

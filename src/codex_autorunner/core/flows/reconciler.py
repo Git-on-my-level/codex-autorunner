@@ -466,10 +466,14 @@ def reconcile_flow_runs(
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     if not db_path.exists():
         return FlowReconcileResult(records=[], summary=FlowReconcileSummary())
-    from ..config import load_repo_config
+    from ..config import ConfigError, load_repo_config
 
-    config = load_repo_config(repo_root)
-    store = FlowStore(db_path, durable=config.durable_writes)
+    try:
+        config = load_repo_config(repo_root)
+        durable_writes = config.durable_writes
+    except ConfigError:
+        durable_writes = False
+    store = FlowStore(db_path, durable=durable_writes)
     summary = FlowReconcileSummary()
     records: list[FlowRunRecord] = []
     try:

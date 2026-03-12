@@ -108,6 +108,7 @@ def test_issue_828_flow_start_parity_matrix_characterization(
     tmp_path: Path, monkeypatch
 ) -> None:
     repo_root = _seed_standalone_repo(tmp_path / "standalone")
+    seed_hub_files(tmp_path / "standalone", force=True)
     external_hub_root = (tmp_path / "external-hub").resolve()
     external_hub_root.mkdir(parents=True, exist_ok=True)
     seed_hub_files(external_hub_root, force=True)

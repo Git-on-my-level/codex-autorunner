@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.pma_context import _gather_inbox
@@ -150,6 +152,7 @@ def test_gather_inbox_hides_stale_when_active_run_exists(tmp_path: Path) -> None
     ), "STOPPED run should be hidden when active sibling exists"
 
 
+@pytest.mark.integration
 def test_gather_inbox_shows_stale_when_no_active_run(tmp_path: Path) -> None:
     """Test that stale runs are shown when no active sibling exists."""
     repo_root = tmp_path / "repo"

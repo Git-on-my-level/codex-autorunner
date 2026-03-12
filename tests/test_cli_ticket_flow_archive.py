@@ -5,7 +5,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.cli import app
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
@@ -54,12 +54,22 @@ def _seed_contextspace(repo_root: Path) -> None:
     (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
 
 
+def _setup_repo(tmp_path: Path) -> Path:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_hub_files(tmp_path, force=True)
+    seed_repo_files(repo_root, git_required=False)
+    return repo_root
+
+
 def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
+    seed_hub_files(tmp_path, force=True)
     seed_repo_files(repo_root, git_required=False)
 
     run_id = "99999999-9999-9999-9999-999999999999"
@@ -124,10 +134,7 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
 
 
 def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
 
     run_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.FAILED)
@@ -160,10 +167,7 @@ def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
 
 
 def test_ticket_flow_archive_force_requires_attestation(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
 
     run_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.PAUSED)
@@ -187,10 +191,7 @@ def test_ticket_flow_archive_force_requires_attestation(tmp_path: Path) -> None:
 
 
 def test_ticket_flow_archive_force_with_attestation_succeeds(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
 
     run_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.PAUSED)
@@ -223,10 +224,7 @@ def test_ticket_flow_archive_force_with_attestation_succeeds(tmp_path: Path) -> 
 
 
 def test_ticket_flow_archive_alias_inherits_force_attestation(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
 
     run_id = "abababab-abab-abab-abab-abababababab"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.PAUSED)
@@ -256,10 +254,7 @@ def test_ticket_flow_archive_alias_inherits_force_attestation(tmp_path: Path) ->
 
 
 def test_ticket_flow_status_outputs_human_readable_status(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
     _seed_ticket(repo_root)
 
     run_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -285,10 +280,7 @@ def test_ticket_flow_status_outputs_human_readable_status(tmp_path: Path) -> Non
 
 
 def test_ticket_flow_status_outputs_json_payload(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
     _seed_ticket(repo_root)
 
     run_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
@@ -323,10 +315,7 @@ def test_ticket_flow_status_outputs_json_payload(tmp_path: Path) -> None:
 
 
 def test_ticket_flow_status_outputs_failure_details_in_json(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
     _seed_ticket(repo_root)
 
     run_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"

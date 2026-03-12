@@ -20,6 +20,7 @@ from ....core.config import (
     ConfigError,
     HubConfig,
     _normalize_base_path,
+    ensure_hub_config_at,
     find_nearest_hub_config_path,
     load_hub_config,
     load_repo_config,
@@ -232,15 +233,18 @@ def register_root_commands(app: typer.Typer) -> None:
         ca_dir.mkdir(parents=True, exist_ok=True)
 
         try:
+            hub_initialized = False
             if selected_mode == "hub":
                 seed_hub_files(target_root, force=force)
                 typer.echo(f"Initialized hub at {ca_dir}")
+                hub_initialized = True
             else:
                 seed_repo_files(target_root, force=force, git_required=git_required)
                 typer.echo(f"Initialized repo at {ca_dir}")
                 if find_nearest_hub_config_path(target_root) is None:
-                    seed_hub_files(target_root, force=force)
-                    typer.echo(f"Initialized hub at {ca_dir}")
+                    _, hub_initialized = ensure_hub_config_at(target_root)
+                    if hub_initialized:
+                        typer.echo(f"Initialized hub at {ca_dir}")
         except ConfigError as exc:
             _raise_exit(str(exc), cause=exc)
         typer.echo("Init complete")

@@ -7,12 +7,14 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.integrations.chat.run_mirror import ChatRunMirror
 
 
 def _init_flow_run(repo_root: Path, run_id: str) -> None:
+    seed_hub_files(repo_root, force=True)
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with FlowStore(db_path) as store:

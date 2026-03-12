@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.pause_dispatch import (
     latest_dispatch_seq,
@@ -16,6 +16,7 @@ def _init_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
+    seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=False)
     return repo_root
 

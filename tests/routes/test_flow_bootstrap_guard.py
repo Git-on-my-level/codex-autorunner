@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
@@ -85,6 +86,7 @@ def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch):
 
 def test_start_reuses_active_run_when_latest_is_terminal(tmp_path, monkeypatch):
     _reset_state()
+    seed_hub_files(tmp_path, force=True)
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
     db_path = tmp_path / ".codex-autorunner" / "flows.db"

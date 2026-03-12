@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.surfaces.web.routes import flows as flows_routes
@@ -30,6 +31,7 @@ def _seed_paused_run(repo_root: Path, run_id: str) -> None:
 
 def test_state_isolation_between_apps(tmp_path, monkeypatch):
     """Test that two FastAPI apps do not share state."""
+    seed_hub_files(tmp_path, force=True)
     repo_root = Path(tmp_path)
     run_id = "11111111-1111-1111-1111-111111111111"
 
