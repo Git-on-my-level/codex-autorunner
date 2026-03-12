@@ -76,10 +76,7 @@ from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.agents.opencode_supervisor_factory import (
     build_opencode_supervisor_from_repo_config,
 )
-from ...integrations.app_server.client import (
-    CodexAppServerClient,
-    CodexAppServerResponseError,
-)
+from ...integrations.app_server.client import CodexAppServerClient
 from ...integrations.app_server.env import app_server_env, build_app_server_env
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
@@ -115,6 +112,13 @@ from ...integrations.chat.media import (
     is_audio_mime_or_path,
     is_image_mime_or_path,
     normalize_mime_type,
+)
+from ...integrations.chat.model_selection import (
+    _coerce_model_entries,
+    _display_name_is_model_alias,
+    _is_valid_opencode_model_name,
+    _model_list_with_agent_compat,
+    format_model_set_message,
 )
 from ...integrations.chat.models import (
     ChatEvent,
@@ -253,7 +257,6 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
-_MODEL_LIST_INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
 MODEL_SEARCH_FETCH_LIMIT = 200
 SESSION_RESUME_SELECT_ID = "session_resume_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
@@ -279,27 +282,6 @@ FLOW_ACTIONS_WITH_RUN_PICKER = {
 
 class AppServerUnavailableError(Exception):
     pass
-
-
-def _normalize_model_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.lower())
-
-
-def _display_name_is_model_alias(model: str, display_name: Any) -> bool:
-    if not isinstance(display_name, str) or not display_name:
-        return False
-    return _normalize_model_name(display_name) == _normalize_model_name(model)
-
-
-def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
-    if isinstance(result, list):
-        return [entry for entry in result if isinstance(entry, dict)]
-    if isinstance(result, dict):
-        for key in ("data", "models", "items", "results"):
-            value = result.get(key)
-            if isinstance(value, list):
-                return [entry for entry in value if isinstance(entry, dict)]
-    return []
 
 
 def _coerce_model_picker_items(
@@ -336,13 +318,6 @@ def _coerce_model_picker_items(
     return options
 
 
-def _is_valid_opencode_model_name(model_name: str) -> bool:
-    if "/" not in model_name:
-        return False
-    provider_id, model_id = model_name.split("/", 1)
-    return bool(provider_id.strip() and model_id.strip())
-
-
 def _path_within(*, root: Path, target: Path) -> bool:
     try:
         root = canonicalize_path(root)
@@ -356,29 +331,6 @@ def _opencode_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]
     if not idle_ttl_seconds or idle_ttl_seconds <= 0:
         return None
     return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
-
-
-async def _model_list_with_agent_compat(
-    client: CodexAppServerClient,
-    *,
-    params: dict[str, Any],
-) -> Any:
-    request_params = {key: value for key, value in params.items() if value is not None}
-    requested_agent = request_params.get("agent")
-    if not isinstance(requested_agent, str) or not requested_agent:
-        requested_agent = None
-        request_params.pop("agent", None)
-    try:
-        return await client.model_list(**request_params)
-    except CodexAppServerResponseError as exc:
-        if (
-            requested_agent is None
-            or exc.code not in _MODEL_LIST_INVALID_PARAMS_ERROR_CODES
-        ):
-            raise
-        fallback_params = dict(request_params)
-        fallback_params.pop("agent", None)
-        return await client.model_list(**fallback_params)
 
 
 def _flow_action_label(action: str) -> str:
@@ -5723,11 +5675,10 @@ class DiscordBotService:
             reasoning_effort=effort,
         )
 
-        effort_note = f" (effort={effort})" if effort else ""
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Model set to {model_name}{effort_note}. Will apply on the next turn.",
+            format_model_set_message(model_name, effort=effort),
         )
 
     async def _handle_model_picker_selection(
