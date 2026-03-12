@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from fastapi import APIRouter, HTTPException, Request
+
 if TYPE_CHECKING:
-    from . import FlowRoutesState
+    from . import FlowRouteDependencies, FlowRoutesState
 
 _logger = logging.getLogger(__name__)
 
@@ -183,6 +186,104 @@ def get_flow_controller(repo_root: Path, flow_type: str, state: "FlowRoutesState
     from .definitions import get_flow_controller as impl
 
     return impl(repo_root, flow_type, state)
+
+
+def build_ticket_bootstrap_routes(
+    deps: "FlowRouteDependencies",
+) -> tuple[APIRouter, list[str]]:
+    router = APIRouter(prefix="/api/flows", tags=["flows"])
+
+    def _ensure_state_in_app(request: Request) -> "FlowRoutesState":
+        from typing import cast
+
+        if not hasattr(request.app.state, "flow_routes_state"):
+            from . import FlowRoutesState
+
+            request.app.state.flow_routes_state = FlowRoutesState()
+        return cast("FlowRoutesState", request.app.state.flow_routes_state)
+
+    @router.get("/ticket_flow/bootstrap-check")
+    async def bootstrap_check():
+        """
+        Determine whether ISSUE.md already exists and whether GitHub is available
+        for fetching an issue before bootstrapping the ticket flow.
+        """
+        repo_root = deps.find_repo_root()
+        if repo_root is None:
+            return {"status": "error", "github_available": False, "repo": None}
+
+        result = deps.bootstrap_check(repo_root, github_service_factory=None)
+        if result.status == "ready":
+            return {"status": "ready"}
+        return {
+            "status": result.status,
+            "github_available": result.github_available,
+            "repo": result.repo_slug,
+        }
+
+    @router.post("/ticket_flow/bootstrap")
+    async def bootstrap_ticket_flow(
+        http_request: Request,
+    ):
+        _ensure_state_in_app(http_request)
+        repo_root = deps.find_repo_root()
+        if repo_root is None:
+            raise HTTPException(status_code=400, detail="Repository not found")
+
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_dir.mkdir(parents=True, exist_ok=True)
+        ticket_path = ticket_dir / "TICKET-001.md"
+        from ....tickets.files import list_ticket_paths
+
+        existing_tickets = list_ticket_paths(ticket_dir)
+        tickets_exist = bool(existing_tickets)
+
+        if not tickets_exist and not ticket_path.exists():
+            bootstrap_ticket_id = f"tkt_{uuid.uuid4().hex}"
+            template = f"""---
+agent: codex
+done: false
+ticket_id: "{bootstrap_ticket_id}"
+title: Bootstrap ticket plan
+goal: Capture scope and seed follow-up tickets
+---
+
+You are the first ticket in a new ticket_flow run.
+
+- Read `.codex-autorunner/ISSUE.md`. If it is missing:
+  - If GitHub is available, ask the user for the issue/PR URL or number and create `.codex-autorunner/ISSUE.md` from it.
+  - If GitHub is not available, write `DISPATCH.md` with `mode: pause` asking the user to describe the work (or share a doc). After the reply, create `.codex-autorunner/ISSUE.md` with their input.
+- If helpful, create or update contextspace docs under `.codex-autorunner/contextspace/`:
+  - `active_context.md` for current context and links
+  - `decisions.md` for decisions/rationale
+  - `spec.md` for requirements and constraints
+- Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
+- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/dispatch/` if needed.
+- Write `DISPATCH.md` to dispatch a message to the user:
+  - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
+  - Use `mode: notify` (informational) to message the user but keep running.
+"""
+            ticket_path.write_text(template, encoding="utf-8")
+
+        records = deps.safe_list_flow_runs(
+            repo_root, flow_type="ticket_flow", recover_stuck=True
+        )
+        active = None
+        for record in records:
+            if record.status.value in ("running", "active"):
+                active = record
+                break
+
+        if active:
+            record = active
+            return deps.build_flow_status_response(record, repo_root, store=None)
+
+        raise HTTPException(
+            status_code=400,
+            detail="Bootstrap not fully implemented in extraction slice - use flows.py for now",
+        )
+
+    return router, ["ticket_bootstrap"]
 
 
 _TICKET_BOOTSTRAP_ROUTE_API = run_bootstrap

@@ -251,49 +251,42 @@ class TicketRunner:
                     reason_code="needs_user_fix",
                 )
 
-        (
-            selected_ticket,
-            selection_state_updates,
-            selection_status,
-            selection_reason_code,
-            selection_message,
-            selection_reason_details,
-        ) = runner_selection.select_ticket(
+        selection_result = runner_selection.select_ticket(
             workspace_root=self._workspace_root,
             ticket_dir=ticket_dir,
             config=self._config,
             state=state,
             emit_event=emit_event,
         )
-        for key, value in selection_state_updates.items():
+        for key, value in selection_result.state_updates.items():
             if value is None:
                 state.pop(key, None)
             else:
                 state[key] = value
-        if selection_status == "paused":
+        if selection_result.status == "paused":
             return self._pause(
                 state,
-                reason=selection_message,
-                reason_details=selection_reason_details,
-                reason_code=selection_reason_code,
+                reason=selection_result.pause_reason or "Paused",
+                reason_details=selection_result.pause_reason_details,
+                reason_code=selection_result.pause_reason_code or "needs_user_fix",
             )
-        if selection_status == "completed":
+        if selection_result.status == "completed":
             state["status"] = "completed"
             return TicketResult(
                 status="completed",
                 state=state,
-                reason=selection_message,
+                reason=selection_result.pause_reason or "All tickets done.",
             )
 
-        if not selected_ticket:
+        if not selection_result.selected:
             return self._pause(
                 state,
                 reason="Ticket selection failed unexpectedly.",
                 reason_code="infra_error",
             )
 
-        current_path = selected_ticket["path"]
-        if selected_ticket.get("reset_commit_state"):
+        current_path = selection_result.selected.path
+        if selection_result.reset_commit_state:
             commit_pending = False
             commit_retries = 0
 
@@ -320,33 +313,27 @@ class TicketRunner:
             _conv_id_raw if isinstance(_conv_id_raw, str) else None
         )
 
-        (
-            validated_ticket,
-            validation_status,
-            validation_reason_code,
-            validation_message,
-            validation_errors,
-        ) = runner_selection.validate_ticket_for_execution(
+        validation_result = runner_selection.validate_ticket_for_execution(
             ticket_path=current_path,
             workspace_root=self._workspace_root,
             state=state,
             lint_errors=lint_errors if lint_errors else None,
         )
         current_ticket_id = safe_relpath(current_path, self._workspace_root)
-        if validation_status == "paused":
+        if validation_result.status == "paused":
             reason_details = (
-                "Errors:\n- " + "\n- ".join(validation_errors)
-                if validation_errors
+                "Errors:\n- " + "\n- ".join(validation_result.errors)
+                if validation_result.errors
                 else None
             )
             return self._pause(
                 state,
-                reason=validation_message or "Ticket validation failed.",
+                reason=validation_result.pause_reason or "Ticket validation failed.",
                 reason_details=reason_details,
                 current_ticket=current_ticket_id,
-                reason_code=validation_reason_code,
+                reason_code=validation_result.pause_reason_code or "needs_user_fix",
             )
-        if not validated_ticket:
+        if not validation_result.validated:
             return self._pause(
                 state,
                 reason="Ticket validation failed unexpectedly.",
@@ -354,8 +341,8 @@ class TicketRunner:
                 reason_code="infra_error",
             )
 
-        ticket_doc = validated_ticket["ticket_doc"]
-        if validated_ticket.get("skip_execution"):
+        ticket_doc = validation_result.validated.ticket_doc
+        if validation_result.validated.skip_execution:
             return TicketResult(status="continue", state=state)
 
         ticket_turns = int(state.get("ticket_turns") or 0)
@@ -456,36 +443,36 @@ class TicketRunner:
             max_network_retries=self._config.max_network_retries,
             current_network_retries=network_retries,
         )
-        if not result["success"]:
-            state["last_agent_output"] = result["text"]
-            state["last_agent_id"] = result["agent_id"]
-            state["last_agent_conversation_id"] = result["conversation_id"]
-            state["last_agent_turn_id"] = result["turn_id"]
+        if not result.success:
+            state["last_agent_output"] = result.text
+            state["last_agent_id"] = result.agent_id
+            state["last_agent_conversation_id"] = result.conversation_id
+            state["last_agent_turn_id"] = result.turn_id
 
-            if result["should_retry"]:
+            if result.should_retry:
                 state["network_retry"] = {
-                    "retries": result["network_retries"],
-                    "last_error": result["error"],
+                    "retries": result.network_retries,
+                    "last_error": result.error,
                 }
                 return TicketResult(
                     status="continue",
                     state=state,
                     reason=(
-                        f"Network error detected (attempt {result['network_retries']}/{self._config.max_network_retries}): {result['error']}\n"
+                        f"Network error detected (attempt {result.network_retries}/{self._config.max_network_retries}): {result.error}\n"
                         "Retrying automatically..."
                     ),
                     current_ticket=current_ticket_id,
-                    agent_output=result["text"],
-                    agent_id=result["agent_id"],
-                    agent_conversation_id=result["conversation_id"],
-                    agent_turn_id=result["turn_id"],
+                    agent_output=result.text,
+                    agent_id=result.agent_id,
+                    agent_conversation_id=result.conversation_id,
+                    agent_turn_id=result.turn_id,
                 )
 
             state.pop("network_retry", None)
             return self._pause(
                 state,
                 reason="Agent turn failed. Fix the issue and resume.",
-                reason_details=f"Error: {result['error']}",
+                reason_details=f"Error: {result.error}",
                 current_ticket=current_ticket_id,
                 reason_code="infra_error",
             )
@@ -493,11 +480,11 @@ class TicketRunner:
         # Mark replies as consumed only after a successful agent turn.
         if reply_max_seq > reply_seq:
             state["reply_seq"] = reply_max_seq
-        state["last_agent_output"] = result["text"]
+        state["last_agent_output"] = result.text
         state.pop("network_retry", None)
-        state["last_agent_id"] = result["agent_id"]
-        state["last_agent_conversation_id"] = result["conversation_id"]
-        state["last_agent_turn_id"] = result["turn_id"]
+        state["last_agent_id"] = result.agent_id
+        state["last_agent_conversation_id"] = result.conversation_id
+        state["last_agent_turn_id"] = result.turn_id
 
         git_state_after = capture_git_state_after(
             workspace_root=self._workspace_root,
@@ -561,9 +548,9 @@ class TicketRunner:
         turn_summary, turn_summary_errors = create_turn_summary(
             outbox_paths,
             next_seq=turn_summary_seq,
-            agent_output=result.get("text") or "",
+            agent_output=result.text or "",
             ticket_id=current_ticket_id,
-            agent_id=result.get("agent_id"),
+            agent_id=result.agent_id,
             turn_number=total_turns,
             diff_stats=turn_diff_stats,
         )
@@ -641,10 +628,10 @@ class TicketRunner:
                 reason_details=details,
                 dispatch=dispatch_record,
                 current_ticket=current_ticket_id,
-                agent_output=result["text"],
-                agent_id=result["agent_id"],
-                agent_conversation_id=result["conversation_id"],
-                agent_turn_id=result["turn_id"],
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
             )
 
         # Post-turn: ticket frontmatter must remain valid.
@@ -666,17 +653,17 @@ class TicketRunner:
             state["lint"] = {
                 "errors": fm_errors,
                 "retries": lint_retries,
-                "conversation_id": result["conversation_id"],
+                "conversation_id": result.conversation_id,
             }
             return TicketResult(
                 status="continue",
                 state=state,
                 reason="Ticket frontmatter invalid; requesting agent fix.",
                 current_ticket=safe_relpath(current_path, self._workspace_root),
-                agent_output=result["text"],
-                agent_id=result["agent_id"],
-                agent_conversation_id=result["conversation_id"],
-                agent_turn_id=result["turn_id"],
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
             )
 
         # Clear lint state if previously set.
@@ -690,7 +677,7 @@ class TicketRunner:
         )
         if self._config.auto_commit and not commit_pending and not commit_required_now:
             checkpoint_error = self._checkpoint_git(
-                turn=total_turns, agent=result["agent_id"]
+                turn=total_turns, agent=result.agent_id or "unknown"
             )
 
         # If we dispatched a pause message, pause regardless of ticket completion.
@@ -707,10 +694,10 @@ class TicketRunner:
                 reason=reason,
                 dispatch=dispatch,
                 current_ticket=safe_relpath(current_path, self._workspace_root),
-                agent_output=result["text"],
-                agent_id=result["agent_id"],
-                agent_conversation_id=result["conversation_id"],
-                agent_turn_id=result["turn_id"],
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
             )
 
         # If ticket is marked done, require a clean working tree (i.e., changes
@@ -746,14 +733,14 @@ class TicketRunner:
                     )
 
                 return TicketResult(
-                    status=commit_status,
+                    status=commit_status or "continue",
                     state=state,
                     reason="Ticket done but commit required; requesting agent commit.",
                     current_ticket=current_ticket_id,
-                    agent_output=result["text"],
-                    agent_id=result["agent_id"],
-                    agent_conversation_id=result["conversation_id"],
-                    agent_turn_id=result["turn_id"],
+                    agent_output=result.text,
+                    agent_id=result.agent_id,
+                    agent_conversation_id=result.conversation_id,
+                    agent_turn_id=result.turn_id,
                 )
 
             # Clean (or unknown) → commit satisfied (or no changes / cannot check).
@@ -778,10 +765,10 @@ class TicketRunner:
             reason="Turn complete.",
             dispatch=dispatch,
             current_ticket=safe_relpath(current_path, self._workspace_root),
-            agent_output=result["text"],
-            agent_id=result["agent_id"],
-            agent_conversation_id=result["conversation_id"],
-            agent_turn_id=result["turn_id"],
+            agent_output=result.text,
+            agent_id=result.agent_id,
+            agent_conversation_id=result.conversation_id,
+            agent_turn_id=result.turn_id,
         )
 
     def _recheck_ticket_frontmatter(self, ticket_path: Path):

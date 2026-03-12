@@ -14,6 +14,12 @@ from .files import (
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory
 from .models import TicketDoc, TicketFrontmatter, TicketRunConfig
+from .runner_types import (
+    SelectedTicket,
+    TicketSelectionResult,
+    TicketValidationResult,
+    ValidatedTicket,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -31,44 +37,26 @@ def select_ticket(
     config: TicketRunConfig,
     state: dict[str, Any],
     emit_event: Optional[Any] = None,
-) -> tuple[
-    Optional[dict[str, Any]],
-    dict[str, Any],
-    str,
-    str,
-    str,
-    Optional[str],
-]:
+) -> TicketSelectionResult:
     """Select and validate the next ticket to run.
 
-    Returns (selected_ticket_info, state_updates, status, reason_code, message, reason_details).
-    - selected_ticket_info: dict with path, rel_path, frontmatter, or None if completed
-    - state_updates: dict of state changes to apply
-    - status: "continue" | "paused" | "completed"
-    - reason_code: pause/completion reason code
-    - message: human-readable message
-    - reason_details: optional detail string for paused states
+    Returns TicketSelectionResult with selected ticket, state updates, and status.
     """
     ticket_paths = list_ticket_paths(ticket_dir)
     if not ticket_paths:
-        return (
-            None,
-            {},
-            "paused",
-            "no_tickets",
-            f"No tickets found. Create tickets under {safe_relpath(ticket_dir, workspace_root)} and resume.",
-            None,
+        return TicketSelectionResult(
+            status="paused",
+            pause_reason=f"No tickets found. Create tickets under {safe_relpath(ticket_dir, workspace_root)} and resume.",
+            pause_reason_code="no_tickets",
         )
 
     dir_lint_errors = lint_ticket_directory(ticket_dir)
     if dir_lint_errors:
-        return (
-            None,
-            {},
-            "paused",
-            "needs_user_fix",
-            "Duplicate ticket indices detected.",
-            "Errors:\n- " + "\n- ".join(dir_lint_errors),
+        return TicketSelectionResult(
+            status="paused",
+            pause_reason="Duplicate ticket indices detected.",
+            pause_reason_code="needs_user_fix",
+            pause_reason_details="Errors:\n- " + "\n- ".join(dir_lint_errors),
         )
 
     current_ticket = state.get("current_ticket")
@@ -77,6 +65,8 @@ def select_ticket(
         if isinstance(current_ticket, str) and current_ticket
         else None
     )
+
+    state_updates: dict[str, Any] = {}
 
     def _clear_per_ticket_state() -> None:
         state_updates["current_ticket"] = None
@@ -109,13 +99,11 @@ def select_ticket(
     if current_path is None:
         next_path = _find_next_ticket(ticket_paths)
         if next_path is None:
-            return (
-                None,
-                {"status": "completed"},
-                "completed",
-                "all_done",
-                "All tickets done.",
-                None,
+            return TicketSelectionResult(
+                status="completed",
+                state_updates={"status": "completed"},
+                pause_reason="All tickets done.",
+                pause_reason_code="all_done",
             )
         current_path = next_path
         rel_path = safe_relpath(current_path, workspace_root)
@@ -135,17 +123,15 @@ def select_ticket(
 
     state_updates["commit"] = None
 
-    return (
-        {
-            "path": current_path,
-            "rel_path": safe_relpath(current_path, workspace_root),
-            "reset_commit_state": reset_commit_state,
-        },
-        state_updates,
-        "continue",
-        "",
-        "",
-        None,
+    return TicketSelectionResult(
+        selected=SelectedTicket(
+            path=current_path,
+            rel_path=safe_relpath(current_path, workspace_root),
+            frontmatter=TicketFrontmatter(agent="", done=False),
+        ),
+        status="continue",
+        state_updates=state_updates,
+        reset_commit_state=reset_commit_state,
     )
 
 
@@ -155,10 +141,10 @@ def validate_ticket_for_execution(
     workspace_root: Path,
     state: dict[str, Any],
     lint_errors: Optional[list[str]] = None,
-) -> tuple[Optional[dict[str, Any]], str, str, Optional[str], list[str]]:
+) -> TicketValidationResult:
     """Validate ticket for execution, handling lint-retry mode.
 
-    Returns (ticket_info, status, reason_code, pause_message, errors).
+    Returns TicketValidationResult with validated ticket or pause reason.
     """
     if lint_errors:
         return _validate_ticket_lint_retry(
@@ -169,49 +155,38 @@ def validate_ticket_for_execution(
 
     ticket_doc, ticket_errors = read_ticket(ticket_path)
     if ticket_errors or ticket_doc is None:
-        return (
-            None,
-            "paused",
-            "needs_user_fix",
-            f"Ticket frontmatter invalid: {safe_relpath(ticket_path, workspace_root)}",
-            ticket_errors,
+        return TicketValidationResult(
+            status="paused",
+            pause_reason=f"Ticket frontmatter invalid: {safe_relpath(ticket_path, workspace_root)}",
+            pause_reason_code="needs_user_fix",
+            errors=ticket_errors,
         )
 
     if ticket_doc.frontmatter.agent == "user":
         if ticket_doc.frontmatter.done:
-            return (
-                {
-                    "path": ticket_path,
-                    "ticket_doc": ticket_doc,
-                    "frontmatter": ticket_doc.frontmatter,
-                    "rel_path": safe_relpath(ticket_path, workspace_root),
-                    "skip_execution": True,
-                },
-                "continue",
-                "",
-                None,
-                [],
+            return TicketValidationResult(
+                validated=ValidatedTicket(
+                    path=ticket_path,
+                    rel_path=safe_relpath(ticket_path, workspace_root),
+                    ticket_doc=ticket_doc,
+                    skip_execution=True,
+                ),
+                status="continue",
             )
-        return (
-            None,
-            "paused",
-            "user_pause",
-            f"Paused for user input. Mark ticket as done when ready: {safe_relpath(ticket_path, workspace_root)}",
-            [],
+        return TicketValidationResult(
+            status="paused",
+            pause_reason=f"Paused for user input. Mark ticket as done when ready: {safe_relpath(ticket_path, workspace_root)}",
+            pause_reason_code="user_pause",
         )
 
-    return (
-        {
-            "path": ticket_path,
-            "ticket_doc": ticket_doc,
-            "frontmatter": ticket_doc.frontmatter,
-            "rel_path": safe_relpath(ticket_path, workspace_root),
-            "skip_execution": False,
-        },
-        "continue",
-        "",
-        None,
-        [],
+    return TicketValidationResult(
+        validated=ValidatedTicket(
+            path=ticket_path,
+            rel_path=safe_relpath(ticket_path, workspace_root),
+            ticket_doc=ticket_doc,
+            skip_execution=False,
+        ),
+        status="continue",
     )
 
 
@@ -220,29 +195,25 @@ def _validate_ticket_lint_retry(
     ticket_path: Path,
     workspace_root: Path,
     lint_errors: list[str],
-) -> tuple[Optional[dict[str, Any]], str, str, Optional[str], list[str]]:
+) -> TicketValidationResult:
     """Handle lint-retry mode for ticket validation."""
     try:
         raw = ticket_path.read_text(encoding="utf-8")
     except OSError as exc:
-        return (
-            None,
-            "paused",
-            "infra_error",
-            f"Ticket unreadable during lint retry for {safe_relpath(ticket_path, workspace_root)}: {exc}",
-            [],
+        return TicketValidationResult(
+            status="paused",
+            pause_reason=f"Ticket unreadable during lint retry for {safe_relpath(ticket_path, workspace_root)}: {exc}",
+            pause_reason_code="infra_error",
         )
 
     data, _ = parse_markdown_frontmatter(raw)
     agent = data.get("agent")
     agent_id = agent.strip() if isinstance(agent, str) else None
     if not agent_id:
-        return (
-            None,
-            "paused",
-            "needs_user_fix",
-            "Cannot determine ticket agent during lint retry (missing frontmatter.agent). Fix the ticket frontmatter manually and resume.",
-            [],
+        return TicketValidationResult(
+            status="paused",
+            pause_reason="Cannot determine ticket agent during lint retry (missing frontmatter.agent). Fix the ticket frontmatter manually and resume.",
+            pause_reason_code="needs_user_fix",
         )
 
     if agent_id != "user":
@@ -251,31 +222,25 @@ def _validate_ticket_lint_retry(
 
             agent_id = validate_agent_id(agent_id)
         except Exception as exc:
-            return (
-                None,
-                "paused",
-                "needs_user_fix",
-                f"Cannot determine valid agent during lint retry for {safe_relpath(ticket_path, workspace_root)}: {exc}",
-                [],
+            return TicketValidationResult(
+                status="paused",
+                pause_reason=f"Cannot determine valid agent during lint retry for {safe_relpath(ticket_path, workspace_root)}: {exc}",
+                pause_reason_code="needs_user_fix",
             )
 
-    return (
-        {
-            "path": ticket_path,
-            "ticket_doc": TicketDoc(
+    return TicketValidationResult(
+        validated=ValidatedTicket(
+            path=ticket_path,
+            rel_path=safe_relpath(ticket_path, workspace_root),
+            ticket_doc=TicketDoc(
                 path=ticket_path,
                 index=0,
                 frontmatter=TicketFrontmatter(agent=agent_id, done=False),
                 body="",
             ),
-            "frontmatter": TicketFrontmatter(agent=agent_id, done=False),
-            "rel_path": safe_relpath(ticket_path, workspace_root),
-            "skip_execution": False,
-        },
-        "continue",
-        "",
-        None,
-        [],
+            skip_execution=False,
+        ),
+        status="continue",
     )
 
 

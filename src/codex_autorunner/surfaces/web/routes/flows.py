@@ -74,6 +74,7 @@ from ..schemas import (
 )
 from ..services import flow_store as flow_store_service
 from .flow_routes import FlowRoutesState
+from .flow_routes.dependencies import build_default_flow_route_dependencies
 from .flow_routes.history_artifacts import (
     get_diff_stats_by_dispatch_seq as extracted_get_diff_stats_by_dispatch_seq,
 )
@@ -1748,5 +1749,20 @@ You are the first ticket in a new ticket_flow run.
             )
 
         return FileResponse(artifact_path, filename=artifact_path.name)
+
+    deps = build_default_flow_route_dependencies()
+
+    from .flow_routes.status_history_routes import (
+        build_status_history_routes,
+    )
+    from .flow_routes.ticket_bootstrap import (
+        build_ticket_bootstrap_routes,
+    )
+
+    status_history_router, _ = build_status_history_routes(deps)
+    bootstrap_router, _ = build_ticket_bootstrap_routes(deps)
+
+    router.include_router(status_history_router)
+    router.include_router(bootstrap_router)
 
     return router

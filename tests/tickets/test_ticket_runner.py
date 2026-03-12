@@ -134,9 +134,7 @@ async def test_ticket_runner_fails_when_required_context_file_missing(
     ticket_path = ticket_dir / "TICKET-001.md"
     _write_ticket(
         ticket_path,
-        frontmatter_extra=(
-            "context:\n" "  - path: docs/missing.md\n" "    required: true\n"
-        ),
+        frontmatter_extra=("context:\n  - path: docs/missing.md\n    required: true\n"),
     )
 
     pool = FakeAgentPool(
@@ -176,7 +174,7 @@ async def test_ticket_runner_marks_non_required_missing_context_in_prompt(
     _write_ticket(
         ticket_path,
         frontmatter_extra=(
-            "context:\n" "  - path: docs/optional-missing.md\n" "    required: false\n"
+            "context:\n  - path: docs/optional-missing.md\n    required: false\n"
         ),
     )
 
@@ -224,7 +222,7 @@ async def test_ticket_runner_includes_read_error_for_binary_context_file(
     _write_ticket(
         ticket_path,
         frontmatter_extra=(
-            "context:\n" "  - path: docs/binary.txt\n" "    required: false\n"
+            "context:\n  - path: docs/binary.txt\n    required: false\n"
         ),
     )
 
@@ -374,12 +372,7 @@ async def test_ticket_runner_delegates_selection_and_validation(
 
     def wrapped_select(**kwargs):
         result = real_select(**kwargs)
-        selected_ticket = result[0]
-        selected_rel_path = (
-            selected_ticket.get("rel_path", "")
-            if isinstance(selected_ticket, dict)
-            else ""
-        )
+        selected_rel_path = result.selected.rel_path if result.selected else ""
         calls.append(("select", selected_rel_path))
         return result
 
@@ -443,7 +436,13 @@ async def test_ticket_runner_respects_validation_pause_from_selection_seam(
 
     def paused_validation(**kwargs):
         _ = kwargs
-        return None, "paused", "user_pause", "Paused from validation seam.", []
+        from codex_autorunner.tickets.runner_types import TicketValidationResult
+
+        return TicketValidationResult(
+            status="paused",
+            pause_reason="Paused from validation seam.",
+            pause_reason_code="user_pause",
+        )
 
     monkeypatch.setattr(
         runner_module.runner_selection,

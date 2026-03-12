@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from ..core.git_utils import run_git
 from .agent_pool import AgentPool, AgentTurnRequest
+from .runner_types import TurnExecutionResult
 
 _logger = logging.getLogger(__name__)
 
@@ -44,19 +45,8 @@ async def execute_turn(
     emit_event: Optional[Any] = None,
     max_network_retries: int = 5,
     current_network_retries: int = 0,
-) -> dict[str, Any]:
-    """Execute an agent turn and return structured result.
-
-    Returns a dict with:
-    - success: bool
-    - error: Optional[str]
-    - text: Optional[str]
-    - agent_id: Optional[str]
-    - conversation_id: Optional[str]
-    - turn_id: Optional[str]
-    - should_retry: bool
-    - network_retries: int
-    """
+) -> TurnExecutionResult:
+    """Execute an agent turn and return structured result."""
     turn_options = options if options else {}
     req = AgentTurnRequest(
         agent_id=agent_id,
@@ -72,29 +62,29 @@ async def execute_turn(
     if result.error:
         is_net_err = is_network_error(result.error)
         should_retry = is_net_err and current_network_retries < max_network_retries
-        return {
-            "success": False,
-            "error": result.error,
-            "text": result.text,
-            "agent_id": result.agent_id,
-            "conversation_id": result.conversation_id,
-            "turn_id": result.turn_id,
-            "is_network_error": is_net_err,
-            "should_retry": should_retry,
-            "network_retries": current_network_retries + (1 if is_net_err else 0),
-        }
+        return TurnExecutionResult(
+            success=False,
+            error=result.error,
+            text=result.text,
+            agent_id=result.agent_id,
+            conversation_id=result.conversation_id,
+            turn_id=result.turn_id,
+            is_network_error=is_net_err,
+            should_retry=should_retry,
+            network_retries=current_network_retries + (1 if is_net_err else 0),
+        )
 
-    return {
-        "success": True,
-        "error": None,
-        "text": result.text,
-        "agent_id": result.agent_id,
-        "conversation_id": result.conversation_id,
-        "turn_id": result.turn_id,
-        "is_network_error": False,
-        "should_retry": False,
-        "network_retries": 0,
-    }
+    return TurnExecutionResult(
+        success=True,
+        error=None,
+        text=result.text,
+        agent_id=result.agent_id,
+        conversation_id=result.conversation_id,
+        turn_id=result.turn_id,
+        is_network_error=False,
+        should_retry=False,
+        network_retries=0,
+    )
 
 
 def capture_git_state(*, workspace_root: Path) -> dict[str, Any]:

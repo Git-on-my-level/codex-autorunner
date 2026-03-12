@@ -82,10 +82,10 @@ from ...helpers import (
     format_public_error,
     is_interrupt_status,
 )
+from ...state import topic_key as build_topic_key
 from ..utils import (
     _build_opencode_token_usage,
 )
-from ...state import topic_key as build_topic_key
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord

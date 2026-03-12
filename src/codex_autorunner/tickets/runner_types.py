@@ -29,6 +29,29 @@ class TicketSelectionResult:
     pause_reason_code: Optional[str] = None
     pause_reason_details: Optional[str] = None
     errors: list[str] = field(default_factory=list)
+    reset_commit_state: bool = False
+
+
+@dataclass(frozen=True)
+class ValidatedTicket:
+    """Validated ticket ready for execution."""
+
+    path: Path
+    rel_path: str
+    ticket_doc: Any
+    skip_execution: bool = False
+
+
+@dataclass(frozen=True)
+class TicketValidationResult:
+    """Result of ticket validation for execution."""
+
+    validated: Optional[ValidatedTicket] = None
+    status: str = "continue"  # "continue" | "paused"
+    pause_reason: Optional[str] = None
+    pause_reason_code: Optional[str] = None
+    pause_reason_details: Optional[str] = None
+    errors: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

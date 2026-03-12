@@ -151,3 +151,13 @@ def build_ids_text(
         lines.extend(snippet_lines)
 
     return lines
+
+
+# Keep explicit module-level references so dead-code heuristics treat these
+# shared chat diagnostics helpers as part of the intended command surface.
+_CHAT_COMMAND_DIAGNOSTIC_HELPERS = (
+    ActiveFlowInfo,
+    build_status_text,
+    build_debug_text,
+    build_ids_text,
+)
