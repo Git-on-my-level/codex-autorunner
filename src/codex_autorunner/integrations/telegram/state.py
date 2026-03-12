@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
+from ..chat.agents import normalize_chat_agent
 
 logger = logging.getLogger("codex_autorunner.integrations.telegram.state")
 
@@ -39,14 +40,9 @@ def normalize_approval_mode(
 
 
 def normalize_agent(value: Optional[str]) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().lower()
-    compact = "".join(ch for ch in normalized if ch.isalnum())
+    normalized = normalize_chat_agent(value)
     if normalized in AGENT_VALUES:
         return normalized
-    if compact in AGENT_VALUES:
-        return compact
     return None
 
 

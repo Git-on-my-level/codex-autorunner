@@ -13,6 +13,7 @@ from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 
 DISCORD_STATE_SCHEMA_VERSION = 5
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -146,11 +147,15 @@ class DiscordStateStore:
         *,
         channel_id: str,
         agent: str,
+        model_override: Optional[str] | object = _UNSET,
+        reasoning_effort: Optional[str] | object = _UNSET,
     ) -> None:
         await self._run(
             self._update_agent_state_sync,
             channel_id,
             agent,
+            model_override,
+            reasoning_effort,
         )
 
     async def update_model_state(
@@ -527,18 +532,39 @@ class DiscordStateStore:
         self,
         channel_id: str,
         agent: str,
+        model_override: Optional[str] | object,
+        reasoning_effort: Optional[str] | object,
     ) -> None:
         conn = self._connection_sync()
         with conn:
-            conn.execute(
-                """
-                UPDATE channel_bindings
-                SET agent = ?,
-                    updated_at = ?
-                WHERE channel_id = ?
-                """,
-                (agent, now_iso(), channel_id),
-            )
+            if model_override is not _UNSET or reasoning_effort is not _UNSET:
+                conn.execute(
+                    """
+                    UPDATE channel_bindings
+                    SET agent = ?,
+                        model_override = ?,
+                        reasoning_effort = ?,
+                        updated_at = ?
+                    WHERE channel_id = ?
+                    """,
+                    (
+                        agent,
+                        None if model_override is _UNSET else model_override,
+                        None if reasoning_effort is _UNSET else reasoning_effort,
+                        now_iso(),
+                        channel_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE channel_bindings
+                    SET agent = ?,
+                        updated_at = ?
+                    WHERE channel_id = ?
+                    """,
+                    (agent, now_iso(), channel_id),
+                )
 
     def _update_model_state_sync(
         self,

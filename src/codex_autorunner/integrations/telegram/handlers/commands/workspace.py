@@ -21,6 +21,11 @@ from ....app_server.client import (
     CodexAppServerClient,
     CodexAppServerResponseError,
 )
+from ....chat.agents import (
+    build_agent_switch_state,
+    chat_agent_supports_effort,
+    normalize_chat_agent,
+)
 from ...adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
@@ -33,7 +38,6 @@ from ...config import AppServerUnavailableError
 from ...constants import (
     BIND_PICKER_PROMPT,
     DEFAULT_AGENT,
-    DEFAULT_AGENT_MODELS,
     DEFAULT_PAGE_SIZE,
     MAX_TOPIC_THREAD_HISTORY,
     RESUME_MISSING_IDS_LOG_LIMIT,
@@ -154,19 +158,20 @@ class WorkspaceCommands(SharedHelpers):
         thread_id: Optional[int],
         desired: str,
     ) -> str:
+        switch_state = build_agent_switch_state(desired, model_reset="agent_default")
+
         def apply(record: "TelegramTopicRecord") -> None:
-            record.agent = desired
+            record.agent = switch_state.agent
             record.active_thread_id = None
             record.thread_ids.clear()
             record.thread_summaries.clear()
             record.pending_compact_seed = None
             record.pending_compact_seed_thread_id = None
-            if not self._agent_supports_effort(desired):
-                record.effort = None
-            record.model = DEFAULT_AGENT_MODELS.get(desired)
+            record.effort = switch_state.effort
+            record.model = switch_state.model
 
         await self._router.update_topic(chat_id, thread_id, apply)
-        if not self._agent_supports_resume(desired):
+        if not self._agent_supports_resume(switch_state.agent):
             return " (resume not supported)"
         return ""
 
@@ -188,12 +193,14 @@ class WorkspaceCommands(SharedHelpers):
         return approval_policy, sandbox_policy
 
     def _effective_agent(self, record: Optional["TelegramTopicRecord"]) -> str:
-        if record and record.agent in VALID_AGENT_VALUES:
-            return record.agent
+        if record:
+            normalized = normalize_chat_agent(record.agent)
+            if normalized in VALID_AGENT_VALUES:
+                return normalized
         return DEFAULT_AGENT
 
     def _agent_supports_effort(self, agent: str) -> bool:
-        return agent == "codex"
+        return chat_agent_supports_effort(agent)
 
     def _agent_supports_resume(self, agent: str) -> bool:
         return agent in ("codex", "opencode")

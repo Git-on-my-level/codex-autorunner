@@ -1965,6 +1965,11 @@ async def test_component_interaction_agent_select_updates_agent(tmp_path: Path) 
         workspace_path=str(workspace),
         repo_id="repo-1",
     )
+    await store.update_model_state(
+        channel_id="channel-1",
+        model_override="zai-coding-plan/glm-5",
+        reasoning_effort="high",
+    )
     rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="agent_select", values=["opencode"])]
@@ -1983,6 +1988,8 @@ async def test_component_interaction_agent_select_updates_agent(tmp_path: Path) 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("agent") == "opencode"
+        assert binding.get("model_override") is None
+        assert binding.get("reasoning_effort") is None
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "agent set to opencode" in content

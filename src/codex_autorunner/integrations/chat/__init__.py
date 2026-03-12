@@ -1,6 +1,16 @@
 """Platform-agnostic chat adapter contracts (adapter layer)."""
 
 from .adapter import ChatAdapter, SendAttachmentRequest, SendTextRequest
+from .agents import (
+    DEFAULT_CHAT_AGENT,
+    DEFAULT_CHAT_AGENT_MODELS,
+    VALID_CHAT_AGENT_VALUES,
+    ChatAgentSwitchState,
+    build_agent_switch_state,
+    chat_agent_supports_effort,
+    default_chat_model_for_agent,
+    normalize_chat_agent,
+)
 from .bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from .callbacks import (
     CALLBACK_AGENT,
@@ -146,16 +156,22 @@ __all__ = [
     "CALLBACK_REVIEW_COMMIT",
     "CALLBACK_UPDATE",
     "CALLBACK_UPDATE_CONFIRM",
+    "ChatAgentSwitchState",
     "CHANNEL_DIRECTORY_FILENAME",
     "ChannelDirectoryStore",
+    "DEFAULT_CHAT_AGENT",
+    "DEFAULT_CHAT_AGENT_MODELS",
     "SendAttachmentRequest",
     "SendTextRequest",
     "TextRenderer",
     "build_dispatch_context",
+    "build_agent_switch_state",
     "audio_content_type_for_input",
     "audio_extension_for_input",
+    "chat_agent_supports_effort",
     "conversation_id_for",
     "decode_logical_callback",
+    "default_chat_model_for_agent",
     "encode_logical_callback",
     "format_media_batch_failure",
     "is_audio_mime_or_path",
@@ -171,8 +187,10 @@ __all__ = [
     "default_channel_directory_state",
     "PlainTextTurnContext",
     "normalize_channel_entry",
+    "normalize_chat_agent",
     "run_parity_checks",
     "TurnTriggerMode",
+    "VALID_CHAT_AGENT_VALUES",
     "run_chat_bootstrap_steps",
     "should_trigger_plain_text_turn",
     "normalize_mime_type",

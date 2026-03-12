@@ -88,6 +88,12 @@ from ...integrations.app_server.threads import (
     PMA_KEY,
     PMA_OPENCODE_KEY,
 )
+from ...integrations.chat.agents import (
+    DEFAULT_CHAT_AGENT,
+    VALID_CHAT_AGENT_VALUES,
+    build_agent_switch_state,
+    normalize_chat_agent,
+)
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.channel_directory import ChannelDirectoryStore
 from ...integrations.chat.collaboration_policy import (
@@ -3575,11 +3581,10 @@ class DiscordBotService:
         return resolve_workspace_from_token(token, candidates)
 
     def _normalize_agent(self, value: Any) -> str:
-        agent = value if isinstance(value, str) else self.DEFAULT_AGENT
-        normalized = agent.strip().lower()
-        if normalized not in self.VALID_AGENT_VALUES:
-            return self.DEFAULT_AGENT
-        return normalized
+        return (
+            normalize_chat_agent(value, default=self.DEFAULT_AGENT)
+            or self.DEFAULT_AGENT
+        )
 
     async def _list_model_items_for_binding(
         self,
@@ -5344,8 +5349,8 @@ class DiscordBotService:
             self._format_update_status_message(status),
         )
 
-    VALID_AGENT_VALUES = ("codex", "opencode")
-    DEFAULT_AGENT = "codex"
+    VALID_AGENT_VALUES = VALID_CHAT_AGENT_VALUES
+    DEFAULT_AGENT = DEFAULT_CHAT_AGENT
 
     async def _handle_car_agent(
         self,
@@ -5404,11 +5409,17 @@ class DiscordBotService:
             )
             return
 
-        await self._store.update_agent_state(channel_id=channel_id, agent=desired)
+        switch_state = build_agent_switch_state(desired, model_reset="clear")
+        await self._store.update_agent_state(
+            channel_id=channel_id,
+            agent=switch_state.agent,
+            model_override=switch_state.model,
+            reasoning_effort=switch_state.effort,
+        )
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Agent set to {desired}. Will apply on the next turn.",
+            f"Agent set to {switch_state.agent}. Will apply on the next turn.",
         )
 
     VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
