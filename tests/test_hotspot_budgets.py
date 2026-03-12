@@ -261,8 +261,8 @@ STANDARD_FUNCTION_BUDGETS = (
 LEGACY_FILE_CAPS = (
     FileBudget(
         path="src/codex_autorunner/surfaces/web/routes/flows.py",
-        max_lines=1800,
-        reason="Legacy flow composition owner until more /api/flows CRUD and lifecycle routes are extracted.",
+        max_lines=1825,
+        reason="Legacy flow composition owner until more /api/flows CRUD, lifecycle, and ticket-diff aggregation routes are extracted; keep the merge-ref shape under a narrow ceiling.",
     ),
     FileBudget(
         path="src/codex_autorunner/surfaces/web/routes/file_chat.py",
