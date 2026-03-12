@@ -59,10 +59,15 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         issue_url: Optional[str] = None,
         issue_text: Optional[str] = None,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> Any:
+        github_service_factory = kwargs.get("github_service_factory")
         if issue_url:
-            return seed_issue_from_github(repo_root, run_id, issue_url)
-        return seed_issue_from_text(repo_root, run_id, issue_text or "", **kwargs)
+            return seed_issue_from_github(
+                repo_root,
+                issue_url,
+                github_service_factory=github_service_factory,
+            )
+        return seed_issue_from_text(issue_text or "")
 
     return FlowRouteDependencies(
         find_repo_root=find_repo_root,

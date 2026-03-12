@@ -80,7 +80,7 @@ def build_status_history_routes(
             if store:
                 records = store.list_flow_runs(flow_type=flow_type)
                 if reconcile:
-                    from ....core.flows.reconciler import reconcile_flow_run
+                    from .....core.flows.reconciler import reconcile_flow_run
 
                     records = [
                         reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
@@ -114,7 +114,7 @@ def build_status_history_routes(
         store = deps.require_flow_store(repo_root)
         try:
             if reconcile and store:
-                from ....core.flows.reconciler import reconcile_flow_run
+                from .....core.flows.reconciler import reconcile_flow_run
 
                 record = reconcile_flow_run(repo_root, record, store, logger=_logger)[0]
             return deps.build_flow_status_response(record, repo_root, store=store)

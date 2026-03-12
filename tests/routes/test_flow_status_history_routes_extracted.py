@@ -118,3 +118,70 @@ def test_extracted_dispatch_file_reads_run_specific_history(tmp_path: Path) -> N
 
     assert response.status_code == 200
     assert response.text == "attached\n"
+
+
+def test_extracted_status_history_routes_support_reconcile_requests(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    record = _FakeRecord(id="33333333-3333-3333-3333-333333333333")
+    observed: dict[str, object] = {}
+
+    class _Store:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def list_flow_runs(self, flow_type=None):  # noqa: ANN001
+            observed["flow_type"] = flow_type
+            return [record]
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    store = _Store()
+
+    def _status_response(rec, _repo_root: Path, *, store=None):  # noqa: ANN001
+        return {"id": rec.id, "store_present": store is not None}
+
+    deps = FlowRouteDependencies(
+        find_repo_root=lambda: repo_root,
+        require_flow_store=lambda _repo_root: store,
+        safe_list_flow_runs=lambda *args, **kwargs: [],
+        build_flow_status_response=_status_response,
+        get_flow_record=lambda _repo_root, _run_id: record,
+        get_flow_controller=lambda *args, **kwargs: None,
+        start_flow_worker=lambda *args, **kwargs: None,
+        recover_flow_store_if_possible=lambda *args, **kwargs: None,
+        bootstrap_check=lambda *args, **kwargs: None,
+        seed_issue=lambda *args, **kwargs: {},
+    )
+
+    def _fake_reconcile(repo_root_arg, rec, store_arg, logger=None):  # noqa: ANN001
+        observed["repo_root"] = repo_root_arg
+        observed["record_id"] = rec.id
+        observed["same_store"] = store_arg is store
+        observed["logger"] = logger is not None
+        return rec, False, False
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.reconcile_flow_run",
+        _fake_reconcile,
+    )
+
+    router, _ = build_status_history_routes(deps)
+    app = FastAPI()
+    app.include_router(router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/flows/runs?flow_type=ticket_flow&reconcile=true")
+
+    assert response.status_code == 200
+    assert response.json() == [{"id": record.id, "store_present": True}]
+    assert observed == {
+        "flow_type": "ticket_flow",
+        "repo_root": repo_root,
+        "record_id": record.id,
+        "same_store": True,
+        "logger": True,
+    }
+    assert store.close_calls == 1

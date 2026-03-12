@@ -233,7 +233,7 @@ def build_ticket_bootstrap_routes(
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
         ticket_path = ticket_dir / "TICKET-001.md"
-        from ....tickets.files import list_ticket_paths
+        from .....tickets.files import list_ticket_paths
 
         existing_tickets = list_ticket_paths(ticket_dir)
         tickets_exist = bool(existing_tickets)
