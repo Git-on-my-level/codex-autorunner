@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
@@ -35,6 +36,19 @@ def _normalize_run_id(run_id: str) -> str:
         return str(uuid.UUID(str(run_id)))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid run_id") from None
+
+
+def _resolve_outbox_for_record(record: Any, repo_root: Path):
+    from .....tickets.outbox import resolve_outbox_paths
+
+    input_data = dict(getattr(record, "input_data", {}) or {})
+    workspace_root = Path(input_data.get("workspace_root") or repo_root)
+    runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
+    return resolve_outbox_paths(
+        workspace_root=workspace_root,
+        runs_dir=runs_dir,
+        run_id=record.id,
+    )
 
 
 def build_status_history_routes(
@@ -166,13 +180,13 @@ def build_status_history_routes(
             get_diff_stats_by_dispatch_seq as _get_diff_stats_by_dispatch_seq,
         )
 
-        diff_by_seq = _get_diff_stats_by_dispatch_seq(repo_root, record, None)
+        outbox_paths = _resolve_outbox_for_record(record, repo_root)
+        diff_by_seq = _get_diff_stats_by_dispatch_seq(repo_root, record, outbox_paths)
 
-        from ....tickets.outbox import parse_dispatch
-        from .runtime_service import flow_paths
+        from .....tickets.files import safe_relpath
+        from .....tickets.outbox import parse_dispatch
 
-        _, artifacts_root = flow_paths(repo_root)
-        history_dir = artifacts_root / "dispatch_history"
+        history_dir = outbox_paths.dispatch_history_dir
 
         history_entries = []
         if history_dir.exists() and history_dir.is_dir():
@@ -187,7 +201,7 @@ def build_status_history_routes(
                     if dispatch_path.exists()
                     else (None, ["Dispatch file missing"])
                 )
-                dispatch_dict = dict(dispatch) if dispatch else None
+                dispatch_dict = asdict(dispatch) if dispatch else None
                 if dispatch_dict:
                     dispatch_dict["is_handoff"] = (
                         dispatch.is_handoff
@@ -213,7 +227,7 @@ def build_status_history_routes(
                         {
                             "name": child.name,
                             "rel_path": rel,
-                            "path": str(child),
+                            "path": safe_relpath(child, repo_root),
                             "size": child.stat().st_size if child.is_file() else None,
                             "url": f"api/flows/{normalized}/dispatch_history/{entry.name}/{quote(rel)}",
                         }
@@ -224,7 +238,7 @@ def build_status_history_routes(
                         "dispatch": dispatch_dict,
                         "errors": errors,
                         "attachments": attachments,
-                        "path": str(entry),
+                        "path": safe_relpath(entry, repo_root),
                     }
                 )
 
@@ -233,15 +247,15 @@ def build_status_history_routes(
     @router.get("/{run_id}/dispatch_history/{seq}/{file_path:path}")
     async def get_dispatch_file(run_id: str, seq: str, file_path: str):
         """Get an attachment file from a dispatch history entry."""
-        _normalize_run_id(run_id)
+        normalized = _normalize_run_id(run_id)
         repo_root = deps.find_repo_root()
         if repo_root is None:
             raise HTTPException(status_code=404, detail="Repository not found")
 
-        from .runtime_service import flow_paths
-
-        _, artifacts_root = flow_paths(repo_root)
-        base_history = artifacts_root / "dispatch_history"
+        record = deps.get_flow_record(repo_root, normalized)
+        base_history = _resolve_outbox_for_record(
+            record, repo_root
+        ).dispatch_history_dir.resolve()
 
         seq_clean = seq.strip()
         if not re.fullmatch(r"[0-9]{4}", seq_clean):
@@ -282,7 +296,7 @@ def build_status_history_routes(
 
     @router.get("/{run_id}/reply_history/{seq}/{file_path:path}")
     def get_reply_history_file(run_id: str, seq: str, file_path: str):
-        from ....core.safe_paths import SafePathError, validate_single_filename
+        from .....core.safe_paths import SafePathError, validate_single_filename
 
         repo_root = deps.find_repo_root()
         if repo_root is None:
@@ -291,7 +305,7 @@ def build_status_history_routes(
         from .runtime_service import flow_paths
 
         db_path, _ = flow_paths(repo_root)
-        from ....core.flows import FlowStore
+        from .....core.flows import FlowStore
 
         store = FlowStore(db_path)
         try:
@@ -316,7 +330,7 @@ def build_status_history_routes(
         input_data = dict(record.input_data or {})
         workspace_root = Path(input_data.get("workspace_root") or repo_root)
         runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
-        from ....tickets.replies import resolve_reply_paths
+        from .....tickets.replies import resolve_reply_paths
 
         reply_paths = resolve_reply_paths(
             workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id

@@ -11,6 +11,12 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.surfaces.web.routes import flows as flow_routes
+from codex_autorunner.surfaces.web.routes.flow_routes.dependencies import (
+    build_default_flow_route_dependencies,
+)
+from codex_autorunner.surfaces.web.routes.flow_routes.status_history_routes import (
+    build_status_history_routes,
+)
 
 
 def test_list_runs_falls_back_to_safe_listing_when_store_unavailable(
@@ -298,6 +304,73 @@ def test_dispatch_history_includes_diff_stats_and_serves_attachments(
         assert (
             attachment["url"] == f"api/flows/{run_id}/dispatch_history/0001/notes.txt"
         )
+
+        file_res = client.get(f"/api/flows/{run_id}/dispatch_history/0001/notes.txt")
+
+    assert file_res.status_code == 200
+    assert file_res.text == "artifact payload\n"
+
+
+def test_extracted_status_history_router_uses_run_scoped_dispatch_history(
+    tmp_path, monkeypatch
+):
+    repo_root = Path(tmp_path)
+    run_id = "11111111-1111-1111-1111-111111111111"
+
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+        store.create_event(
+            event_id=f"{run_id}-diff-1",
+            run_id=run_id,
+            event_type=FlowEventType.DIFF_UPDATED,
+            data={
+                "dispatch_seq": 1,
+                "insertions": 5,
+                "deletions": 2,
+                "files_changed": 2,
+            },
+        )
+
+    entry_dir = (
+        repo_root / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / "0001"
+    )
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    (entry_dir / "DISPATCH.md").write_text(
+        "---\nmode: pause\ntitle: Extracted router\n---\n\nPlease review.\n",
+        encoding="utf-8",
+    )
+    (entry_dir / "notes.txt").write_text("artifact payload\n", encoding="utf-8")
+
+    deps = build_default_flow_route_dependencies()
+    monkeypatch.setattr(deps, "find_repo_root", lambda: repo_root)
+    router, _ = build_status_history_routes(deps)
+
+    app = FastAPI()
+    app.include_router(router)
+
+    with TestClient(app) as client:
+        history_res = client.get(f"/api/flows/{run_id}/dispatch_history")
+        assert history_res.status_code == 200
+        payload = history_res.json()
+        assert payload["run_id"] == run_id
+        assert len(payload["history"]) == 1
+        assert payload["history"][0]["dispatch"]["diff_stats"] == {
+            "insertions": 5,
+            "deletions": 2,
+            "files_changed": 2,
+        }
 
         file_res = client.get(f"/api/flows/{run_id}/dispatch_history/0001/notes.txt")
 

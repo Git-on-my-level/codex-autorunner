@@ -31,7 +31,8 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         seed_issue_from_text,
     )
     from .....core.utils import find_repo_root
-    from .definitions import get_flow_record
+    from ...services.flow_store import get_flow_record
+    from .definitions import get_flow_controller
     from .run_routes import start_flow_worker as _start_flow_worker
     from .runtime_service import (
         recover_flow_store_if_possible as _recover_flow_store_if_possible,
@@ -47,22 +48,10 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         store.initialize()
         return store
 
-    def get_flow_controller(
+    def get_flow_controller_adapter(
         repo_root: Path, flow_type: str, state: Any
-    ) -> "FlowController":
-        from .....core.flows import FlowController
-        from .....flows.ticket_flow import build_ticket_flow_definition
-
-        key = (repo_root.resolve(), flow_type)
-        with state.lock:
-            controller = state.controller_cache.get(key)
-            if controller:
-                return controller
-        definition = build_ticket_flow_definition(flow_type)
-        controller = FlowController(repo_root, definition)
-        with state.lock:
-            state.controller_cache[key] = controller
-        return controller
+    ) -> FlowController:
+        return get_flow_controller(repo_root, flow_type, state)
 
     def seed_issueispatch(
         repo_root: Path,
@@ -81,7 +70,7 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         safe_list_flow_runs=safe_list_flow_runs,
         build_flow_status_response=build_flow_status_snapshot,
         get_flow_record=get_flow_record,
-        get_flow_controller=get_flow_controller,
+        get_flow_controller=get_flow_controller_adapter,
         start_flow_worker=_start_flow_worker,
         recover_flow_store_if_possible=_recover_flow_store_if_possible,
         bootstrap_check=ux_bootstrap_check,
