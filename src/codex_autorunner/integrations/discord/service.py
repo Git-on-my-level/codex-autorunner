@@ -17,10 +17,14 @@ from typing import Any, Awaitable, Callable, Optional
 from ...agents.opencode.harness import OpenCodeHarness
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...bootstrap import seed_repo_files
+from ...core.chat_bindings import (
+    preferred_non_pma_chat_notification_source_for_workspace,
+)
 from ...core.config import (
     ConfigError,
     ensure_hub_config_at,
     find_nearest_hub_config_path,
+    load_hub_config,
     load_repo_config,
     resolve_env_for_root,
 )
@@ -575,6 +579,7 @@ class DiscordBotService:
         self._channel_directory_store = ChannelDirectoryStore(self._config.root)
         self._guild_name_cache: dict[str, str] = {}
         self._channel_name_cache: dict[str, str] = {}
+        self._hub_raw_config_cache: Optional[dict[str, Any]] = None
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
         if generated_hub_config.exists():
@@ -2565,6 +2570,11 @@ class DiscordBotService:
             if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
                 continue
             workspace_root = canonicalize_path(Path(workspace_raw))
+            preferred_source = self._preferred_bound_source_for_workspace(
+                workspace_root
+            )
+            if preferred_source == "telegram":
+                continue
             run_mirror = self._flow_run_mirror(workspace_root)
             snapshot = await asyncio.to_thread(
                 load_latest_paused_ticket_flow_dispatch, workspace_root
@@ -2644,6 +2654,30 @@ class DiscordBotService:
                 dispatch_seq=snapshot.dispatch_seq,
                 chunk_count=len(chunks),
             )
+
+    def _preferred_bound_source_for_workspace(self, workspace_root: Path) -> str | None:
+        raw_config = self._hub_raw_config_cache
+        if raw_config is None:
+            try:
+                raw_config = load_hub_config(self._config.root).raw
+            except Exception:
+                raw_config = {}
+            self._hub_raw_config_cache = raw_config
+        try:
+            return preferred_non_pma_chat_notification_source_for_workspace(
+                hub_root=self._config.root,
+                raw_config=raw_config,
+                workspace_root=workspace_root,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.pause_watch.route_lookup_failed",
+                exc=exc,
+                workspace_root=str(workspace_root),
+            )
+            return None
 
     async def _watch_ticket_flow_terminals(self) -> None:
         while True:

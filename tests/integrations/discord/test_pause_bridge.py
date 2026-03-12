@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
@@ -222,5 +223,97 @@ async def test_pause_bridge_chunked_messages_have_no_part_prefix(
         for record in queued:
             content = str(record.payload_json.get("content", ""))
             assert not content.startswith("Part ")
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_paused_run_with_dispatch(workspace, run_id, "0001")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    telegram_db = tmp_path / ".codex-autorunner" / "telegram_state.sqlite3"
+    conn = sqlite3.connect(telegram_db)
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE telegram_topics (
+                    topic_key TEXT PRIMARY KEY,
+                    chat_id INTEGER NOT NULL,
+                    thread_id INTEGER,
+                    scope TEXT,
+                    workspace_path TEXT,
+                    repo_id TEXT,
+                    pma_enabled INTEGER NOT NULL DEFAULT 0,
+                    last_active_at TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE telegram_topic_scopes (
+                    chat_id INTEGER NOT NULL,
+                    thread_id INTEGER,
+                    scope TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, thread_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO telegram_topics (
+                    topic_key,
+                    chat_id,
+                    thread_id,
+                    scope,
+                    workspace_path,
+                    repo_id,
+                    last_active_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "123:456",
+                    123,
+                    456,
+                    None,
+                    str(workspace),
+                    None,
+                    "2026-03-12T03:30:00Z",
+                    "2026-03-12T03:00:00Z",
+                ),
+            )
+    finally:
+        conn.close()
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert queued == []
     finally:
         await store.close()

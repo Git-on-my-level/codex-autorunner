@@ -1,5 +1,6 @@
 import json
 import logging
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,92 @@ async def test_default_chat_dedupes(tmp_path: Path) -> None:
     await bridge._notify_via_default_chat(workspace)
 
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_default_chat_skips_when_discord_binding_is_preferred(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace = hub_root / "worktrees" / "repo-a"
+    workspace.mkdir(parents=True)
+    state_dir = hub_root / ".codex-autorunner"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(state_dir / "discord_state.sqlite3")
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE channel_bindings (
+                    channel_id TEXT PRIMARY KEY,
+                    guild_id TEXT,
+                    workspace_path TEXT NOT NULL,
+                    repo_id TEXT,
+                    last_pause_run_id TEXT,
+                    last_pause_dispatch_seq TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO channel_bindings (
+                    channel_id,
+                    guild_id,
+                    workspace_path,
+                    repo_id,
+                    last_pause_run_id,
+                    last_pause_dispatch_seq,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "discord-123",
+                    "guild-1",
+                    str(workspace),
+                    "repo-a",
+                    None,
+                    None,
+                    "2026-03-12T02:00:00Z",
+                ),
+            )
+    finally:
+        conn.close()
+
+    calls: list[str] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append(text)
+        return True
+
+    async def send_document(**kwargs):
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=10,
+            chunk_long_messages=False,
+        ),
+        default_notification_chat_id=999,
+        hub_root=hub_root,
+        manifest_path=None,
+        config_root=workspace,
+        hub_raw_config={},
+    )
+
+    bridge._load_ticket_flow_pause = lambda path: ("run2", "0002", "body", None)  # type: ignore
+
+    await bridge._notify_via_default_chat(workspace)
+
+    assert calls == []

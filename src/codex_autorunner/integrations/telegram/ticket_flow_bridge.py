@@ -4,9 +4,12 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
-from ...core.config import ConfigError, load_repo_config
+from ...core.chat_bindings import (
+    preferred_non_pma_chat_notification_source_for_workspace,
+)
+from ...core.config import ConfigError, load_hub_config, load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.pause_dispatch import load_latest_paused_ticket_flow_dispatch
@@ -41,6 +44,7 @@ class TelegramTicketFlowBridge:
         manifest_path: Optional[Path] = None,
         config_root: Optional[Path] = None,
         runtime_services: Optional[RuntimeServices] = None,
+        hub_raw_config: Optional[dict[str, Any]] = None,
     ) -> None:
         self._logger = logger
         self._store = store
@@ -53,6 +57,7 @@ class TelegramTicketFlowBridge:
         self._manifest_path = manifest_path
         self._config_root = config_root
         self._runtime_services = runtime_services
+        self._hub_raw_config = hub_raw_config
         self._last_default_notification: dict[Path, str] = {}
 
     @staticmethod
@@ -132,6 +137,9 @@ class TelegramTicketFlowBridge:
         workspace_root: Path,
         entries: list[tuple[str, object]],
     ) -> None:
+        preferred_source = self._preferred_bound_source_for_workspace(workspace_root)
+        if preferred_source == "discord":
+            return
         try:
             pause = await asyncio.to_thread(
                 self._load_ticket_flow_pause, workspace_root
@@ -309,6 +317,9 @@ class TelegramTicketFlowBridge:
     async def _notify_via_default_chat(self, workspace_root: Path) -> None:
         if not self._pause_config.enabled or self._default_notification_chat_id is None:
             return
+        preferred_source = self._preferred_bound_source_for_workspace(workspace_root)
+        if preferred_source in {"telegram", "discord"}:
+            return
         try:
             pause = await asyncio.to_thread(
                 self._load_ticket_flow_pause, workspace_root
@@ -351,6 +362,32 @@ class TelegramTicketFlowBridge:
                 run_id=run_id,
                 seq=seq,
             )
+
+    def _preferred_bound_source_for_workspace(self, workspace_root: Path) -> str | None:
+        if self._hub_root is None:
+            return None
+        raw_config = self._hub_raw_config
+        if raw_config is None:
+            try:
+                raw_config = load_hub_config(self._hub_root).raw
+            except Exception:
+                raw_config = {}
+            self._hub_raw_config = raw_config
+        try:
+            return preferred_non_pma_chat_notification_source_for_workspace(
+                hub_root=self._hub_root,
+                raw_config=raw_config,
+                workspace_root=workspace_root,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.route_lookup_failed",
+                exc=exc,
+                workspace_root=str(workspace_root),
+            )
+            return None
 
     async def _send_full_dispatch(
         self,

@@ -4,6 +4,7 @@ import logging
 import sqlite3
 from collections import Counter
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -126,6 +127,15 @@ def _resolve_workspace_path(value: Any) -> str | None:
     return None
 
 
+def _normalize_workspace_path(value: Any) -> str | None:
+    if isinstance(value, Path):
+        try:
+            return str(value.resolve())
+        except Exception:
+            return str(value)
+    return _resolve_workspace_path(value)
+
+
 def _resolve_bound_repo_id(
     *,
     repo_id: Any,
@@ -163,6 +173,19 @@ def _normalize_scope(value: Any) -> str | None:
         return None
     scope = value.strip()
     return scope or None
+
+
+def _parse_iso_timestamp(raw: Any) -> float:
+    if not isinstance(raw, str):
+        return float("-inf")
+    value = raw.strip()
+    if not value:
+        return float("-inf")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return float("-inf")
 
 
 def _normalize_chat_identity(
@@ -289,6 +312,75 @@ def _read_discord_repo_counts(
             continue
         counts[repo_id] += 1
     return dict(counts)
+
+
+def _latest_discord_binding_timestamp_for_workspace(
+    *, db_path: Path, workspace_path: Path
+) -> float:
+    if not db_path.exists():
+        return float("-inf")
+    target_workspace = _normalize_workspace_path(workspace_path)
+    if target_workspace is None:
+        return float("-inf")
+    try:
+        with open_sqlite(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT workspace_path, updated_at
+                  FROM channel_bindings
+                """
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return float("-inf")
+        raise RuntimeError(
+            f"Failed reading Discord chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    latest = float("-inf")
+    for row in rows:
+        if _normalize_workspace_path(row["workspace_path"]) != target_workspace:
+            continue
+        latest = max(latest, _parse_iso_timestamp(row["updated_at"]))
+    return latest
+
+
+def _latest_current_telegram_binding_timestamp_for_workspace(
+    *, db_path: Path, workspace_path: Path
+) -> float:
+    if not db_path.exists():
+        return float("-inf")
+    target_workspace = _normalize_workspace_path(workspace_path)
+    if target_workspace is None:
+        return float("-inf")
+    try:
+        with open_sqlite(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT chat_id, thread_id, scope, workspace_path, last_active_at, updated_at
+                  FROM telegram_topics
+                """
+            ).fetchall()
+            scope_map = _read_telegram_current_scope_map(conn)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return float("-inf")
+        raise RuntimeError(
+            f"Failed reading Telegram chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    latest = float("-inf")
+    for row in rows:
+        if not _is_current_telegram_topic_row(row=row, scope_map=scope_map):
+            continue
+        if _normalize_workspace_path(row["workspace_path"]) != target_workspace:
+            continue
+        latest = max(
+            latest,
+            _parse_iso_timestamp(row["last_active_at"]),
+            _parse_iso_timestamp(row["updated_at"]),
+        )
+    return latest
 
 
 def _active_pma_thread_counts(
@@ -445,9 +537,36 @@ def repo_has_active_non_pma_chat_binding(
     )
 
 
+def preferred_non_pma_chat_notification_source_for_workspace(
+    *, hub_root: Path, raw_config: Mapping[str, Any], workspace_root: Path
+) -> str | None:
+    """Return the preferred bound chat surface for workspace notifications."""
+
+    discord_timestamp = _latest_discord_binding_timestamp_for_workspace(
+        db_path=_resolve_discord_state_path(hub_root, raw_config),
+        workspace_path=workspace_root,
+    )
+    telegram_timestamp = _latest_current_telegram_binding_timestamp_for_workspace(
+        db_path=_resolve_telegram_state_path(hub_root, raw_config),
+        workspace_path=workspace_root,
+    )
+
+    candidates = [
+        ("discord", discord_timestamp),
+        ("telegram", telegram_timestamp),
+    ]
+    available = [item for item in candidates if item[1] != float("-inf")]
+    if not available:
+        return None
+    # Prefer the freshest persisted binding signal; ties fall back to Telegram.
+    available.sort(key=lambda item: (item[1], 1 if item[0] == "telegram" else 0))
+    return available[-1][0]
+
+
 __all__ = [
     "active_chat_binding_counts",
     "active_chat_binding_counts_by_source",
+    "preferred_non_pma_chat_notification_source_for_workspace",
     "repo_has_active_chat_binding",
     "repo_has_active_non_pma_chat_binding",
 ]

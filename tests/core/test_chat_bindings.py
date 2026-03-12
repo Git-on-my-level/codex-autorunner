@@ -7,6 +7,7 @@ from pathlib import Path
 from codex_autorunner.core.chat_bindings import (
     active_chat_binding_counts,
     active_chat_binding_counts_by_source,
+    preferred_non_pma_chat_notification_source_for_workspace,
     repo_has_active_chat_binding,
     repo_has_active_non_pma_chat_binding,
 )
@@ -52,6 +53,7 @@ def _write_discord_binding(
     channel_id: str,
     repo_id: str | None,
     workspace_path: str | None = None,
+    updated_at: str = "2026-03-12T00:00:00Z",
 ) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -62,19 +64,23 @@ def _write_discord_binding(
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     workspace_path TEXT,
-                    repo_id TEXT
+                    repo_id TEXT,
+                    updated_at TEXT
                 )
                 """
             )
             conn.execute(
                 """
-                INSERT INTO channel_bindings (channel_id, workspace_path, repo_id)
-                VALUES (?, ?, ?)
+                INSERT INTO channel_bindings (
+                    channel_id, workspace_path, repo_id, updated_at
+                )
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(channel_id) DO UPDATE SET
                     workspace_path=excluded.workspace_path,
-                    repo_id=excluded.repo_id
+                    repo_id=excluded.repo_id,
+                    updated_at=excluded.updated_at
                 """,
-                (channel_id, workspace_path, repo_id),
+                (channel_id, workspace_path, repo_id, updated_at),
             )
     finally:
         conn.close()
@@ -86,6 +92,8 @@ def _write_telegram_binding(
     topic_key: str,
     repo_id: str | None,
     workspace_path: str | None = None,
+    updated_at: str = "2026-03-12T00:00:00Z",
+    last_active_at: str | None = None,
 ) -> None:
     if ":" not in topic_key:
         raise ValueError(
@@ -109,7 +117,9 @@ def _write_telegram_binding(
                     thread_id INTEGER,
                     scope TEXT,
                     workspace_path TEXT,
-                    repo_id TEXT
+                    repo_id TEXT,
+                    last_active_at TEXT,
+                    updated_at TEXT
                 )
                 """
             )
@@ -126,17 +136,35 @@ def _write_telegram_binding(
             conn.execute(
                 """
                 INSERT INTO telegram_topics (
-                    topic_key, chat_id, thread_id, scope, workspace_path, repo_id
+                    topic_key,
+                    chat_id,
+                    thread_id,
+                    scope,
+                    workspace_path,
+                    repo_id,
+                    last_active_at,
+                    updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(topic_key) DO UPDATE SET
                     chat_id=excluded.chat_id,
                     thread_id=excluded.thread_id,
                     scope=excluded.scope,
                     workspace_path=excluded.workspace_path,
-                    repo_id=excluded.repo_id
+                    repo_id=excluded.repo_id,
+                    last_active_at=excluded.last_active_at,
+                    updated_at=excluded.updated_at
                 """,
-                (topic_key, chat_id, thread_id, scope, workspace_path, repo_id),
+                (
+                    topic_key,
+                    chat_id,
+                    thread_id,
+                    scope,
+                    workspace_path,
+                    repo_id,
+                    last_active_at,
+                    updated_at,
+                ),
             )
     finally:
         conn.close()
@@ -405,4 +433,58 @@ def test_chat_binding_lookup_resolves_repo_from_custom_manifest_path(
             repo_id="repo-custom-manifest",
         )
         is True
+    )
+
+
+def test_preferred_non_pma_chat_notification_source_uses_freshest_binding(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    workspace = (hub_root / "worktrees" / "repo-a").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-chan",
+        repo_id="repo-a",
+        workspace_path=str(workspace),
+        updated_at="2026-03-12T02:00:00Z",
+    )
+    _write_telegram_binding(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        topic_key="123:456",
+        repo_id="repo-a",
+        workspace_path=str(workspace),
+        updated_at="2026-03-12T01:00:00Z",
+        last_active_at="2026-03-12T01:30:00Z",
+    )
+
+    assert (
+        preferred_non_pma_chat_notification_source_for_workspace(
+            hub_root=hub_root,
+            raw_config=cfg,
+            workspace_root=workspace,
+        )
+        == "discord"
+    )
+
+    _write_telegram_binding(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        topic_key="123:789",
+        repo_id="repo-a",
+        workspace_path=str(workspace),
+        updated_at="2026-03-12T03:00:00Z",
+        last_active_at="2026-03-12T03:30:00Z",
+    )
+
+    assert (
+        preferred_non_pma_chat_notification_source_for_workspace(
+            hub_root=hub_root,
+            raw_config=cfg,
+            workspace_root=workspace,
+        )
+        == "telegram"
     )
