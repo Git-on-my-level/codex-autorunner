@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
+from .orchestration.migrate_legacy_state import backfill_legacy_reactive_state
+from .orchestration.sqlite import open_orchestration_sqlite
+from .time_utils import now_iso
 from .utils import atomic_write
 
 PMA_REACTIVE_STATE_FILENAME = "reactive_state.json"
@@ -23,6 +26,7 @@ def default_pma_reactive_state() -> dict[str, Any]:
 
 class PmaReactiveStore:
     def __init__(self, hub_root: Path) -> None:
+        self._hub_root = hub_root
         self._path = (
             hub_root / ".codex-autorunner" / "pma" / PMA_REACTIVE_STATE_FILENAME
         )
@@ -62,24 +66,59 @@ class PmaReactiveStore:
         return True
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
-        if not self._path.exists():
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            backfill_legacy_reactive_state(self._hub_root, conn)
+            rows = conn.execute(
+                """
+                SELECT debounce_key, last_enqueued_at
+                  FROM orch_reactive_debounce_state
+                 ORDER BY debounce_key ASC
+                """
+            ).fetchall()
+        if not rows:
             return None
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning(
-                "Failed to read PMA reactive state at %s: %s", self._path, exc
-            )
-            return None
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return default_pma_reactive_state()
-        if not isinstance(data, dict):
-            return default_pma_reactive_state()
-        return data
+        return {
+            "version": 1,
+            "last_enqueued": {
+                str(row["debounce_key"]): float(row["last_enqueued_at"])
+                for row in rows
+                if row["debounce_key"] is not None
+                and row["last_enqueued_at"] is not None
+            },
+        }
 
     def _save_unlocked(self, state: dict[str, Any]) -> None:
+        last_enqueued = state.get("last_enqueued")
+        values = last_enqueued if isinstance(last_enqueued, dict) else {}
+        stamp = now_iso()
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            backfill_legacy_reactive_state(self._hub_root, conn)
+            with conn:
+                conn.execute("DELETE FROM orch_reactive_debounce_state")
+                for key, raw_value in values.items():
+                    if not isinstance(key, str):
+                        continue
+                    try:
+                        parsed = float(raw_value)
+                    except (TypeError, ValueError):
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO orch_reactive_debounce_state (
+                            debounce_key,
+                            repo_id,
+                            thread_target_id,
+                            fingerprint,
+                            available_at,
+                            last_event_id,
+                            metadata_json,
+                            created_at,
+                            updated_at,
+                            last_enqueued_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (key, None, None, None, None, None, "{}", stamp, stamp, parsed),
+                    )
         self._path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(self._path, json.dumps(state, indent=2) + "\n")
 

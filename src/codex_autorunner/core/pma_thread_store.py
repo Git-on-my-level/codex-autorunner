@@ -13,6 +13,8 @@ from .managed_thread_status import (
     build_managed_thread_status_snapshot,
     transition_managed_thread_status,
 )
+from .orchestration.migrate_legacy_state import backfill_legacy_thread_state
+from .orchestration.sqlite import open_orchestration_sqlite
 from .sqlite_utils import open_sqlite
 from .time_utils import now_iso
 
@@ -295,6 +297,7 @@ class PmaThreadStore:
     """
 
     def __init__(self, hub_root: Path, *, durable: bool = False) -> None:
+        self._hub_root = hub_root
         self._path = default_pma_threads_db_path(hub_root)
         self._durable = durable
         self._initialize()
@@ -305,15 +308,73 @@ class PmaThreadStore:
 
     def _initialize(self) -> None:
         with pma_threads_db_lock(self._path):
-            with open_sqlite(self._path, durable=self._durable) as conn:
-                _ensure_schema(conn)
+            with open_orchestration_sqlite(
+                self._hub_root,
+                durable=self._durable,
+            ) as conn:
+                backfill_legacy_thread_state(self._hub_root, conn)
+                self._sync_legacy_mirror(conn)
+
+    @contextmanager
+    def _read_conn(self) -> Iterator[Any]:
+        with open_orchestration_sqlite(
+            self._hub_root,
+            durable=self._durable,
+        ) as conn:
+            backfill_legacy_thread_state(self._hub_root, conn)
+            yield conn
 
     @contextmanager
     def _write_conn(self) -> Iterator[Any]:
         with pma_threads_db_lock(self._path):
-            with open_sqlite(self._path, durable=self._durable) as conn:
-                _ensure_schema(conn)
+            with open_orchestration_sqlite(
+                self._hub_root,
+                durable=self._durable,
+            ) as conn:
+                backfill_legacy_thread_state(self._hub_root, conn)
                 yield conn
+                self._sync_legacy_mirror(conn)
+
+    @staticmethod
+    def _thread_row_to_record(row: Any) -> dict[str, Any]:
+        record = {
+            "managed_thread_id": row["thread_target_id"],
+            "agent": row["agent_id"],
+            "repo_id": row["repo_id"],
+            "workspace_root": row["workspace_root"],
+            "name": row["display_name"],
+            "backend_thread_id": row["backend_thread_id"],
+            "status": row["lifecycle_status"] or "active",
+            "normalized_status": row["runtime_status"] or "idle",
+            "status_reason_code": row["status_reason"],
+            "status_updated_at": row["status_updated_at"] or row["updated_at"],
+            "status_terminal": int(row["status_terminal"] or 0),
+            "status_turn_id": row["status_turn_id"],
+            "last_turn_id": row["last_execution_id"],
+            "last_message_preview": row["last_message_preview"],
+            "compact_seed": row["compact_seed"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        return _normalize_thread_record(record)
+
+    @staticmethod
+    def _execution_row_to_record(row: Any) -> dict[str, Any]:
+        return {
+            "managed_turn_id": row["execution_id"],
+            "managed_thread_id": row["thread_target_id"],
+            "client_turn_id": row["client_request_id"],
+            "backend_turn_id": row["backend_turn_id"],
+            "prompt": row["prompt_text"],
+            "status": row["status"],
+            "assistant_text": row["assistant_text"],
+            "transcript_turn_id": row["transcript_mirror_id"],
+            "model": row["model_id"],
+            "reasoning": row["reasoning_level"],
+            "error": row["error_text"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+        }
 
     def _fetch_thread(
         self, conn: Any, managed_thread_id: str
@@ -321,14 +382,14 @@ class PmaThreadStore:
         row = conn.execute(
             """
             SELECT *
-              FROM pma_managed_threads
-             WHERE managed_thread_id = ?
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
             """,
             (managed_thread_id,),
         ).fetchone()
         if row is None:
             return None
-        return _normalize_thread_record(row)
+        return self._thread_row_to_record(row)
 
     def _transition_thread_status(
         self,
@@ -355,14 +416,14 @@ class PmaThreadStore:
         with conn:
             conn.execute(
                 """
-                UPDATE pma_managed_threads
-                   SET normalized_status = ?,
-                       status_reason_code = ?,
+                UPDATE orch_thread_targets
+                   SET runtime_status = ?,
+                       status_reason = ?,
                        status_updated_at = ?,
                        status_terminal = ?,
                        status_turn_id = ?,
                        updated_at = ?
-                 WHERE managed_thread_id = ?
+                 WHERE thread_target_id = ?
                 """,
                 (
                     snapshot.status,
@@ -399,44 +460,44 @@ class PmaThreadStore:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO pma_managed_threads (
-                        managed_thread_id,
-                        agent,
+                    INSERT INTO orch_thread_targets (
+                        thread_target_id,
+                        agent_id,
+                        backend_thread_id,
                         repo_id,
                         workspace_root,
-                        name,
-                        backend_thread_id,
-                        status,
-                        normalized_status,
-                        status_reason_code,
-                        status_updated_at,
-                        status_terminal,
+                        display_name,
+                        lifecycle_status,
+                        runtime_status,
+                        status_reason,
                         status_turn_id,
-                        last_turn_id,
+                        last_execution_id,
                         last_message_preview,
                         compact_seed,
                         created_at,
-                        updated_at
+                        updated_at,
+                        status_updated_at,
+                        status_terminal
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         managed_thread_id,
                         agent,
+                        backend_thread_id,
                         repo_id,
                         str(workspace),
                         name,
-                        backend_thread_id,
                         "active",
                         snapshot.status,
                         snapshot.reason_code,
-                        snapshot.changed_at,
-                        1 if snapshot.terminal else 0,
                         snapshot.turn_id,
                         None,
                         None,
                         None,
                         now,
                         now,
+                        snapshot.changed_at,
+                        1 if snapshot.terminal else 0,
                     ),
                 )
             created = self._fetch_thread(conn, managed_thread_id)
@@ -445,8 +506,7 @@ class PmaThreadStore:
         return created
 
     def get_thread(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
-        with open_sqlite(self._path, durable=self._durable) as conn:
-            _ensure_schema(conn)
+        with self._read_conn() as conn:
             return self._fetch_thread(conn, managed_thread_id)
 
     def list_threads(
@@ -463,51 +523,49 @@ class PmaThreadStore:
 
         query = """
             SELECT *
-              FROM pma_managed_threads
+              FROM orch_thread_targets
              WHERE 1 = 1
         """
         params: list[Any] = []
         if agent is not None:
-            query += " AND agent = ?"
+            query += " AND agent_id = ?"
             params.append(agent)
         if status is not None:
-            query += " AND status = ?"
+            query += " AND lifecycle_status = ?"
             params.append(status)
         if normalized_status is not None:
-            query += " AND normalized_status = ?"
+            query += " AND runtime_status = ?"
             params.append(normalized_status)
         if repo_id is not None:
             query += " AND repo_id = ?"
             params.append(repo_id)
-        query += " ORDER BY updated_at DESC, created_at DESC, managed_thread_id DESC"
+        query += " ORDER BY updated_at DESC, created_at DESC, thread_target_id DESC"
         query += " LIMIT ?"
         params.append(limit)
 
-        with open_sqlite(self._path, durable=self._durable) as conn:
-            _ensure_schema(conn)
+        with self._read_conn() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [_normalize_thread_record(row) for row in rows]
+        return [self._thread_row_to_record(row) for row in rows]
 
     def count_threads_by_repo(
         self, *, agent: Optional[str] = None, status: Optional[str] = None
     ) -> dict[str, int]:
         query = """
             SELECT TRIM(repo_id) AS repo_id, COUNT(*) AS thread_count
-              FROM pma_managed_threads
+              FROM orch_thread_targets
              WHERE repo_id IS NOT NULL
                AND TRIM(repo_id) != ''
         """
         params: list[Any] = []
         if agent is not None:
-            query += " AND agent = ?"
+            query += " AND agent_id = ?"
             params.append(agent)
         if status is not None:
-            query += " AND status = ?"
+            query += " AND lifecycle_status = ?"
             params.append(status)
         query += " GROUP BY TRIM(repo_id)"
 
-        with open_sqlite(self._path, durable=self._durable) as conn:
-            _ensure_schema(conn)
+        with self._read_conn() as conn:
             rows = conn.execute(query, params).fetchall()
         counts: dict[str, int] = {}
         for row in rows:
@@ -524,10 +582,10 @@ class PmaThreadStore:
             with conn:
                 conn.execute(
                     """
-                    UPDATE pma_managed_threads
+                    UPDATE orch_thread_targets
                        SET backend_thread_id = ?,
                            updated_at = ?
-                     WHERE managed_thread_id = ?
+                     WHERE thread_target_id = ?
                     """,
                     (backend_thread_id, now_iso(), managed_thread_id),
                 )
@@ -543,11 +601,11 @@ class PmaThreadStore:
             with conn:
                 conn.execute(
                     """
-                    UPDATE pma_managed_threads
-                       SET last_turn_id = ?,
+                    UPDATE orch_thread_targets
+                       SET last_execution_id = ?,
                            last_message_preview = ?,
                            updated_at = ?
-                     WHERE managed_thread_id = ?
+                     WHERE thread_target_id = ?
                     """,
                     (
                         last_turn_id,
@@ -566,14 +624,14 @@ class PmaThreadStore:
     ) -> None:
         changed_at = now_iso()
         query = """
-            UPDATE pma_managed_threads
+            UPDATE orch_thread_targets
                SET compact_seed = ?,
                    updated_at = ?
         """
         params: list[Any] = [compact_seed, changed_at]
         if reset_backend_id:
             query += ", backend_thread_id = NULL"
-        query += " WHERE managed_thread_id = ?"
+        query += " WHERE thread_target_id = ?"
         params.append(managed_thread_id)
 
         with self._write_conn() as conn:
@@ -593,10 +651,10 @@ class PmaThreadStore:
             with conn:
                 conn.execute(
                     """
-                    UPDATE pma_managed_threads
-                       SET status = 'archived',
+                    UPDATE orch_thread_targets
+                       SET lifecycle_status = 'archived',
                            updated_at = ?
-                     WHERE managed_thread_id = ?
+                     WHERE thread_target_id = ?
                     """,
                     (changed_at, managed_thread_id),
                 )
@@ -613,10 +671,10 @@ class PmaThreadStore:
             with conn:
                 conn.execute(
                     """
-                    UPDATE pma_managed_threads
-                       SET status = 'active',
+                    UPDATE orch_thread_targets
+                       SET lifecycle_status = 'active',
                            updated_at = ?
-                     WHERE managed_thread_id = ?
+                     WHERE thread_target_id = ?
                     """,
                     (changed_at, managed_thread_id),
                 )
@@ -643,29 +701,31 @@ class PmaThreadStore:
             with conn:
                 cursor = conn.execute(
                     """
-                    INSERT INTO pma_managed_turns (
-                        managed_turn_id,
-                        managed_thread_id,
-                        client_turn_id,
-                        backend_turn_id,
-                        prompt,
+                    INSERT INTO orch_thread_executions (
+                        execution_id,
+                        thread_target_id,
+                        client_request_id,
+                        request_kind,
+                        prompt_text,
                         status,
+                        backend_turn_id,
                         assistant_text,
-                        transcript_turn_id,
-                        model,
-                        reasoning,
-                        error,
+                        error_text,
+                        model_id,
+                        reasoning_level,
+                        transcript_mirror_id,
                         started_at,
-                        finished_at
+                        finished_at,
+                        created_at
                     )
-                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                      FROM pma_managed_threads
-                     WHERE managed_thread_id = ?
-                       AND status = 'active'
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                      FROM orch_thread_targets
+                     WHERE thread_target_id = ?
+                       AND lifecycle_status = 'active'
                        AND NOT EXISTS (
                            SELECT 1
-                             FROM pma_managed_turns
-                            WHERE managed_thread_id = ?
+                             FROM orch_thread_executions
+                            WHERE thread_target_id = ?
                               AND status = 'running'
                        )
                     """,
@@ -673,9 +733,10 @@ class PmaThreadStore:
                         managed_turn_id,
                         managed_thread_id,
                         client_turn_id,
-                        None,
+                        "managed_turn",
                         prompt,
                         "running",
+                        None,
                         None,
                         None,
                         model,
@@ -683,6 +744,7 @@ class PmaThreadStore:
                         None,
                         started_at,
                         None,
+                        started_at,
                         managed_thread_id,
                         managed_thread_id,
                     ),
@@ -690,15 +752,16 @@ class PmaThreadStore:
                 if cursor.rowcount == 0:
                     status_row = conn.execute(
                         """
-                        SELECT status
-                          FROM pma_managed_threads
-                         WHERE managed_thread_id = ?
+                        SELECT lifecycle_status
+                          FROM orch_thread_targets
+                         WHERE thread_target_id = ?
                         """,
                         (managed_thread_id,),
                     ).fetchone()
                     thread_status = (
-                        str(status_row["status"])
-                        if status_row is not None and status_row["status"] is not None
+                        str(status_row["lifecycle_status"])
+                        if status_row is not None
+                        and status_row["lifecycle_status"] is not None
                         else None
                     )
                     if thread_status != "active":
@@ -716,15 +779,15 @@ class PmaThreadStore:
             row = conn.execute(
                 """
                 SELECT *
-                  FROM pma_managed_turns
-                 WHERE managed_turn_id = ?
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
                 """,
                 (managed_turn_id,),
             ).fetchone()
 
         if row is None:
             raise RuntimeError("Failed to create managed PMA turn")
-        return _row_to_dict(row)
+        return self._execution_row_to_record(row)
 
     def mark_turn_finished(
         self,
@@ -745,26 +808,26 @@ class PmaThreadStore:
         with self._write_conn() as conn:
             row = conn.execute(
                 """
-                SELECT managed_thread_id
-                  FROM pma_managed_turns
-                 WHERE managed_turn_id = ?
+                SELECT thread_target_id
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
                 """,
                 (managed_turn_id,),
             ).fetchone()
             if row is None:
                 return False
-            managed_thread_id = str(row["managed_thread_id"])
+            managed_thread_id = str(row["thread_target_id"])
             with conn:
                 cursor = conn.execute(
                     """
-                    UPDATE pma_managed_turns
+                    UPDATE orch_thread_executions
                        SET status = ?,
                            assistant_text = ?,
-                           error = ?,
+                           error_text = ?,
                            backend_turn_id = ?,
-                           transcript_turn_id = ?,
+                           transcript_mirror_id = ?,
                            finished_at = ?
-                     WHERE managed_turn_id = ?
+                     WHERE execution_id = ?
                        AND status = 'running'
                     """,
                     (
@@ -795,9 +858,9 @@ class PmaThreadStore:
             with conn:
                 conn.execute(
                     """
-                    UPDATE pma_managed_turns
+                    UPDATE orch_thread_executions
                        SET backend_turn_id = ?
-                     WHERE managed_turn_id = ?
+                     WHERE execution_id = ?
                     """,
                     (backend_turn_id, managed_turn_id),
                 )
@@ -807,22 +870,22 @@ class PmaThreadStore:
         with self._write_conn() as conn:
             row = conn.execute(
                 """
-                SELECT managed_thread_id
-                  FROM pma_managed_turns
-                 WHERE managed_turn_id = ?
+                SELECT thread_target_id
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
                 """,
                 (managed_turn_id,),
             ).fetchone()
             if row is None:
                 return False
-            managed_thread_id = str(row["managed_thread_id"])
+            managed_thread_id = str(row["thread_target_id"])
             with conn:
                 cursor = conn.execute(
                     """
-                    UPDATE pma_managed_turns
+                    UPDATE orch_thread_executions
                        SET status = 'interrupted',
                            finished_at = ?
-                     WHERE managed_turn_id = ?
+                     WHERE execution_id = ?
                        AND status = 'running'
                     """,
                     (finished_at, managed_turn_id),
@@ -844,28 +907,26 @@ class PmaThreadStore:
         if limit <= 0:
             return []
 
-        with open_sqlite(self._path, durable=self._durable) as conn:
-            _ensure_schema(conn)
+        with self._read_conn() as conn:
             rows = conn.execute(
                 """
                 SELECT *
-                  FROM pma_managed_turns
-                 WHERE managed_thread_id = ?
-                 ORDER BY started_at DESC, rowid DESC
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                 ORDER BY rowid DESC
                  LIMIT ?
                 """,
                 (managed_thread_id, limit),
             ).fetchall()
-        return [_row_to_dict(row) for row in rows]
+        return [self._execution_row_to_record(row) for row in rows]
 
     def has_running_turn(self, managed_thread_id: str) -> bool:
-        with open_sqlite(self._path, durable=self._durable) as conn:
-            _ensure_schema(conn)
+        with self._read_conn() as conn:
             row = conn.execute(
                 """
                 SELECT 1
-                  FROM pma_managed_turns
-                 WHERE managed_thread_id = ?
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
                    AND status = 'running'
                  LIMIT 1
                 """,
@@ -874,40 +935,38 @@ class PmaThreadStore:
         return row is not None
 
     def get_running_turn(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
-        with open_sqlite(self._path, durable=self._durable) as conn:
-            _ensure_schema(conn)
+        with self._read_conn() as conn:
             row = conn.execute(
                 """
                 SELECT *
-                  FROM pma_managed_turns
-                 WHERE managed_thread_id = ?
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
                    AND status = 'running'
-                 ORDER BY started_at DESC, rowid DESC
+                 ORDER BY started_at DESC, execution_id DESC
                  LIMIT 1
                 """,
                 (managed_thread_id,),
             ).fetchone()
         if row is None:
             return None
-        return _row_to_dict(row)
+        return self._execution_row_to_record(row)
 
     def get_turn(
         self, managed_thread_id: str, managed_turn_id: str
     ) -> Optional[dict[str, Any]]:
-        with open_sqlite(self._path, durable=self._durable) as conn:
-            _ensure_schema(conn)
+        with self._read_conn() as conn:
             row = conn.execute(
                 """
                 SELECT *
-                  FROM pma_managed_turns
-                 WHERE managed_thread_id = ?
-                   AND managed_turn_id = ?
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND execution_id = ?
                 """,
                 (managed_thread_id, managed_turn_id),
             ).fetchone()
         if row is None:
             return None
-        return _row_to_dict(row)
+        return self._execution_row_to_record(row)
 
     def append_action(
         self,
@@ -917,22 +976,169 @@ class PmaThreadStore:
         payload_json: Optional[str] = None,
     ) -> int:
         with self._write_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(CAST(action_id AS INTEGER)) AS max_action_id
+                  FROM orch_thread_actions
+                 WHERE action_id GLOB '[0-9]*'
+                """
+            ).fetchone()
+            next_id = int(row["max_action_id"] or 0) + 1
             with conn:
-                cursor = conn.execute(
+                conn.execute(
                     """
-                    INSERT INTO pma_managed_actions (
-                        managed_thread_id,
+                    INSERT INTO orch_thread_actions (
+                        action_id,
+                        thread_target_id,
+                        execution_id,
                         action_type,
                         payload_json,
                         created_at
-                    ) VALUES (?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (managed_thread_id, action_type, payload_json, now_iso()),
+                    (
+                        str(next_id),
+                        managed_thread_id,
+                        None,
+                        action_type,
+                        payload_json or "{}",
+                        now_iso(),
+                    ),
                 )
-        action_id = cursor.lastrowid
-        if not isinstance(action_id, int):
-            raise RuntimeError("Failed to append PMA action")
-        return action_id
+        return next_id
+
+    def _sync_legacy_mirror(self, conn: Any) -> None:
+        with open_sqlite(self._path, durable=self._durable) as legacy_conn:
+            _ensure_schema(legacy_conn)
+            thread_rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_targets
+                 ORDER BY created_at ASC, thread_target_id ASC
+                """
+            ).fetchall()
+            execution_rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 ORDER BY started_at ASC, execution_id ASC
+                """
+            ).fetchall()
+            action_rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_actions
+                 ORDER BY CAST(action_id AS INTEGER) ASC, action_id ASC
+                """
+            ).fetchall()
+            with legacy_conn:
+                legacy_conn.execute("DELETE FROM pma_managed_actions")
+                legacy_conn.execute("DELETE FROM pma_managed_turns")
+                legacy_conn.execute("DELETE FROM pma_managed_threads")
+                for row in thread_rows:
+                    legacy = self._thread_row_to_record(row)
+                    legacy_conn.execute(
+                        """
+                        INSERT INTO pma_managed_threads (
+                            managed_thread_id,
+                            agent,
+                            repo_id,
+                            workspace_root,
+                            name,
+                            backend_thread_id,
+                            status,
+                            normalized_status,
+                            status_reason_code,
+                            status_updated_at,
+                            status_terminal,
+                            status_turn_id,
+                            last_turn_id,
+                            last_message_preview,
+                            compact_seed,
+                            created_at,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            legacy["managed_thread_id"],
+                            legacy["agent"],
+                            legacy["repo_id"],
+                            legacy["workspace_root"],
+                            legacy["name"],
+                            legacy["backend_thread_id"],
+                            legacy["status"],
+                            legacy["normalized_status"],
+                            legacy["status_reason_code"],
+                            legacy["status_updated_at"],
+                            1 if legacy["status_terminal"] else 0,
+                            legacy["status_turn_id"],
+                            legacy["last_turn_id"],
+                            legacy["last_message_preview"],
+                            legacy["compact_seed"],
+                            legacy["created_at"],
+                            legacy["updated_at"],
+                        ),
+                    )
+                for row in execution_rows:
+                    legacy = self._execution_row_to_record(row)
+                    legacy_conn.execute(
+                        """
+                        INSERT INTO pma_managed_turns (
+                            managed_turn_id,
+                            managed_thread_id,
+                            client_turn_id,
+                            backend_turn_id,
+                            prompt,
+                            status,
+                            assistant_text,
+                            transcript_turn_id,
+                            model,
+                            reasoning,
+                            error,
+                            started_at,
+                            finished_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            legacy["managed_turn_id"],
+                            legacy["managed_thread_id"],
+                            legacy["client_turn_id"],
+                            legacy["backend_turn_id"],
+                            legacy["prompt"],
+                            legacy["status"],
+                            legacy["assistant_text"],
+                            legacy["transcript_turn_id"],
+                            legacy["model"],
+                            legacy["reasoning"],
+                            legacy["error"],
+                            legacy["started_at"],
+                            legacy["finished_at"],
+                        ),
+                    )
+                for row in action_rows:
+                    action_id = str(row["action_id"] or "").strip()
+                    try:
+                        legacy_action_id = int(action_id)
+                    except ValueError:
+                        continue
+                    legacy_conn.execute(
+                        """
+                        INSERT INTO pma_managed_actions (
+                            action_id,
+                            managed_thread_id,
+                            action_type,
+                            payload_json,
+                            created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            legacy_action_id,
+                            row["thread_target_id"],
+                            row["action_type"],
+                            row["payload_json"],
+                            row["created_at"],
+                        ),
+                    )
 
 
 __all__ = [

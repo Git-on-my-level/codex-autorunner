@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
+from .orchestration.migrate_legacy_state import backfill_legacy_queue_state
+from .orchestration.sqlite import open_orchestration_sqlite
 from .time_utils import now_iso
 from .utils import atomic_write
 
@@ -85,7 +87,7 @@ class PmaQueueItem:
 
 
 class PmaQueue:
-    """PMA queue backed by JSONL state; pending items are replayed into memory."""
+    """PMA queue backed by orchestration SQLite with JSONL compatibility mirrors."""
 
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = hub_root
@@ -98,6 +100,11 @@ class PmaQueue:
         self._replayed_lanes: set[str] = set()
         self._lock = asyncio.Lock()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._initialize_canonical_state()
+
+    def _initialize_canonical_state(self) -> None:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            backfill_legacy_queue_state(self._hub_root, conn)
 
     def _lane_queue_path(self, lane_id: str) -> Path:
         safe_lane_id = lane_id.replace(":", "__COLON__").replace("/", "__SLASH__")
@@ -324,29 +331,8 @@ class PmaQueue:
                 return True
 
     async def list_items(self, lane_id: str) -> list[PmaQueueItem]:
-        path = self._lane_queue_path(lane_id)
-        if not path.exists():
-            return []
-
-        items: list[PmaQueueItem] = []
         async with self._ensure_lane_lock(lane_id):
-            with file_lock(self._lane_queue_lock_path(lane_id)):
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except OSError:
-                    return []
-
-            for line in content.strip().splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    items.append(PmaQueueItem.from_dict(data))
-                except (json.JSONDecodeError, ValueError):
-                    continue
-
-        return items
+            return self._read_items_from_sqlite(lane_id)
 
     async def _refresh_lane_from_disk(self, lane_id: str) -> int:
         items = await self.list_items(lane_id)
@@ -384,46 +370,94 @@ class PmaQueue:
         return None
 
     async def _append_to_file(self, item: PmaQueueItem) -> None:
-        path = self._lane_queue_path(item.lane_id)
         async with self._ensure_lane_lock(item.lane_id):
-            with file_lock(self._lane_queue_lock_path(item.lane_id)):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                line = json.dumps(item.to_dict(), separators=(",", ":")) + "\n"
-                with path.open("a", encoding="utf-8") as f:
-                    f.write(line)
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO orch_queue_items (
+                            queue_item_id,
+                            lane_id,
+                            source_kind,
+                            source_key,
+                            dedupe_key,
+                            state,
+                            visible_at,
+                            claimed_at,
+                            completed_at,
+                            payload_json,
+                            created_at,
+                            updated_at,
+                            idempotency_key,
+                            error_text,
+                            dedupe_reason,
+                            result_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(queue_item_id) DO UPDATE SET
+                            lane_id = excluded.lane_id,
+                            source_kind = excluded.source_kind,
+                            source_key = excluded.source_key,
+                            dedupe_key = excluded.dedupe_key,
+                            state = excluded.state,
+                            visible_at = excluded.visible_at,
+                            claimed_at = excluded.claimed_at,
+                            completed_at = excluded.completed_at,
+                            payload_json = excluded.payload_json,
+                            created_at = excluded.created_at,
+                            updated_at = excluded.updated_at,
+                            idempotency_key = excluded.idempotency_key,
+                            error_text = excluded.error_text,
+                            dedupe_reason = excluded.dedupe_reason,
+                            result_json = excluded.result_json
+                        """,
+                        self._item_db_tuple(item),
+                    )
+            self._sync_lane_mirror_sync(item.lane_id)
 
     async def _update_in_file(self, item: PmaQueueItem) -> None:
-        path = self._lane_queue_path(item.lane_id)
         async with self._ensure_lane_lock(item.lane_id):
-            with file_lock(self._lane_queue_lock_path(item.lane_id)):
-                if not path.exists():
-                    return
-
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except OSError:
-                    return
-
-                lines: list[str] = []
-                updated = False
-                for line in content.strip().splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        if data.get("item_id") == item.item_id:
-                            lines.append(
-                                json.dumps(item.to_dict(), separators=(",", ":"))
-                            )
-                            updated = True
-                        else:
-                            lines.append(line)
-                    except (json.JSONDecodeError, ValueError):
-                        lines.append(line)
-
-                if updated:
-                    atomic_write(path, "\n".join(lines) + "\n")
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE orch_queue_items
+                           SET lane_id = ?,
+                               source_kind = ?,
+                               source_key = ?,
+                               dedupe_key = ?,
+                               state = ?,
+                               visible_at = ?,
+                               claimed_at = ?,
+                               completed_at = ?,
+                               payload_json = ?,
+                               created_at = ?,
+                               updated_at = ?,
+                               idempotency_key = ?,
+                               error_text = ?,
+                               dedupe_reason = ?,
+                               result_json = ?
+                         WHERE queue_item_id = ?
+                        """,
+                        (
+                            item.lane_id,
+                            "pma_lane",
+                            item.item_id,
+                            item.idempotency_key,
+                            item.state.value,
+                            item.enqueued_at,
+                            item.started_at,
+                            item.finished_at,
+                            json.dumps(item.payload, separators=(",", ":")),
+                            item.enqueued_at,
+                            item.finished_at or item.started_at or item.enqueued_at,
+                            item.idempotency_key,
+                            item.error,
+                            item.dedupe_reason,
+                            json.dumps(item.result or {}, separators=(",", ":")),
+                            item.item_id,
+                        ),
+                    )
+            self._sync_lane_mirror_sync(item.lane_id)
 
     async def compact_lane(
         self,
@@ -431,53 +465,37 @@ class PmaQueue:
         *,
         keep_last: int = DEFAULT_COMPACTION_KEEP_LAST,
     ) -> bool:
-        path = self._lane_queue_path(lane_id)
-        if not path.exists():
-            return False
-
         keep_last = max(0, keep_last)
         async with self._ensure_lane_lock(lane_id):
-            with file_lock(self._lane_queue_lock_path(lane_id)):
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except OSError:
-                    return False
-
-                raw_lines = [
-                    line.strip() for line in content.splitlines() if line.strip()
-                ]
-                if not raw_lines:
-                    return False
-
-                parsed: list[tuple[str, Optional[dict[str, Any]]]] = []
-                terminal_indexes: list[int] = []
-                for idx, line in enumerate(raw_lines):
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        data = None
-                    parsed.append((line, data))
-                    if isinstance(data, dict) and data.get("state") in TERMINAL_STATES:
-                        terminal_indexes.append(idx)
-
-                if len(terminal_indexes) <= keep_last:
-                    return False
-
-                keep_terminal_indexes = (
-                    set(terminal_indexes[-keep_last:]) if keep_last > 0 else set()
-                )
-                compacted_lines = [
-                    line
-                    for idx, (line, data) in enumerate(parsed)
-                    if not isinstance(data, dict)
-                    or data.get("state") not in TERMINAL_STATES
-                    or idx in keep_terminal_indexes
-                ]
-                if compacted_lines == raw_lines:
-                    return False
-
-                atomic_write(path, "\n".join(compacted_lines) + "\n")
-                return True
+            items = self._read_items_from_sqlite(lane_id)
+            if not items:
+                return False
+            terminal_indexes = [
+                idx
+                for idx, item in enumerate(items)
+                if item.state.value in TERMINAL_STATES
+            ]
+            if len(terminal_indexes) <= keep_last:
+                return False
+            keep_terminal_indexes = (
+                set(terminal_indexes[-keep_last:]) if keep_last > 0 else set()
+            )
+            delete_ids = [
+                item.item_id
+                for idx, item in enumerate(items)
+                if item.state.value in TERMINAL_STATES
+                and idx not in keep_terminal_indexes
+            ]
+            if not delete_ids:
+                return False
+            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+                with conn:
+                    conn.executemany(
+                        "DELETE FROM orch_queue_items WHERE queue_item_id = ?",
+                        [(item_id,) for item_id in delete_ids],
+                    )
+            self._sync_lane_mirror_sync(lane_id)
+            return True
 
     async def _maybe_compact_lane(self, lane_id: str) -> None:
         path = self._lane_queue_path(lane_id)
@@ -489,36 +507,51 @@ class PmaQueue:
         await self.compact_lane(lane_id)
 
     def _append_to_file_sync(self, item: PmaQueueItem) -> None:
-        path = self._lane_queue_path(item.lane_id)
-        with file_lock(self._lane_queue_lock_path(item.lane_id)):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps(item.to_dict(), separators=(",", ":")) + "\n"
-            with path.open("a", encoding="utf-8") as f:
-                f.write(line)
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO orch_queue_items (
+                        queue_item_id,
+                        lane_id,
+                        source_kind,
+                        source_key,
+                        dedupe_key,
+                        state,
+                        visible_at,
+                        claimed_at,
+                        completed_at,
+                        payload_json,
+                        created_at,
+                        updated_at,
+                        idempotency_key,
+                        error_text,
+                        dedupe_reason,
+                        result_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(queue_item_id) DO UPDATE SET
+                        lane_id = excluded.lane_id,
+                        source_kind = excluded.source_kind,
+                        source_key = excluded.source_key,
+                        dedupe_key = excluded.dedupe_key,
+                        state = excluded.state,
+                        visible_at = excluded.visible_at,
+                        claimed_at = excluded.claimed_at,
+                        completed_at = excluded.completed_at,
+                        payload_json = excluded.payload_json,
+                        created_at = excluded.created_at,
+                        updated_at = excluded.updated_at,
+                        idempotency_key = excluded.idempotency_key,
+                        error_text = excluded.error_text,
+                        dedupe_reason = excluded.dedupe_reason,
+                        result_json = excluded.result_json
+                    """,
+                    self._item_db_tuple(item),
+                )
+        self._sync_lane_mirror_sync(item.lane_id)
 
     def _read_items_sync(self, lane_id: str) -> list[PmaQueueItem]:
-        path = self._lane_queue_path(lane_id)
-        if not path.exists():
-            return []
-
-        items: list[PmaQueueItem] = []
-        with file_lock(self._lane_queue_lock_path(lane_id)):
-            try:
-                content = path.read_text(encoding="utf-8")
-            except OSError:
-                return []
-
-        for line in content.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                items.append(PmaQueueItem.from_dict(data))
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-        return items
+        return self._read_items_from_sqlite(lane_id)
 
     def _find_by_idempotency_key_sync(
         self, lane_id: str, idempotency_key: str
@@ -563,18 +596,15 @@ class PmaQueue:
         }
 
     async def get_all_lanes(self) -> list[str]:
-        lanes: set[str] = set()
-        if not self._queue_dir.exists():
-            return []
-
-        for path in self._queue_dir.iterdir():
-            if path.is_file() and path.suffix == QUEUE_FILE_SUFFIX:
-                lane_name = path.stem.replace("__SLASH__", "/").replace(
-                    "__COLON__", ":"
-                )
-                lanes.add(lane_name)
-
-        return sorted(lanes)
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT lane_id
+                  FROM orch_queue_items
+                 ORDER BY lane_id ASC
+                """
+            ).fetchall()
+        return [str(row["lane_id"]) for row in rows if row["lane_id"]]
 
     async def get_queue_summary(self) -> dict[str, Any]:
         lanes = await self.get_all_lanes()
@@ -583,6 +613,82 @@ class PmaQueue:
             summary["lanes"][lane] = await self.get_lane_stats(lane)
         summary["total_lanes"] = len(lanes)
         return summary
+
+    def _item_db_tuple(self, item: PmaQueueItem) -> tuple[Any, ...]:
+        return (
+            item.item_id,
+            item.lane_id,
+            "pma_lane",
+            item.item_id,
+            item.idempotency_key,
+            item.state.value,
+            item.enqueued_at,
+            item.started_at,
+            item.finished_at,
+            json.dumps(item.payload, separators=(",", ":")),
+            item.enqueued_at,
+            item.finished_at or item.started_at or item.enqueued_at,
+            item.idempotency_key,
+            item.error,
+            item.dedupe_reason,
+            json.dumps(item.result or {}, separators=(",", ":")),
+        )
+
+    def _row_to_item(self, row: Any) -> PmaQueueItem:
+        payload = self._json_loads_object(row["payload_json"])
+        result = self._json_loads_object(row["result_json"])
+        state_raw = str(row["state"] or QueueItemState.PENDING.value)
+        try:
+            state = QueueItemState(state_raw)
+        except ValueError:
+            state = QueueItemState.PENDING
+        return PmaQueueItem(
+            item_id=str(row["queue_item_id"]),
+            lane_id=str(row["lane_id"]),
+            enqueued_at=str(row["created_at"]),
+            idempotency_key=str(row["idempotency_key"] or row["dedupe_key"] or ""),
+            payload=payload,
+            state=state,
+            started_at=row["claimed_at"],
+            finished_at=row["completed_at"],
+            error=row["error_text"],
+            dedupe_reason=row["dedupe_reason"],
+            result=result or None,
+        )
+
+    @staticmethod
+    def _json_loads_object(raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, str) or not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _read_items_from_sqlite(self, lane_id: str) -> list[PmaQueueItem]:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_queue_items
+                 WHERE lane_id = ?
+                 ORDER BY rowid ASC
+                """,
+                (lane_id,),
+            ).fetchall()
+        return [self._row_to_item(row) for row in rows]
+
+    def _sync_lane_mirror_sync(self, lane_id: str) -> None:
+        path = self._lane_queue_path(lane_id)
+        items = self._read_items_from_sqlite(lane_id)
+        with file_lock(self._lane_queue_lock_path(lane_id)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [
+                json.dumps(item.to_dict(), separators=(",", ":")) for item in items
+            ]
+            content = "\n".join(lines)
+            atomic_write(path, (content + "\n") if content else "")
 
 
 __all__ = [

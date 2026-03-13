@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from .locks import file_lock
+from .orchestration.migrate_legacy_state import backfill_legacy_automation_state
+from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_persistence import PmaAutomationPersistence
 from .pma_automation_types import (
     DEFAULT_PMA_LANE_ID,
@@ -352,6 +355,7 @@ class PmaAutomationWakeup:
 
 class PmaAutomationStore:
     def __init__(self, hub_root: Path) -> None:
+        self._hub_root = hub_root
         self._persistence = PmaAutomationPersistence(hub_root)
         self._path = self._persistence.path
 
@@ -363,13 +367,32 @@ class PmaAutomationStore:
         return self._persistence._lock_path()
 
     def load(self) -> dict[str, Any]:
-        return self._persistence.load()
+        with file_lock(self._lock_path()):
+            return self._load_unlocked() or default_pma_automation_state()
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
-        return self._persistence._load_unlocked()
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            backfill_legacy_automation_state(self._hub_root, conn)
+            subscriptions = self._load_subscriptions_from_sqlite(conn)
+            timers = self._load_timers_from_sqlite(conn)
+            wakeups = self._load_wakeups_from_sqlite(conn)
+        updated_values: list[str] = []
+        updated_values.extend(entry.updated_at for entry in subscriptions)
+        updated_values.extend(entry.updated_at for entry in timers)
+        updated_values.extend(entry.updated_at for entry in wakeups)
+        state = default_pma_automation_state()
+        if updated_values:
+            state["updated_at"] = max(updated_values)
+        state["subscriptions"] = [entry.to_dict() for entry in subscriptions]
+        state["timers"] = [entry.to_dict() for entry in timers]
+        state["wakeups"] = [entry.to_dict() for entry in wakeups]
+        return state
 
     def _save_unlocked(self, state: dict[str, Any]) -> None:
-        self._persistence._save_unlocked(state)
+        subscriptions = self._normalize_subscriptions(state.get("subscriptions"))
+        timers = self._normalize_timers(state.get("timers"))
+        wakeups = self._normalize_wakeups(state.get("wakeups"))
+        self._save_structured_unlocked(state, subscriptions, timers, wakeups)
 
     def _load_structured_unlocked(
         self,
@@ -380,10 +403,12 @@ class PmaAutomationStore:
         list[PmaAutomationWakeup],
     ]:
         state = self._load_unlocked() or default_pma_automation_state()
-        subscriptions = self._normalize_subscriptions(state.get("subscriptions"))
-        timers = self._normalize_timers(state.get("timers"))
-        wakeups = self._normalize_wakeups(state.get("wakeups"))
-        return state, subscriptions, timers, wakeups
+        return (
+            state,
+            self._normalize_subscriptions(state.get("subscriptions")),
+            self._normalize_timers(state.get("timers")),
+            self._normalize_wakeups(state.get("wakeups")),
+        )
 
     def _save_structured_unlocked(
         self,
@@ -396,7 +421,329 @@ class PmaAutomationStore:
         state["subscriptions"] = [entry.to_dict() for entry in subscriptions]
         state["timers"] = [entry.to_dict() for entry in timers]
         state["wakeups"] = [entry.to_dict() for entry in wakeups]
-        self._save_unlocked(state)
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            backfill_legacy_automation_state(self._hub_root, conn)
+            with conn:
+                conn.execute("DELETE FROM orch_automation_wakeups")
+                conn.execute("DELETE FROM orch_automation_timers")
+                conn.execute("DELETE FROM orch_automation_subscriptions")
+                for subscription in subscriptions:
+                    conn.execute(
+                        """
+                        INSERT INTO orch_automation_subscriptions (
+                            subscription_id,
+                            event_types_json,
+                            repo_id,
+                            run_id,
+                            thread_target_id,
+                            binding_id,
+                            lane_id,
+                            from_state,
+                            to_state,
+                            notify_once,
+                            state,
+                            match_count,
+                            metadata_json,
+                            created_at,
+                            updated_at,
+                            disabled_at,
+                            reason_text,
+                            idempotency_key,
+                            max_matches
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            subscription.subscription_id,
+                            json.dumps(subscription.event_types),
+                            subscription.repo_id,
+                            subscription.run_id,
+                            subscription.thread_id,
+                            None,
+                            subscription.lane_id,
+                            subscription.from_state,
+                            subscription.to_state,
+                            1 if subscription.max_matches == 1 else 0,
+                            subscription.state,
+                            subscription.match_count,
+                            json.dumps(subscription.metadata),
+                            subscription.created_at,
+                            subscription.updated_at,
+                            (
+                                subscription.updated_at
+                                if subscription.state != "active"
+                                else None
+                            ),
+                            subscription.reason,
+                            subscription.idempotency_key,
+                            subscription.max_matches,
+                        ),
+                    )
+                for timer in timers:
+                    conn.execute(
+                        """
+                        INSERT INTO orch_automation_timers (
+                            timer_id,
+                            subscription_id,
+                            repo_id,
+                            run_id,
+                            thread_target_id,
+                            timer_kind,
+                            schedule_key,
+                            available_at,
+                            payload_json,
+                            state,
+                            created_at,
+                            updated_at,
+                            fired_at,
+                            reason_text,
+                            idempotency_key,
+                            idle_seconds
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            timer.timer_id,
+                            timer.subscription_id,
+                            timer.repo_id,
+                            timer.run_id,
+                            timer.thread_id,
+                            timer.timer_type,
+                            timer.subscription_id or timer.idempotency_key,
+                            timer.due_at,
+                            json.dumps(
+                                {
+                                    "metadata": timer.metadata,
+                                    "from_state": timer.from_state,
+                                    "to_state": timer.to_state,
+                                }
+                            ),
+                            timer.state,
+                            timer.created_at,
+                            timer.updated_at,
+                            timer.fired_at,
+                            timer.reason,
+                            timer.idempotency_key,
+                            timer.idle_seconds,
+                        ),
+                    )
+                for wakeup in wakeups:
+                    conn.execute(
+                        """
+                        INSERT INTO orch_automation_wakeups (
+                            wakeup_id,
+                            subscription_id,
+                            repo_id,
+                            run_id,
+                            thread_target_id,
+                            lane_id,
+                            wakeup_kind,
+                            state,
+                            available_at,
+                            claimed_at,
+                            completed_at,
+                            reason_text,
+                            payload_json,
+                            created_at,
+                            updated_at,
+                            dispatched_at,
+                            timestamp,
+                            idempotency_key,
+                            timer_id,
+                            event_id,
+                            event_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            wakeup.wakeup_id,
+                            wakeup.subscription_id,
+                            wakeup.repo_id,
+                            wakeup.run_id,
+                            wakeup.thread_id,
+                            wakeup.lane_id,
+                            wakeup.source,
+                            wakeup.state,
+                            wakeup.timestamp,
+                            None,
+                            None,
+                            wakeup.reason,
+                            json.dumps(
+                                {
+                                    "metadata": wakeup.metadata,
+                                    "event_data": wakeup.event_data,
+                                    "from_state": wakeup.from_state,
+                                    "to_state": wakeup.to_state,
+                                }
+                            ),
+                            wakeup.created_at,
+                            wakeup.updated_at,
+                            wakeup.dispatched_at,
+                            wakeup.timestamp,
+                            wakeup.idempotency_key,
+                            wakeup.timer_id,
+                            wakeup.event_id,
+                            wakeup.event_type,
+                        ),
+                    )
+        self._persistence._save_unlocked(state)
+
+    @staticmethod
+    def _json_load(raw: str | None) -> dict[str, Any]:
+        if not isinstance(raw, str) or not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _json_load_list(raw: str | None) -> list[str]:
+        if not isinstance(raw, str) or not raw.strip():
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return [str(item).lower() for item in parsed if isinstance(item, str)]
+
+    def _load_subscriptions_from_sqlite(
+        self,
+        conn: Any,
+    ) -> list[PmaLifecycleSubscription]:
+        rows = conn.execute(
+            """
+            SELECT *
+              FROM orch_automation_subscriptions
+             ORDER BY created_at ASC, subscription_id ASC
+            """
+        ).fetchall()
+        out: list[PmaLifecycleSubscription] = []
+        for row in rows:
+            out.append(
+                PmaLifecycleSubscription(
+                    subscription_id=str(row["subscription_id"]),
+                    created_at=str(row["created_at"]),
+                    updated_at=str(row["updated_at"]),
+                    state=str(row["state"] or "active"),
+                    event_types=self._json_load_list(row["event_types_json"]),
+                    repo_id=row["repo_id"],
+                    run_id=row["run_id"],
+                    thread_id=row["thread_target_id"],
+                    lane_id=str(row["lane_id"] or DEFAULT_PMA_LANE_ID),
+                    from_state=row["from_state"],
+                    to_state=row["to_state"],
+                    reason=row["reason_text"],
+                    idempotency_key=row["idempotency_key"],
+                    max_matches=(
+                        int(row["max_matches"])
+                        if row["max_matches"] is not None
+                        else None
+                    ),
+                    match_count=int(row["match_count"] or 0),
+                    metadata=self._json_load(row["metadata_json"]),
+                )
+            )
+        return out
+
+    def _load_timers_from_sqlite(self, conn: Any) -> list[PmaAutomationTimer]:
+        rows = conn.execute(
+            """
+            SELECT *
+              FROM orch_automation_timers
+             ORDER BY created_at ASC, timer_id ASC
+            """
+        ).fetchall()
+        out: list[PmaAutomationTimer] = []
+        for row in rows:
+            payload = self._json_load(row["payload_json"])
+            metadata = cast(
+                dict[str, Any],
+                (
+                    payload.get("metadata")
+                    if isinstance(payload.get("metadata"), dict)
+                    else {}
+                ),
+            )
+            out.append(
+                PmaAutomationTimer(
+                    timer_id=str(row["timer_id"]),
+                    due_at=str(row["available_at"]),
+                    created_at=str(row["created_at"]),
+                    updated_at=str(row["updated_at"]),
+                    state=str(row["state"] or "pending"),
+                    fired_at=row["fired_at"],
+                    timer_type=str(row["timer_kind"] or TIMER_TYPE_ONE_SHOT),
+                    idle_seconds=(
+                        int(row["idle_seconds"])
+                        if row["idle_seconds"] is not None
+                        else None
+                    ),
+                    subscription_id=row["subscription_id"],
+                    repo_id=row["repo_id"],
+                    run_id=row["run_id"],
+                    thread_id=row["thread_target_id"],
+                    lane_id=_normalize_lane_id(payload.get("lane_id")),
+                    from_state=_normalize_text(payload.get("from_state")),
+                    to_state=_normalize_text(payload.get("to_state")),
+                    reason=row["reason_text"],
+                    idempotency_key=row["idempotency_key"],
+                    metadata=metadata,
+                )
+            )
+        return out
+
+    def _load_wakeups_from_sqlite(self, conn: Any) -> list[PmaAutomationWakeup]:
+        rows = conn.execute(
+            """
+            SELECT *
+              FROM orch_automation_wakeups
+             ORDER BY created_at ASC, wakeup_id ASC
+            """
+        ).fetchall()
+        out: list[PmaAutomationWakeup] = []
+        for row in rows:
+            payload = self._json_load(row["payload_json"])
+            event_data = cast(
+                dict[str, Any],
+                (
+                    payload.get("event_data")
+                    if isinstance(payload.get("event_data"), dict)
+                    else {}
+                ),
+            )
+            metadata = cast(
+                dict[str, Any],
+                (
+                    payload.get("metadata")
+                    if isinstance(payload.get("metadata"), dict)
+                    else {}
+                ),
+            )
+            out.append(
+                PmaAutomationWakeup(
+                    wakeup_id=str(row["wakeup_id"]),
+                    created_at=str(row["created_at"]),
+                    updated_at=str(row["updated_at"]),
+                    state=str(row["state"] or "pending"),
+                    dispatched_at=row["dispatched_at"],
+                    source=str(row["wakeup_kind"] or "automation"),
+                    repo_id=row["repo_id"],
+                    run_id=row["run_id"],
+                    thread_id=row["thread_target_id"],
+                    lane_id=str(row["lane_id"] or DEFAULT_PMA_LANE_ID),
+                    from_state=_normalize_text(payload.get("from_state")),
+                    to_state=_normalize_text(payload.get("to_state")),
+                    reason=row["reason_text"],
+                    timestamp=row["timestamp"],
+                    idempotency_key=row["idempotency_key"],
+                    subscription_id=row["subscription_id"],
+                    timer_id=row["timer_id"],
+                    event_id=row["event_id"],
+                    event_type=row["event_type"],
+                    event_data=event_data,
+                    metadata=metadata,
+                )
+            )
+        return out
 
     def _normalize_subscriptions(self, value: Any) -> list[PmaLifecycleSubscription]:
         out: list[PmaLifecycleSubscription] = []

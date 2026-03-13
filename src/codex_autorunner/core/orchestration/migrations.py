@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 2
+ORCHESTRATION_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -337,9 +337,218 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     )
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT name
+          FROM sqlite_master
+         WHERE type = 'table'
+           AND name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    if not _table_exists(conn, table_name):
+        return set()
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows if row["name"] is not None}
+
+
+def _column_not_null(
+    conn: sqlite3.Connection, table_name: str, column_name: str
+) -> bool | None:
+    if not _table_exists(conn, table_name):
+        return None
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    for row in rows:
+        if str(row["name"]) == column_name:
+            return bool(row["notnull"])
+    return None
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    ddl: str,
+) -> None:
+    if not _table_exists(conn, table_name):
+        return
+    if column_name in _table_columns(conn, table_name):
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
+
+
+def _apply_v3(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_thread_targets",
+        "status_updated_at",
+        "status_updated_at TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_thread_targets",
+        "status_terminal",
+        "status_terminal INTEGER NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_subscriptions",
+        "reason_text",
+        "reason_text TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_subscriptions",
+        "idempotency_key",
+        "idempotency_key TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_subscriptions",
+        "max_matches",
+        "max_matches INTEGER",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_timers",
+        "fired_at",
+        "fired_at TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_timers",
+        "reason_text",
+        "reason_text TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_timers",
+        "idempotency_key",
+        "idempotency_key TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_timers",
+        "idle_seconds",
+        "idle_seconds INTEGER",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_wakeups",
+        "dispatched_at",
+        "dispatched_at TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_wakeups",
+        "timestamp",
+        "timestamp TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_wakeups",
+        "idempotency_key",
+        "idempotency_key TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_wakeups",
+        "timer_id",
+        "timer_id TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_wakeups",
+        "event_id",
+        "event_id TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_wakeups",
+        "event_type",
+        "event_type TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_queue_items",
+        "idempotency_key",
+        "idempotency_key TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_queue_items",
+        "error_text",
+        "error_text TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_queue_items",
+        "dedupe_reason",
+        "dedupe_reason TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_queue_items",
+        "result_json",
+        "result_json TEXT NOT NULL DEFAULT '{}'",
+    )
+    _ensure_column(
+        conn,
+        "orch_reactive_debounce_state",
+        "last_enqueued_at",
+        "last_enqueued_at REAL",
+    )
+
+    if _column_not_null(conn, "orch_thread_actions", "thread_target_id"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orch_thread_actions_v3 (
+                action_id TEXT PRIMARY KEY,
+                thread_target_id TEXT,
+                execution_id TEXT,
+                action_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (thread_target_id) REFERENCES orch_thread_targets(thread_target_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (execution_id) REFERENCES orch_thread_executions(execution_id)
+                    ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_actions_v3 (
+                action_id,
+                thread_target_id,
+                execution_id,
+                action_type,
+                payload_json,
+                created_at
+            )
+            SELECT
+                action_id,
+                thread_target_id,
+                execution_id,
+                action_type,
+                payload_json,
+                created_at
+              FROM orch_thread_actions
+            """
+        )
+        conn.execute("DROP TABLE orch_thread_actions")
+        conn.execute("ALTER TABLE orch_thread_actions_v3 RENAME TO orch_thread_actions")
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
+    _MigrationStep(3, "expand_pma_cutover_columns", _apply_v3),
 )
 
 
