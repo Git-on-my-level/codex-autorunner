@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from ..manifest import load_manifest
+from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .sqlite_utils import open_sqlite
 
@@ -401,6 +402,99 @@ def _latest_current_telegram_binding_timestamps_by_workspace(
     return latest_by_workspace
 
 
+def _read_orchestration_binding_rows(
+    *,
+    hub_root: Path,
+    repo_id_by_workspace: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    try:
+        with open_orchestration_sqlite(hub_root) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    b.surface_kind,
+                    b.surface_key,
+                    b.repo_id,
+                    b.updated_at,
+                    t.repo_id AS thread_repo_id,
+                    t.workspace_root
+                  FROM orch_bindings AS b
+             LEFT JOIN orch_thread_targets AS t
+                    ON t.thread_target_id = b.target_id
+                 WHERE b.disabled_at IS NULL
+                   AND b.target_kind = 'thread'
+                """
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise RuntimeError(
+            f"Failed reading orchestration chat bindings from {hub_root}: {exc}"
+        ) from exc
+
+    bindings: list[dict[str, Any]] = []
+    for row in rows:
+        workspace_root = _normalize_workspace_path(row["workspace_root"])
+        repo_id = _resolve_bound_repo_id(
+            repo_id=row["repo_id"] or row["thread_repo_id"],
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=((workspace_root,) if workspace_root is not None else ()),
+        )
+        if repo_id is None:
+            continue
+        surface_kind = _normalize_scope(row["surface_kind"])
+        surface_key = _normalize_scope(row["surface_key"])
+        if surface_kind is None or surface_key is None:
+            continue
+        bindings.append(
+            {
+                "surface_kind": surface_kind,
+                "surface_key": surface_key,
+                "repo_id": repo_id,
+                "workspace_root": workspace_root,
+                "updated_at": row["updated_at"],
+            }
+        )
+    return bindings
+
+
+def _orchestration_binding_counts_by_source(
+    *, hub_root: Path, repo_id_by_workspace: Mapping[str, str]
+) -> dict[str, dict[str, int]]:
+    source_counts: dict[str, dict[str, int]] = {}
+    for row in _read_orchestration_binding_rows(
+        hub_root=hub_root, repo_id_by_workspace=repo_id_by_workspace
+    ):
+        surface_kind = row["surface_kind"]
+        if surface_kind not in {"discord", "telegram"}:
+            continue
+        repo_counts = source_counts.setdefault(row["repo_id"], {})
+        repo_counts[surface_kind] = int(repo_counts.get(surface_kind, 0)) + 1
+    return source_counts
+
+
+def _orchestration_binding_timestamps_by_workspace(
+    *,
+    hub_root: Path,
+    repo_id_by_workspace: Mapping[str, str],
+    surface_kind: str,
+) -> dict[str, float]:
+    latest_by_workspace: dict[str, float] = {}
+    for row in _read_orchestration_binding_rows(
+        hub_root=hub_root, repo_id_by_workspace=repo_id_by_workspace
+    ):
+        if row["surface_kind"] != surface_kind:
+            continue
+        workspace_root = row["workspace_root"]
+        if not isinstance(workspace_root, str) or not workspace_root:
+            continue
+        timestamp = _parse_iso_timestamp(row["updated_at"])
+        previous = latest_by_workspace.get(workspace_root, float("-inf"))
+        if timestamp > previous:
+            latest_by_workspace[workspace_root] = timestamp
+    return latest_by_workspace
+
+
 def _active_pma_thread_counts(
     hub_root: Path, repo_id_by_workspace: Mapping[str, str]
 ) -> dict[str, int]:
@@ -496,24 +590,39 @@ def active_chat_binding_counts_by_source(
             repo_counts[source] = int(repo_counts.get(source, 0)) + int(count)
 
     _merge_counts("pma", _active_pma_thread_counts(hub_root, repo_id_by_workspace))
-
-    discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
-    _merge_counts(
-        "discord",
-        _read_discord_repo_counts(
-            db_path=discord_state_path,
-            repo_id_by_workspace=repo_id_by_workspace,
-        ),
+    orchestration_counts = _orchestration_binding_counts_by_source(
+        hub_root=hub_root,
+        repo_id_by_workspace=repo_id_by_workspace,
     )
+    orchestrated_sources = {
+        source
+        for counts in orchestration_counts.values()
+        for source, count in counts.items()
+        if int(count) > 0
+    }
+    for repo_id, counts in orchestration_counts.items():
+        for source, count in counts.items():
+            _merge_counts(source, {repo_id: count})
 
-    telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
-    _merge_counts(
-        "telegram",
-        _read_current_telegram_repo_counts(
-            db_path=telegram_state_path,
-            repo_id_by_workspace=repo_id_by_workspace,
-        ),
-    )
+    if "discord" not in orchestrated_sources:
+        discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
+        _merge_counts(
+            "discord",
+            _read_discord_repo_counts(
+                db_path=discord_state_path,
+                repo_id_by_workspace=repo_id_by_workspace,
+            ),
+        )
+
+    if "telegram" not in orchestrated_sources:
+        telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
+        _merge_counts(
+            "telegram",
+            _read_current_telegram_repo_counts(
+                db_path=telegram_state_path,
+                repo_id_by_workspace=repo_id_by_workspace,
+            ),
+        )
 
     return source_counts
 
@@ -576,14 +685,34 @@ def preferred_non_pma_chat_notification_sources_by_workspace(
 
     discord_timestamps: dict[str, float] = {}
     if _chat_surface_enabled(raw_config, "discord_bot"):
-        discord_timestamps = _latest_discord_binding_timestamps_by_workspace(
+        discord_timestamps = _orchestration_binding_timestamps_by_workspace(
+            hub_root=hub_root,
+            repo_id_by_workspace=_repo_id_by_workspace_path(hub_root, raw_config),
+            surface_kind="discord",
+        )
+        legacy_discord = _latest_discord_binding_timestamps_by_workspace(
             _resolve_discord_state_path(hub_root, raw_config)
         )
+        for workspace_path, timestamp in legacy_discord.items():
+            discord_timestamps[workspace_path] = max(
+                timestamp,
+                discord_timestamps.get(workspace_path, float("-inf")),
+            )
     telegram_timestamps: dict[str, float] = {}
     if _chat_surface_enabled(raw_config, "telegram_bot"):
-        telegram_timestamps = _latest_current_telegram_binding_timestamps_by_workspace(
+        telegram_timestamps = _orchestration_binding_timestamps_by_workspace(
+            hub_root=hub_root,
+            repo_id_by_workspace=_repo_id_by_workspace_path(hub_root, raw_config),
+            surface_kind="telegram",
+        )
+        legacy_telegram = _latest_current_telegram_binding_timestamps_by_workspace(
             _resolve_telegram_state_path(hub_root, raw_config)
         )
+        for workspace_path, timestamp in legacy_telegram.items():
+            telegram_timestamps[workspace_path] = max(
+                timestamp,
+                telegram_timestamps.get(workspace_path, float("-inf")),
+            )
 
     preferred_by_workspace: dict[str, str] = {}
     workspace_paths = set(discord_timestamps) | set(telegram_timestamps)

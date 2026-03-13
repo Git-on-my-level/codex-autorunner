@@ -44,7 +44,11 @@ def parse_discord_conversation_key(
 
 
 class DiscordChatStateStore(ChatStateStore):
-    """Thin adapter from chat-core state contracts to DiscordStateStore."""
+    """Thin adapter for Discord-local delivery state.
+
+    Thread/binding authority now lives in orchestration storage; this adapter keeps
+    Discord outbox and pending-interaction state only.
+    """
 
     def __init__(self, store: DiscordStateStore) -> None:
         self._store = store

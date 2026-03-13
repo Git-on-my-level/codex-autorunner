@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from ..pma_thread_store import PmaThreadStore
+from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
 from .events import OrchestrationEvent
 from .flows import PausedFlowTarget
@@ -223,6 +224,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
     definition_catalog: AgentDefinitionCatalog
     thread_store: ThreadExecutionStore
     harness_factory: Callable[[str], RuntimeThreadHarness]
+    binding_store: Optional[OrchestrationBindingStore] = None
 
     def list_agent_definitions(self) -> list[AgentDefinition]:
         return self.definition_catalog.list_definitions()
@@ -255,6 +257,88 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if thread is None:
             return None
         return thread.status
+
+    def upsert_binding(
+        self,
+        *,
+        surface_kind: str,
+        surface_key: str,
+        thread_target_id: str,
+        agent_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        mode: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ):
+        if self.binding_store is None:
+            raise RuntimeError("binding_store is not configured")
+        return self.binding_store.upsert_binding(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            thread_target_id=thread_target_id,
+            agent_id=agent_id,
+            repo_id=repo_id,
+            mode=mode,
+            metadata=metadata,
+        )
+
+    def get_binding(
+        self,
+        *,
+        surface_kind: str,
+        surface_key: str,
+        include_disabled: bool = False,
+    ):
+        if self.binding_store is None:
+            return None
+        return self.binding_store.get_binding(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            include_disabled=include_disabled,
+        )
+
+    def list_bindings(
+        self,
+        *,
+        repo_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        surface_kind: Optional[str] = None,
+        include_disabled: bool = False,
+        limit: int = 200,
+    ):
+        if self.binding_store is None:
+            return []
+        return self.binding_store.list_bindings(
+            repo_id=repo_id,
+            agent_id=agent_id,
+            surface_kind=surface_kind,
+            include_disabled=include_disabled,
+            limit=limit,
+        )
+
+    def get_active_thread_for_binding(
+        self, *, surface_kind: str, surface_key: str
+    ) -> Optional[str]:
+        if self.binding_store is None:
+            return None
+        return self.binding_store.get_active_thread_for_binding(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+        )
+
+    def list_active_work_summaries(
+        self,
+        *,
+        repo_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[ActiveWorkSummary]:
+        if self.binding_store is None:
+            return []
+        return self.binding_store.list_active_work_summaries(
+            repo_id=repo_id,
+            agent_id=agent_id,
+            limit=limit,
+        )
 
     def create_thread_target(
         self,
@@ -677,6 +761,7 @@ def build_harness_backed_orchestration_service(
     thread_store: Optional[ThreadExecutionStore] = None,
     pma_thread_store: Optional[PmaThreadStore] = None,
     definition_catalog: Optional[AgentDefinitionCatalog] = None,
+    binding_store: Optional[OrchestrationBindingStore] = None,
 ) -> HarnessBackedOrchestrationService:
     """Build the default runtime-thread orchestration service for current PMA state."""
 
@@ -686,10 +771,15 @@ def build_harness_backed_orchestration_service(
         thread_store = PmaThreadExecutionStore(pma_thread_store)
     if definition_catalog is None:
         definition_catalog = MappingAgentDefinitionCatalog(descriptors)
+    if binding_store is None and pma_thread_store is not None:
+        hub_root = getattr(pma_thread_store, "_hub_root", None)
+        if isinstance(hub_root, Path):
+            binding_store = OrchestrationBindingStore(hub_root)
     return HarnessBackedOrchestrationService(
         definition_catalog=definition_catalog,
         thread_store=thread_store,
         harness_factory=harness_factory,
+        binding_store=binding_store,
     )
 
 

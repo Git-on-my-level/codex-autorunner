@@ -721,6 +721,13 @@ class PendingVoiceRecord:
 
 
 class TelegramStateStore:
+    """Persist Telegram transport-local topic metadata and delivery state.
+
+    Orchestration-owned binding rows are the durable authority for bound thread
+    identity; this store remains the compatibility home for Telegram-specific
+    topic metadata, previews, and pending UI state.
+    """
+
     def __init__(
         self, path: Path, *, default_approval_mode: str = APPROVAL_MODE_YOLO
     ) -> None:

@@ -12,6 +12,7 @@ from codex_autorunner.core.orchestration import (
     HarnessBackedOrchestrationService,
     MappingAgentDefinitionCatalog,
     MessageRequest,
+    OrchestrationBindingStore,
     PausedFlowTarget,
     PmaThreadExecutionStore,
     SurfaceThreadMessageRequest,
@@ -445,3 +446,46 @@ def test_get_surface_orchestration_ingress_reuses_owner_instance() -> None:
     second = get_surface_orchestration_ingress(owner)
 
     assert first is second
+
+
+def test_service_exposes_binding_queries_when_binding_store_is_configured(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    service = HarnessBackedOrchestrationService(
+        definition_catalog=MappingAgentDefinitionCatalog({"codex": _make_descriptor()}),
+        thread_store=PmaThreadExecutionStore(PmaThreadStore(hub_root)),
+        harness_factory=lambda _agent_id: _FakeHarness(),
+        binding_store=OrchestrationBindingStore(hub_root),
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        display_name="Bound thread",
+    )
+
+    binding = service.upsert_binding(
+        surface_kind="telegram",
+        surface_key="123:root",
+        thread_target_id=thread.thread_target_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+
+    assert binding.thread_target_id == thread.thread_target_id
+    assert (
+        service.get_active_thread_for_binding(
+            surface_kind="telegram",
+            surface_key="123:root",
+        )
+        == thread.thread_target_id
+    )
+    assert (
+        service.get_binding(surface_kind="telegram", surface_key="123:root") is not None
+    )
+    summaries = service.list_active_work_summaries(repo_id="repo-1")
+    assert len(summaries) == 1
+    assert summaries[0].thread_target_id == thread.thread_target_id

@@ -4,6 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration import (
+    OrchestrationBindingStore,
+    initialize_orchestration_sqlite,
+)
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore, OutboxRecord
 
 
@@ -71,5 +76,48 @@ async def test_outbox_enqueue_list_get_and_deliver(tmp_path: Path) -> None:
 
         await store.mark_outbox_delivered("rec-1")
         assert await store.get_outbox("rec-1") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_transport_store_remains_metadata_only_for_binding_identity(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = (hub_root / "worktrees" / "repo-1").resolve()
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    initialize_orchestration_sqlite(hub_root)
+    thread = PmaThreadStore(hub_root).create_thread(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        name="Discord thread",
+    )
+    binding_store = OrchestrationBindingStore(hub_root)
+    binding_store.upsert_binding(
+        surface_kind="discord",
+        surface_key="channel-1",
+        thread_target_id=str(thread["managed_thread_id"]),
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+
+    store = DiscordStateStore(hub_root / ".codex-autorunner" / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.upsert_binding(
+            channel_id="channel-1",
+            guild_id="guild-1",
+            workspace_path=str(workspace_root),
+            repo_id="repo-1",
+        )
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert "active_thread_id" not in binding
+        assert binding_store.get_active_thread_for_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        ) == str(thread["managed_thread_id"])
     finally:
         await store.close()

@@ -164,7 +164,9 @@ class Binding:
         surface_kind = _normalize_optional_text(data.get("surface_kind"))
         surface_key = _normalize_optional_text(data.get("surface_key"))
         thread_target_id = _normalize_optional_text(
-            data.get("thread_target_id") or data.get("thread_id")
+            data.get("thread_target_id")
+            or data.get("target_id")
+            or data.get("thread_id")
         )
         if binding_id is None or surface_kind is None or surface_key is None:
             raise ValueError(

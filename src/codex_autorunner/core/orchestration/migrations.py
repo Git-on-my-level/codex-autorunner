@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 4
+ORCHESTRATION_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -586,11 +586,38 @@ def _apply_v4(conn: sqlite3.Connection) -> None:
         )
 
 
+def _apply_v5(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "orch_bindings"):
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_bindings_active_surface_unique
+                ON orch_bindings(surface_kind, surface_key)
+             WHERE disabled_at IS NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_bindings_agent_repo_active
+                ON orch_bindings(agent_id, repo_id, updated_at)
+             WHERE disabled_at IS NULL
+            """
+        )
+    thread_target_columns = _table_columns(conn, "orch_thread_targets")
+    if {"repo_id", "updated_at"}.issubset(thread_target_columns):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_repo_updated
+                ON orch_thread_targets(repo_id, updated_at)
+            """
+        )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
     _MigrationStep(3, "expand_pma_cutover_columns", _apply_v3),
     _MigrationStep(4, "add_transcript_metadata_and_projection_processing", _apply_v4),
+    _MigrationStep(5, "enforce_active_binding_uniqueness", _apply_v5),
 )
 
 
@@ -638,7 +665,7 @@ _TABLE_DEFINITIONS = (
     OrchestrationTableDefinition(
         name="orch_bindings",
         role="authoritative",
-        description="Reserved authoritative binding table for later surface routing work.",
+        description="Authoritative transport-agnostic bindings from surface context to thread target.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",
