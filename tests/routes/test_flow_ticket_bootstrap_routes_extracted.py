@@ -19,6 +19,7 @@ def test_extracted_bootstrap_route_loads_ticket_paths_without_import_error(
     repo_root = tmp_path / "repo"
     deps = FlowRouteDependencies(
         find_repo_root=lambda: repo_root,
+        build_flow_orchestration_service=lambda *_args, **_kwargs: None,
         require_flow_store=lambda _repo_root: None,
         safe_list_flow_runs=lambda *args, **kwargs: [],
         build_flow_status_response=lambda *args, **kwargs: {},

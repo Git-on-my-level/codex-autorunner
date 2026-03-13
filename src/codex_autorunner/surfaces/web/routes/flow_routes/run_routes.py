@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 import threading
@@ -86,11 +87,16 @@ def resume_flow_run(
     flow_type: str,
     state: FlowRoutesState,
 ) -> dict[str, Any]:
-    from .definitions import get_flow_controller
+    from .runtime_service import build_flow_orchestration_service
 
-    controller = get_flow_controller(repo_root, flow_type, state)
-    controller.resume(run_id)
-    return {"status": "ok", "run_id": run_id, "action": "resumed"}
+    service = build_flow_orchestration_service(repo_root, flow_type)
+    updated = asyncio.run(service.resume_flow_run(run_id))
+    return {
+        "status": "ok",
+        "run_id": updated.run_id,
+        "action": "resumed",
+        "flow_status": updated.status,
+    }
 
 
 def reconcile_flow_run(
@@ -124,10 +130,10 @@ def get_flow_run_status(
     flow_type: str,
     state: FlowRoutesState,
 ) -> dict[str, Any]:
-    from .definitions import get_flow_controller
+    from .runtime_service import build_flow_orchestration_service
 
-    controller = get_flow_controller(repo_root, flow_type, state)
-    status = controller.get_status(run_id)
+    service = build_flow_orchestration_service(repo_root, flow_type)
+    status = service.get_flow_run(run_id)
     return {"status": "ok", "run_id": run_id, "flow_status": status}
 
 

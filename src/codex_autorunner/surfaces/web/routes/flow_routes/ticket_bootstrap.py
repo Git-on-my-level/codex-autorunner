@@ -190,8 +190,10 @@ def get_flow_controller(repo_root: Path, flow_type: str, state: "FlowRoutesState
 
 def build_ticket_bootstrap_routes(
     deps: "FlowRouteDependencies",
+    *,
+    prefix: str = "/api/flows",
 ) -> tuple[APIRouter, list[str]]:
-    router = APIRouter(prefix="/api/flows", tags=["flows"])
+    router = APIRouter(prefix=prefix, tags=["flows"])
 
     def _ensure_state_in_app(request: Request) -> "FlowRoutesState":
         from typing import cast

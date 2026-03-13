@@ -31,6 +31,8 @@ from ....core.force_attestation import (
     validate_force_attestation,
 )
 from ....core.managed_processes import reap_managed_processes
+from ....core.orchestration import build_ticket_flow_orchestration_service
+from ....core.orchestration.models import FlowRunTarget
 from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
 from ....tickets import AgentPool
@@ -511,6 +513,25 @@ def register_flow_commands(
         controller.initialize()
         return controller, agent_pool
 
+    def _ticket_flow_orchestration_service(engine: RuntimeContext):
+        return build_ticket_flow_orchestration_service(workspace_root=engine.repo_root)
+
+    def _flow_run_record_from_target(target: FlowRunTarget) -> FlowRunRecord:
+        return FlowRunRecord(
+            id=target.run_id,
+            flow_type=target.flow_type,
+            status=FlowRunStatus(target.status),
+            input_data={},
+            state=dict(target.state or {}),
+            current_step=target.current_step,
+            stop_requested=False,
+            created_at=target.created_at or "",
+            started_at=target.started_at,
+            finished_at=target.finished_at,
+            error_message=target.error_message,
+            metadata=dict(target.metadata or {}),
+        )
+
     @flow_app.command("worker")
     def flow_worker(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
@@ -731,41 +752,39 @@ def register_flow_commands(
         """
         engine = require_repo_config(repo, hub)
         guard_unregistered_hub_repo(engine.repo_root, hub)
-        db_path, artifacts_root, ticket_dir = _ticket_flow_paths(engine)
+        _, _, ticket_dir = _ticket_flow_paths(engine)
         ticket_dir.mkdir(parents=True, exist_ok=True)
         ticket_path = ticket_dir / "TICKET-001.md"
 
-        store = _open_flow_store(engine)
-        stale_terminal: list[FlowRunRecord] = []
-        try:
-            records = store.list_flow_runs(flow_type="ticket_flow")
-            stale_terminal = _stale_terminal_runs(records)
-            if not force_new:
-                existing_run, reason = _resumable_run(records)
-                if existing_run and reason == "active":
-                    _start_ticket_flow_worker(
-                        engine.repo_root, existing_run.id, is_terminal=False
-                    )
-                    typer.echo(f"Reused active run: {existing_run.id}")
+        service = _ticket_flow_orchestration_service(engine)
+        records = [
+            _flow_run_record_from_target(target) for target in service.list_flow_runs()
+        ]
+        stale_terminal = _stale_terminal_runs(records)
+        if not force_new:
+            existing_run, reason = _resumable_run(records)
+            if existing_run and reason == "active":
+                _start_ticket_flow_worker(
+                    engine.repo_root, existing_run.id, is_terminal=False
+                )
+                typer.echo(f"Reused active run: {existing_run.id}")
+                typer.echo(
+                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
+                )
+                return
+            elif existing_run and reason == "completed_pending":
+                existing_tickets = list_ticket_paths(ticket_dir)
+                pending_count = len(
+                    [t for t in existing_tickets if not ticket_is_done(t)]
+                )
+                if pending_count > 0:
                     typer.echo(
-                        f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
+                        f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
                     )
-                    return
-                elif existing_run and reason == "completed_pending":
-                    existing_tickets = list_ticket_paths(ticket_dir)
-                    pending_count = len(
-                        [t for t in existing_tickets if not ticket_is_done(t)]
+                    typer.echo(
+                        "Use --force-new to start a fresh run (dispatch history will be reset)."
                     )
-                    if pending_count > 0:
-                        typer.echo(
-                            f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
-                        )
-                        typer.echo(
-                            "Use --force-new to start a fresh run (dispatch history will be reset)."
-                        )
-                        raise_exit("Add --force-new to create a new run.")
-        finally:
-            store.close()
+                    raise_exit("Add --force-new to create a new run.")
 
         if stale_terminal:
             typer.echo(
@@ -807,24 +826,18 @@ You are the first ticket in a new ticket_flow run.
             ticket_path.write_text(template, encoding="utf-8")
             seeded = True
 
-        db_path, _, _ = _ticket_flow_paths(engine)
-        controller, agent_pool = _ticket_flow_controller(engine)
-        try:
-            run_id = str(uuid.uuid4())
-            input_data: dict[str, object] = {}
-            if max_total_turns is not None:
-                input_data["max_total_turns"] = max_total_turns
-            record = asyncio.run(
-                controller.start_flow(
-                    input_data=input_data,
-                    run_id=run_id,
-                    metadata={"seeded_ticket": seeded},
-                )
+        run_id = str(uuid.uuid4())
+        input_data: dict[str, object] = {}
+        if max_total_turns is not None:
+            input_data["max_total_turns"] = max_total_turns
+        asyncio.run(
+            service.start_flow_run(
+                "ticket_flow",
+                input_data=input_data,
+                run_id=run_id,
+                metadata={"seeded_ticket": seeded},
             )
-            _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
-        finally:
-            controller.shutdown()
-            asyncio.run(agent_pool.close_all())
+        )
 
         typer.echo(f"Started ticket_flow run: {run_id}")
         typer.echo(
@@ -880,44 +893,40 @@ You are the first ticket in a new ticket_flow run.
         _, _, ticket_dir = _ticket_flow_paths(engine)
         ticket_dir.mkdir(parents=True, exist_ok=True)
 
-        store = _open_flow_store(engine)
-        stale_terminal: list[FlowRunRecord] = []
-        try:
-            records = store.list_flow_runs(flow_type="ticket_flow")
-            stale_terminal = _stale_terminal_runs(records)
-            if not force_new:
-                existing_run, reason = _resumable_run(records)
-                if existing_run and reason == "active":
-                    report = _ticket_flow_preflight(engine, ticket_dir)
-                    if report.has_errors():
-                        typer.echo("Ticket flow preflight failed:", err=True)
-                        _print_preflight_report(report)
-                        raise_exit(
-                            "Fix the above errors before starting the ticket flow."
-                        )
-                    _start_ticket_flow_worker(
-                        engine.repo_root, existing_run.id, is_terminal=False
-                    )
-                    typer.echo(f"Reused active run: {existing_run.id}")
+        service = _ticket_flow_orchestration_service(engine)
+        records = [
+            _flow_run_record_from_target(target) for target in service.list_flow_runs()
+        ]
+        stale_terminal = _stale_terminal_runs(records)
+        if not force_new:
+            existing_run, reason = _resumable_run(records)
+            if existing_run and reason == "active":
+                report = _ticket_flow_preflight(engine, ticket_dir)
+                if report.has_errors():
+                    typer.echo("Ticket flow preflight failed:", err=True)
+                    _print_preflight_report(report)
+                    raise_exit("Fix the above errors before starting the ticket flow.")
+                _start_ticket_flow_worker(
+                    engine.repo_root, existing_run.id, is_terminal=False
+                )
+                typer.echo(f"Reused active run: {existing_run.id}")
+                typer.echo(
+                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
+                )
+                return
+            elif existing_run and reason == "completed_pending":
+                existing_tickets = list_ticket_paths(ticket_dir)
+                pending_count = len(
+                    [t for t in existing_tickets if not ticket_is_done(t)]
+                )
+                if pending_count > 0:
                     typer.echo(
-                        f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
+                        f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
                     )
-                    return
-                elif existing_run and reason == "completed_pending":
-                    existing_tickets = list_ticket_paths(ticket_dir)
-                    pending_count = len(
-                        [t for t in existing_tickets if not ticket_is_done(t)]
+                    typer.echo(
+                        "Use --force-new to start a fresh run (dispatch history will be reset)."
                     )
-                    if pending_count > 0:
-                        typer.echo(
-                            f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
-                        )
-                        typer.echo(
-                            "Use --force-new to start a fresh run (dispatch history will be reset)."
-                        )
-                        raise_exit("Add --force-new to create a new run.")
-        finally:
-            store.close()
+                    raise_exit("Add --force-new to create a new run.")
 
         if stale_terminal:
             typer.echo(
@@ -937,19 +946,17 @@ You are the first ticket in a new ticket_flow run.
             _print_preflight_report(report)
             raise_exit("Fix the above errors before starting the ticket flow.")
 
-        controller, agent_pool = _ticket_flow_controller(engine)
-        try:
-            run_id = str(uuid.uuid4())
-            input_data: dict[str, object] = {"workspace_root": str(engine.repo_root)}
-            if max_total_turns is not None:
-                input_data["max_total_turns"] = max_total_turns
-            record = asyncio.run(
-                controller.start_flow(input_data=input_data, run_id=run_id)
+        run_id = str(uuid.uuid4())
+        input_data: dict[str, object] = {"workspace_root": str(engine.repo_root)}
+        if max_total_turns is not None:
+            input_data["max_total_turns"] = max_total_turns
+        asyncio.run(
+            service.start_flow_run(
+                "ticket_flow",
+                input_data=input_data,
+                run_id=run_id,
             )
-            _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
-        finally:
-            controller.shutdown()
-            asyncio.run(agent_pool.close_all())
+        )
 
         typer.echo(f"Started ticket_flow run: {run_id}")
         typer.echo(
@@ -966,21 +973,17 @@ You are the first ticket in a new ticket_flow run.
         """Show status for a ticket_flow run."""
         engine = require_repo_config(repo, hub)
         normalized_run_id = _normalize_flow_run_id(run_id)
+        service = _ticket_flow_orchestration_service(engine)
 
-        store = _open_flow_store(engine)
-        try:
-            record = None
-            if normalized_run_id:
-                record = store.get_flow_run(normalized_run_id)
-            else:
-                records = store.list_flow_runs(flow_type="ticket_flow")
-                record = records[0] if records else None
-            if not record:
-                raise_exit("No ticket_flow runs found.")
-            assert record is not None
-            normalized_run_id = record.id
-        finally:
-            store.close()
+        target = None
+        if normalized_run_id:
+            target = service.get_flow_run(normalized_run_id)
+        else:
+            runs = service.list_flow_runs()
+            target = runs[0] if runs else None
+        if not target:
+            raise_exit("No ticket_flow runs found.")
+        normalized_run_id = target.run_id
 
         _, _, ticket_dir = _ticket_flow_paths(engine)
         report = _ticket_flow_preflight(engine, ticket_dir)
@@ -994,7 +997,7 @@ You are the first ticket in a new ticket_flow run.
         try:
             record = store.get_flow_run(normalized_run_id)
             if not record:
-                raise_exit("No ticket_flow runs found.")
+                record = _flow_run_record_from_target(target)
             payload = _ticket_flow_status_payload(engine, record, store)
         finally:
             store.close()
@@ -1013,32 +1016,22 @@ You are the first ticket in a new ticket_flow run.
         """Stop a ticket_flow run."""
         engine = require_repo_config(repo, hub)
         normalized_run_id = _normalize_flow_run_id(run_id)
+        service = _ticket_flow_orchestration_service(engine)
 
-        store = _open_flow_store(engine)
-        try:
-            record = None
-            if normalized_run_id:
-                record = store.get_flow_run(normalized_run_id)
-            else:
-                records = store.list_flow_runs(flow_type="ticket_flow")
-                record = records[0] if records else None
-            if not record:
-                raise_exit("No ticket_flow runs found.")
-            assert record is not None
-            normalized_run_id = record.id
-        finally:
-            store.close()
+        if normalized_run_id:
+            target = service.get_flow_run(normalized_run_id)
+        else:
+            runs = service.list_flow_runs()
+            target = runs[0] if runs else None
+        if not target:
+            raise_exit("No ticket_flow runs found.")
+        normalized_run_id = target.run_id
 
-        controller, agent_pool = _ticket_flow_controller(engine)
-        try:
-            _stop_ticket_flow_worker(engine.repo_root, normalized_run_id)
-            updated = asyncio.run(controller.stop_flow(normalized_run_id))
-        finally:
-            controller.shutdown()
-            asyncio.run(agent_pool.close_all())
+        _stop_ticket_flow_worker(engine.repo_root, normalized_run_id)
+        updated = asyncio.run(service.stop_flow_run(normalized_run_id))
 
         typer.echo(
-            f"Stop requested for run: {updated.id} (status={updated.status.value})"
+            f"Stop requested for run: {updated.run_id} (status={updated.status})"
         )
 
     @ticket_flow_app.command("archive")

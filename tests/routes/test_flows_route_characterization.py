@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
+from codex_autorunner.core.orchestration.models import FlowRunTarget
 from codex_autorunner.surfaces.web.routes import flows as flow_routes
 from codex_autorunner.surfaces.web.routes.flow_routes.dependencies import (
     build_default_flow_route_dependencies,
@@ -135,6 +136,60 @@ def test_list_runs_closes_primary_store_and_passes_it_to_status_builder(
     assert observed["record"] is store.record
     assert observed["root"] == repo_root
     assert observed["store"] is store
+    assert store.close_calls == 1
+
+
+def test_list_runs_prefers_orchestration_service_targets(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: repo_root)
+
+    observed: dict[str, object] = {}
+
+    class StubStore:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def get_flow_run(self, run_id: str):  # noqa: ANN001
+            observed["store_run_id"] = run_id
+            return None
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    class StubService:
+        def list_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            observed["flow_target_id"] = flow_target_id
+            return [
+                FlowRunTarget(
+                    run_id="11111111-1111-1111-1111-111111111111",
+                    flow_target_id="ticket_flow",
+                    flow_type="ticket_flow",
+                    status="paused",
+                    workspace_root=str(repo_root),
+                    created_at="2026-01-01T00:00:00Z",
+                )
+            ]
+
+    store = StubStore()
+    monkeypatch.setattr(flow_routes, "_require_flow_store", lambda _repo_root: store)
+    monkeypatch.setattr(
+        flow_routes,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: StubService(),
+    )
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/runs?flow_type=ticket_flow")
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert observed == {
+        "flow_target_id": "ticket_flow",
+        "store_run_id": "11111111-1111-1111-1111-111111111111",
+    }
     assert store.close_calls == 1
 
 
@@ -309,6 +364,65 @@ def test_dispatch_history_includes_diff_stats_and_serves_attachments(
 
     assert file_res.status_code == 200
     assert file_res.text == "artifact payload\n"
+
+
+def test_resume_flow_routes_through_orchestration_service(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+    run_id = "33333333-3333-3333-3333-333333333333"
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        flow_routes,
+        "_get_flow_record",
+        lambda _repo_root, _run_id: SimpleNamespace(flow_type="ticket_flow"),
+    )
+    monkeypatch.setattr(flow_routes, "_require_flow_store", lambda _repo_root: None)
+
+    observed: dict[str, object] = {}
+
+    class StubService:
+        def list_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return []
+
+        def list_active_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return []
+
+        def get_flow_run(self, requested_run_id: str):  # noqa: ANN001
+            observed["get_flow_run"] = requested_run_id
+            return None
+
+        async def resume_flow_run(self, requested_run_id: str, *, force: bool = False):
+            observed["resume"] = (requested_run_id, force)
+            return FlowRunTarget(
+                run_id=requested_run_id,
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                status="running",
+                current_step="ticket_turn",
+                workspace_root=str(repo_root),
+                created_at="2026-01-01T00:00:00Z",
+            )
+
+        async def start_flow_run(self, *args, **kwargs):  # noqa: ANN001
+            raise AssertionError("Unexpected start_flow_run")
+
+        async def stop_flow_run(self, *args, **kwargs):  # noqa: ANN001
+            raise AssertionError("Unexpected stop_flow_run")
+
+    monkeypatch.setattr(
+        flow_routes,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: StubService(),
+    )
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post(f"/api/flows/{run_id}/resume?force=true")
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == run_id
+    assert observed["resume"] == (run_id, True)
 
 
 def test_extracted_status_history_router_uses_run_scoped_dispatch_history(

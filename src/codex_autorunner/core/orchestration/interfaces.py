@@ -305,6 +305,10 @@ class OrchestrationFlowService(Protocol):
 
     def get_flow_run(self, run_id: str) -> Optional[FlowRunTarget]: ...
 
+    def list_flow_runs(
+        self, *, flow_target_id: Optional[str] = None
+    ) -> list[FlowRunTarget]: ...
+
     def list_active_flow_runs(
         self, *, flow_target_id: Optional[str] = None
     ) -> list[FlowRunTarget]: ...

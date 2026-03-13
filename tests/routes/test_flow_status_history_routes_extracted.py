@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.orchestration.models import FlowRunTarget
 from codex_autorunner.surfaces.web.routes.flow_routes.dependencies import (
     FlowRouteDependencies,
 )
@@ -25,6 +26,7 @@ class _FakeRecord:
 def _build_app(repo_root: Path, record: _FakeRecord) -> TestClient:
     deps = FlowRouteDependencies(
         find_repo_root=lambda: repo_root,
+        build_flow_orchestration_service=lambda *_args, **_kwargs: None,
         require_flow_store=lambda _repo_root: None,
         safe_list_flow_runs=lambda *args, **kwargs: [],
         build_flow_status_response=lambda *args, **kwargs: {},
@@ -145,6 +147,7 @@ def test_extracted_status_history_routes_support_reconcile_requests(
 
     deps = FlowRouteDependencies(
         find_repo_root=lambda: repo_root,
+        build_flow_orchestration_service=lambda *_args, **_kwargs: None,
         require_flow_store=lambda _repo_root: store,
         safe_list_flow_runs=lambda *args, **kwargs: [],
         build_flow_status_response=_status_response,
@@ -185,3 +188,54 @@ def test_extracted_status_history_routes_support_reconcile_requests(
         "logger": True,
     }
     assert store.close_calls == 1
+
+
+def test_extracted_status_history_routes_use_orchestration_service_for_status(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    run_id = "44444444-4444-4444-4444-444444444444"
+    observed: dict[str, object] = {}
+
+    class _Service:
+        def list_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return []
+
+        def list_active_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return []
+
+        def get_flow_run(self, requested_run_id: str):
+            observed["run_id"] = requested_run_id
+            return FlowRunTarget(
+                run_id=requested_run_id,
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                status="paused",
+                workspace_root=str(repo_root),
+                created_at="2026-01-01T00:00:00Z",
+            )
+
+    deps = FlowRouteDependencies(
+        find_repo_root=lambda: repo_root,
+        build_flow_orchestration_service=lambda *_args, **_kwargs: _Service(),
+        require_flow_store=lambda _repo_root: None,
+        safe_list_flow_runs=lambda *args, **kwargs: [],
+        build_flow_status_response=lambda rec, *_args, **_kwargs: {"id": rec.id},
+        get_flow_record=lambda _repo_root, _run_id: None,
+        get_flow_controller=lambda *args, **kwargs: None,
+        start_flow_worker=lambda *args, **kwargs: None,
+        recover_flow_store_if_possible=lambda *args, **kwargs: None,
+        bootstrap_check=lambda *args, **kwargs: None,
+        seed_issue=lambda *args, **kwargs: {},
+    )
+
+    router, _ = build_status_history_routes(deps)
+    app = FastAPI()
+    app.include_router(router)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/flows/{run_id}/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"id": run_id}
+    assert observed == {"run_id": run_id}

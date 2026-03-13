@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional
 
-from ...core.config import load_repo_config
+from ...core.config import find_nearest_hub_config_path, load_repo_config
 from ...core.flows import FlowController
 from ...core.flows.models import FlowRunRecord
 from ...core.flows.store import FlowStore
@@ -100,8 +100,11 @@ async def stop_ticket_flow_run(repo_root: Path, run_id: str) -> FlowRunRecord:
 def _open_ticket_flow_store(repo_root: Path) -> FlowStore:
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
-    config = load_repo_config(repo_root)
-    store = FlowStore(db_path, durable=config.durable_writes)
+    durable = False
+    if find_nearest_hub_config_path(repo_root) is not None:
+        config = load_repo_config(repo_root)
+        durable = config.durable_writes
+    store = FlowStore(db_path, durable=durable)
     store.initialize()
     return store
 
@@ -114,16 +117,20 @@ def get_ticket_flow_run_status(repo_root: Path, run_id: str) -> Optional[FlowRun
         store.close()
 
 
-def list_active_ticket_flow_runs(repo_root: Path) -> list[FlowRunRecord]:
+def list_ticket_flow_runs(repo_root: Path) -> list[FlowRunRecord]:
     store = _open_ticket_flow_store(repo_root)
     try:
-        return [
-            record
-            for record in store.list_flow_runs(flow_type="ticket_flow")
-            if record.status.is_active() or record.status.is_paused()
-        ]
+        return store.list_flow_runs(flow_type="ticket_flow")
     finally:
         store.close()
+
+
+def list_active_ticket_flow_runs(repo_root: Path) -> list[FlowRunRecord]:
+    return [
+        record
+        for record in list_ticket_flow_runs(repo_root)
+        if record.status.is_active() or record.status.is_paused()
+    ]
 
 
 def spawn_ticket_flow_worker(

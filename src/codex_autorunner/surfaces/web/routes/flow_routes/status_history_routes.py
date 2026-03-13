@@ -52,9 +52,10 @@ def _resolve_outbox_for_record(record: Any, repo_root: Path):
 
 
 def build_status_history_routes(
-    deps: "FlowRouteDependencies",
+    deps: "FlowRouteDependencies", *, prefix: str = "/api/flows"
 ) -> tuple[APIRouter, list[str]]:
-    router = APIRouter(prefix="/api/flows", tags=["flows"])
+    router = APIRouter(prefix=prefix, tags=["flows"])
+    from .runtime_service import load_flow_run_record, load_flow_run_records
 
     def _ensure_state_in_app(request: Request) -> "FlowRoutesState":
         from typing import cast
@@ -75,21 +76,15 @@ def build_status_history_routes(
             return []
 
         store = deps.require_flow_store(repo_root)
-        records: list[Any] = []
         try:
-            if store:
-                records = store.list_flow_runs(flow_type=flow_type)
-                if reconcile:
-                    from .....core.flows.reconciler import reconcile_flow_run
-
-                    records = [
-                        reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
-                        for rec in records
-                    ]
-            else:
-                records = deps.safe_list_flow_runs(
-                    repo_root, flow_type=flow_type, recover_stuck=reconcile
-                )
+            records = load_flow_run_records(
+                repo_root,
+                flow_type=flow_type,
+                reconcile=reconcile,
+                store=store,
+                safe_list_flow_runs=deps.safe_list_flow_runs,
+                build_flow_orchestration_service_fn=deps.build_flow_orchestration_service,
+            )
             return [
                 deps.build_flow_status_response(rec, repo_root, store=store)
                 for rec in records
@@ -107,16 +102,21 @@ def build_status_history_routes(
         repo_root = deps.find_repo_root()
         if repo_root is None:
             raise HTTPException(status_code=404, detail="Repository not found")
-
         _reap_dead_worker(run_id, state)
-
-        record = deps.get_flow_record(repo_root, run_id)
         store = deps.require_flow_store(repo_root)
         try:
-            if reconcile and store:
-                from .....core.flows.reconciler import reconcile_flow_run
-
-                record = reconcile_flow_run(repo_root, record, store, logger=_logger)[0]
+            record = load_flow_run_record(
+                repo_root,
+                run_id,
+                flow_type="ticket_flow",
+                reconcile=reconcile,
+                store=store,
+                build_flow_orchestration_service_fn=deps.build_flow_orchestration_service,
+            )
+            if record is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Flow run {run_id} not found"
+                )
             return deps.build_flow_status_response(record, repo_root, store=store)
         finally:
             if store:

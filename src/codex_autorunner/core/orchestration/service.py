@@ -681,6 +681,18 @@ class FlowBackedOrchestrationService(OrchestrationFlowService):
         _, run = self._find_wrapper_for_run(run_id)
         return run
 
+    def list_flow_runs(
+        self, *, flow_target_id: Optional[str] = None
+    ) -> list[FlowRunTarget]:
+        if flow_target_id is not None:
+            wrapper = self.flow_wrappers.get(flow_target_id)
+            return [] if wrapper is None else wrapper.list_runs()
+
+        runs: list[FlowRunTarget] = []
+        for wrapper in self.flow_wrappers.values():
+            runs.extend(wrapper.list_runs())
+        return runs
+
     def list_active_flow_runs(
         self, *, flow_target_id: Optional[str] = None
     ) -> list[FlowRunTarget]:

@@ -68,6 +68,12 @@ def _list_active_ticket_flow_runs(repo_root: Path) -> list[FlowRunRecord]:
     return list_active_ticket_flow_runs(repo_root)
 
 
+def _list_ticket_flow_runs(repo_root: Path) -> list[FlowRunRecord]:
+    from ...flows.ticket_flow.runtime_helpers import list_ticket_flow_runs
+
+    return list_ticket_flow_runs(repo_root)
+
+
 def _flow_run_target_from_record(
     record: FlowRunRecord,
     *,
@@ -119,6 +125,7 @@ class TicketFlowTargetWrapper:
     get_flow_run_status_fn: Callable[..., Optional[FlowRunRecord]] = (
         _get_ticket_flow_run_status
     )
+    list_flow_runs_fn: Callable[..., list[FlowRunRecord]] = _list_ticket_flow_runs
     list_active_flow_runs_fn: Callable[..., list[FlowRunRecord]] = (
         _list_active_ticket_flow_runs
     )
@@ -162,6 +169,13 @@ class TicketFlowTargetWrapper:
             return None
         return _flow_run_target_from_record(record, flow_target=self.flow_target)
 
+    def list_runs(self) -> list[FlowRunTarget]:
+        records = self.list_flow_runs_fn(self._workspace_root())
+        return [
+            _flow_run_target_from_record(record, flow_target=self.flow_target)
+            for record in records
+        ]
+
     def list_active_runs(self) -> list[FlowRunTarget]:
         records = self.list_active_flow_runs_fn(self._workspace_root())
         return [
@@ -181,6 +195,7 @@ def build_ticket_flow_target_wrapper(
         resume_flow_run_fn=_resume_ticket_flow_run,
         stop_flow_run_fn=_stop_ticket_flow_run,
         get_flow_run_status_fn=_get_ticket_flow_run_status,
+        list_flow_runs_fn=_list_ticket_flow_runs,
         list_active_flow_runs_fn=_list_active_ticket_flow_runs,
     )
 

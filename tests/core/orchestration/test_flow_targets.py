@@ -112,6 +112,7 @@ async def test_ticket_flow_wrapper_maps_runtime_records_to_orchestration_targets
         resume_flow_run_fn=resume_flow_run,
         stop_flow_run_fn=stop_flow_run,
         get_flow_run_status_fn=get_flow_run,
+        list_flow_runs_fn=list_active_runs,
         list_active_flow_runs_fn=list_active_runs,
     )
 
@@ -121,6 +122,7 @@ async def test_ticket_flow_wrapper_maps_runtime_records_to_orchestration_targets
         run_id="run-1",
     )
     paused = wrapper.get_run("run-1")
+    listed = wrapper.list_runs()
     active = wrapper.list_active_runs()
     resumed = await wrapper.resume_run("run-1", force=True)
     stopped = await wrapper.stop_run("run-1")
@@ -128,6 +130,7 @@ async def test_ticket_flow_wrapper_maps_runtime_records_to_orchestration_targets
     assert calls == [
         ("start", workspace_root, {"ticket": 620}, {"source": "cli"}, "run-1"),
         ("get", workspace_root, "run-1"),
+        ("list", workspace_root),
         ("list", workspace_root),
         ("resume", workspace_root, "run-1", True),
         ("stop", workspace_root, "run-1"),
@@ -150,6 +153,7 @@ async def test_ticket_flow_wrapper_maps_runtime_records_to_orchestration_targets
     assert paused is not None
     assert paused.status == "paused"
     assert paused.state == {"paused": True}
+    assert [run.run_id for run in listed] == ["run-1", "run-2"]
     assert [run.run_id for run in active] == ["run-1", "run-2"]
     assert resumed.status == "running"
     assert resumed.state == {"resumed": True}
@@ -202,6 +206,10 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
             calls.append(("get", run_id))
             return runs.get(run_id)
 
+        def list_runs(self) -> list[FlowRunTarget]:
+            calls.append(("list_all",))
+            return list(runs.values())
+
         def list_active_runs(self) -> list[FlowRunTarget]:
             calls.append(("list",))
             return [
@@ -223,6 +231,7 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
     assert service.list_flow_targets() == [flow_target]
     assert service.get_flow_target("ticket_flow") == flow_target
     assert service.get_flow_run(started.run_id) == started
+    assert [run.run_id for run in service.list_flow_runs()] == ["run-1"]
     assert [run.run_id for run in service.list_active_flow_runs()] == ["run-1"]
 
     resumed = await service.resume_flow_run("run-1", force=True)
@@ -244,6 +253,7 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
             },
         ),
         ("get", "run-1"),
+        ("list_all",),
         ("list",),
         ("get", "run-1"),
         ("resume", "run-1", True),

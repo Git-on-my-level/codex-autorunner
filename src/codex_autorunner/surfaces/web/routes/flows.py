@@ -6,15 +6,15 @@ import subprocess
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Dict, Optional, Union
-from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ....core.config import load_repo_config
+from ....core.config_contract import ConfigError
 from ....core.file_chat_keys import (
     ticket_chat_scope,
     ticket_stable_id,
@@ -48,8 +48,8 @@ from ....core.flows.worker_process import (
     check_worker_health,
     write_worker_exit_info,
 )
+from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.runtime import RuntimeContext
-from ....core.safe_paths import SafePathError, validate_single_filename
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....integrations.agents.build_agent_pool import build_agent_pool
@@ -63,7 +63,6 @@ from ....tickets.files import (
 )
 from ....tickets.frontmatter import parse_markdown_frontmatter
 from ....tickets.lint import lint_ticket_frontmatter
-from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
     TicketBulkClearModelRequest,
     TicketBulkSetAgentRequest,
@@ -99,6 +98,13 @@ from .flow_routes.run_routes import (
 from .flow_routes.run_routes import (
     stop_flow_worker as extracted_stop_flow_worker,
 )
+from .flow_routes.runtime_service import (
+    list_orchestration_flow_run_records,
+    resolve_flow_run_record,
+)
+from .flow_routes.ticket_bootstrap import (
+    build_ticket_bootstrap_routes as extracted_build_ticket_bootstrap_routes,
+)
 from .flow_routes.ticket_bootstrap import run_bootstrap as extracted_run_bootstrap
 
 _logger = logging.getLogger(__name__)
@@ -116,6 +122,7 @@ _EXTRACTED_FLOW_ROUTE_SEAMS = (
     extracted_resume_flow_run,
     extracted_archive_flow_run,
     extracted_get_flow_run_status,
+    extracted_build_ticket_bootstrap_routes,
     extracted_run_bootstrap,
 )
 
@@ -621,6 +628,48 @@ def _build_flow_status_response(
     return resp
 
 
+def _build_flow_orchestration_service(repo_root: Path, flow_type: str):
+    if flow_type != "ticket_flow":
+        raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
+    return build_ticket_flow_orchestration_service(workspace_root=repo_root)
+
+
+async def _start_flow_via_controller(
+    repo_root: Path,
+    flow_type: str,
+    request: FlowStartRequest,
+    state: FlowRoutesState,
+    *,
+    run_id: str,
+) -> FlowRunRecord:
+    controller = _get_flow_controller(repo_root, flow_type, state)
+    try:
+        return await controller.start_flow(
+            input_data=request.input_data,
+            run_id=run_id,
+            metadata=request.metadata,
+        )
+    except Exception as exc:
+        if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
+            controller = _get_flow_controller(repo_root, flow_type, state)
+            retry_run_id = _normalize_run_id(uuid.uuid4())
+            try:
+                return await controller.start_flow(
+                    input_data=request.input_data,
+                    run_id=retry_run_id,
+                    metadata=request.metadata,
+                )
+            except sqlite3.Error as retry_exc:
+                raise HTTPException(
+                    status_code=503, detail="Flows database unavailable"
+                ) from retry_exc
+        if isinstance(exc, sqlite3.Error):
+            raise HTTPException(
+                status_code=503, detail="Flows database unavailable"
+            ) from exc
+        raise
+
+
 def _start_flow_worker(
     repo_root: Path, run_id: str, state: FlowRoutesState
 ) -> Optional[subprocess.Popen]:
@@ -693,6 +742,25 @@ def build_flow_routes() -> APIRouter:
             request.app.state.flow_routes_state = state
         return cast(FlowRoutesState, request.app.state.flow_routes_state)
 
+    deps = build_default_flow_route_dependencies()
+    deps.find_repo_root = find_repo_root
+    deps.build_flow_orchestration_service = _build_flow_orchestration_service
+    deps.require_flow_store = _require_flow_store
+    deps.safe_list_flow_runs = _safe_list_flow_runs
+    deps.build_flow_status_response = _build_flow_status_response
+    deps.get_flow_record = _get_flow_record
+    deps.get_flow_controller = _get_flow_controller
+    deps.start_flow_worker = _start_flow_worker
+    deps.recover_flow_store_if_possible = _recover_flow_store_if_possible
+    deps.bootstrap_check = ux_bootstrap_check
+
+    from .flow_routes.status_history_routes import (
+        build_status_history_routes,
+    )
+
+    status_history_router, _ = build_status_history_routes(deps, prefix="")
+    router.include_router(status_history_router)
+
     def _definition_info(definition: FlowDefinition) -> Dict:
         return {
             "type": definition.flow_type,
@@ -700,46 +768,6 @@ def build_flow_routes() -> APIRouter:
             "description": definition.description,
             "input_schema": definition.input_schema or {},
         }
-
-    def _resolve_outbox_for_record(record: FlowRunRecord, repo_root: Path):
-        workspace_root = Path(record.input_data.get("workspace_root") or repo_root)
-        runs_dir = Path(record.input_data.get("runs_dir") or ".codex-autorunner/runs")
-        return resolve_outbox_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
-        )
-
-    def _get_diff_stats_by_dispatch_seq(
-        repo_root: Path, *, run_id: str
-    ) -> dict[int, dict[str, int]]:
-        """Return mapping of dispatch_seq -> diff stats for the run."""
-        store = _require_flow_store(repo_root)
-        if store is None:
-            return {}
-        try:
-            events = store.get_events_by_type(run_id, FlowEventType.DIFF_UPDATED)
-        except Exception:
-            events = []
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
-
-        by_seq: dict[int, dict[str, int]] = {}
-        for ev in events:
-            data = ev.data or {}
-            try:
-                seq_val = int(data.get("dispatch_seq") or 0)
-            except Exception:
-                continue
-            if seq_val <= 0:
-                continue
-            by_seq[seq_val] = {
-                "insertions": int(data.get("insertions") or 0),
-                "deletions": int(data.get("deletions") or 0),
-                "files_changed": int(data.get("files_changed") or 0),
-            }
-        return by_seq
 
     @router.get("")
     async def list_flow_definitions(request: Request):
@@ -750,34 +778,6 @@ def build_flow_routes() -> APIRouter:
             for flow_type in _supported_flow_types
         ]
         return {"definitions": definitions}
-
-    @router.get("/runs", response_model=list[FlowStatusResponse])
-    async def list_runs(
-        request: Request, flow_type: Optional[str] = None, reconcile: bool = False
-    ):
-        _ensure_state_in_app(request)
-        repo_root = find_repo_root()
-        store = _require_flow_store(repo_root)
-        records: list[FlowRunRecord] = []
-        try:
-            if store:
-                records = store.list_flow_runs(flow_type=flow_type)
-                if reconcile:
-                    records = [
-                        reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
-                        for rec in records
-                    ]
-            else:
-                records = _safe_list_flow_runs(
-                    repo_root, flow_type=flow_type, recover_stuck=reconcile
-                )
-            return [
-                _build_flow_status_response(rec, repo_root, store=store)
-                for rec in records
-            ]
-        finally:
-            if store:
-                store.close()
 
     @router.get("/{flow_type}")
     async def get_flow_definition(request: Request, flow_type: str):
@@ -804,7 +804,6 @@ def build_flow_routes() -> APIRouter:
             )
 
         repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root, flow_type, state)
 
         if flow_type == "ticket_flow" and validate_tickets:
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -823,10 +822,17 @@ def build_flow_routes() -> APIRouter:
 
         # Reuse an active/paused run unless force_new is requested.
         if not force_new:
-            runs = _safe_list_flow_runs(
-                repo_root, flow_type=flow_type, recover_stuck=True
-            )
-            active = _active_or_paused_run(runs)
+            try:
+                active_records = list_orchestration_flow_run_records(
+                    repo_root,
+                    flow_type=flow_type,
+                    flow_target_id=flow_type,
+                    active_only=True,
+                    build_service=_build_flow_orchestration_service,
+                )
+            except Exception:
+                active_records = []
+            active = active_records[0] if active_records else None
             if active:
                 _reap_dead_worker(active.id, state)
                 _start_flow_worker(repo_root, active.id, state)
@@ -843,22 +849,38 @@ def build_flow_routes() -> APIRouter:
                 return response
 
         run_id = _normalize_run_id(uuid.uuid4())
-
         try:
-            record = await controller.start_flow(
-                input_data=request.input_data,
-                run_id=run_id,
-                metadata=request.metadata,
+            service = _build_flow_orchestration_service(repo_root, flow_type)
+            record = resolve_flow_run_record(
+                repo_root,
+                await service.start_flow_run(
+                    flow_type,
+                    input_data=request.input_data,
+                    run_id=run_id,
+                    metadata=request.metadata,
+                ),
+            )
+        except ConfigError:
+            record = await _start_flow_via_controller(
+                repo_root, flow_type, request, state, run_id=run_id
             )
         except Exception as exc:
             if _recover_flow_store_if_possible(repo_root, flow_type, state, exc):
-                controller = _get_flow_controller(repo_root, flow_type, state)
                 run_id = _normalize_run_id(uuid.uuid4())
                 try:
-                    record = await controller.start_flow(
-                        input_data=request.input_data,
-                        run_id=run_id,
-                        metadata=request.metadata,
+                    service = _build_flow_orchestration_service(repo_root, flow_type)
+                    record = resolve_flow_run_record(
+                        repo_root,
+                        await service.start_flow_run(
+                            flow_type,
+                            input_data=request.input_data,
+                            run_id=run_id,
+                            metadata=request.metadata,
+                        ),
+                    )
+                except ConfigError:
+                    record = await _start_flow_via_controller(
+                        repo_root, flow_type, request, state, run_id=run_id
                     )
                 except sqlite3.Error as retry_exc:
                     raise HTTPException(
@@ -870,8 +892,6 @@ def build_flow_routes() -> APIRouter:
                 ) from exc
             else:
                 raise
-
-        _start_flow_worker(repo_root, run_id, state)
 
         store = _require_flow_store(repo_root)
         try:
@@ -1386,25 +1406,29 @@ You are the first ticket in a new ticket_flow run.
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
-        controller = _get_flow_controller(repo_root, record.flow_type, state)
+        service = _build_flow_orchestration_service(repo_root, record.flow_type)
 
         _stop_worker(run_id, state)
 
-        updated = await controller.stop_flow(run_id)
+        updated = await service.stop_flow_run(run_id)
         store = _require_flow_store(repo_root)
         try:
-            return _build_flow_status_response(updated, repo_root, store=store)
+            return _build_flow_status_response(
+                resolve_flow_run_record(repo_root, updated, store=store),
+                repo_root,
+                store=store,
+            )
         finally:
             if store:
                 store.close()
 
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
     async def resume_flow(http_request: Request, run_id: str, force: bool = False):
-        state = _ensure_state_in_app(http_request)
+        _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
-        controller = _get_flow_controller(repo_root, record.flow_type, state)
+        service = _build_flow_orchestration_service(repo_root, record.flow_type)
 
         # Validate tickets before resuming ticket_flow
         if record.flow_type == "ticket_flow":
@@ -1420,15 +1444,17 @@ You are the first ticket in a new ticket_flow run.
                 )
 
         try:
-            updated = await controller.resume_flow(run_id, force=force)
+            updated = await service.resume_flow_run(run_id, force=force)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _reap_dead_worker(run_id, state)
-        _start_flow_worker(repo_root, run_id, state)
 
         store = _require_flow_store(repo_root)
         try:
-            return _build_flow_status_response(updated, repo_root, store=store)
+            return _build_flow_status_response(
+                resolve_flow_run_record(repo_root, updated, store=store),
+                repo_root,
+                store=store,
+            )
         finally:
             if store:
                 store.close()
@@ -1503,222 +1529,6 @@ You are the first ticket in a new ticket_flow run.
             "missing_paths": summary.get("missing_paths", []),
         }
 
-    @router.get("/{run_id}/status", response_model=FlowStatusResponse)
-    async def get_flow_status(
-        http_request: Request, run_id: str, reconcile: bool = False
-    ):
-        state = _ensure_state_in_app(http_request)
-        run_id = _normalize_run_id(run_id)
-        repo_root = find_repo_root()
-
-        _reap_dead_worker(run_id, state)
-
-        record = _get_flow_record(repo_root, run_id)
-        store = _require_flow_store(repo_root)
-        try:
-            if reconcile and store:
-                record = reconcile_flow_run(repo_root, record, store, logger=_logger)[0]
-            return _build_flow_status_response(record, repo_root, store=store)
-        finally:
-            if store:
-                store.close()
-
-    @router.get("/{run_id}/events")
-    async def stream_flow_events(
-        http_request: Request, run_id: str, after: Optional[int] = None
-    ):
-        state = _ensure_state_in_app(http_request)
-        run_id = _normalize_run_id(run_id)
-        repo_root = find_repo_root()
-        record = _get_flow_record(repo_root, run_id)
-        controller = _get_flow_controller(repo_root, record.flow_type, state)
-
-        async def event_stream():
-            try:
-                resume_after = after
-                if resume_after is None:
-                    last_event_id = http_request.headers.get("Last-Event-ID")
-                    if last_event_id:
-                        try:
-                            resume_after = int(last_event_id)
-                        except ValueError:
-                            _logger.debug(
-                                "Invalid Last-Event-ID %s for run %s",
-                                last_event_id,
-                                run_id,
-                            )
-                async for event in controller.stream_events(
-                    run_id, after_seq=resume_after
-                ):
-                    data = event.model_dump(mode="json")
-                    yield f"id: {event.seq}\ndata: {json.dumps(data)}\n\n"
-            except Exception as e:
-                _logger.exception("Error streaming events for run %s: %s", run_id, e)
-                raise
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    @router.get("/{run_id}/dispatch_history")
-    async def get_dispatch_history(http_request: Request, run_id: str):
-        """Get dispatch history for a flow run.
-
-        Returns all dispatches (agent->human communications) for this run.
-        """
-        normalized = _normalize_run_id(run_id)
-        repo_root = find_repo_root()
-        record = _get_flow_record(repo_root, normalized)
-        paths = _resolve_outbox_for_record(record, repo_root)
-
-        # Pull diff stats from FlowStore keyed by dispatch sequence number so we
-        # can enrich dispatch history entries without relying on DISPATCH.md metadata.
-        diff_by_seq = _get_diff_stats_by_dispatch_seq(repo_root, run_id=normalized)
-
-        history_entries = []
-        history_dir = paths.dispatch_history_dir
-        if history_dir.exists() and history_dir.is_dir():
-            for entry in sorted(
-                [p for p in history_dir.iterdir() if p.is_dir()],
-                key=lambda p: p.name,
-                reverse=True,
-            ):
-                dispatch_path = entry / "DISPATCH.md"
-                dispatch, errors = (
-                    parse_dispatch(dispatch_path)
-                    if dispatch_path.exists()
-                    else (None, ["Dispatch file missing"])
-                )
-                dispatch_dict = asdict(dispatch) if dispatch else None
-                if dispatch_dict and dispatch:
-                    dispatch_dict["is_handoff"] = dispatch.is_handoff
-                    # Add structured diff stats (per turn summary), matched by seq.
-                    try:
-                        entry_seq_int = int(entry.name)
-                    except Exception:
-                        entry_seq_int = 0
-                    if entry_seq_int and entry_seq_int in diff_by_seq:
-                        dispatch_dict["diff_stats"] = diff_by_seq[entry_seq_int]
-                attachments = []
-                for child in sorted(entry.rglob("*")):
-                    if child.name == "DISPATCH.md":
-                        continue
-                    rel = child.relative_to(entry).as_posix()
-                    if any(part.startswith(".") for part in Path(rel).parts):
-                        continue
-                    if child.is_dir():
-                        continue
-                    attachments.append(
-                        {
-                            "name": child.name,
-                            "rel_path": rel,
-                            "path": safe_relpath(child, repo_root),
-                            "size": child.stat().st_size if child.is_file() else None,
-                            "url": f"api/flows/{normalized}/dispatch_history/{entry.name}/{quote(rel)}",
-                        }
-                    )
-                history_entries.append(
-                    {
-                        "seq": entry.name,
-                        "dispatch": dispatch_dict,
-                        "errors": errors,
-                        "attachments": attachments,
-                        "path": safe_relpath(entry, repo_root),
-                    }
-                )
-
-        return {"run_id": normalized, "history": history_entries}
-
-    @router.get("/{run_id}/reply_history/{seq}/{file_path:path}")
-    def get_reply_history_file(run_id: str, seq: str, file_path: str):
-        repo_root = find_repo_root()
-        db_path, _ = _flow_paths(repo_root)
-        store = FlowStore(db_path)
-        try:
-            store.initialize()
-            record = store.get_flow_run(run_id)
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
-        if not record:
-            raise HTTPException(status_code=404, detail="Run not found")
-
-        if not (len(seq) == 4 and seq.isdigit()):
-            raise HTTPException(status_code=400, detail="Invalid seq")
-
-        try:
-            filename = validate_single_filename(file_path)
-        except SafePathError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        input_data = dict(record.input_data or {})
-        workspace_root = Path(input_data.get("workspace_root") or repo_root)
-        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
-        from ....tickets.replies import resolve_reply_paths
-
-        reply_paths = resolve_reply_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-        )
-        target = reply_paths.reply_history_dir / seq / filename
-        if not target.exists() or not target.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(path=str(target), filename=filename)
-
-    @router.get("/{run_id}/dispatch_history/{seq}/{file_path:path}")
-    async def get_dispatch_file(run_id: str, seq: str, file_path: str):
-        """Get an attachment file from a dispatch history entry."""
-        normalized = _normalize_run_id(run_id)
-        repo_root = find_repo_root()
-        record = _get_flow_record(repo_root, normalized)
-        paths = _resolve_outbox_for_record(record, repo_root)
-
-        base_history = paths.dispatch_history_dir.resolve()
-
-        seq_clean = seq.strip()
-        if not re.fullmatch(r"[0-9]{4}", seq_clean):
-            raise HTTPException(
-                status_code=400, detail="Invalid dispatch history sequence"
-            )
-
-        history_dir = (base_history / seq_clean).resolve()
-        if not history_dir.is_relative_to(base_history) or not history_dir.is_dir():
-            raise HTTPException(
-                status_code=404, detail=f"Dispatch history not found for run {run_id}"
-            )
-
-        file_rel = PurePosixPath(file_path)
-        if file_rel.is_absolute() or ".." in file_rel.parts or "\\" in file_path:
-            raise HTTPException(status_code=400, detail="Invalid dispatch file path")
-
-        safe_parts = [part for part in file_rel.parts if part not in {"", "."}]
-        if any(not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in safe_parts):
-            raise HTTPException(status_code=400, detail="Invalid dispatch file path")
-
-        target = (history_dir / Path(*safe_parts)).resolve()
-        try:
-            resolved = target.resolve()
-        except OSError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if not resolved.exists():
-            raise HTTPException(status_code=404, detail="File not found")
-
-        if not resolved.is_relative_to(history_dir):
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: file outside dispatch history directory",
-            )
-
-        return FileResponse(resolved, filename=resolved.name)
-
     @router.get("/{run_id}/artifacts", response_model=list[FlowArtifactInfo])
     async def list_flow_artifacts(http_request: Request, run_id: str):
         state = _ensure_state_in_app(http_request)
@@ -1791,20 +1601,5 @@ You are the first ticket in a new ticket_flow run.
             )
 
         return FileResponse(artifact_path, filename=artifact_path.name)
-
-    deps = build_default_flow_route_dependencies()
-
-    from .flow_routes.status_history_routes import (
-        build_status_history_routes,
-    )
-    from .flow_routes.ticket_bootstrap import (
-        build_ticket_bootstrap_routes,
-    )
-
-    status_history_router, _ = build_status_history_routes(deps)
-    bootstrap_router, _ = build_ticket_bootstrap_routes(deps)
-
-    router.include_router(status_history_router)
-    router.include_router(bootstrap_router)
 
     return router

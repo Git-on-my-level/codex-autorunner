@@ -12,7 +12,8 @@ if TYPE_CHECKING:
 @dataclass
 class FlowRouteDependencies:
     find_repo_root: Callable[[], Optional[Path]]
-    require_flow_store: Callable[[Path], "FlowStore"]
+    build_flow_orchestration_service: Any
+    require_flow_store: Callable[[Path], Optional["FlowStore"]]
     safe_list_flow_runs: Callable[..., list["FlowRunRecord"]]
     build_flow_status_response: Any
     get_flow_record: Any
@@ -34,6 +35,9 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
     from ...services.flow_store import get_flow_record
     from .definitions import get_flow_controller
     from .run_routes import start_flow_worker as _start_flow_worker
+    from .runtime_service import (
+        build_flow_orchestration_service as _build_flow_orchestration_service,
+    )
     from .runtime_service import (
         recover_flow_store_if_possible as _recover_flow_store_if_possible,
     )
@@ -71,6 +75,7 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
 
     return FlowRouteDependencies(
         find_repo_root=find_repo_root,
+        build_flow_orchestration_service=_build_flow_orchestration_service,
         require_flow_store=require_flow_store,
         safe_list_flow_runs=safe_list_flow_runs,
         build_flow_status_response=build_flow_status_snapshot,

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import typer
 from typer.testing import CliRunner
 
+from codex_autorunner.core.orchestration.models import FlowRunTarget
 from codex_autorunner.surfaces.cli.commands import flow as flow_module
 
 
@@ -35,14 +36,15 @@ def _build_ticket_flow_app(
 
     engine = SimpleNamespace(repo_root=repo_root, config=_FakeConfig())
 
-    class _FakeFlowController:
-        def __init__(self, **_kwargs) -> None:
-            pass
+    class _FakeFlowService:
+        def list_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return []
 
-        def initialize(self) -> None:
-            return
+        def list_active_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return []
 
-        async def start_flow(self, input_data, run_id, metadata=None):  # type: ignore[no-untyped-def]
+        async def start_flow_run(self, flow_target_id, *, input_data=None, metadata=None, run_id=None):  # type: ignore[no-untyped-def]
+            _ = flow_target_id
             start_calls.append(
                 {
                     "input_data": dict(input_data or {}),
@@ -50,22 +52,26 @@ def _build_ticket_flow_app(
                     "metadata": dict(metadata or {}),
                 }
             )
-            return SimpleNamespace(id=run_id)
+            return FlowRunTarget(
+                run_id=run_id or "run-1",
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                status="pending",
+                workspace_root=str(repo_root),
+                created_at="2026-01-01T00:00:00Z",
+                metadata=dict(metadata or {}),
+            )
 
-        def shutdown(self) -> None:
-            return
+        def get_flow_run(self, run_id: str):  # noqa: ANN001
+            return None
 
-    class _FakeDefinition:
-        def validate(self) -> None:
-            return
+        async def stop_flow_run(self, run_id: str):  # noqa: ANN001
+            raise AssertionError(f"Unexpected stop_flow_run({run_id})")
 
-    class _FakeAgentPool:
-        async def close_all(self) -> None:
-            return
-
-    monkeypatch.setattr(flow_module, "FlowController", _FakeFlowController)
     monkeypatch.setattr(
-        flow_module, "ensure_worker", lambda *_args, **_kwargs: {"status": "reused"}
+        flow_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: _FakeFlowService(),
     )
 
     flow_app = typer.Typer(add_completion=False)
@@ -75,8 +81,8 @@ def _build_ticket_flow_app(
         ticket_flow_app,
         require_repo_config=lambda _repo, _hub: engine,
         raise_exit=lambda msg, **_kw: (_ for _ in ()).throw(RuntimeError(msg)),
-        build_agent_pool=lambda _cfg: _FakeAgentPool(),
-        build_ticket_flow_definition=lambda **_kw: _FakeDefinition(),
+        build_agent_pool=lambda _cfg: None,
+        build_ticket_flow_definition=lambda **_kw: None,
         guard_unregistered_hub_repo=lambda *_args, **_kwargs: None,
         parse_bool_text=lambda *_args, **_kwargs: True,
         parse_duration=lambda *_args, **_kwargs: None,

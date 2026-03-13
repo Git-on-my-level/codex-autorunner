@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from codex_autorunner.core.flows import worker_process
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.core.orchestration.models import FlowRunTarget
 from codex_autorunner.surfaces.cli.commands import flow as flow_module
 
 
@@ -53,30 +54,61 @@ def _build_ticket_flow_app(
         def close(self) -> None:
             return
 
-    class _FakeController:
-        def __init__(self, **_kwargs) -> None:
-            pass
+    class _FakeFlowService:
+        def list_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return [
+                FlowRunTarget(
+                    run_id=run_id,
+                    flow_target_id="ticket_flow",
+                    flow_type="ticket_flow",
+                    status="running",
+                    current_step="ticket_turn",
+                    workspace_root=str(tmp_path),
+                    created_at="2026-02-15T00:00:00Z",
+                    started_at="2026-02-15T00:00:01Z",
+                )
+            ]
 
-        def initialize(self) -> None:
-            return
+        def get_flow_run(self, requested_run_id: str):  # noqa: ANN001
+            if requested_run_id != run_id:
+                return None
+            return FlowRunTarget(
+                run_id=run_id,
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                status="running",
+                current_step="ticket_turn",
+                workspace_root=str(tmp_path),
+                created_at="2026-02-15T00:00:00Z",
+                started_at="2026-02-15T00:00:01Z",
+            )
 
-        async def stop_flow(self, _requested_run_id: str) -> FlowRunRecord:
+        def list_active_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return self.list_flow_runs(flow_target_id=flow_target_id)
+
+        async def stop_flow_run(self, _requested_run_id: str) -> FlowRunTarget:
             events.append("stop_flow")
-            return _record(run_id, FlowRunStatus.STOPPED)
+            return FlowRunTarget(
+                run_id=run_id,
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                status="stopped",
+                current_step="ticket_turn",
+                workspace_root=str(tmp_path),
+                created_at="2026-02-15T00:00:00Z",
+                started_at="2026-02-15T00:00:01Z",
+                finished_at="2026-02-15T00:00:02Z",
+            )
 
-        def shutdown(self) -> None:
-            events.append("controller_shutdown")
-
-    class _FakeDefinition:
-        def validate(self) -> None:
-            return
-
-    class _FakeAgentPool:
-        async def close_all(self) -> None:
-            events.append("agent_pool_close")
+        async def start_flow_run(self, *args, **kwargs):  # noqa: ANN001
+            raise AssertionError("Unexpected start_flow_run")
 
     monkeypatch.setattr(flow_module, "FlowStore", _FakeFlowStore)
-    monkeypatch.setattr(flow_module, "FlowController", _FakeController)
+    monkeypatch.setattr(
+        flow_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: _FakeFlowService(),
+    )
     monkeypatch.setattr(flow_module, "check_worker_health", lambda *_a, **_k: health)
     monkeypatch.setattr(flow_module, "clear_worker_metadata", lambda *_a, **_k: None)
 
@@ -87,8 +119,8 @@ def _build_ticket_flow_app(
         ticket_flow_app,
         require_repo_config=lambda _repo, _hub: engine,
         raise_exit=lambda msg, **_kw: (_ for _ in ()).throw(RuntimeError(msg)),
-        build_agent_pool=lambda _cfg: _FakeAgentPool(),
-        build_ticket_flow_definition=lambda **_kw: _FakeDefinition(),
+        build_agent_pool=lambda _cfg: None,
+        build_ticket_flow_definition=lambda **_kw: None,
         guard_unregistered_hub_repo=lambda *_a, **_k: None,
         parse_bool_text=lambda *_a, **_k: True,
         parse_duration=lambda *_a, **_k: None,
@@ -126,8 +158,6 @@ def test_ticket_flow_stop_prefers_killpg(monkeypatch, tmp_path: Path) -> None:
     assert killpg_calls == [(42424, signal.SIGTERM)]
     assert kill_calls == []
     assert "stop_flow" in events
-    assert "controller_shutdown" in events
-    assert "agent_pool_close" in events
 
 
 def test_ticket_flow_stop_falls_back_to_kill(monkeypatch, tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from codex_autorunner.cli import app
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.orchestration.models import FlowRunTarget
 from codex_autorunner.surfaces.cli.commands import flow as flow_module
 
 
@@ -39,7 +40,9 @@ def _seed_stale_stopped_run(repo_root: Path, run_id: str) -> None:
         store.update_flow_run_status(run_id, FlowRunStatus.STOPPED)
 
 
-def _build_ticket_flow_app(monkeypatch, repo_root: Path) -> typer.Typer:
+def _build_ticket_flow_app(
+    monkeypatch, repo_root: Path, *, service_factory=None
+) -> typer.Typer:
     class _FakeConfig:
         durable_writes = False
         app_server = SimpleNamespace(command=["python"])
@@ -47,30 +50,51 @@ def _build_ticket_flow_app(monkeypatch, repo_root: Path) -> typer.Typer:
     engine = SimpleNamespace(repo_root=repo_root, config=_FakeConfig())
 
     class _FakeFlowController:
-        def __init__(self, **_kwargs) -> None:
-            pass
+        def list_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            with FlowStore(repo_root / ".codex-autorunner" / "flows.db") as store:
+                store.initialize()
+                return [
+                    FlowRunTarget(
+                        run_id=record.id,
+                        flow_target_id="ticket_flow",
+                        flow_type=record.flow_type,
+                        status=record.status.value,
+                        current_step=record.current_step,
+                        workspace_root=str(repo_root),
+                        created_at=record.created_at,
+                        started_at=record.started_at,
+                        finished_at=record.finished_at,
+                        error_message=record.error_message,
+                        state=dict(record.state or {}),
+                        metadata=dict(record.metadata or {}),
+                    )
+                    for record in store.list_flow_runs(flow_type=flow_target_id)
+                ]
 
-        def initialize(self) -> None:
-            return
+        def list_active_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            return []
 
-        async def start_flow(self, input_data, run_id, metadata=None):  # type: ignore[no-untyped-def]
-            _ = (input_data, metadata)
-            return SimpleNamespace(id=run_id)
+        async def start_flow_run(self, flow_target_id, *, input_data=None, metadata=None, run_id=None):  # type: ignore[no-untyped-def]
+            _ = (flow_target_id, input_data, metadata)
+            return FlowRunTarget(
+                run_id=run_id or "run-1",
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                status="pending",
+                workspace_root=str(repo_root),
+                created_at="2026-01-01T00:00:00Z",
+            )
 
-        def shutdown(self) -> None:
-            return
+        def get_flow_run(self, run_id: str):  # noqa: ANN001
+            return None
 
-    class _FakeDefinition:
-        def validate(self) -> None:
-            return
+        async def stop_flow_run(self, run_id: str):  # noqa: ANN001
+            raise AssertionError(f"Unexpected stop_flow_run({run_id})")
 
-    class _FakeAgentPool:
-        async def close_all(self) -> None:
-            return
-
-    monkeypatch.setattr(flow_module, "FlowController", _FakeFlowController)
     monkeypatch.setattr(
-        flow_module, "ensure_worker", lambda *_args, **_kwargs: {"status": "reused"}
+        flow_module,
+        "build_ticket_flow_orchestration_service",
+        service_factory or (lambda *, workspace_root: _FakeFlowController()),
     )
 
     flow_app = typer.Typer(add_completion=False)
@@ -80,8 +104,8 @@ def _build_ticket_flow_app(monkeypatch, repo_root: Path) -> typer.Typer:
         ticket_flow_app,
         require_repo_config=lambda _repo, _hub: engine,
         raise_exit=lambda msg, **_kw: (_ for _ in ()).throw(RuntimeError(msg)),
-        build_agent_pool=lambda _cfg: _FakeAgentPool(),
-        build_ticket_flow_definition=lambda **_kw: _FakeDefinition(),
+        build_agent_pool=lambda _cfg: None,
+        build_ticket_flow_definition=lambda **_kw: None,
         guard_unregistered_hub_repo=lambda *_args, **_kwargs: None,
         parse_bool_text=lambda *_args, **_kwargs: True,
         parse_duration=lambda *_args, **_kwargs: None,
@@ -130,3 +154,51 @@ def test_ticket_flow_start_stale_warning_uses_existing_cli_commands(
         f"car flow ticket_flow archive --run-id {stale_run_id} --force" in result.output
     )
     assert "car flow ticket_flow resume --run-id" not in result.output
+
+
+def test_ticket_flow_status_reads_run_via_orchestration_service(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _write_valid_ticket(tmp_path)
+    run_id = "22222222-2222-2222-2222-222222222222"
+    observed: dict[str, object] = {}
+
+    class _Service:
+        def list_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            observed["list_flow_runs"] = flow_target_id
+            return []
+
+        def list_active_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
+            observed["list_active_flow_runs"] = flow_target_id
+            return []
+
+        def get_flow_run(self, requested_run_id: str):
+            observed["get_flow_run"] = requested_run_id
+            return FlowRunTarget(
+                run_id=run_id,
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                status="paused",
+                workspace_root=str(tmp_path),
+                created_at="2026-01-01T00:00:00Z",
+            )
+
+        async def start_flow_run(self, *args, **kwargs):  # noqa: ANN001
+            raise AssertionError("Unexpected start_flow_run")
+
+        async def stop_flow_run(self, *args, **kwargs):  # noqa: ANN001
+            raise AssertionError("Unexpected stop_flow_run")
+
+    ticket_flow_app = _build_ticket_flow_app(
+        monkeypatch,
+        tmp_path,
+        service_factory=lambda *, workspace_root: _Service(),
+    )
+
+    result = CliRunner().invoke(
+        ticket_flow_app,
+        ["status", "--run-id", run_id, "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed == {"get_flow_run": run_id}
