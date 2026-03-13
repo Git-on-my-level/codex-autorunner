@@ -93,16 +93,20 @@ class TestValidateAgentId:
 
 class TestHasCapability:
     def test_valid_capabilities_codex(self):
-        assert has_capability("codex", "threads") is True
-        assert has_capability("codex", "turns") is True
+        assert has_capability("codex", "durable_threads") is True
+        assert has_capability("codex", "message_turns") is True
+        assert has_capability("codex", "interrupt") is True
+        assert has_capability("codex", "active_thread_discovery") is True
         assert has_capability("codex", "review") is True
         assert has_capability("codex", "model_listing") is True
         assert has_capability("codex", "event_streaming") is True
         assert has_capability("codex", "approvals") is True
 
     def test_valid_capabilities_opencode(self):
-        assert has_capability("opencode", "threads") is True
-        assert has_capability("opencode", "turns") is True
+        assert has_capability("opencode", "durable_threads") is True
+        assert has_capability("opencode", "message_turns") is True
+        assert has_capability("opencode", "interrupt") is True
+        assert has_capability("opencode", "active_thread_discovery") is True
         assert has_capability("opencode", "review") is True
         assert has_capability("opencode", "model_listing") is True
         assert has_capability("opencode", "event_streaming") is True
@@ -111,11 +115,15 @@ class TestHasCapability:
         assert has_capability("codex", "invalid_capability") is False
 
     def test_nonexistent_agent(self):
-        assert has_capability("invalid_agent", "threads") is False
+        assert has_capability("invalid_agent", "durable_threads") is False
         assert has_capability("invalid_agent", "invalid_capability") is False
 
     def test_opencode_doesnt_have_approvals(self):
         assert has_capability("opencode", "approvals") is False
+
+    def test_legacy_capability_aliases_still_normalize(self):
+        assert has_capability("codex", "threads") is True
+        assert has_capability("codex", "turns") is True
 
 
 class _StubEntryPoint:

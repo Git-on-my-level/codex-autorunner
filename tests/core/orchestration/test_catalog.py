@@ -6,6 +6,7 @@ from codex_autorunner.core.orchestration import (
     get_agent_definition,
     list_agent_definitions,
     map_agent_capabilities,
+    merge_agent_capabilities,
 )
 
 
@@ -24,13 +25,23 @@ def _make_descriptor(
 
 def test_map_agent_capabilities_uses_orchestration_vocabulary() -> None:
     capabilities = map_agent_capabilities(
-        ["threads", "turns", "review", "model_listing", "event_streaming"]
+        [
+            "threads",
+            "turns",
+            "interrupt",
+            "active_thread_discovery",
+            "review",
+            "model_listing",
+            "event_streaming",
+        ]
     )
 
     assert capabilities == frozenset(
         [
             "durable_threads",
             "message_turns",
+            "interrupt",
+            "active_thread_discovery",
             "review",
             "model_listing",
             "event_streaming",
@@ -63,17 +74,35 @@ def test_build_agent_definition_preserves_registry_boundary() -> None:
     )
 
 
+def test_merge_agent_capabilities_keeps_optional_runtime_features_visible() -> None:
+    merged = merge_agent_capabilities(
+        ["durable_threads", "message_turns", "event_streaming"],
+        ["interrupt", "structured_event_streaming", "transcript_history"],
+    )
+
+    assert merged == frozenset(
+        [
+            "durable_threads",
+            "message_turns",
+            "event_streaming",
+            "interrupt",
+            "structured_event_streaming",
+            "transcript_history",
+        ]
+    )
+
+
 def test_list_and_lookup_agent_definitions_are_pma_agnostic() -> None:
     descriptors = {
         "opencode": _make_descriptor(
             "opencode",
             "OpenCode",
-            frozenset(["threads", "turns", "event_streaming"]),
+            frozenset(["durable_threads", "message_turns", "event_streaming"]),
         ),
         "codex": _make_descriptor(
             "codex",
             "Codex",
-            frozenset(["threads", "turns", "review", "approvals"]),
+            frozenset(["durable_threads", "message_turns", "review", "approvals"]),
         ),
     }
 
@@ -82,6 +111,9 @@ def test_list_and_lookup_agent_definitions_are_pma_agnostic() -> None:
         repo_id="repo-1",
         workspace_root="/tmp/repo",
         availability={"codex": True, "opencode": False},
+        runtime_capability_reports={
+            "codex": ["interrupt", "active_thread_discovery"],
+        },
     )
 
     assert [definition.display_name for definition in definitions] == [
@@ -90,6 +122,7 @@ def test_list_and_lookup_agent_definitions_are_pma_agnostic() -> None:
     ]
     assert definitions[0].runtime_kind == "codex"
     assert definitions[1].available is False
+    assert "interrupt" in definitions[0].capabilities
 
     lookup = get_agent_definition(
         descriptors,
@@ -97,8 +130,12 @@ def test_list_and_lookup_agent_definitions_are_pma_agnostic() -> None:
         repo_id="repo-1",
         workspace_root="/tmp/repo",
         availability={"codex": True},
+        runtime_capability_reports={
+            "codex": ["interrupt", "active_thread_discovery"],
+        },
     )
 
     assert lookup is not None
     assert lookup.agent_id == "codex"
     assert "approvals" in lookup.capabilities
+    assert "active_thread_discovery" in lookup.capabilities

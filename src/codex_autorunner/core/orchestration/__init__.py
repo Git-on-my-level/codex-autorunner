@@ -5,6 +5,7 @@ from .catalog import (
     get_agent_definition,
     list_agent_definitions,
     map_agent_capabilities,
+    merge_agent_capabilities,
 )
 from .interfaces import (
     AgentDefinitionCatalog,
@@ -104,6 +105,7 @@ __all__ = [
     "list_agent_definitions",
     "list_orchestration_table_definitions",
     "map_agent_capabilities",
+    "merge_agent_capabilities",
     "resolve_orchestration_sqlite_path",
     "stream_runtime_thread_events",
     "verify_audit_parity",

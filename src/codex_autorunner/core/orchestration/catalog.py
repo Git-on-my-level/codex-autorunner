@@ -7,6 +7,11 @@ from .models import AgentDefinition, TargetCapability
 
 RuntimeCapability = str
 
+_RUNTIME_CAPABILITY_ALIASES = {
+    "threads": "durable_threads",
+    "turns": "message_turns",
+}
+
 
 class RuntimeAgentDescriptor(Protocol):
     id: str
@@ -15,23 +20,50 @@ class RuntimeAgentDescriptor(Protocol):
 
 
 _CAPABILITY_MAP: dict[RuntimeCapability, TargetCapability] = {
-    "threads": "durable_threads",
-    "turns": "message_turns",
+    "durable_threads": "durable_threads",
+    "message_turns": "message_turns",
+    "interrupt": "interrupt",
+    "active_thread_discovery": "active_thread_discovery",
+    "transcript_history": "transcript_history",
     "review": "review",
     "model_listing": "model_listing",
     "event_streaming": "event_streaming",
+    "structured_event_streaming": "structured_event_streaming",
     "approvals": "approvals",
 }
+
+
+def normalize_runtime_capabilities(
+    capabilities: Iterable[str],
+) -> frozenset[RuntimeCapability]:
+    normalized: set[RuntimeCapability] = set()
+    for capability in capabilities:
+        text = str(capability or "").strip().lower()
+        if not text:
+            continue
+        normalized.add(_RUNTIME_CAPABILITY_ALIASES.get(text, text))
+    return frozenset(normalized)
 
 
 def map_agent_capabilities(
     capabilities: Iterable[RuntimeCapability],
 ) -> frozenset[TargetCapability]:
+    normalized = normalize_runtime_capabilities(capabilities)
     return frozenset(
         _CAPABILITY_MAP[capability]
-        for capability in capabilities
+        for capability in normalized
         if capability in _CAPABILITY_MAP
     )
+
+
+def merge_agent_capabilities(
+    static_capabilities: Iterable[RuntimeCapability],
+    runtime_capabilities: Optional[Iterable[RuntimeCapability]] = None,
+) -> frozenset[TargetCapability]:
+    merged = set(normalize_runtime_capabilities(static_capabilities))
+    if runtime_capabilities is not None:
+        merged.update(normalize_runtime_capabilities(runtime_capabilities))
+    return map_agent_capabilities(merged)
 
 
 def build_agent_definition(
@@ -42,12 +74,16 @@ def build_agent_definition(
     default_model: Optional[str] = None,
     description: Optional[str] = None,
     available: bool = True,
+    runtime_capabilities: Optional[Iterable[RuntimeCapability]] = None,
 ) -> AgentDefinition:
     return AgentDefinition(
         agent_id=descriptor.id,
         display_name=descriptor.name,
         runtime_kind=descriptor.id,
-        capabilities=map_agent_capabilities(descriptor.capabilities),
+        capabilities=merge_agent_capabilities(
+            descriptor.capabilities,
+            runtime_capabilities,
+        ),
         repo_id=repo_id,
         workspace_root=workspace_root,
         default_model=default_model,
@@ -62,6 +98,9 @@ def list_agent_definitions(
     repo_id: Optional[str] = None,
     workspace_root: Optional[str] = None,
     availability: Optional[Mapping[str, bool]] = None,
+    runtime_capability_reports: Optional[
+        Mapping[str, Iterable[RuntimeCapability]]
+    ] = None,
 ) -> list[AgentDefinition]:
     definitions = [
         build_agent_definition(
@@ -69,6 +108,11 @@ def list_agent_definitions(
             repo_id=repo_id,
             workspace_root=workspace_root,
             available=availability.get(agent_id, True) if availability else True,
+            runtime_capabilities=(
+                runtime_capability_reports.get(agent_id)
+                if runtime_capability_reports
+                else None
+            ),
         )
         for agent_id, descriptor in descriptors.items()
     ]
@@ -82,6 +126,9 @@ def get_agent_definition(
     repo_id: Optional[str] = None,
     workspace_root: Optional[str] = None,
     availability: Optional[Mapping[str, bool]] = None,
+    runtime_capability_reports: Optional[
+        Mapping[str, Iterable[RuntimeCapability]]
+    ] = None,
 ) -> Optional[AgentDefinition]:
     descriptor = descriptors.get(agent_id)
     if descriptor is None:
@@ -91,6 +138,11 @@ def get_agent_definition(
         repo_id=repo_id,
         workspace_root=workspace_root,
         available=availability.get(agent_id, True) if availability else True,
+        runtime_capabilities=(
+            runtime_capability_reports.get(agent_id)
+            if runtime_capability_reports
+            else None
+        ),
     )
 
 
@@ -102,6 +154,9 @@ class MappingAgentDefinitionCatalog:
     repo_id: Optional[str] = None
     workspace_root: Optional[str] = None
     availability: Optional[Mapping[str, bool]] = None
+    runtime_capability_reports: Optional[Mapping[str, Iterable[RuntimeCapability]]] = (
+        None
+    )
 
     def list_definitions(self) -> list[AgentDefinition]:
         return list_agent_definitions(
@@ -109,6 +164,7 @@ class MappingAgentDefinitionCatalog:
             repo_id=self.repo_id,
             workspace_root=self.workspace_root,
             availability=self.availability,
+            runtime_capability_reports=self.runtime_capability_reports,
         )
 
     def get_definition(self, agent_id: str) -> Optional[AgentDefinition]:
@@ -118,6 +174,7 @@ class MappingAgentDefinitionCatalog:
             repo_id=self.repo_id,
             workspace_root=self.workspace_root,
             availability=self.availability,
+            runtime_capability_reports=self.runtime_capability_reports,
         )
 
 
@@ -128,4 +185,5 @@ __all__ = [
     "get_agent_definition",
     "list_agent_definitions",
     "map_agent_capabilities",
+    "merge_agent_capabilities",
 ]

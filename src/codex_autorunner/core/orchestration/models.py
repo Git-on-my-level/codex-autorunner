@@ -6,9 +6,13 @@ from typing import Any, Literal, Mapping, Optional
 TargetCapability = Literal[
     "durable_threads",
     "message_turns",
+    "interrupt",
+    "active_thread_discovery",
+    "transcript_history",
     "review",
     "model_listing",
     "event_streaming",
+    "structured_event_streaming",
     "approvals",
 ]
 TargetKind = Literal["thread", "flow"]

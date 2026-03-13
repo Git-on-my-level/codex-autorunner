@@ -4,23 +4,16 @@ import importlib.metadata
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Literal, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .base import AgentHarness
 from .codex.harness import CodexHarness
 from .opencode.harness import OpenCodeHarness
+from .types import RuntimeCapability, normalize_runtime_capabilities
 
 _logger = logging.getLogger(__name__)
-
-AgentCapability = Literal[
-    "threads",
-    "turns",
-    "review",
-    "model_listing",
-    "event_streaming",
-    "approvals",
-]
+AgentCapability = RuntimeCapability
 
 
 @dataclass(frozen=True)
@@ -39,6 +32,19 @@ class AgentDescriptor:
     make_harness: Callable[[Any], AgentHarness]
     healthcheck: Optional[Callable[[Any], bool]] = None
     plugin_api_version: int = CAR_PLUGIN_API_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "capabilities",
+            normalize_agent_capabilities(self.capabilities),
+        )
+
+
+def normalize_agent_capabilities(
+    capabilities: Iterable[str],
+) -> frozenset[AgentCapability]:
+    return normalize_runtime_capabilities(capabilities)
 
 
 def _make_codex_harness(ctx: Any) -> AgentHarness:
@@ -72,12 +78,14 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         name="Codex",
         capabilities=frozenset(
             [
-                "threads",
-                "turns",
-                "review",
-                "model_listing",
-                "event_streaming",
-                "approvals",
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
+                RuntimeCapability("interrupt"),
+                RuntimeCapability("active_thread_discovery"),
+                RuntimeCapability("review"),
+                RuntimeCapability("model_listing"),
+                RuntimeCapability("event_streaming"),
+                RuntimeCapability("approvals"),
             ]
         ),
         make_harness=_make_codex_harness,
@@ -88,11 +96,13 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         name="OpenCode",
         capabilities=frozenset(
             [
-                "threads",
-                "turns",
-                "review",
-                "model_listing",
-                "event_streaming",
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
+                RuntimeCapability("interrupt"),
+                RuntimeCapability("active_thread_discovery"),
+                RuntimeCapability("review"),
+                RuntimeCapability("model_listing"),
+                RuntimeCapability("event_streaming"),
             ]
         ),
         make_harness=_make_opencode_harness,
@@ -266,11 +276,14 @@ def validate_agent_id(agent_id: str) -> str:
     return normalized
 
 
-def has_capability(agent_id: str, capability: AgentCapability) -> bool:
+def has_capability(agent_id: str, capability: str) -> bool:
     descriptor = get_agent_descriptor(agent_id)
     if descriptor is None:
         return False
-    return capability in descriptor.capabilities
+    normalized = normalize_agent_capabilities([capability])
+    if not normalized:
+        return False
+    return next(iter(normalized)) in descriptor.capabilities
 
 
 __all__ = [
@@ -283,5 +296,6 @@ __all__ = [
     "get_agent_descriptor",
     "validate_agent_id",
     "has_capability",
+    "normalize_agent_capabilities",
     "reload_agents",
 ]
