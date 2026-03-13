@@ -54,3 +54,73 @@ Notes:
 - Plugin ids are normalized to lowercase.
 - Plugins cannot override built-in agent ids.
 - Plugins SHOULD avoid import-time side effects; do heavy initialization inside `make_harness`.
+
+## Durable-Thread Contract
+
+CAR v1 orchestration requires agent backends to implement a **durable thread/session model**:
+
+1. **Threads persist beyond a single interaction**: Creating a conversation produces a session ID that remains valid across CAR restarts
+2. **Threads support resume**: Given a thread/session ID, the agent can resume from where it left off
+3. **Turns are atomic**: Each turn has a clear start and terminal state
+
+### Must-Support Core Interface
+
+```python
+async def new_conversation(workspace_root: Path, title: Optional[str]) -> ConversationRef
+async def resume_conversation(workspace_root: Path, conversation_id: str) -> ConversationRef
+async def start_turn(...) -> TurnRef
+async def wait_for_turn(...) -> TerminalTurnResult
+```
+
+### Single-Session Runtimes (Out of Scope)
+
+**Single-session runtimes are explicitly out of scope for CAR v1 orchestration.** These are runtimes that:
+
+- Do not persist conversation state beyond a single request/response cycle
+- Cannot resume a previous conversation
+- Do not expose a session/conversation ID
+
+If your runtime does not expose a documented public thread/session API, build a narrow CAR-owned wrapper and leave unsupported capabilities absent. The ZeroClaw adapter is the reference example for this pattern.
+
+## Capability Model
+
+### Required Capabilities
+
+All agent backends must declare these core capabilities:
+
+- `durable_threads`: Thread create/resume/list operations
+- `message_turns`: Turn execution within threads
+
+### Optional Capabilities
+
+Plugins can optionally declare additional capabilities:
+
+- `model_listing`: Return available models via `model_catalog()`
+- `active_thread_discovery`: List existing conversations via `list_conversations()`
+- `interrupt`: Interrupt running turns
+- `review`: Run code review operations
+- `event_streaming`: Stream turn events in real-time
+- `transcript_history`: Retrieve conversation transcript
+- `approvals`: Support approval/workflow mechanisms
+- `structured_event_streaming`: Structured event format support
+
+Capability aliases (legacy → canonical):
+- `threads` → `durable_threads`
+- `turns` → `message_turns`
+
+### Capability Discovery
+
+CAR supports both static and runtime capability discovery:
+
+1. **Static capabilities**: Declared in `AgentDescriptor.capabilities` at registration
+2. **Runtime capabilities**: Reported via `harness.runtime_capability_report()` after initialization
+
+The harness automatically gates optional helper methods:
+- Calling `model_catalog()` on an agent without `model_listing` raises `UnsupportedAgentCapabilityError`
+- Calling `interrupt()` on an agent without `interrupt` raises `UnsupportedAgentCapabilityError`
+
+## Reference Implementations
+
+- **ZeroClaw**: Wrapper-managed durable sessions, limited to `durable_threads`, `message_turns`, `active_thread_discovery`, `event_streaming`
+- **Codex**: Full-featured, supports all optional capabilities
+- **OpenCode**: Full-featured except `approvals`
