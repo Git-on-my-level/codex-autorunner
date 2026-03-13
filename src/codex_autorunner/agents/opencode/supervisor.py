@@ -65,6 +65,7 @@ class OpenCodeHandle:
     workspace_root: Path
     process: Optional[asyncio.subprocess.Process]
     client: Optional[OpenCodeClient]
+    managed_process_record: Optional[ProcessRecord]
     base_url: Optional[str]
     health_info: Optional[dict[str, Any]]
     version: Optional[str]
@@ -271,14 +272,25 @@ class OpenCodeSupervisor:
             await handle.client.close()
 
         process = handle.process
-        if process is None or process.pid is None:
+        process_record: Optional[ProcessRecord] = None
+        if process is not None and process.pid is not None:
+            if process.returncode is not None:
+                self._delete_registry_record(handle, pid=process.pid)
+                handle.managed_process_record = None
+                return
+            process_record = self._build_record_for_handle(handle, process.pid)
+        else:
+            process_record = handle.managed_process_record
+            if process_record is None:
+                return
+            if not self._record_is_running(process_record):
+                self._delete_registry_record(handle, pid=process_record.pid)
+                handle.managed_process_record = None
+                return
+
+        if process_record is None:
             return
 
-        if process.returncode is not None:
-            self._delete_registry_record(handle, pid=process.pid)
-            return
-
-        process_record = self._build_record_for_handle(handle, process.pid)
         terminated = await self._terminate_record_process(process_record)
         if not terminated or self._record_is_running(process_record):
             log_event(
@@ -292,13 +304,14 @@ class OpenCodeSupervisor:
             )
             return
 
-        if process.returncode is None:
+        if process is not None and process.returncode is None:
             try:
                 await asyncio.wait_for(process.wait(), timeout=2)
             except asyncio.TimeoutError:
                 pass
         if not self._record_is_running(process_record):
             self._delete_registry_record(handle, pid=process_record.pid)
+            handle.managed_process_record = None
 
     async def _ensure_handle(
         self, handle_id: str, workspace_root: Path
@@ -320,6 +333,7 @@ class OpenCodeSupervisor:
                 workspace_root=workspace_root,
                 process=None,
                 client=None,
+                managed_process_record=None,
                 base_url=None,
                 health_info=None,
                 version=None,
@@ -357,9 +371,11 @@ class OpenCodeSupervisor:
         base_url = self._base_url
         if not base_url:
             return
+        handle.managed_process_record = None
         await self._attach_to_base_url(handle, base_url)
 
     async def _start_process(self, handle: OpenCodeHandle) -> None:
+        handle.managed_process_record = None
         if self._base_url:
             handle.health_info = {}
             handle.version = "external"
@@ -489,7 +505,9 @@ class OpenCodeSupervisor:
                 return True
 
             try:
+                handle.managed_process_record = None
                 await self._attach_to_base_url(handle, record.base_url)
+                handle.managed_process_record = record
                 self._refresh_registry_ownership(handle, record)
                 log_event(
                     self._logger,

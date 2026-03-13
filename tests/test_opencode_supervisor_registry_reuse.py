@@ -24,6 +24,7 @@ def _handle(workspace_root: Path, workspace_id: str = "ws-1") -> OpenCodeHandle:
         workspace_root=workspace_root,
         process=None,
         client=None,
+        managed_process_record=None,
         base_url=None,
         health_info=None,
         version=None,
@@ -168,6 +169,7 @@ async def test_ensure_started_reuses_healthy_registry_record(
     assert attach_calls == ["http://127.0.0.1:9001"]
     assert start_calls == []
     assert handle.started is True
+    assert handle.managed_process_record == registry_record
     assert len(refresh_calls) == 1
     assert refresh_calls[0].workspace_id == "ws-1"
 
@@ -523,14 +525,79 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
 
 
 @pytest.mark.anyio
-async def test_close_handle_skips_delete_when_process_not_owned(
+async def test_close_handle_terminates_and_deletes_registry_record_for_reused_server(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     supervisor = OpenCodeSupervisor(["opencode", "serve"])
     handle = _handle(tmp_path)
     assert handle.process is None
+    handle.base_url = "http://127.0.0.1:9014"
+    handle.managed_process_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=9014,
+        pgid=9014,
+        base_url=handle.base_url,
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={},
+    )
+    delete_calls: list[tuple[Path, str, str]] = []
+    terminate_calls: list[tuple[int | None, int | None]] = []
+    pid_state = {"running": True}
+
+    async def _fake_terminate(record: ProcessRecord) -> bool:
+        terminate_calls.append((record.pid, record.pgid))
+        pid_state["running"] = False
+        return True
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "delete_process_record",
+        lambda repo_root, kind, key: delete_calls.append((repo_root, kind, key))
+        or True,
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_terminate_record_process",
+        _fake_terminate,
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_record_is_running",
+        lambda _record: pid_state["running"],
+    )
+
+    await supervisor._close_handle(handle, reason="close_all")
+
+    assert terminate_calls == [(9014, 9014)]
+    assert sorted((call[1], call[2]) for call in delete_calls) == [
+        ("opencode", "9014"),
+        ("opencode", "ws-1"),
+    ]
+    assert handle.managed_process_record is None
+
+
+@pytest.mark.anyio
+async def test_close_handle_keeps_external_base_url_server_untouched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"], base_url="http://external")
+    handle = _handle(tmp_path)
+    handle.base_url = "http://external"
+    terminate_calls: list[tuple[int | None, int | None]] = []
     delete_calls: list[tuple[Path, str, str]] = []
 
+    async def _fake_terminate(record: ProcessRecord) -> bool:
+        terminate_calls.append((record.pid, record.pgid))
+        return True
+
+    monkeypatch.setattr(
+        supervisor,
+        "_terminate_record_process",
+        _fake_terminate,
+    )
     monkeypatch.setattr(
         supervisor_module,
         "delete_process_record",
@@ -540,6 +607,7 @@ async def test_close_handle_skips_delete_when_process_not_owned(
 
     await supervisor._close_handle(handle, reason="close_all")
 
+    assert terminate_calls == []
     assert delete_calls == []
 
 
@@ -631,6 +699,7 @@ async def test_global_scope_close_calls_dispose_before_client_close(
         workspace_root=tmp_path,
         process=None,
         client=_Client(),
+        managed_process_record=None,
         base_url="http://127.0.0.1:8000",
         health_info=None,
         version=None,
