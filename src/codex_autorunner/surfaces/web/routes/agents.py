@@ -12,7 +12,9 @@ from fastapi.responses import StreamingResponse
 from ....agents.codex.harness import CodexHarness
 from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
+from ....agents.registry import get_available_agents
 from ....agents.types import ModelCatalog
+from ....core.orchestration.catalog import map_agent_capabilities
 from ..services.validation import normalize_agent_id
 from .shared import SSE_HEADERS
 
@@ -25,32 +27,43 @@ def _normalize_path_agent_id(agent: str) -> str:
     return normalize_agent_id(agent)
 
 
-def _available_agents(request: Request) -> tuple[list[dict[str, str]], str]:
-    agents: list[dict[str, str]] = []
+def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
+    agents: list[dict[str, Any]] = []
     default_agent: Optional[str] = None
 
-    if getattr(request.app.state, "app_server_supervisor", None) is not None:
-        agents.append({"id": "codex", "name": "Codex", "protocol_version": "2.0"})
-        default_agent = "codex"
+    available = get_available_agents(request.app.state)
 
-    if getattr(request.app.state, "opencode_supervisor", None) is not None:
-        supervisor = getattr(request.app.state, "opencode_supervisor", None)
-        version = None
-        if supervisor and hasattr(supervisor, "_handles"):
-            handles = supervisor._handles
-            if handles:
-                first_handle = next(iter(handles.values()), None)
-                if first_handle:
-                    version = getattr(first_handle, "version", None)
-        agent_data = {"id": "opencode", "name": "OpenCode"}
-        if version:
-            agent_data["version"] = str(version)
+    for agent_id, descriptor in available.items():
+        agent_data: dict[str, Any] = {
+            "id": agent_id,
+            "name": descriptor.name,
+            "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
+        }
+        if agent_id == "codex":
+            agent_data["protocol_version"] = "2.0"
+        if agent_id == "opencode":
+            supervisor = getattr(request.app.state, "opencode_supervisor", None)
+            if supervisor and hasattr(supervisor, "_handles"):
+                handles = supervisor._handles
+                if handles:
+                    first_handle = next(iter(handles.values()), None)
+                    if first_handle:
+                        version = getattr(first_handle, "version", None)
+                        if version:
+                            agent_data["version"] = str(version)
         agents.append(agent_data)
         if default_agent is None:
-            default_agent = "opencode"
+            default_agent = agent_id
 
     if not agents:
-        agents = [{"id": "codex", "name": "Codex", "protocol_version": "2.0"}]
+        agents = [
+            {
+                "id": "codex",
+                "name": "Codex",
+                "protocol_version": "2.0",
+                "capabilities": [],
+            }
+        ]
         default_agent = "codex"
 
     return agents, default_agent or "codex"

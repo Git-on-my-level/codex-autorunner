@@ -693,9 +693,10 @@ def pma_agents(
                 continue
             agent_id = agent.get("id", "")
             agent_name = agent.get("name", agent_id)
-            available = agent.get("available", False)
-            status = "available" if available else "unavailable"
-            typer.echo(f"  - {agent_name} ({agent_id}): {status}")
+            capabilities = agent.get("capabilities", [])
+            capability_str = ", ".join(sorted(capabilities)) if capabilities else "none"
+            typer.echo(f"  - {agent_name} ({agent_id})")
+            typer.echo(f"    Capabilities: {capability_str}")
 
 
 @pma_app.command("models")

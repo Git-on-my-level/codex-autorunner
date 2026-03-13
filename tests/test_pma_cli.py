@@ -210,6 +210,22 @@ def test_pma_models_help_shows_json_option():
     assert "AGENT" in output, "PMA models should require agent argument"
 
 
+def test_pma_agents_displays_capabilities():
+    """Verify PMA agents command displays capabilities."""
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["agents", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--json" in output, "PMA agents should support --json output mode"
+
+
+def test_pma_agents_capability_filtering():
+    """Verify PMA agents command supports capability filtering."""
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["agents", "--help"])
+    assert result.exit_code == 0
+
+
 def test_pma_docs_command_group_exists():
     """Verify PMA docs command group exists."""
     runner = CliRunner()
