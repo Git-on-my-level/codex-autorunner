@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 
-DISCORD_STATE_SCHEMA_VERSION = 5
+DISCORD_STATE_SCHEMA_VERSION = 6
 _UNSET = object()
 
 
@@ -186,6 +186,27 @@ class DiscordStateStore:
             mode,
         )
 
+    async def set_pending_compact_seed(
+        self,
+        *,
+        channel_id: str,
+        seed_text: str,
+        session_key: str,
+    ) -> None:
+        await self._run(
+            self._set_pending_compact_seed_sync,
+            channel_id,
+            seed_text,
+            session_key,
+        )
+
+    async def clear_pending_compact_seed(
+        self,
+        *,
+        channel_id: str,
+    ) -> None:
+        await self._run(self._clear_pending_compact_seed_sync, channel_id)
+
     async def record_outbox_failure(
         self,
         record_id: str,
@@ -326,6 +347,14 @@ class DiscordStateStore:
             conn.execute(
                 "ALTER TABLE channel_bindings ADD COLUMN last_terminal_run_id TEXT"
             )
+        if "pending_compact_seed" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN pending_compact_seed TEXT"
+            )
+        if "pending_compact_session_key" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN pending_compact_session_key TEXT"
+            )
 
     def _upsert_binding_sync(
         self,
@@ -385,6 +414,16 @@ class DiscordStateStore:
             if "last_terminal_run_id" in row.keys()
             else None
         )
+        pending_compact_seed_raw = (
+            row["pending_compact_seed"]
+            if "pending_compact_seed" in row.keys()
+            else None
+        )
+        pending_compact_session_key_raw = (
+            row["pending_compact_session_key"]
+            if "pending_compact_session_key" in row.keys()
+            else None
+        )
         return {
             "channel_id": str(row["channel_id"]),
             "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
@@ -435,6 +474,16 @@ class DiscordStateStore:
             "last_terminal_run_id": (
                 last_terminal_run_id_raw
                 if isinstance(last_terminal_run_id_raw, str)
+                else None
+            ),
+            "pending_compact_seed": (
+                pending_compact_seed_raw
+                if isinstance(pending_compact_seed_raw, str)
+                else None
+            ),
+            "pending_compact_session_key": (
+                pending_compact_session_key_raw
+                if isinstance(pending_compact_session_key_raw, str)
                 else None
             ),
             "updated_at": str(row["updated_at"]),
@@ -614,6 +663,39 @@ class DiscordStateStore:
                 WHERE channel_id = ?
                 """,
                 (mode, now_iso(), channel_id),
+            )
+
+    def _set_pending_compact_seed_sync(
+        self,
+        channel_id: str,
+        seed_text: str,
+        session_key: str,
+    ) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET pending_compact_seed = ?,
+                    pending_compact_session_key = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (seed_text, session_key, now_iso(), channel_id),
+            )
+
+    def _clear_pending_compact_seed_sync(self, channel_id: str) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET pending_compact_seed = NULL,
+                    pending_compact_session_key = NULL,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (now_iso(), channel_id),
             )
 
     def _upsert_outbox_sync(self, record: OutboxRecord) -> OutboxRecord:
