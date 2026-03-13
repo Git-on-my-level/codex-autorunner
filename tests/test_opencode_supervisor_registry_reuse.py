@@ -115,11 +115,65 @@ async def test_start_process_writes_registry_record(
     pid_record = next(
         r for r in written_records if r.workspace_id is None and r.pid == 4242
     )
-    assert workspace_record.metadata == {"workspace_root": str(tmp_path)}
+    assert workspace_record.metadata == {
+        "workspace_root": str(tmp_path),
+        "workspace_id": "ws-1",
+        "server_scope": "workspace",
+        "ownership": "car_managed",
+        "process_origin": "spawned_local",
+        "last_attach_mode": "spawned_local",
+    }
     assert pid_record.metadata["workspace_root"] == str(tmp_path)
     assert pid_record.metadata["workspace_id"] == "ws-1"
+    assert pid_record.metadata["server_scope"] == "workspace"
+    assert pid_record.metadata["ownership"] == "car_managed"
+    assert pid_record.metadata["process_origin"] == "spawned_local"
+    assert pid_record.metadata["last_attach_mode"] == "spawned_local"
     assert written_paths[0].name == "ws-1.json"
     assert written_paths[1].name == "4242.json"
+
+
+def test_refresh_registry_ownership_marks_registry_reuse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=4242,
+        pgid=4242,
+        base_url="http://127.0.0.1:7788",
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={"process_origin": "spawned_local"},
+    )
+    written_records: list[ProcessRecord] = []
+
+    def _capture_write(
+        _repo_root: Path, registry_record: ProcessRecord, **_kwargs: Any
+    ):
+        written_records.append(registry_record)
+        return tmp_path / f"{registry_record.record_key()}.json"
+
+    monkeypatch.setattr(supervisor_module, "write_process_record", _capture_write)
+
+    supervisor._refresh_registry_ownership(handle, record)
+
+    workspace_record = next(
+        r for r in written_records if r.workspace_id == "ws-1" and r.pid == 4242
+    )
+    pid_record = next(
+        r for r in written_records if r.workspace_id is None and r.pid == 4242
+    )
+    assert workspace_record.metadata["workspace_root"] == str(tmp_path)
+    assert workspace_record.metadata["workspace_id"] == "ws-1"
+    assert workspace_record.metadata["ownership"] == "car_managed"
+    assert workspace_record.metadata["process_origin"] == "spawned_local"
+    assert workspace_record.metadata["last_attach_mode"] == "registry_reuse"
+    assert pid_record.metadata["workspace_id"] == "ws-1"
+    assert pid_record.metadata["last_attach_mode"] == "registry_reuse"
 
 
 @pytest.mark.anyio

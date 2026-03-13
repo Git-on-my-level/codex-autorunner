@@ -21,6 +21,7 @@ from ...agents.opencode.runtime import (
 )
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.opencode.usage_decoder import extract_usage
+from ...core.logging_utils import log_event
 from ...core.ports.agent_backend import (
     AgentBackend,
     AgentEvent,
@@ -150,8 +151,25 @@ class OpenCodeBackend(AgentBackend):
                 await client.get_session(resume_session)
                 self._session_id = resume_session
                 self._temporary_session_id = None
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.session.reused",
+                    session_id=resume_session,
+                    workspace_root=str(workspace_root),
+                    source="backend",
+                    reuse=True,
+                )
             except Exception:
                 self._session_id = None
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.session.resume_missing",
+                    session_id=resume_session,
+                    workspace_root=str(workspace_root),
+                    source="backend",
+                )
 
         if not self._session_id:
             result = await client.create_session(
@@ -160,6 +178,16 @@ class OpenCodeBackend(AgentBackend):
             )
             self._session_id = extract_session_id(result, allow_fallback_id=True)
             self._temporary_session_id = self._session_id
+            if self._session_id:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.session.created",
+                    session_id=self._session_id,
+                    workspace_root=str(workspace_root),
+                    source="backend",
+                    reuse=False,
+                )
 
         if not self._session_id:
             raise RuntimeError("Failed to create OpenCode session: missing session ID")
@@ -699,8 +727,26 @@ class OpenCodeBackend(AgentBackend):
         try:
             client = await self._ensure_client()
             await client.dispose(session_id)
-            self._logger.info("Disposed temporary OpenCode session: %s", session_id)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.session.disposed",
+                session_id=session_id,
+                workspace_root=str(self._workspace_root or Path(".")),
+                source="backend",
+                reuse=False,
+            )
         except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.session.dispose_failed",
+                session_id=session_id,
+                workspace_root=str(self._workspace_root or Path(".")),
+                source="backend",
+                reuse=False,
+                exc=exc,
+            )
             self._logger.warning(
                 "Failed to dispose temporary OpenCode session %s: %s",
                 session_id,

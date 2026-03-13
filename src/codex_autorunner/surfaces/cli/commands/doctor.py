@@ -20,6 +20,7 @@ from ....core.runtime import (
     hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
     pma_doctor_checks,
+    summarize_opencode_lifecycle,
 )
 from ....core.utils import (
     RepoNotFoundError,
@@ -440,6 +441,9 @@ def register_doctor_commands(
         if repo_root:
             snapshot = enrich_with_ownership(snapshot, repo_root)
         registry_counts, registry_records = _build_process_registry_payload(repo_root)
+        opencode_lifecycle = (
+            summarize_opencode_lifecycle(repo_root) if repo_root is not None else {}
+        )
 
         if json_output:
             payload = {
@@ -448,6 +452,7 @@ def register_doctor_commands(
                     "counts_by_kind": registry_counts,
                     "records": registry_records,
                 },
+                "opencode_lifecycle": opencode_lifecycle,
             }
             typer.echo(json.dumps(payload, indent=2))
             return
@@ -495,6 +500,52 @@ def register_doctor_commands(
                     )
                 )
 
+        typer.echo("\nOpenCode Lifecycle")
+        if not opencode_lifecycle:
+            typer.echo("  - unavailable")
+        else:
+            counts = opencode_lifecycle.get("counts") or {}
+            typer.echo(
+                "  - server_scope={scope} active={active} stale={stale} "
+                "spawned_local={spawned} registry_reuse={reused}".format(
+                    scope=opencode_lifecycle.get("server_scope") or "workspace",
+                    active=counts.get("active", 0),
+                    stale=counts.get("stale", 0),
+                    spawned=counts.get("spawned_local", 0),
+                    reused=counts.get("registry_reuse", 0),
+                )
+            )
+            external_base_url = opencode_lifecycle.get("external_base_url")
+            if external_base_url:
+                typer.echo(f"  - external_base_url={external_base_url}")
+            for record in (opencode_lifecycle.get("managed_servers") or [])[:top_n]:
+                typer.echo(
+                    "  - workspace={workspace} pid={pid} status={status} "
+                    "origin={origin} attach={attach} base_url={base_url}".format(
+                        workspace=record.get("workspace_id") or "pid-only",
+                        pid=record.get("pid") or "n/a",
+                        status=record.get("status") or "unknown",
+                        origin=record.get("process_origin") or "unknown",
+                        attach=record.get("last_attach_mode") or "unknown",
+                        base_url=record.get("base_url") or "n/a",
+                    )
+                )
+            live_handles = opencode_lifecycle.get("live_handles") or []
+            if live_handles:
+                typer.echo("  - live handles:")
+                for handle in live_handles[:top_n]:
+                    typer.echo(
+                        "    - workspace={workspace} mode={mode} active_turns={active_turns} "
+                        "pid={pid} managed_pid={managed_pid} base_url={base_url}".format(
+                            workspace=handle.get("workspace_id") or "unknown",
+                            mode=handle.get("mode") or "unknown",
+                            active_turns=handle.get("active_turns") or 0,
+                            pid=handle.get("process_pid") or "n/a",
+                            managed_pid=handle.get("managed_pid") or "n/a",
+                            base_url=handle.get("base_url") or "n/a",
+                        )
+                    )
+
         if save and hub_config:
             output_path = (
                 hub_config.root
@@ -508,6 +559,7 @@ def register_doctor_commands(
                     "counts_by_kind": registry_counts,
                     "records": registry_records,
                 },
+                "opencode_lifecycle": opencode_lifecycle,
             }
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_path, "w") as f:

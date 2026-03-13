@@ -10,12 +10,14 @@ import pytest
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
+from codex_autorunner.core.managed_processes.registry import ProcessRecord
 from codex_autorunner.core.runtime import (
     DoctorCheck,
     doctor,
     hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
     pma_doctor_checks,
+    summarize_opencode_lifecycle,
 )
 from codex_autorunner.integrations.chat.doctor import chat_doctor_checks
 from codex_autorunner.integrations.chat.parity_checker import ParityCheckResult
@@ -459,6 +461,169 @@ def test_doctor_reports_render_markdown_downstream_tool_status(
     messages = [check.message for check in report.checks]
     assert any("Mermaid CLI (mmdc) is not installed" in msg for msg in messages)
     assert any("Pandoc is not installed" in msg for msg in messages)
+
+
+def test_summarize_opencode_lifecycle_dedupes_pid_records_and_reports_handle_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_config = SimpleNamespace(
+        agents={"opencode": SimpleNamespace(base_url=None)},
+        opencode=SimpleNamespace(server_scope="workspace"),
+    )
+    workspace_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=4201,
+        pgid=4201,
+        base_url="http://127.0.0.1:4201",
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-03-01T00:00:00Z",
+        metadata={
+            "workspace_root": str(tmp_path / "ws-1"),
+            "server_scope": "workspace",
+            "process_origin": "spawned_local",
+            "last_attach_mode": "registry_reuse",
+        },
+    )
+    pid_record = ProcessRecord(
+        kind="opencode",
+        workspace_id=None,
+        pid=4201,
+        pgid=4201,
+        base_url="http://127.0.0.1:4201",
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-03-01T00:00:00Z",
+        metadata={
+            "workspace_root": str(tmp_path / "ws-1"),
+            "workspace_id": "ws-1",
+            "server_scope": "workspace",
+            "process_origin": "spawned_local",
+            "last_attach_mode": "spawned_local",
+        },
+    )
+    stale_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-2",
+        pid=4202,
+        pgid=4202,
+        base_url="http://127.0.0.1:4202",
+        command=["opencode", "serve"],
+        owner_pid=222,
+        started_at="2026-03-01T00:00:00Z",
+        metadata={
+            "workspace_root": str(tmp_path / "ws-2"),
+            "server_scope": "workspace",
+            "process_origin": "spawned_local",
+            "last_attach_mode": "spawned_local",
+        },
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.list_process_records",
+        lambda *_args, **_kwargs: [pid_record, stale_record, workspace_record],
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime._opencode_record_is_running",
+        lambda record: record.pid == 4201,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime._pid_exists",
+        lambda pid: pid == 111,
+    )
+
+    class _StubSupervisor:
+        def observability_snapshot(self) -> dict[str, object]:
+            return {
+                "handles": [
+                    {
+                        "workspace_id": "ws-1",
+                        "mode": "managed_registry_reuse",
+                        "active_turns": 0,
+                        "process_pid": None,
+                        "managed_pid": 4201,
+                        "base_url": "http://127.0.0.1:4201",
+                    },
+                    {
+                        "workspace_id": "ws-3",
+                        "mode": "managed_spawned",
+                        "active_turns": 1,
+                        "process_pid": 4300,
+                        "managed_pid": 4300,
+                        "base_url": "http://127.0.0.1:4300",
+                    },
+                    {
+                        "workspace_id": "ws-4",
+                        "mode": "external_base_url",
+                        "active_turns": 0,
+                        "process_pid": None,
+                        "managed_pid": None,
+                        "base_url": "http://external:7777",
+                    },
+                ]
+            }
+
+    backend_orchestrator = SimpleNamespace(
+        _active_backend=SimpleNamespace(_supervisor=_StubSupervisor())
+    )
+
+    summary = summarize_opencode_lifecycle(
+        tmp_path,
+        repo_config=repo_config,
+        backend_orchestrator=backend_orchestrator,
+    )
+
+    assert summary["counts"] == {
+        "active": 1,
+        "stale": 1,
+        "spawned_local": 2,
+        "registry_reuse": 1,
+    }
+    assert len(summary["managed_servers"]) == 2
+    assert summary["managed_servers"][0]["workspace_id"] == "ws-2"
+    assert summary["managed_servers"][1]["workspace_id"] == "ws-1"
+    assert summary["managed_servers"][1]["owner_alive"] is True
+    assert [handle["mode"] for handle in summary["live_handles"]] == [
+        "managed_registry_reuse",
+        "managed_spawned",
+        "external_base_url",
+    ]
+
+
+def test_doctor_reports_opencode_external_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.git_utils.run_git",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.load_repo_config",
+        lambda _repo_root: SimpleNamespace(
+            voice={},
+            agents={"opencode": SimpleNamespace(base_url="http://external:7777")},
+            opencode=SimpleNamespace(server_scope="workspace"),
+        ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.list_process_records",
+        lambda *_args, **_kwargs: [],
+    )
+
+    report = doctor(hub_root)
+
+    by_id = {check.check_id: check for check in report.checks if check.check_id}
+    external_check = by_id["opencode.lifecycle.external"]
+    registry_check = by_id["opencode.lifecycle.registry"]
+    assert external_check.passed is True
+    assert "External OpenCode base_url configured" in external_check.message
+    assert registry_check.passed is True
+    assert "No CAR-managed OpenCode server records found" in registry_check.message
 
 
 def test_pma_doctor_checks_invalid_agent():

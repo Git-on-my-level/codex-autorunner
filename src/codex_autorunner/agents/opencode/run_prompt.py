@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+from ...core.logging_utils import log_event
 from ...core.usage import persist_opencode_usage_snapshot
 from .runtime import (
     PERMISSION_ALLOW,
@@ -60,6 +61,15 @@ async def run_opencode_prompt(
         session_id = extract_session_id(session, allow_fallback_id=True)
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("OpenCode did not return a session id")
+        log_event(
+            logger or logging.getLogger(__name__),
+            logging.INFO,
+            "opencode.session.created",
+            session_id=session_id,
+            workspace_root=config.workspace_root,
+            source="run_prompt",
+            reuse=False,
+        )
     except Exception as exc:
         raise RuntimeError(f"Failed to create OpenCode session: {exc}") from exc
 
@@ -68,7 +78,26 @@ async def run_opencode_prompt(
             return
         try:
             await client.dispose(session_id)
+            log_event(
+                logger or logging.getLogger(__name__),
+                logging.INFO,
+                "opencode.session.disposed",
+                session_id=session_id,
+                workspace_root=config.workspace_root,
+                source="run_prompt",
+                reuse=False,
+            )
         except Exception as exc:
+            log_event(
+                logger or logging.getLogger(__name__),
+                logging.WARNING,
+                "opencode.session.dispose_failed",
+                session_id=session_id,
+                workspace_root=config.workspace_root,
+                source="run_prompt",
+                reuse=False,
+                exc=exc,
+            )
             if logger is not None:
                 logger.warning(f"OpenCode dispose failed: {exc}")
 
