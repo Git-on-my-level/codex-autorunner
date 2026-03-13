@@ -27,6 +27,8 @@ from .app_server_threads import (
 )
 from .locks import file_lock
 from .logging_utils import log_event
+from .orchestration.migrate_legacy_state import backfill_legacy_pma_lifecycle_events
+from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_audit import PmaActionType
 from .pma_queue import PmaQueue
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
@@ -76,6 +78,8 @@ class PmaLifecycleRouter:
         self._events_log = (
             hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
         )
+        with open_orchestration_sqlite(hub_root) as conn:
+            backfill_legacy_pma_lifecycle_events(hub_root, conn)
         safety_config = PmaSafetyConfig()
         self._safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
 
@@ -515,6 +519,63 @@ class PmaLifecycleRouter:
 
     def _emit_event(self, event: dict[str, Any]) -> None:
         self._artifacts_dir.mkdir(parents=True, exist_ok=True)
+        event_id = str(event.get("event_id") or "").strip()
+        event_type = str(event.get("event_type") or "unknown").strip() or "unknown"
+        target_id = str(
+            event.get("thread_id") or event.get("lane_id") or event.get("agent") or ""
+        ).strip()
+        target_kind = None
+        if event.get("thread_id"):
+            target_kind = "thread_target"
+        elif event.get("lane_id"):
+            target_kind = "lane"
+        elif event.get("agent"):
+            target_kind = "agent_definition"
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    target_kind,
+                    target_id,
+                    execution_id,
+                    repo_id,
+                    run_id,
+                    timestamp,
+                    status,
+                    payload_json,
+                    processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET
+                    event_family = excluded.event_family,
+                    event_type = excluded.event_type,
+                    target_kind = excluded.target_kind,
+                    target_id = excluded.target_id,
+                    execution_id = excluded.execution_id,
+                    repo_id = excluded.repo_id,
+                    run_id = excluded.run_id,
+                    timestamp = excluded.timestamp,
+                    status = excluded.status,
+                    payload_json = excluded.payload_json,
+                    processed = excluded.processed
+                """,
+                (
+                    event_id,
+                    "pma.lifecycle",
+                    event_type,
+                    target_kind,
+                    target_id or None,
+                    None,
+                    event.get("repo_id"),
+                    event.get("run_id"),
+                    event.get("timestamp") or now_iso(),
+                    "recorded",
+                    json.dumps(event, sort_keys=True),
+                    1,
+                ),
+            )
         lock_path = self._events_log.with_suffix(".jsonl.lock")
         with file_lock(lock_path):
             with open(self._events_log, "a", encoding="utf-8") as f:

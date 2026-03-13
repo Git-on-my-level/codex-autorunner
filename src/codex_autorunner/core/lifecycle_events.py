@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .locks import file_lock
+from .orchestration.sqlite import (
+    open_orchestration_sqlite,
+    resolve_orchestration_sqlite_path,
+)
 from .utils import atomic_write
 
 logger = logging.getLogger(__name__)
@@ -179,10 +183,11 @@ class _LegacyJsonLifecycleEventStore:
 
 
 class _SqliteLifecycleEventStore:
-    def __init__(self, hub_root: Path) -> None:
+    def __init__(self, hub_root: Path, *, initialize_schema: bool = True) -> None:
         self._path = default_lifecycle_events_db_path(hub_root)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize_schema()
+        if initialize_schema:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._initialize_schema()
 
     @property
     def path(self) -> Path:
@@ -263,6 +268,7 @@ class _SqliteLifecycleEventStore:
         existing.data = data
 
     def _connect(self) -> sqlite3.Connection:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self._path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -351,6 +357,8 @@ class _SqliteLifecycleEventStore:
         return events
 
     def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
+        if not self._path.exists() and not ensure_exists:
+            return []
         return self._load_rows(
             """
             SELECT event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
@@ -510,6 +518,8 @@ class _SqliteLifecycleEventStore:
             )
 
     def count(self) -> int:
+        if not self._path.exists():
+            return 0
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS c FROM lifecycle_events").fetchone()
         if row is None:
@@ -517,17 +527,398 @@ class _SqliteLifecycleEventStore:
         return int(row["c"])
 
 
+class _OrchestrationLifecycleEventStore:
+    def __init__(self, hub_root: Path) -> None:
+        self._hub_root = hub_root
+        self._path = resolve_orchestration_sqlite_path(hub_root)
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @staticmethod
+    def _is_terminal_flow_event(event_type: LifecycleEventType) -> bool:
+        return event_type in {
+            LifecycleEventType.FLOW_COMPLETED,
+            LifecycleEventType.FLOW_FAILED,
+            LifecycleEventType.FLOW_STOPPED,
+        }
+
+    @staticmethod
+    def _extract_transition_token(data: dict[str, Any]) -> Optional[str]:
+        raw = data.get(TRANSITION_TOKEN_KEY)
+        if isinstance(raw, str):
+            token = raw.strip()
+            if token:
+                return token
+        return None
+
+    def _semantic_identity(self, event: LifecycleEvent) -> tuple[str, ...]:
+        key: tuple[str, ...] = (
+            event.event_type.value,
+            event.repo_id,
+            event.run_id,
+        )
+        token = self._extract_transition_token(event.data)
+        if token:
+            key = (*key, token)
+        return key
+
+    @staticmethod
+    def _parse_duplicate_count(value: Any) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value if value >= 0 else 0
+        if isinstance(value, str):
+            try:
+                parsed = int(value.strip())
+                return parsed if parsed >= 0 else 0
+            except Exception:
+                return 0
+        return 0
+
+    @staticmethod
+    def _resolve_first_seen_at(
+        existing: LifecycleEvent,
+        event_data: dict[str, Any],
+        *,
+        fallback: str,
+    ) -> str:
+        first_seen = event_data.get("first_seen_at")
+        if isinstance(first_seen, str) and first_seen.strip():
+            return first_seen.strip()
+        if isinstance(existing.timestamp, str) and existing.timestamp.strip():
+            return existing.timestamp.strip()
+        return fallback
+
+    def _annotate_duplicate(
+        self,
+        existing: LifecycleEvent,
+        *,
+        duplicate_seen_at: str,
+    ) -> None:
+        data = dict(existing.data or {})
+        duplicate_count = self._parse_duplicate_count(data.get("duplicate_count"))
+        first_seen_at = self._resolve_first_seen_at(
+            existing,
+            data,
+            fallback=duplicate_seen_at,
+        )
+        data["duplicate_count"] = duplicate_count + 1
+        data["first_seen_at"] = first_seen_at
+        data["last_seen_at"] = duplicate_seen_at
+        existing.data = data
+
+    @staticmethod
+    def _event_payload(event: LifecycleEvent) -> str:
+        payload = {
+            "data": event.data or {},
+            "origin": event.origin or "system",
+        }
+        return json.dumps(payload, sort_keys=True)
+
+    @staticmethod
+    def _row_to_event(row: Any) -> Optional[LifecycleEvent]:
+        try:
+            event_type_raw = row["event_type"]
+            if not isinstance(event_type_raw, str):
+                return None
+            event_type = LifecycleEventType(event_type_raw)
+            payload_raw = row["payload_json"]
+            payload_data: Any = {}
+            if isinstance(payload_raw, str):
+                try:
+                    payload_data = json.loads(payload_raw)
+                except Exception:
+                    payload_data = {}
+            payload = dict(payload_data) if isinstance(payload_data, dict) else {}
+            data_raw = payload.get("data")
+            data = dict(data_raw) if isinstance(data_raw, dict) else {}
+            origin_raw = payload.get("origin")
+            origin = (
+                str(origin_raw).strip()
+                if isinstance(origin_raw, str) and origin_raw.strip()
+                else "system"
+            )
+            return LifecycleEvent(
+                event_type=event_type,
+                repo_id=str(row["repo_id"] or ""),
+                run_id=str(row["run_id"] or ""),
+                data=data,
+                origin=origin,
+                timestamp=str(row["timestamp"] or ""),
+                processed=bool(row["processed"]),
+                event_id=str(row["event_id"] or ""),
+            )
+        except Exception:
+            return None
+
+    def _load_rows(self, query: str, params: tuple[Any, ...]) -> list[LifecycleEvent]:
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            rows = conn.execute(query, params).fetchall()
+        events: list[LifecycleEvent] = []
+        for row in rows:
+            event = self._row_to_event(row)
+            if event is not None:
+                events.append(event)
+        return events
+
+    def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
+        _ = ensure_exists
+        return self._load_rows(
+            """
+            SELECT event_id, event_type, repo_id, run_id, payload_json, timestamp, processed
+              FROM orch_event_projections
+             WHERE event_family = 'lifecycle'
+             ORDER BY rowid ASC
+            """,
+            (),
+        )
+
+    def save(self, events: list[LifecycleEvent]) -> None:
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            conn.execute(
+                "DELETE FROM orch_event_projections WHERE event_family = 'lifecycle'"
+            )
+            conn.executemany(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    target_kind,
+                    target_id,
+                    execution_id,
+                    repo_id,
+                    run_id,
+                    timestamp,
+                    status,
+                    payload_json,
+                    processed
+                ) VALUES (?, 'lifecycle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        event.event_id,
+                        event.event_type.value,
+                        "flow_run",
+                        event.run_id,
+                        None,
+                        event.repo_id,
+                        event.run_id,
+                        event.timestamp,
+                        event.event_type.value,
+                        self._event_payload(event),
+                        1 if event.processed else 0,
+                    )
+                    for event in events
+                ],
+            )
+
+    def _find_duplicate_terminal_event(
+        self,
+        conn: sqlite3.Connection,
+        candidate: LifecycleEvent,
+    ) -> Optional[LifecycleEvent]:
+        if not self._is_terminal_flow_event(candidate.event_type):
+            return None
+        candidate_key = self._semantic_identity(candidate)
+        rows = conn.execute(
+            """
+            SELECT event_id, event_type, repo_id, run_id, payload_json, timestamp, processed
+              FROM orch_event_projections
+             WHERE event_family = 'lifecycle'
+               AND event_type = ?
+               AND repo_id = ?
+               AND run_id = ?
+             ORDER BY rowid ASC
+            """,
+            (candidate.event_type.value, candidate.repo_id, candidate.run_id),
+        ).fetchall()
+        for row in rows:
+            existing = self._row_to_event(row)
+            if (
+                existing is not None
+                and self._semantic_identity(existing) == candidate_key
+            ):
+                return existing
+        return None
+
+    def append_with_result(self, event: LifecycleEvent) -> LifecycleEventAppendResult:
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            duplicate = self._find_duplicate_terminal_event(conn, event)
+            if duplicate is not None:
+                seen_at = event.timestamp
+                if not isinstance(seen_at, str) or not seen_at.strip():
+                    seen_at = datetime.now(timezone.utc).isoformat()
+                self._annotate_duplicate(duplicate, duplicate_seen_at=seen_at)
+                conn.execute(
+                    """
+                    UPDATE orch_event_projections
+                       SET payload_json = ?
+                     WHERE event_family = 'lifecycle'
+                       AND event_id = ?
+                    """,
+                    (
+                        self._event_payload(duplicate),
+                        duplicate.event_id,
+                    ),
+                )
+                return LifecycleEventAppendResult(event=duplicate, deduped=True)
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    target_kind,
+                    target_id,
+                    execution_id,
+                    repo_id,
+                    run_id,
+                    timestamp,
+                    status,
+                    payload_json,
+                    processed
+                ) VALUES (?, 'lifecycle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.event_id,
+                    event.event_type.value,
+                    "flow_run",
+                    event.run_id,
+                    None,
+                    event.repo_id,
+                    event.run_id,
+                    event.timestamp,
+                    event.event_type.value,
+                    self._event_payload(event),
+                    1 if event.processed else 0,
+                ),
+            )
+            return LifecycleEventAppendResult(event=event, deduped=False)
+
+    def append(self, event: LifecycleEvent) -> None:
+        self.append_with_result(event)
+
+    def update_event(
+        self,
+        event_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        processed: Optional[bool] = None,
+    ) -> Optional[LifecycleEvent]:
+        if not event_id:
+            return None
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            row = conn.execute(
+                """
+                SELECT event_id, event_type, repo_id, run_id, payload_json, timestamp, processed
+                  FROM orch_event_projections
+                 WHERE event_family = 'lifecycle'
+                   AND event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+            event = self._row_to_event(row)
+            if event is None:
+                return None
+            if data is not None:
+                event.data = data
+            if processed is not None:
+                event.processed = processed
+            conn.execute(
+                """
+                UPDATE orch_event_projections
+                   SET payload_json = ?,
+                       processed = ?
+                 WHERE event_family = 'lifecycle'
+                   AND event_id = ?
+                """,
+                (
+                    self._event_payload(event),
+                    1 if event.processed else 0,
+                    event_id,
+                ),
+            )
+        return event
+
+    def mark_processed(self, event_id: str) -> Optional[LifecycleEvent]:
+        return self.update_event(event_id, processed=True)
+
+    def get_unprocessed(self, *, limit: int = 100) -> list[LifecycleEvent]:
+        safe_limit = max(0, int(limit))
+        return self._load_rows(
+            """
+            SELECT event_id, event_type, repo_id, run_id, payload_json, timestamp, processed
+              FROM orch_event_projections
+             WHERE event_family = 'lifecycle'
+               AND processed = 0
+             ORDER BY rowid ASC
+             LIMIT ?
+            """,
+            (safe_limit,),
+        )
+
+    def prune_processed(self, *, keep_last: int = 100) -> None:
+        safe_keep_last = max(0, int(keep_last))
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            if safe_keep_last == 0:
+                conn.execute(
+                    """
+                    DELETE FROM orch_event_projections
+                     WHERE event_family = 'lifecycle'
+                       AND processed = 1
+                    """
+                )
+                return
+            conn.execute(
+                """
+                DELETE FROM orch_event_projections
+                 WHERE event_family = 'lifecycle'
+                   AND processed = 1
+                   AND rowid NOT IN (
+                        SELECT rowid
+                          FROM orch_event_projections
+                         WHERE event_family = 'lifecycle'
+                           AND processed = 1
+                         ORDER BY rowid DESC
+                         LIMIT ?
+                   )
+                """,
+                (safe_keep_last,),
+            )
+
+    def count(self) -> int:
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                  FROM orch_event_projections
+                 WHERE event_family = 'lifecycle'
+                """
+            ).fetchone()
+        if row is None:
+            return 0
+        return int(row["c"] or 0)
+
+
 class LifecycleEventStore:
-    """Lifecycle event store facade using SQLite primary storage with JSON migration."""
+    """Lifecycle event store facade using orchestration SQLite with legacy migration."""
 
     def __init__(self, hub_root: Path) -> None:
         self._legacy_store = _LegacyJsonLifecycleEventStore(hub_root)
-        self._sqlite_store = _SqliteLifecycleEventStore(hub_root)
+        self._legacy_sqlite_store = _SqliteLifecycleEventStore(
+            hub_root, initialize_schema=False
+        )
+        self._orchestration_store = _OrchestrationLifecycleEventStore(hub_root)
         self._migrate_legacy_if_needed()
 
     @property
     def path(self) -> Path:
-        return self._sqlite_store.path
+        return self._orchestration_store.path
 
     @property
     def legacy_path(self) -> Path:
@@ -572,42 +963,55 @@ class LifecycleEventStore:
         )
 
     def _migrate_legacy_if_needed(self) -> None:
-        legacy_path = self._legacy_store.path
-        if not legacy_path.exists():
+        if self._orchestration_store.count() > 0:
             return
-        if self._sqlite_store.count() > 0:
-            return
+        migrated = 0
 
-        result = self._legacy_store.load_with_result()
-        if result.malformed:
-            self._quarantine_malformed_legacy_file(
-                raw_text=result.raw_text,
-                error=result.error,
+        legacy_sqlite_events = self._legacy_sqlite_store.load(ensure_exists=False)
+        if legacy_sqlite_events:
+            logger.info(
+                "Migrating %s legacy lifecycle events from %s to %s",
+                len(legacy_sqlite_events),
+                self._legacy_sqlite_store.path,
+                self._orchestration_store.path,
             )
-            return
-        if not result.events:
-            return
+            for event in legacy_sqlite_events:
+                self._orchestration_store.append_with_result(event)
+                migrated += 1
 
-        logger.info(
-            "Migrating %s legacy lifecycle events from %s to %s",
-            len(result.events),
-            legacy_path,
-            self._sqlite_store.path,
-        )
-        for event in result.events:
-            self._sqlite_store.append_with_result(event)
+        legacy_path = self._legacy_store.path
+        if legacy_path.exists():
+            result = self._legacy_store.load_with_result()
+            if result.malformed:
+                self._quarantine_malformed_legacy_file(
+                    raw_text=result.raw_text,
+                    error=result.error,
+                )
+                return
+            if result.events:
+                logger.info(
+                    "Migrating %s legacy lifecycle JSON events from %s to %s",
+                    len(result.events),
+                    legacy_path,
+                    self._orchestration_store.path,
+                )
+                for event in result.events:
+                    self._orchestration_store.append_with_result(event)
+                    migrated += 1
+        if migrated == 0:
+            return
 
     def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
-        return self._sqlite_store.load(ensure_exists=ensure_exists)
+        return self._orchestration_store.load(ensure_exists=ensure_exists)
 
     def save(self, events: list[LifecycleEvent]) -> None:
-        self._sqlite_store.save(events)
+        self._orchestration_store.save(events)
 
     def append_with_result(self, event: LifecycleEvent) -> LifecycleEventAppendResult:
-        return self._sqlite_store.append_with_result(event)
+        return self._orchestration_store.append_with_result(event)
 
     def append(self, event: LifecycleEvent) -> None:
-        self._sqlite_store.append(event)
+        self._orchestration_store.append(event)
 
     def update_event(
         self,
@@ -616,20 +1020,20 @@ class LifecycleEventStore:
         data: Optional[dict[str, Any]] = None,
         processed: Optional[bool] = None,
     ) -> Optional[LifecycleEvent]:
-        return self._sqlite_store.update_event(
+        return self._orchestration_store.update_event(
             event_id,
             data=data,
             processed=processed,
         )
 
     def mark_processed(self, event_id: str) -> Optional[LifecycleEvent]:
-        return self._sqlite_store.mark_processed(event_id)
+        return self._orchestration_store.mark_processed(event_id)
 
     def get_unprocessed(self, *, limit: int = 100) -> list[LifecycleEvent]:
-        return self._sqlite_store.get_unprocessed(limit=limit)
+        return self._orchestration_store.get_unprocessed(limit=limit)
 
     def prune_processed(self, *, keep_last: int = 100) -> None:
-        self._sqlite_store.prune_processed(keep_last=keep_last)
+        self._orchestration_store.prune_processed(keep_last=keep_last)
 
 
 class LifecycleEventEmitter:

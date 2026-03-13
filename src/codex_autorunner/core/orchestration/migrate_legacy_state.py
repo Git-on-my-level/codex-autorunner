@@ -11,6 +11,9 @@ LEGACY_PMA_THREADS_DB_PATH = Path(".codex-autorunner/pma/threads.sqlite3")
 LEGACY_PMA_AUTOMATION_PATH = Path(".codex-autorunner/pma/automation_store.json")
 LEGACY_PMA_QUEUE_DIR = Path(".codex-autorunner/pma/queue")
 LEGACY_PMA_REACTIVE_PATH = Path(".codex-autorunner/pma/reactive_state.json")
+LEGACY_PMA_TRANSCRIPTS_DIR = Path(".codex-autorunner/pma/transcripts")
+LEGACY_PMA_AUDIT_LOG_PATH = Path(".codex-autorunner/pma/audit_log.jsonl")
+LEGACY_PMA_LIFECYCLE_LOG_PATH = Path(".codex-autorunner/pma/lifecycle_events.jsonl")
 
 
 def _json_dumps(value: Any) -> str:
@@ -31,6 +34,27 @@ def _load_json_file(path: Path) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+def _load_json_lines(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            entries.append(parsed)
+    return entries
 
 
 def _table_exists(conn: Any, table_name: str) -> bool:
@@ -599,13 +623,247 @@ def backfill_legacy_reactive_state(hub_root: Path, conn: Any) -> dict[str, int]:
     return {"keys": count}
 
 
+def backfill_legacy_transcript_mirrors(hub_root: Path, conn: Any) -> dict[str, int]:
+    transcripts_dir = hub_root / LEGACY_PMA_TRANSCRIPTS_DIR
+    if not transcripts_dir.exists():
+        return {"transcripts": 0}
+
+    count = 0
+    for path in sorted(transcripts_dir.glob("*.json")):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            metadata = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        transcript_mirror_id = str(
+            metadata.get("turn_id") or metadata.get("managed_turn_id") or ""
+        ).strip()
+        if not transcript_mirror_id:
+            continue
+        content_path = Path(str(metadata.get("content_path") or ""))
+        if not content_path.is_absolute():
+            content_path = (path.parent / content_path).resolve()
+        try:
+            content = content_path.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        preview = content.strip()
+        if len(preview) > 400:
+            preview = preview[:400].rstrip() + "..."
+        target_id = str(
+            metadata.get("managed_thread_id")
+            or metadata.get("thread_id")
+            or metadata.get("lane_id")
+            or transcript_mirror_id
+        ).strip()
+        target_kind = "thread_target"
+        if metadata.get("lane_id") and not (
+            metadata.get("managed_thread_id") or metadata.get("thread_id")
+        ):
+            target_kind = "lane"
+        created_at = str(
+            metadata.get("created_at")
+            or metadata.get("finished_at")
+            or metadata.get("event_timestamp")
+            or now_iso()
+        )
+        execution_id = str(
+            metadata.get("managed_turn_id")
+            or metadata.get("turn_id")
+            or transcript_mirror_id
+        ).strip()
+        conn.execute(
+            """
+            INSERT INTO orch_transcript_mirrors (
+                transcript_mirror_id,
+                target_kind,
+                target_id,
+                execution_id,
+                message_role,
+                text_content,
+                text_preview,
+                repo_id,
+                agent_id,
+                model_id,
+                created_at,
+                updated_at,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(transcript_mirror_id) DO UPDATE SET
+                target_kind = excluded.target_kind,
+                target_id = excluded.target_id,
+                execution_id = excluded.execution_id,
+                message_role = excluded.message_role,
+                text_content = excluded.text_content,
+                text_preview = excluded.text_preview,
+                repo_id = excluded.repo_id,
+                agent_id = excluded.agent_id,
+                model_id = excluded.model_id,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                transcript_mirror_id,
+                target_kind,
+                target_id,
+                execution_id or None,
+                "assistant",
+                content,
+                preview,
+                metadata.get("repo_id"),
+                metadata.get("agent"),
+                metadata.get("model"),
+                created_at,
+                created_at,
+                _json_dumps(metadata),
+            ),
+        )
+        count += 1
+    return {"transcripts": count}
+
+
+def backfill_legacy_audit_entries(hub_root: Path, conn: Any) -> dict[str, int]:
+    count = 0
+    for index, entry in enumerate(
+        _load_json_lines(hub_root / LEGACY_PMA_AUDIT_LOG_PATH)
+    ):
+        audit_id = str(entry.get("entry_id") or "").strip()
+        if not audit_id:
+            continue
+        payload = {
+            "entry_id": audit_id,
+            "thread_id": entry.get("thread_id"),
+            "turn_id": entry.get("turn_id"),
+            "client_turn_id": entry.get("client_turn_id"),
+            "details": (
+                entry.get("details") if isinstance(entry.get("details"), dict) else {}
+            ),
+            "status": entry.get("status") or "ok",
+            "error": entry.get("error"),
+            "agent": entry.get("agent"),
+        }
+        conn.execute(
+            """
+            INSERT INTO orch_audit_entries (
+                audit_id,
+                action_type,
+                actor_kind,
+                actor_id,
+                target_kind,
+                target_id,
+                repo_id,
+                payload_json,
+                created_at,
+                fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(audit_id) DO UPDATE SET
+                action_type = excluded.action_type,
+                actor_kind = excluded.actor_kind,
+                actor_id = excluded.actor_id,
+                target_kind = excluded.target_kind,
+                target_id = excluded.target_id,
+                repo_id = excluded.repo_id,
+                payload_json = excluded.payload_json,
+                created_at = excluded.created_at,
+                fingerprint = excluded.fingerprint
+            """,
+            (
+                f"{audit_id}:{index}",
+                entry.get("action_type") or "unknown",
+                "agent" if entry.get("agent") else None,
+                entry.get("agent"),
+                "thread_target" if entry.get("thread_id") else None,
+                entry.get("thread_id"),
+                None,
+                _json_dumps(payload),
+                entry.get("timestamp") or now_iso(),
+                entry.get("fingerprint"),
+            ),
+        )
+        count += 1
+    return {"entries": count}
+
+
+def backfill_legacy_pma_lifecycle_events(hub_root: Path, conn: Any) -> dict[str, int]:
+    count = 0
+    for entry in _load_json_lines(hub_root / LEGACY_PMA_LIFECYCLE_LOG_PATH):
+        event_id = str(entry.get("event_id") or "").strip()
+        if not event_id:
+            continue
+        target_id = str(
+            entry.get("thread_id") or entry.get("lane_id") or entry.get("agent") or ""
+        ).strip()
+        target_kind = None
+        if entry.get("thread_id"):
+            target_kind = "thread_target"
+        elif entry.get("lane_id"):
+            target_kind = "lane"
+        elif entry.get("agent"):
+            target_kind = "agent_definition"
+        conn.execute(
+            """
+            INSERT INTO orch_event_projections (
+                event_id,
+                event_family,
+                event_type,
+                target_kind,
+                target_id,
+                execution_id,
+                repo_id,
+                run_id,
+                timestamp,
+                status,
+                payload_json,
+                processed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+                event_family = excluded.event_family,
+                event_type = excluded.event_type,
+                target_kind = excluded.target_kind,
+                target_id = excluded.target_id,
+                execution_id = excluded.execution_id,
+                repo_id = excluded.repo_id,
+                run_id = excluded.run_id,
+                timestamp = excluded.timestamp,
+                status = excluded.status,
+                payload_json = excluded.payload_json,
+                processed = excluded.processed
+            """,
+            (
+                event_id,
+                "pma.lifecycle",
+                entry.get("event_type") or "unknown",
+                target_kind,
+                target_id or None,
+                None,
+                entry.get("repo_id"),
+                entry.get("run_id"),
+                entry.get("timestamp") or now_iso(),
+                "recorded",
+                _json_dumps(entry),
+                1,
+            ),
+        )
+        count += 1
+    return {"events": count}
+
+
 __all__ = [
     "LEGACY_PMA_AUTOMATION_PATH",
+    "LEGACY_PMA_AUDIT_LOG_PATH",
+    "LEGACY_PMA_LIFECYCLE_LOG_PATH",
     "LEGACY_PMA_QUEUE_DIR",
     "LEGACY_PMA_REACTIVE_PATH",
+    "LEGACY_PMA_TRANSCRIPTS_DIR",
     "LEGACY_PMA_THREADS_DB_PATH",
     "backfill_legacy_automation_state",
+    "backfill_legacy_audit_entries",
+    "backfill_legacy_pma_lifecycle_events",
     "backfill_legacy_queue_state",
     "backfill_legacy_reactive_state",
+    "backfill_legacy_transcript_mirrors",
     "backfill_legacy_thread_state",
 ]

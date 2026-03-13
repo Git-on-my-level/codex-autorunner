@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 3
+ORCHESTRATION_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -545,10 +545,52 @@ def _apply_v3(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orch_thread_actions_v3 RENAME TO orch_thread_actions")
 
 
+def _apply_v4(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_transcript_mirrors",
+        "metadata_json",
+        "metadata_json TEXT NOT NULL DEFAULT '{}'",
+    )
+    _ensure_column(
+        conn,
+        "orch_event_projections",
+        "processed",
+        "processed INTEGER NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "orch_audit_entries",
+        "fingerprint",
+        "fingerprint TEXT",
+    )
+    if _table_exists(conn, "orch_event_projections"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_processed
+                ON orch_event_projections(event_family, processed, timestamp)
+            """
+        )
+    if _table_exists(conn, "orch_audit_entries"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_audit_entries_action_created
+                ON orch_audit_entries(action_type, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_audit_entries_fingerprint_created
+                ON orch_audit_entries(fingerprint, created_at)
+            """
+        )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
     _MigrationStep(3, "expand_pma_cutover_columns", _apply_v3),
+    _MigrationStep(4, "add_transcript_metadata_and_projection_processing", _apply_v4),
 )
 
 

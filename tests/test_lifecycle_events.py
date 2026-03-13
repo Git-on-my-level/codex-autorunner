@@ -225,7 +225,7 @@ def test_lifecycle_event_store_migrates_legacy_json_list() -> None:
         assert loaded[0].event_id == "legacy-1"
         assert loaded[0].event_type == LifecycleEventType.FLOW_FAILED
         assert loaded[0].data == {"error": "boom"}
-        assert store.path.name == "lifecycle_events.sqlite3"
+        assert store.path.name == "orchestration.sqlite3"
 
 
 def test_lifecycle_event_store_migrates_legacy_json_dict_shape() -> None:

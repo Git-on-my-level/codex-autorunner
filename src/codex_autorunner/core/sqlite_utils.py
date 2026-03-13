@@ -37,5 +37,9 @@ def open_sqlite(path: Path, durable: bool = False) -> Iterator[sqlite3.Connectio
     conn = connect_sqlite(path, durable=durable)
     try:
         yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

@@ -49,6 +49,7 @@ from .sqlite import (
     initialize_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
+from .transcript_mirror import TranscriptMirrorRow, TranscriptMirrorStore
 
 __all__ = [
     "AgentDefinition",
@@ -75,6 +76,8 @@ __all__ = [
     "TargetKind",
     "ThreadExecutionStore",
     "ThreadTarget",
+    "TranscriptMirrorRow",
+    "TranscriptMirrorStore",
     "await_runtime_thread_outcome",
     "apply_orchestration_migrations",
     "begin_runtime_thread_execution",

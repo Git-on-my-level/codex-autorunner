@@ -146,6 +146,8 @@ def build_history_files_docs_router(
     @router.get("/history")
     def list_pma_history(request: Request, limit: int = 50) -> dict[str, Any]:
         hub_root = request.app.state.config.root
+        # The transcript store serves the canonical sqlite mirror and falls back to
+        # legacy files only while older history is being migrated.
         store = PmaTranscriptStore(hub_root)
         entries = store.list_recent(limit=limit)
         return {"entries": entries}
