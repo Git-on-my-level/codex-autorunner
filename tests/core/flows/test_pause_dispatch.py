@@ -121,6 +121,7 @@ def test_load_latest_paused_ticket_flow_dispatch_fails_closed_for_latest_invalid
     assert snapshot is not None
     assert snapshot.run_id == "run-invalid"
     assert snapshot.dispatch_seq == "0002"
+    assert snapshot.allow_resume_hint is False
     assert (
         snapshot.dispatch_markdown
         == "Latest paused dispatch #0002 is unreadable or invalid.\n\n"
@@ -146,6 +147,7 @@ def test_load_latest_paused_ticket_flow_dispatch_reports_unreadable_latest_dispa
     assert snapshot is not None
     assert snapshot.run_id == "run-missing"
     assert snapshot.dispatch_seq == "0001"
+    assert snapshot.allow_resume_hint is False
     assert "Latest paused dispatch #0001 is unreadable or invalid." in (
         snapshot.dispatch_markdown
     )

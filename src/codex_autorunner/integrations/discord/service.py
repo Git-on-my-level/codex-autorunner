@@ -2556,7 +2556,9 @@ class DiscordBotService:
                     workspace_root=workspace_root,
                     repo_id=binding.get("repo_id"),
                 ),
-                resume_hint="`/car flow resume`",
+                resume_hint=(
+                    "`/car flow resume`" if snapshot.allow_resume_hint else ""
+                ),
             )
             chunks = chunk_discord_message(
                 content,

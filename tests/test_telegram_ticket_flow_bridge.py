@@ -329,7 +329,8 @@ async def test_pause_dispatch_surfaces_latest_invalid_dispatch_notice(
     assert "Ticket flow paused (run run-invalid). Latest dispatch #0001:" in text
     assert "Latest paused dispatch #0001 is unreadable or invalid." in text
     assert "frontmatter.mode must be 'notify', 'pause', or 'turn_summary'." in text
-    assert "Use `/flow resume` to continue." in text
+    assert "Fix DISPATCH.md for that paused turn before resuming." in text
+    assert "Use `/flow resume` to continue." not in text
 
 
 @pytest.mark.asyncio

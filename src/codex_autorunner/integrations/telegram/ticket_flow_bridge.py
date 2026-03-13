@@ -175,7 +175,8 @@ class TelegramTicketFlowBridge:
             return
         if pause is None:
             return
-        run_id, seq, content, archived_dir = pause
+        run_id, seq, content, archived_dir = pause[:4]
+        allow_resume_hint = pause[4] if len(pause) > 4 else True
         marker = f"{run_id}:{seq}"
         pending = [
             (key, record)
@@ -217,6 +218,7 @@ class TelegramTicketFlowBridge:
                 archived_dir=archived_dir,
                 workspace_root=workspace_root,
                 repo_id=getattr(primary_record, "repo_id", None),
+                allow_resume_hint=allow_resume_hint,
             )
             self._pause_targets[str(workspace_root)] = run_id
         except Exception as exc:
@@ -273,7 +275,7 @@ class TelegramTicketFlowBridge:
 
     def _load_ticket_flow_pause(
         self, workspace_root: Path
-    ) -> Optional[tuple[str, str, str, Optional[Path]]]:
+    ) -> Optional[tuple[str, str, str, Optional[Path], bool]]:
         snapshot = load_latest_paused_ticket_flow_dispatch(workspace_root)
         if snapshot is None:
             return None
@@ -282,6 +284,7 @@ class TelegramTicketFlowBridge:
             snapshot.dispatch_seq,
             snapshot.dispatch_markdown,
             snapshot.dispatch_dir,
+            snapshot.allow_resume_hint,
         )
 
     def get_paused_ticket_flow(
@@ -363,7 +366,8 @@ class TelegramTicketFlowBridge:
             return
         if pause is None:
             return
-        run_id, seq, content, archived_dir = pause
+        run_id, seq, content, archived_dir = pause[:4]
+        allow_resume_hint = pause[4] if len(pause) > 4 else True
         marker = f"{run_id}:{seq}"
         previous = self._last_default_notification.get(workspace_root)
         if previous == marker:
@@ -377,6 +381,7 @@ class TelegramTicketFlowBridge:
                 content=content,
                 archived_dir=archived_dir,
                 workspace_root=workspace_root,
+                allow_resume_hint=allow_resume_hint,
             )
             self._last_default_notification[workspace_root] = marker
             self._pause_targets[str(workspace_root)] = run_id
@@ -452,6 +457,7 @@ class TelegramTicketFlowBridge:
         archived_dir: Optional[Path],
         workspace_root: Optional[Path],
         repo_id: Optional[str] = None,
+        allow_resume_hint: bool = True,
     ) -> None:
         await self._send_dispatch_text(
             chat_id,
@@ -461,6 +467,7 @@ class TelegramTicketFlowBridge:
             content=content,
             workspace_root=workspace_root,
             repo_id=repo_id,
+            allow_resume_hint=allow_resume_hint,
         )
         if self._pause_config.send_attachments and archived_dir:
             await self._send_dispatch_attachments(
@@ -481,6 +488,7 @@ class TelegramTicketFlowBridge:
         content: str,
         workspace_root: Optional[Path],
         repo_id: Optional[str] = None,
+        allow_resume_hint: bool = True,
     ) -> None:
         run_mirror = (
             ChatRunMirror(workspace_root, logger_=self._logger)
@@ -493,7 +501,7 @@ class TelegramTicketFlowBridge:
             dispatch_seq=seq,
             content=content,
             source=source,
-            resume_hint="`/flow resume`",
+            resume_hint="`/flow resume`" if allow_resume_hint else "",
         )
 
         if self._pause_config.chunk_long_messages:

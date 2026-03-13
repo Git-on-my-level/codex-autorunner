@@ -337,7 +337,8 @@ async def test_pause_bridge_surfaces_latest_invalid_dispatch_notice(
         assert "frontmatter.mode must be 'notify', 'pause', or 'turn_summary'." in (
             content
         )
-        assert "Use `/car flow resume` to continue." in content
+        assert "Fix DISPATCH.md for that paused turn before resuming." in content
+        assert "Use `/car flow resume` to continue." not in content
     finally:
         await store.close()
 

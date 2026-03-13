@@ -24,6 +24,7 @@ class PauseDispatchSnapshot:
     dispatch_seq: str
     dispatch_markdown: str
     dispatch_dir: Optional[Path]
+    allow_resume_hint: bool = True
 
 
 def latest_dispatch_seq(history_dir: Path) -> Optional[str]:
@@ -132,6 +133,7 @@ def load_latest_paused_ticket_flow_dispatch(
             dispatch_seq="paused",
             dispatch_markdown=format_pause_reason(latest),
             dispatch_dir=None,
+            allow_resume_hint=True,
         )
 
     from ...tickets.outbox import parse_dispatch
@@ -154,6 +156,7 @@ def load_latest_paused_ticket_flow_dispatch(
                     errors=errors,
                 ),
                 dispatch_dir=dispatch_dir,
+                allow_resume_hint=False,
             )
             if dispatch_dir.name == latest_seq:
                 return failure_snapshot
@@ -168,6 +171,7 @@ def load_latest_paused_ticket_flow_dispatch(
                 body=dispatch.body,
             ),
             dispatch_dir=dispatch_dir,
+            allow_resume_hint=True,
         )
         if dispatch.is_handoff:
             handoff_snapshot = snapshot
@@ -188,4 +192,5 @@ def load_latest_paused_ticket_flow_dispatch(
         dispatch_seq=latest_seq,
         dispatch_markdown=format_pause_reason(latest),
         dispatch_dir=seq_dirs[0],
+        allow_resume_hint=True,
     )
