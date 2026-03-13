@@ -287,6 +287,13 @@ def _backfill_missing_thread_status(conn: Any) -> None:
 
 
 class PmaThreadStore:
+    """Current PMA-backed persistence for runtime thread targets and executions.
+
+    Orchestration services may use this as an implementation dependency during
+    the migration window, but callers should not treat its row shape as the
+    long-term orchestration API surface.
+    """
+
     def __init__(self, hub_root: Path, *, durable: bool = False) -> None:
         self._path = default_pma_threads_db_path(hub_root)
         self._durable = durable

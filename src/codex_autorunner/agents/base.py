@@ -7,6 +7,13 @@ from .types import AgentId, ConversationRef, ModelCatalog, TurnRef
 
 
 class AgentHarness(Protocol):
+    """Runtime-backed durable thread/session seam used beneath orchestration services.
+
+    Surface code should depend on orchestration service interfaces rather than
+    calling harnesses directly. Concrete harness implementations remain the
+    backend adapter layer for runtime-thread operations.
+    """
+
     agent_id: AgentId
     display_name: str
 

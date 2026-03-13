@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Protocol
 
 from .models import AgentDefinition, TargetCapability
@@ -93,7 +94,36 @@ def get_agent_definition(
     )
 
 
+@dataclass(frozen=True)
+class MappingAgentDefinitionCatalog:
+    """Thin catalog that projects registry-shaped descriptors into orchestration nouns."""
+
+    descriptors: Mapping[str, RuntimeAgentDescriptor]
+    repo_id: Optional[str] = None
+    workspace_root: Optional[str] = None
+    availability: Optional[Mapping[str, bool]] = None
+
+    def list_definitions(self) -> list[AgentDefinition]:
+        return list_agent_definitions(
+            self.descriptors,
+            repo_id=self.repo_id,
+            workspace_root=self.workspace_root,
+            availability=self.availability,
+        )
+
+    def get_definition(self, agent_id: str) -> Optional[AgentDefinition]:
+        return get_agent_definition(
+            self.descriptors,
+            agent_id,
+            repo_id=self.repo_id,
+            workspace_root=self.workspace_root,
+            availability=self.availability,
+        )
+
+
 __all__ = [
+    "MappingAgentDefinitionCatalog",
+    "RuntimeAgentDescriptor",
     "build_agent_definition",
     "get_agent_definition",
     "list_agent_definitions",
