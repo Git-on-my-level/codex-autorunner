@@ -228,6 +228,62 @@ async def test_pause_bridge_chunked_messages_have_no_part_prefix(
 
 
 @pytest.mark.anyio
+async def test_pause_bridge_prefers_pause_dispatch_over_turn_summary(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_paused_run_with_dispatch(
+        workspace,
+        run_id,
+        "0001",
+        dispatch_text=(
+            "---\nmode: pause\ntitle: Need input\n---\n\n"
+            "Please answer the blocker before I continue.\n"
+        ),
+    )
+    _create_paused_run_with_dispatch(
+        workspace,
+        run_id,
+        "0002",
+        dispatch_text=(
+            "---\nmode: turn_summary\n---\n\n"
+            "This summary should not be mirrored to Discord.\n"
+        ),
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) == 1
+        content = str(queued[0].payload_json.get("content", ""))
+        assert "Need input" in content
+        assert "Please answer the blocker before I continue." in content
+        assert "turn_summary" not in content
+        assert "This summary should not be mirrored to Discord." not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
     tmp_path: Path,
 ) -> None:

@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.core.flows import FlowStore
+from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.integrations.telegram.config import PauseDispatchNotifications
 from codex_autorunner.integrations.telegram.ticket_flow_bridge import (
     TelegramTicketFlowBridge,
@@ -26,6 +29,32 @@ class _DummyStore:
 
     async def update_topic(self, key: str, fn) -> None:
         fn(self._topics[key])
+
+
+def _init_repo(workspace: Path) -> None:
+    seed_hub_files(workspace, force=True)
+    (workspace / ".git").mkdir()
+    seed_repo_files(workspace, git_required=False)
+
+
+def _create_paused_run_with_dispatch(
+    workspace: Path,
+    run_id: str,
+    seq: str,
+    *,
+    dispatch_text: str,
+) -> None:
+    db_path = workspace / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        if store.get_flow_run(run_id) is None:
+            store.create_flow_run(run_id, "ticket_flow", input_data={}, state={})
+        store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+
+    history_dir = (
+        workspace / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / seq
+    )
+    history_dir.mkdir(parents=True, exist_ok=True)
+    (history_dir / "DISPATCH.md").write_text(dispatch_text, encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -158,6 +187,82 @@ async def test_pause_dispatch_reports_attachment_send_failure(tmp_path: Path) ->
     await bridge._notify_ticket_flow_pause(workspace, [("123:root", record)])
 
     assert any("Failed to send attachment note.txt." in call for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_pause_dispatch_prefers_pause_dispatch_over_turn_summary(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws_real"
+    workspace.mkdir()
+    _init_repo(workspace)
+    _create_paused_run_with_dispatch(
+        workspace,
+        "run-real",
+        "0001",
+        dispatch_text=(
+            "---\nmode: pause\ntitle: Need input\n---\n\n"
+            "Please answer the blocker before I continue.\n"
+        ),
+    )
+    _create_paused_run_with_dispatch(
+        workspace,
+        "run-real",
+        "0002",
+        dispatch_text=(
+            "---\nmode: turn_summary\n---\n\n"
+            "This summary should not be sent to Telegram.\n"
+        ),
+    )
+
+    calls: list[tuple[int, str, int | None]] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append((chat_id, text, thread_id))
+        return True
+
+    async def send_document(
+        chat_id: int,
+        data: bytes,
+        *,
+        filename: str,
+        thread_id=None,
+        reply_to=None,
+        caption=None,
+    ):
+        return True
+
+    pause_config = PauseDispatchNotifications(
+        enabled=True,
+        send_attachments=False,
+        max_file_size_bytes=50 * 1024 * 1024,
+        chunk_long_messages=False,
+    )
+    record = _DummyRecord(workspace)
+    store = _DummyStore({"123:root": record})
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=store,
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=pause_config,
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+
+    await bridge._notify_ticket_flow_pause(workspace, [("123:root", record)])
+
+    assert len(calls) == 1
+    text = calls[0][1]
+    assert "Need input" in text
+    assert "Please answer the blocker before I continue." in text
+    assert "turn_summary" not in text
+    assert "This summary should not be sent to Telegram." not in text
 
 
 @pytest.mark.asyncio

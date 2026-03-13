@@ -39,6 +39,17 @@ def latest_dispatch_seq(history_dir: Path) -> Optional[str]:
     return max(seqs)
 
 
+def _iter_dispatch_history_dirs(history_dir: Path) -> list[Path]:
+    if not history_dir.exists() or not history_dir.is_dir():
+        return []
+    seq_dirs = [
+        child
+        for child in history_dir.iterdir()
+        if child.is_dir() and not child.name.startswith(".") and child.name.isdigit()
+    ]
+    return sorted(seq_dirs, key=lambda path: path.name, reverse=True)
+
+
 def _format_public_error(detail: str, *, limit: int = 200) -> str:
     normalized = " ".join(detail.split())
     redacted = redact_text(normalized)
@@ -59,6 +70,17 @@ def format_pause_reason(record: FlowRunRecord) -> str:
         else "Paused without details."
     )
     return f"Reason: {reason}"
+
+
+def _render_dispatch_for_chat(*, title: Optional[str], body: str) -> str:
+    parts: list[str] = []
+    title_text = title.strip() if isinstance(title, str) and title.strip() else ""
+    body_text = body.strip()
+    if title_text:
+        parts.append(title_text)
+    if body_text:
+        parts.append(body_text)
+    return "\n\n".join(parts).strip()
 
 
 def load_latest_paused_ticket_flow_dispatch(
@@ -89,8 +111,8 @@ def load_latest_paused_ticket_flow_dispatch(
         workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
     )
     history_dir = paths.dispatch_history_dir
-    seq = latest_dispatch_seq(history_dir)
-    if not seq:
+    seq_dirs = _iter_dispatch_history_dirs(history_dir)
+    if not seq_dirs:
         return PauseDispatchSnapshot(
             run_id=latest.id,
             dispatch_seq="paused",
@@ -98,15 +120,41 @@ def load_latest_paused_ticket_flow_dispatch(
             dispatch_dir=None,
         )
 
-    message_path = history_dir / seq / "DISPATCH.md"
-    try:
-        content = message_path.read_text(encoding="utf-8")
-    except OSError:
-        return None
+    from ...tickets.outbox import parse_dispatch
+
+    handoff_snapshot: Optional[PauseDispatchSnapshot] = None
+    non_summary_snapshot: Optional[PauseDispatchSnapshot] = None
+    turn_summary_snapshot: Optional[PauseDispatchSnapshot] = None
+
+    for dispatch_dir in seq_dirs:
+        dispatch_path = dispatch_dir / "DISPATCH.md"
+        dispatch, errors = parse_dispatch(dispatch_path)
+        if errors or dispatch is None:
+            continue
+        snapshot = PauseDispatchSnapshot(
+            run_id=latest.id,
+            dispatch_seq=dispatch_dir.name,
+            dispatch_markdown=_render_dispatch_for_chat(
+                title=dispatch.title,
+                body=dispatch.body,
+            ),
+            dispatch_dir=dispatch_dir,
+        )
+        if dispatch.is_handoff:
+            handoff_snapshot = snapshot
+            break
+        if dispatch.mode != "turn_summary" and non_summary_snapshot is None:
+            non_summary_snapshot = snapshot
+        if dispatch.mode == "turn_summary" and turn_summary_snapshot is None:
+            turn_summary_snapshot = snapshot
+
+    selected = handoff_snapshot or non_summary_snapshot or turn_summary_snapshot
+    if selected is not None:
+        return selected
 
     return PauseDispatchSnapshot(
         run_id=latest.id,
-        dispatch_seq=seq,
-        dispatch_markdown=content,
-        dispatch_dir=history_dir / seq,
+        dispatch_seq=seq_dirs[0].name,
+        dispatch_markdown=format_pause_reason(latest),
+        dispatch_dir=seq_dirs[0],
     )

@@ -67,6 +67,36 @@ def test_load_latest_paused_ticket_flow_dispatch_reads_latest_history(
     assert snapshot.dispatch_dir == history_root / "0002"
 
 
+def test_load_latest_paused_ticket_flow_dispatch_prefers_pause_over_turn_summary(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(repo_root, run_id="run-3")
+
+    history_root = (
+        repo_root / ".codex-autorunner" / "runs" / "run-3" / "dispatch_history"
+    )
+    (history_root / "0001").mkdir(parents=True)
+    (history_root / "0001" / "DISPATCH.md").write_text(
+        "---\nmode: pause\ntitle: Need input\n---\n\nPlease confirm the rollout plan.\n",
+        encoding="utf-8",
+    )
+    (history_root / "0002").mkdir(parents=True)
+    (history_root / "0002" / "DISPATCH.md").write_text(
+        "---\nmode: turn_summary\n---\n\nFinal turn summary that should not be sent.\n",
+        encoding="utf-8",
+    )
+
+    snapshot = load_latest_paused_ticket_flow_dispatch(repo_root)
+    assert snapshot is not None
+    assert snapshot.run_id == "run-3"
+    assert snapshot.dispatch_seq == "0001"
+    assert (
+        snapshot.dispatch_markdown == "Need input\n\nPlease confirm the rollout plan."
+    )
+    assert snapshot.dispatch_dir == history_root / "0001"
+
+
 def test_load_latest_paused_ticket_flow_dispatch_falls_back_to_reason(
     tmp_path: Path,
 ) -> None:
