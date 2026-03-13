@@ -275,6 +275,11 @@ async def test_flow_archive_defaults_latest_paused(
     tickets_dir.mkdir(parents=True, exist_ok=True)
     (tickets_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
 
+    context_dir = tmp_path / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+    (context_dir / "decisions.md").write_text("Decision log\n", encoding="utf-8")
+
     run_dir = tmp_path / ".codex-autorunner" / "runs" / run_paused
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
@@ -290,6 +295,20 @@ async def test_flow_archive_defaults_latest_paused(
         tmp_path / ".codex-autorunner" / "flows" / run_paused / "archived_runs"
     )
     assert archived_runs.exists()
+    assert (
+        tmp_path
+        / ".codex-autorunner"
+        / "flows"
+        / run_paused
+        / "contextspace"
+        / "active_context.md"
+    ).read_text(encoding="utf-8") == "Active context\n"
+    assert (
+        tmp_path / ".codex-autorunner" / "contextspace" / "active_context.md"
+    ).read_text(encoding="utf-8") == ""
+    assert (tmp_path / ".codex-autorunner" / "contextspace" / "decisions.md").read_text(
+        encoding="utf-8"
+    ) == ""
     assert handler.stopped_workers == [run_paused]
 
     store = FlowStore(tmp_path / ".codex-autorunner" / "flows.db")

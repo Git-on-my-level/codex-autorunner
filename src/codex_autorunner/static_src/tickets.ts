@@ -2355,7 +2355,7 @@ async function archiveTicketFlow(): Promise<void> {
     return;
   }
   const confirmed = await confirmModal(
-    "Archive all tickets from this flow? They will be moved to the run's artifact directory."
+    "Archive this flow? Tickets, contextspace, and run artifacts will move into the run archive and the live workspace state will be reset."
   );
   if (!confirmed) {
     return;

@@ -238,3 +238,57 @@ async def test_flow_archive_button_deletes_run_record_by_default(
         }
     ]
     assert "Archived run" in rest.interaction_responses[0]["payload"]["data"]["content"]
+
+
+@pytest.mark.anyio
+async def test_flow_archive_command_cleans_live_contextspace(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(workspace, run_id, FlowRunStatus.COMPLETED)
+
+    tickets_dir = workspace / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
+
+    context_dir = workspace / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+    (context_dir / "decisions.md").write_text("Decision log\n", encoding="utf-8")
+
+    run_dir = workspace / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+
+    try:
+        await service._handle_flow_archive(
+            "interaction-3",
+            "token-3",
+            workspace_root=workspace,
+            options={"run_id": run_id},
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert (
+        workspace
+        / ".codex-autorunner"
+        / "flows"
+        / run_id
+        / "contextspace"
+        / "active_context.md"
+    ).read_text(encoding="utf-8") == "Active context\n"
+    assert (
+        workspace / ".codex-autorunner" / "contextspace" / "active_context.md"
+    ).read_text(encoding="utf-8") == ""
+    assert (
+        workspace / ".codex-autorunner" / "contextspace" / "decisions.md"
+    ).read_text(encoding="utf-8") == ""
+    assert not (workspace / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
+    assert not (workspace / ".codex-autorunner" / "runs" / run_id).exists()

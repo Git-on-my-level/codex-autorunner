@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from ...bootstrap import seed_repo_files
 from ...tickets.files import list_ticket_paths
 from ...tickets.outbox import resolve_outbox_paths
 from ..archive import (
@@ -31,17 +32,38 @@ def _next_archive_dir(base_dir: Path) -> Path:
     return base_dir.parent / f"{base_dir.name}_{suffix}"
 
 
+def _contextspace_source(car_root: Path) -> Path:
+    contextspace = car_root / "contextspace"
+    if contextspace.exists() or contextspace.is_symlink():
+        return contextspace
+    legacy_workspace = car_root / "workspace"
+    if legacy_workspace.exists() or legacy_workspace.is_symlink():
+        return legacy_workspace
+    return contextspace
+
+
 def _build_flow_archive_entries(
     repo_root: Path,
     *,
     run_id: str,
     run_dir: Path,
 ) -> tuple[list[ArchiveEntrySpec], dict[str, Any]]:
+    car_root = repo_root / ".codex-autorunner"
     archive_root = repo_root / ".codex-autorunner" / "flows" / run_id
     target_runs_dir = _next_archive_dir(archive_root / "archived_runs")
     ticket_paths = list(list_ticket_paths(repo_root / ".codex-autorunner" / "tickets"))
     entries = build_common_car_archive_entries(
-        repo_root / ".codex-autorunner", archive_root
+        car_root,
+        archive_root,
+        include_contextspace=False,
+    )
+    entries.append(
+        ArchiveEntrySpec(
+            label="contextspace",
+            source=_contextspace_source(car_root),
+            dest=archive_root / "contextspace",
+            mode="move",
+        )
     )
     entries.extend(
         ArchiveEntrySpec(
@@ -135,11 +157,15 @@ def archive_flow_run_artifacts(
         summary["archived_runs"] = "archived_runs" in moved_paths or any(
             path.startswith("archived_runs_") for path in moved_paths
         )
-        summary["archived_contextspace"] = "contextspace" in copied_paths
+        summary["archived_contextspace"] = "contextspace" in (
+            copied_paths | moved_paths
+        )
         summary["archived_paths"] = sorted(
             list(execution.copied_paths) + list(execution.moved_paths)
         )
         summary["missing_paths"] = list(execution.missing_paths)
+
+        seed_repo_files(repo_root, force=False, git_required=False)
 
         if delete_run:
             summary["deleted_run"] = bool(store.delete_flow_run(record.id))

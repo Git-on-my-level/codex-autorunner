@@ -1454,7 +1454,7 @@ You are the first ticket in a new ticket_flow run.
         delete_run: bool = True,
         force: bool = False,
     ):
-        """Archive a completed flow by moving tickets to the run's artifact directory.
+        """Archive a completed flow and reset live ticket/contextspace state.
 
         Args:
             run_id: The flow run to archive.
