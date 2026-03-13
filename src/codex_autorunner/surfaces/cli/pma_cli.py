@@ -37,9 +37,16 @@ thread_app = typer.Typer(
     name="thread",
     help="Manage PMA managed threads and turns.",
 )
+binding_app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode=None,
+    name="binding",
+    help="Query orchestration bindings and active work.",
+)
 pma_app.add_typer(docs_app)
 pma_app.add_typer(context_app)
 pma_app.add_typer(thread_app, name="thread")
+pma_app.add_typer(binding_app, name="binding")
 
 
 def _pma_docs_path(hub_root: Path, doc_name: str) -> Path:
@@ -1968,3 +1975,178 @@ def pma_context_compact(
         f"Compacted active_context.md at {active_context_path} "
         f"(lines: {previous_line_count} -> {len(compacted.splitlines())})"
     )
+
+
+@binding_app.command("list")
+def pma_binding_list(
+    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
+    repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
+    surface_kind: Optional[str] = typer.Option(
+        None, "--surface", help="Filter by surface kind (discord, telegram, etc.)"
+    ),
+    include_disabled: bool = typer.Option(
+        False, "--include-disabled", help="Include disabled bindings"
+    ),
+    limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """List orchestration bindings for threads."""
+    hub_root = _resolve_hub_path(path)
+    params = {
+        key: value
+        for key, value in {
+            "agent": agent,
+            "repo_id": repo_id,
+            "surface_kind": surface_kind,
+            "include_disabled": include_disabled,
+            "limit": limit,
+        }.items()
+        if value is not None
+    }
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(config, "/bindings"),
+            token_env=config.server_auth_token_env,
+            params=params,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    bindings = data.get("bindings", []) if isinstance(data, dict) else []
+    if not isinstance(bindings, list) or not bindings:
+        typer.echo("No bindings found")
+        return
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        disabled = " (disabled)" if binding.get("disabled_at") else ""
+        typer.echo(
+            " ".join(
+                [
+                    str(binding.get("binding_id") or "")[:12],
+                    f"surface={binding.get('surface_kind') or ''}",
+                    f"key={binding.get('surface_key') or ''}",
+                    f"thread={binding.get('thread_target_id') or ''}"[:20],
+                    f"agent={binding.get('agent_id') or ''}",
+                    f"repo={binding.get('repo_id') or '-'}",
+                ]
+            ).strip()
+            + disabled
+        )
+
+
+@binding_app.command("active")
+def pma_binding_active(
+    surface_kind: str = typer.Option(
+        ..., "--surface", help="Surface kind (discord, telegram, etc.)"
+    ),
+    surface_key: str = typer.Option(
+        ..., "--key", help="Surface-specific key (channel id, chat id, etc.)"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Get the active thread bound to a surface key."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(
+                config,
+                f"/bindings/active?surface_kind={surface_kind}&surface_key={surface_key}",
+            ),
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    thread_target_id = data.get("thread_target_id")
+    if thread_target_id:
+        typer.echo(f"Active thread: {thread_target_id}")
+    else:
+        typer.echo("No active thread for this surface key")
+
+
+@binding_app.command("work")
+def pma_binding_work(
+    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
+    repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
+    limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """List active work summaries (threads with recent activity)."""
+    hub_root = _resolve_hub_path(path)
+    params = {
+        key: value
+        for key, value in {
+            "agent": agent,
+            "repo_id": repo_id,
+            "limit": limit,
+        }.items()
+        if value is not None
+    }
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(config, "/bindings/work"),
+            token_env=config.server_auth_token_env,
+            params=params,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    summaries = data.get("summaries", []) if isinstance(data, dict) else []
+    if not isinstance(summaries, list) or not summaries:
+        typer.echo("No active work found")
+        return
+    for summary in summaries:
+        if not isinstance(summary, dict):
+            continue
+        thread_id = summary.get("thread_target_id", "")
+        agent_id = summary.get("agent_id", "")
+        repo_id_val = summary.get("repo_id", "-")
+        lifecycle = summary.get("lifecycle_status", "-")
+        runtime = summary.get("runtime_status", "-")
+        exec_status = summary.get("execution_status", "-")
+        bindings = summary.get("binding_count", 0)
+        surfaces = ",".join(summary.get("surface_kinds", []))
+        preview = summary.get("message_preview", "")
+        if preview:
+            preview = preview[:50] + "..." if len(preview) > 50 else preview
+        typer.echo(
+            f"{thread_id[:12]} agent={agent_id} repo={repo_id_val} "
+            f"lifecycle={lifecycle} runtime={runtime} exec={exec_status} "
+            f"bindings={bindings} surfaces={surfaces}"
+        )
+        if preview:
+            typer.echo(f"  preview: {preview}")

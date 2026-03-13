@@ -165,3 +165,131 @@ def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
     assert active_work[0].thread_target_id == codex_thread_id
     assert active_work[0].binding_count == 2
     assert set(active_work[0].surface_kinds) == {"discord", "telegram"}
+
+
+def test_binding_store_active_work_by_agent(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root)
+    bindings = OrchestrationBindingStore(hub_root)
+    codex_thread_id = _create_thread(
+        hub_root,
+        agent="codex",
+        repo_id="repo-1",
+        workspace_name="repo-1",
+        name="Codex Thread",
+    )
+    opencode_thread_id = _create_thread(
+        hub_root,
+        agent="opencode",
+        repo_id="repo-1",
+        workspace_name="repo-2",
+        name="OpenCode Thread",
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="123:root",
+        thread_target_id=codex_thread_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-2",
+        thread_target_id=opencode_thread_id,
+        agent_id="opencode",
+        repo_id="repo-1",
+    )
+
+    codex_work = bindings.list_active_work_summaries(agent_id="codex")
+    opencode_work = bindings.list_active_work_summaries(agent_id="opencode")
+
+    assert len(codex_work) == 1
+    assert codex_work[0].agent_id == "codex"
+    assert codex_work[0].thread_target_id == codex_thread_id
+
+    assert len(opencode_work) == 1
+    assert opencode_work[0].agent_id == "opencode"
+    assert opencode_work[0].thread_target_id == opencode_thread_id
+
+
+def test_binding_store_active_work_by_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root)
+    bindings = OrchestrationBindingStore(hub_root)
+    thread1_id = _create_thread(
+        hub_root,
+        agent="codex",
+        repo_id="repo-a",
+        workspace_name="repo-a",
+        name="Repo A Thread",
+    )
+    thread2_id = _create_thread(
+        hub_root,
+        agent="codex",
+        repo_id="repo-b",
+        workspace_name="repo-b",
+        name="Repo B Thread",
+    )
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-a",
+        thread_target_id=thread1_id,
+        agent_id="codex",
+        repo_id="repo-a",
+    )
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-b",
+        thread_target_id=thread2_id,
+        agent_id="codex",
+        repo_id="repo-b",
+    )
+
+    repo_a_work = bindings.list_active_work_summaries(repo_id="repo-a")
+    repo_b_work = bindings.list_active_work_summaries(repo_id="repo-b")
+
+    assert len(repo_a_work) == 1
+    assert repo_a_work[0].repo_id == "repo-a"
+    assert repo_a_work[0].thread_target_id == thread1_id
+
+    assert len(repo_b_work) == 1
+    assert repo_b_work[0].repo_id == "repo-b"
+    assert repo_b_work[0].thread_target_id == thread2_id
+
+
+def test_binding_store_list_bindings_by_surface_kind(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root)
+    bindings = OrchestrationBindingStore(hub_root)
+    thread_id = _create_thread(hub_root)
+
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-1",
+        thread_target_id=thread_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="123:root",
+        thread_target_id=thread_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="123:chat",
+        thread_target_id=thread_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+
+    discord_bindings = bindings.list_bindings(surface_kind="discord")
+    telegram_bindings = bindings.list_bindings(surface_kind="telegram")
+
+    assert len(discord_bindings) == 1
+    assert discord_bindings[0].surface_kind == "discord"
+
+    assert len(telegram_bindings) == 2
+    assert {b.surface_key for b in telegram_bindings} == {"123:root", "123:chat"}

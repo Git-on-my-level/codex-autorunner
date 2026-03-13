@@ -666,6 +666,95 @@ def build_managed_thread_crud_routes(
             raise HTTPException(status_code=404, detail="Managed turn not found")
         return {"turn": turn}
 
+    @router.get("/bindings")
+    def list_bindings(
+        request: Request,
+        agent: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        surface_kind: Optional[str] = None,
+        include_disabled: bool = False,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        service = build_managed_thread_orchestration_service(request)
+        bindings = service.list_bindings(
+            agent_id=normalize_optional_text(agent),
+            repo_id=normalize_optional_text(repo_id),
+            surface_kind=normalize_optional_text(surface_kind),
+            include_disabled=include_disabled,
+            limit=limit,
+        )
+        return {
+            "bindings": [
+                {
+                    "binding_id": b.binding_id,
+                    "surface_kind": b.surface_kind,
+                    "surface_key": b.surface_key,
+                    "thread_target_id": b.thread_target_id,
+                    "agent_id": b.agent_id,
+                    "repo_id": b.repo_id,
+                    "mode": b.mode,
+                    "created_at": b.created_at,
+                    "updated_at": b.updated_at,
+                    "disabled_at": b.disabled_at,
+                }
+                for b in bindings
+            ]
+        }
+
+    @router.get("/bindings/active")
+    def get_active_thread_for_binding(
+        request: Request,
+        surface_kind: str,
+        surface_key: str,
+    ) -> dict[str, Any]:
+        if not surface_kind or not surface_key:
+            raise HTTPException(
+                status_code=400, detail="surface_kind and surface_key are required"
+            )
+        service = build_managed_thread_orchestration_service(request)
+        thread_target_id = service.get_active_thread_for_binding(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+        )
+        return {"thread_target_id": thread_target_id}
+
+    @router.get("/bindings/work")
+    def list_active_work_summaries(
+        request: Request,
+        agent: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        service = build_managed_thread_orchestration_service(request)
+        summaries = service.list_active_work_summaries(
+            agent_id=normalize_optional_text(agent),
+            repo_id=normalize_optional_text(repo_id),
+            limit=limit,
+        )
+        return {
+            "summaries": [
+                {
+                    "thread_target_id": s.thread_target_id,
+                    "agent_id": s.agent_id,
+                    "repo_id": s.repo_id,
+                    "workspace_root": s.workspace_root,
+                    "display_name": s.display_name,
+                    "lifecycle_status": s.lifecycle_status,
+                    "runtime_status": s.runtime_status,
+                    "execution_id": s.execution_id,
+                    "execution_status": s.execution_status,
+                    "message_preview": s.message_preview,
+                    "binding_count": s.binding_count,
+                    "surface_kinds": list(s.surface_kinds),
+                }
+                for s in summaries
+            ]
+        }
+
 
 def _truncate_text(value: Any, limit: int) -> str:
     if value is None:
