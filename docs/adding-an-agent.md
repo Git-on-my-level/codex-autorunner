@@ -9,6 +9,8 @@ CAR supports multiple AI agents through a registry and capability model. Each ag
 - **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
 - **Registry**: Central registration with capabilities
 
+If an external runtime does not expose a documented public thread/session API, the CAR adapter must stay honest: build a narrow CAR-owned wrapper around the documented CLI or transport surface, and leave unsupported capabilities absent. The ZeroClaw adapter is the reference example for this pattern.
+
 ## Prerequisites
 
 Before adding a new agent, ensure:
@@ -16,6 +18,8 @@ Before adding a new agent, ensure:
 2. The agent has a documented protocol or API (JSON-RPC, HTTP, etc.)
 3. The agent supports basic operations: conversations, turns, model listing
 4. You have tested the agent works independently of CAR
+
+If step 3 is only partially true, scope the adapter to the documented surface instead of inventing missing runtime primitives. For example, ZeroClaw currently documents `zeroclaw agent`, `gateway`, `daemon`, and `models refresh`, but not a public external session API. CAR therefore treats ZeroClaw sessions as wrapper-managed durable sessions and does not advertise unsupported capabilities like interrupt, review, or transcript history retrieval.
 
 ## Step 1: Create the Harness
 

@@ -6,11 +6,17 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
+from ..core.utils import resolve_executable
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .base import AgentHarness
 from .codex.harness import CodexHarness
 from .opencode.harness import OpenCodeHarness
 from .types import RuntimeCapability, normalize_runtime_capabilities
+from .zeroclaw.harness import ZeroClawHarness
+from .zeroclaw.supervisor import (
+    build_zeroclaw_supervisor_from_config,
+    zeroclaw_binary_available,
+)
 
 _logger = logging.getLogger(__name__)
 AgentCapability = RuntimeCapability
@@ -72,6 +78,36 @@ def _check_opencode_health(ctx: Any) -> bool:
     return supervisor is not None
 
 
+def _make_zeroclaw_harness(ctx: Any) -> AgentHarness:
+    supervisor = getattr(ctx, "zeroclaw_supervisor", None)
+    if supervisor is None:
+        config = getattr(ctx, "config", None)
+        logger = getattr(ctx, "logger", None)
+        if config is None:
+            raise RuntimeError("ZeroClaw harness unavailable: config missing")
+        supervisor = build_zeroclaw_supervisor_from_config(config, logger=logger)
+        if supervisor is None:
+            raise RuntimeError("ZeroClaw harness unavailable: binary not configured")
+        try:
+            ctx.zeroclaw_supervisor = supervisor
+        except Exception:
+            pass
+    return ZeroClawHarness(supervisor)
+
+
+def _check_zeroclaw_health(ctx: Any) -> bool:
+    supervisor = getattr(ctx, "zeroclaw_supervisor", None)
+    if supervisor is not None:
+        return True
+    config = getattr(ctx, "config", None)
+    if config is not None:
+        return zeroclaw_binary_available(config)
+    binary = getattr(ctx, "zeroclaw_binary", None)
+    if isinstance(binary, str) and binary.strip():
+        return resolve_executable(binary.strip()) is not None
+    return False
+
+
 _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
     "codex": AgentDescriptor(
         id="codex",
@@ -107,6 +143,20 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         ),
         make_harness=_make_opencode_harness,
         healthcheck=_check_opencode_health,
+    ),
+    "zeroclaw": AgentDescriptor(
+        id="zeroclaw",
+        name="ZeroClaw",
+        capabilities=frozenset(
+            [
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
+                RuntimeCapability("active_thread_discovery"),
+                RuntimeCapability("event_streaming"),
+            ]
+        ),
+        make_harness=_make_zeroclaw_harness,
+        healthcheck=_check_zeroclaw_health,
     ),
 }
 
