@@ -20,7 +20,6 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_approval_callback,
     encode_bind_callback,
     encode_cancel_callback,
-    encode_compact_callback,
     encode_effort_callback,
     encode_flow_callback,
     encode_flow_run_callback,
@@ -361,7 +360,7 @@ async def test_flow_run_callback_forwards_repo_id() -> None:
         ),
         (
             LogicalCallback(callback_id="compact", payload={"action": "apply"}),
-            encode_compact_callback("apply"),
+            "compact:apply",
         ),
         (
             LogicalCallback(callback_id="page", payload={"kind": "repo", "page": 2}),

@@ -40,7 +40,6 @@ from ..adapter import (
     TelegramCallbackQuery,
     TelegramCommand,
     TelegramMessage,
-    build_compact_keyboard,
     build_inline_keyboard,
     build_update_confirm_keyboard,
     encode_cancel_callback,
@@ -105,7 +104,6 @@ from ..state import (
     topic_key,
 )
 from ..types import (
-    CompactState,
     ModelPickerState,
     SelectionState,
 )
@@ -2043,7 +2041,6 @@ class TelegramCommandHandlers(
                 message, runtime, text_override=COMPACT_SUMMARY_PROMPT, record=record
             )
             return
-        auto_apply = bool(argv and argv[0].lower() == "apply")
         record = await self._require_bound_record(message, allow_pma=True)
         if not record:
             return
@@ -2101,9 +2098,8 @@ class TelegramCommandHandlers(
         if isinstance(outcome, _TurnRunFailure):
             return
         summary_text = outcome.response.strip() or "(no summary)"
-        reply_markup = None if auto_apply else build_compact_keyboard()
-        summary_message_id, display_text = await self._send_compact_summary_message(
-            message, summary_text, reply_markup=reply_markup
+        _summary_message_id, _display_text = await self._send_compact_summary_message(
+            message, summary_text, reply_markup=None
         )
         if outcome.turn_id:
             self._token_usage_by_turn.pop(outcome.turn_id, None)
@@ -2117,40 +2113,23 @@ class TelegramCommandHandlers(
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
-        if auto_apply:
-            success, failure_message = await self._apply_compact_summary(
-                message, record, summary_text
-            )
-            if not success:
-                await self._send_message(
-                    message.chat_id,
-                    failure_message or "Failed to start new thread with summary.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            await self._send_message(
-                message.chat_id,
-                "Started a new thread with the summary.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if summary_message_id is None:
-            await self._send_message(
-                message.chat_id,
-                "Failed to send compact summary; try again.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        self._compact_pending[key] = CompactState(
-            summary_text=summary_text,
-            display_text=display_text,
-            message_id=summary_message_id,
-            created_at=now_iso(),
+        success, failure_message = await self._apply_compact_summary(
+            message, record, summary_text
         )
-        self._touch_cache_timestamp("compact_pending", key)
+        if not success:
+            await self._send_message(
+                message.chat_id,
+                failure_message or "Failed to start new thread with summary.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Started a new thread with the summary.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
 
     async def _handle_compact_callback(
         self, key: str, callback: TelegramCallbackQuery, parsed: CompactCallback

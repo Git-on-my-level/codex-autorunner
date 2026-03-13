@@ -2,6 +2,7 @@ import logging
 from typing import Any, Optional
 
 from .....core.logging_utils import log_event
+from .....integrations.chat.compaction import build_compact_seed_prompt
 from ...adapter import TelegramMessage
 from ...constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ...helpers import _compact_preview
@@ -73,9 +74,4 @@ class FormattingHelpers:
         return message_id if isinstance(message_id, int) else None, display_text
 
     def _build_compact_seed_prompt(self, summary_text: str) -> str:
-        summary_text = summary_text.strip() or "(no summary)"
-        return (
-            "Context from previous thread:\n\n"
-            f"{summary_text}\n\n"
-            "Continue from this context. Ask for missing info if needed."
-        )
+        return build_compact_seed_prompt(summary_text)

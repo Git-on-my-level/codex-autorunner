@@ -45,6 +45,7 @@ from codex_autorunner.integrations.chat.collaboration_policy import (
     CollaborationPolicy,
     build_discord_collaboration_policy,
 )
+from codex_autorunner.integrations.chat.compaction import build_compact_seed_prompt
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordBotMediaConfig,
@@ -563,7 +564,7 @@ async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
     )
     await store.set_pending_compact_seed(
         channel_id="channel-1",
-        seed_text="previous summary",
+        seed_text=build_compact_seed_prompt("previous summary"),
         session_key=session_key,
     )
 
@@ -598,7 +599,7 @@ async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
     try:
         await service.run_forever()
         assert captured
-        assert "Context from previous session:" in captured[0]
+        assert "Context from previous conversation:" in captured[0]
         assert "previous summary" in captured[0]
         assert "please continue" in captured[0]
         binding = await store.get_binding(channel_id="channel-1")
@@ -5096,16 +5097,11 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         assert rest.edited_channel_messages
         compact_preview_edit = rest.edited_channel_messages[-1]
         assert compact_preview_edit["message_id"] == "preview-1"
-        assert compact_preview_edit["payload"].get("components") == []
+        assert "components" not in compact_preview_edit["payload"]
         assert rest.channel_messages
 
-        for msg in rest.channel_messages[:-1]:
-            assert not (msg["payload"].get("components") or [])
-        tail_components = rest.channel_messages[-1]["payload"].get("components") or []
-        assert tail_components
-        button = tail_components[0]["components"][0]
-        assert button["label"] == "Continue"
-        assert button["custom_id"] == "continue_turn"
+        for msg in rest.channel_messages:
+            assert "components" not in msg["payload"]
 
         rendered_chunks = [compact_preview_edit["payload"].get("content", "")]
         rendered_chunks.extend(
@@ -5119,7 +5115,8 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         )
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
-        assert binding["pending_compact_seed"] == summary
+        assert "Context from previous conversation:" in binding["pending_compact_seed"]
+        assert summary in binding["pending_compact_seed"]
         assert binding["pending_compact_session_key"]
         assert orchestrator.reset_calls == [binding["pending_compact_session_key"]]
     finally:
@@ -5212,13 +5209,8 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         assert not rest.edited_channel_messages
         assert len(rest.channel_messages) > 1
 
-        for msg in rest.channel_messages[:-1]:
-            assert not (msg["payload"].get("components") or [])
-        tail_components = rest.channel_messages[-1]["payload"].get("components") or []
-        assert tail_components
-        button = tail_components[0]["components"][0]
-        assert button["label"] == "Continue"
-        assert button["custom_id"] == "continue_turn"
+        for msg in rest.channel_messages:
+            assert "components" not in msg["payload"]
 
         rendered_chunks = [
             msg["payload"].get("content", "") for msg in rest.channel_messages
@@ -5230,7 +5222,8 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         )
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
-        assert binding["pending_compact_seed"] == summary
+        assert "Context from previous conversation:" in binding["pending_compact_seed"]
+        assert summary in binding["pending_compact_seed"]
         assert binding["pending_compact_session_key"]
         assert orchestrator.reset_calls == [binding["pending_compact_session_key"]]
     finally:
