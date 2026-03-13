@@ -226,15 +226,18 @@
       "AgentPart": {
         "properties": {
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "name": {
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "source": {
@@ -277,6 +280,7 @@
       "AgentPartInput": {
         "properties": {
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "name": {
@@ -369,6 +373,7 @@
             "type": "string"
           },
           "id": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "mode": {
@@ -378,6 +383,7 @@
             "type": "string"
           },
           "parentID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "path": {
@@ -403,6 +409,7 @@
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "structured": {},
@@ -574,15 +581,18 @@
             "type": "boolean"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "overflow": {
             "type": "boolean"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "type": {
@@ -1465,12 +1475,15 @@
                 "type": "string"
               },
               "messageID": {
+                "pattern": "^msg.*",
                 "type": "string"
               },
               "partID": {
+                "pattern": "^prt.*",
                 "type": "string"
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -1499,12 +1512,15 @@
           "properties": {
             "properties": {
               "messageID": {
+                "pattern": "^msg.*",
                 "type": "string"
               },
               "partID": {
+                "pattern": "^prt.*",
                 "type": "string"
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -1555,9 +1571,11 @@
           "properties": {
             "properties": {
               "messageID": {
+                "pattern": "^msg.*",
                 "type": "string"
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -1631,9 +1649,11 @@
                 "type": "string"
               },
               "requestID": {
+                "pattern": "^per.*",
                 "type": "string"
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -1794,9 +1814,11 @@
           "properties": {
             "properties": {
               "requestID": {
+                "pattern": "^que.*",
                 "type": "string"
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -1828,9 +1850,11 @@
                 "type": "array"
               },
               "requestID": {
+                "pattern": "^que.*",
                 "type": "string"
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -1898,6 +1922,7 @@
           "properties": {
             "properties": {
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -1976,6 +2001,7 @@
                 "type": "array"
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -2026,6 +2052,7 @@
                 ]
               },
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -2047,6 +2074,7 @@
           "properties": {
             "properties": {
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -2071,6 +2099,7 @@
           "properties": {
             "properties": {
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               },
               "status": {
@@ -2123,6 +2152,7 @@
           "properties": {
             "properties": {
               "sessionID": {
+                "pattern": "^ses.*",
                 "type": "string"
               },
               "todos": {
@@ -2228,7 +2258,7 @@
             "properties": {
               "sessionID": {
                 "description": "Session ID to navigate to",
-                "pattern": "^ses",
+                "pattern": "^ses.*",
                 "type": "string"
               }
             },
@@ -2602,15 +2632,18 @@
             "type": "string"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "mime": {
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "source": {
@@ -2640,6 +2673,7 @@
             "type": "string"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "mime": {
@@ -2791,9 +2825,11 @@
                 "type": "string"
               },
               "messageID": {
+                "pattern": "^msg.*",
                 "type": "string"
               },
               "partID": {
+                "pattern": "^prt.*",
                 "type": "string"
               },
               "snapshot": {
@@ -2872,6 +2908,7 @@
             "type": "string"
           },
           "workspaceID": {
+            "pattern": "^wrk.*",
             "type": "string"
           }
         },
@@ -3640,12 +3677,15 @@
             "type": "string"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "type": {
@@ -3825,6 +3865,7 @@
                 "type": "string"
               },
               "messageID": {
+                "pattern": "^msg.*",
                 "type": "string"
               }
             },
@@ -4347,6 +4388,12 @@
               "baseURL": {
                 "type": "string"
               },
+              "chunkTimeout": {
+                "description": "Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
               "enterpriseUrl": {
                 "description": "GitHub Enterprise URL for copilot authentication",
                 "type": "string"
@@ -4505,6 +4552,7 @@
                 "type": "string"
               },
               "messageID": {
+                "pattern": "^msg.*",
                 "type": "string"
               }
             },
@@ -4564,9 +4612,11 @@
       "ReasoningPart": {
         "properties": {
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "metadata": {
@@ -4577,6 +4627,7 @@
             "type": "object"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "text": {
@@ -4644,12 +4695,15 @@
             "$ref": "#/components/schemas/APIError"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "time": {
@@ -4736,9 +4790,11 @@
                 "type": "string"
               },
               "messageID": {
+                "pattern": "^msg.*",
                 "type": "string"
               },
               "partID": {
+                "pattern": "^prt.*",
                 "type": "string"
               },
               "snapshot": {
@@ -4817,6 +4873,7 @@
             "type": "string"
           },
           "workspaceID": {
+            "pattern": "^wrk.*",
             "type": "string"
           }
         },
@@ -4886,12 +4943,15 @@
       "SnapshotPart": {
         "properties": {
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "snapshot": {
@@ -4917,15 +4977,18 @@
             "type": "number"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "reason": {
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "snapshot": {
@@ -4988,12 +5051,15 @@
       "StepStartPart": {
         "properties": {
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "snapshot": {
@@ -5052,9 +5118,11 @@
             "type": "string"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "model": {
@@ -5076,6 +5144,7 @@
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "type": {
@@ -5106,6 +5175,7 @@
             "type": "string"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "model": {
@@ -5207,12 +5277,14 @@
       "TextPart": {
         "properties": {
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "ignored": {
             "type": "boolean"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "metadata": {
@@ -5223,6 +5295,7 @@
             "type": "object"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "synthetic": {
@@ -5262,6 +5335,7 @@
       "TextPartInput": {
         "properties": {
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "ignored": {
@@ -5362,9 +5436,11 @@
             "type": "string"
           },
           "id": {
+            "pattern": "^prt.*",
             "type": "string"
           },
           "messageID": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "metadata": {
@@ -5375,6 +5451,7 @@
             "type": "object"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "state": {
@@ -5622,6 +5699,7 @@
             "$ref": "#/components/schemas/OutputFormat"
           },
           "id": {
+            "pattern": "^msg.*",
             "type": "string"
           },
           "model": {
@@ -5644,6 +5722,7 @@
             "type": "string"
           },
           "sessionID": {
+            "pattern": "^ses.*",
             "type": "string"
           },
           "summary": {
@@ -8064,6 +8143,7 @@
             "name": "requestID",
             "required": true,
             "schema": {
+              "pattern": "^per.*",
               "type": "string"
             }
           }
@@ -8973,6 +9053,7 @@
             "name": "ptyID",
             "required": true,
             "schema": {
+              "pattern": "^pty.*",
               "type": "string"
             }
           }
@@ -9024,6 +9105,7 @@
             "name": "ptyID",
             "required": true,
             "schema": {
+              "pattern": "^pty.*",
               "type": "string"
             }
           }
@@ -9075,6 +9157,7 @@
             "name": "ptyID",
             "required": true,
             "schema": {
+              "pattern": "^pty.*",
               "type": "string"
             }
           }
@@ -9157,6 +9240,7 @@
             "name": "ptyID",
             "required": true,
             "schema": {
+              "pattern": "^pty.*",
               "type": "string"
             }
           }
@@ -9248,6 +9332,7 @@
             "name": "requestID",
             "required": true,
             "schema": {
+              "pattern": "^que.*",
               "type": "string"
             }
           }
@@ -9311,6 +9396,7 @@
             "name": "requestID",
             "required": true,
             "schema": {
+              "pattern": "^que.*",
               "type": "string"
             }
           }
@@ -9473,6 +9559,10 @@
                     "$ref": "#/components/schemas/PermissionRuleset"
                   },
                   "title": {
+                    "type": "string"
+                  },
+                  "workspaceID": {
+                    "pattern": "^wrk.*",
                     "type": "string"
                   }
                 },
@@ -9708,6 +9798,7 @@
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -9793,6 +9884,7 @@
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -9922,11 +10014,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -9961,6 +10053,7 @@
                               "type": "string"
                             },
                             "id": {
+                              "pattern": "^prt.*",
                               "type": "string"
                             },
                             "mime": {
@@ -10185,11 +10278,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -10275,11 +10368,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           },
@@ -10362,11 +10455,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -10518,20 +10611,20 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           },
           {
-            "description": "Message ID",
             "in": "path",
             "name": "messageID",
             "required": true,
             "schema": {
+              "pattern": "^msg.*",
               "type": "string"
             }
           }
@@ -10589,20 +10682,20 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           },
           {
-            "description": "Message ID",
             "in": "path",
             "name": "messageID",
             "required": true,
             "schema": {
+              "pattern": "^msg.*",
               "type": "string"
             }
           }
@@ -10677,29 +10770,29 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           },
           {
-            "description": "Message ID",
             "in": "path",
             "name": "messageID",
             "required": true,
             "schema": {
+              "pattern": "^msg.*",
               "type": "string"
             }
           },
           {
-            "description": "Part ID",
             "in": "path",
             "name": "partID",
             "required": true,
             "schema": {
+              "pattern": "^prt.*",
               "type": "string"
             }
           }
@@ -10756,29 +10849,29 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           },
           {
-            "description": "Message ID",
             "in": "path",
             "name": "messageID",
             "required": true,
             "schema": {
+              "pattern": "^msg.*",
               "type": "string"
             }
           },
           {
-            "description": "Part ID",
             "in": "path",
             "name": "partID",
             "required": true,
             "schema": {
+              "pattern": "^prt.*",
               "type": "string"
             }
           }
@@ -10851,6 +10944,7 @@
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           },
@@ -10859,6 +10953,7 @@
             "name": "permissionID",
             "required": true,
             "schema": {
+              "pattern": "^per.*",
               "type": "string"
             }
           }
@@ -10940,11 +11035,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -11078,6 +11173,7 @@
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -11225,6 +11321,7 @@
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -11284,11 +11381,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -11384,11 +11481,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -11473,11 +11570,11 @@
             }
           },
           {
-            "description": "Session ID",
             "in": "path",
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -11544,6 +11641,7 @@
             "name": "sessionID",
             "required": true,
             "schema": {
+              "pattern": "^ses.*",
               "type": "string"
             }
           }
@@ -12121,7 +12219,7 @@
                 "properties": {
                   "sessionID": {
                     "description": "Session ID to navigate to",
-                    "pattern": "^ses",
+                    "pattern": "^ses.*",
                     "type": "string"
                   }
                 },
