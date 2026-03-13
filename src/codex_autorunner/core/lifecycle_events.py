@@ -26,6 +26,8 @@ TRANSITION_TOKEN_KEY = "transition_token"
 
 
 class LifecycleEventType(str, Enum):
+    FLOW_STARTED = "flow_started"
+    FLOW_RESUMED = "flow_resumed"
     FLOW_PAUSED = "flow_paused"
     FLOW_COMPLETED = "flow_completed"
     FLOW_FAILED = "flow_failed"
@@ -1051,6 +1053,40 @@ class LifecycleEventEmitter:
             except Exception as exc:
                 logger.exception("Error in lifecycle event listener: %s", exc)
         return append_result.event.event_id
+
+    def emit_flow_started(
+        self,
+        repo_id: str,
+        run_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        origin: str = "system",
+    ) -> str:
+        event = LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_STARTED,
+            repo_id=repo_id,
+            run_id=run_id,
+            data=data or {},
+            origin=origin,
+        )
+        return self.emit(event)
+
+    def emit_flow_resumed(
+        self,
+        repo_id: str,
+        run_id: str,
+        *,
+        data: Optional[dict[str, Any]] = None,
+        origin: str = "system",
+    ) -> str:
+        event = LifecycleEvent(
+            event_type=LifecycleEventType.FLOW_RESUMED,
+            repo_id=repo_id,
+            run_id=run_id,
+            data=data or {},
+            origin=origin,
+        )
+        return self.emit(event)
 
     def emit_flow_paused(
         self,

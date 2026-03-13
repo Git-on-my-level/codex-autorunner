@@ -123,6 +123,14 @@ class FlowRuntime:
                 if not updated:
                     raise RuntimeError(f"Failed to start flow run {run_id}")
                 record = updated
+                self._emit_lifecycle(
+                    LifecycleEventType.FLOW_STARTED,
+                    "",
+                    run_id,
+                    self._with_transition_metadata(
+                        LifecycleEventType.FLOW_STARTED, record
+                    ),
+                )
             else:
                 self._emit(FlowEventType.FLOW_RESUMED, run_id)
                 updated = self.store.update_flow_run_status(
@@ -132,6 +140,14 @@ class FlowRuntime:
                 )
                 if updated:
                     record = updated
+                self._emit_lifecycle(
+                    LifecycleEventType.FLOW_RESUMED,
+                    "",
+                    run_id,
+                    self._with_transition_metadata(
+                        LifecycleEventType.FLOW_RESUMED, record
+                    ),
+                )
 
             next_steps: Set[str] = set()
             if record.current_step:

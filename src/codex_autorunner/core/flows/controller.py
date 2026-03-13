@@ -416,7 +416,15 @@ class FlowController:
         if self._lifecycle_emitter is None:
             return
         try:
-            if event_type == LifecycleEventType.FLOW_PAUSED:
+            if event_type == LifecycleEventType.FLOW_STARTED:
+                self._lifecycle_emitter.emit_flow_started(
+                    repo_id, run_id, data=data, origin=origin
+                )
+            elif event_type == LifecycleEventType.FLOW_RESUMED:
+                self._lifecycle_emitter.emit_flow_resumed(
+                    repo_id, run_id, data=data, origin=origin
+                )
+            elif event_type == LifecycleEventType.FLOW_PAUSED:
                 self._lifecycle_emitter.emit_flow_paused(
                     repo_id, run_id, data=data, origin=origin
                 )
