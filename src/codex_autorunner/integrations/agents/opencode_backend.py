@@ -79,6 +79,7 @@ class OpenCodeBackend(AgentBackend):
         self._logger = logger or _logger
 
         self._session_id: Optional[str] = None
+        self._temporary_session_id: Optional[str] = None
         self._message_count: int = 0
         self._final_messages: list[str] = []
         self._last_turn_id: Optional[str] = None
@@ -88,6 +89,7 @@ class OpenCodeBackend(AgentBackend):
     def reset_session_state(self) -> None:
         """Clear cached session ids so the next turn creates/resumes explicitly."""
         self._session_id = None
+        self._temporary_session_id = None
         self._last_turn_id = None
 
     async def aclose(self) -> None:
@@ -147,6 +149,7 @@ class OpenCodeBackend(AgentBackend):
             try:
                 await client.get_session(resume_session)
                 self._session_id = resume_session
+                self._temporary_session_id = None
             except Exception:
                 self._session_id = None
 
@@ -156,6 +159,7 @@ class OpenCodeBackend(AgentBackend):
                 directory=str(workspace_root),
             )
             self._session_id = extract_session_id(result, allow_fallback_id=True)
+            self._temporary_session_id = self._session_id
 
         if not self._session_id:
             raise RuntimeError("Failed to create OpenCode session: missing session ID")
@@ -180,18 +184,22 @@ class OpenCodeBackend(AgentBackend):
 
         _logger.info("Sending message to session %s", self._session_id)
 
-        yield AgentEvent.stream_delta(content=message, delta_type="user_message")
+        active_session_id = self._session_id
+        try:
+            yield AgentEvent.stream_delta(content=message, delta_type="user_message")
 
-        await client.send_message(
-            self._session_id,
-            message=message,
-            agent=self._agent,
-            model=split_model_id(self._model) if self._model else None,
-        )
+            await client.send_message(
+                self._session_id,
+                message=message,
+                agent=self._agent,
+                model=split_model_id(self._model) if self._model else None,
+            )
 
-        self._message_count += 1
-        async for event in self._yield_events_until_completion():
-            yield event
+            self._message_count += 1
+            async for event in self._yield_events_until_completion():
+                yield event
+        finally:
+            await self._dispose_temporary_session(active_session_id)
 
     async def run_turn_events(
         self,
@@ -236,61 +244,150 @@ class OpenCodeBackend(AgentBackend):
             )
 
         _logger.info("Running turn events on session %s", self._session_id)
+        active_session_id = self._session_id
 
-        self._last_turn_id = build_turn_id(self._session_id)
+        try:
+            self._last_turn_id = build_turn_id(self._session_id)
 
-        yield Started(timestamp=now_iso(), session_id=self._session_id)
+            yield Started(timestamp=now_iso(), session_id=self._session_id)
 
-        yield OutputDelta(
-            timestamp=now_iso(), content=message, delta_type="user_message"
-        )
-
-        model_payload = split_model_id(self._model) if self._model else None
-        missing_env = await opencode_missing_env(
-            client, str(workspace_root), model_payload
-        )
-        if missing_env:
-            provider_id = model_payload.get("providerID") if model_payload else None
-            missing_label = ", ".join(missing_env)
-            yield Failed(
-                timestamp=now_iso(),
-                error_message=(
-                    "OpenCode provider "
-                    f"{provider_id or 'selected'} requires env vars: {missing_label}"
-                ),
+            yield OutputDelta(
+                timestamp=now_iso(), content=message, delta_type="user_message"
             )
-            return
 
-        permission_policy = map_approval_policy_to_permission(
-            self._approval_policy, default="allow"
-        )
+            model_payload = split_model_id(self._model) if self._model else None
+            missing_env = await opencode_missing_env(
+                client, str(workspace_root), model_payload
+            )
+            if missing_env:
+                provider_id = model_payload.get("providerID") if model_payload else None
+                missing_label = ", ".join(missing_env)
+                yield Failed(
+                    timestamp=now_iso(),
+                    error_message=(
+                        "OpenCode provider "
+                        f"{provider_id or 'selected'} requires env vars: {missing_label}"
+                    ),
+                )
+                return
 
-        event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
-        self._event_formatter.reset()
-        assistant_stream_coalescer = StreamingTextCoalescer()
-        latest_usage_snapshot: Optional[dict[str, Any]] = None
+            permission_policy = map_approval_policy_to_permission(
+                self._approval_policy, default="allow"
+            )
 
-        async def _enqueue_lines(lines: list[str]) -> None:
-            for line in lines:
+            event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
+            self._event_formatter.reset()
+            assistant_stream_coalescer = StreamingTextCoalescer()
+            latest_usage_snapshot: Optional[dict[str, Any]] = None
+
+            async def _enqueue_lines(lines: list[str]) -> None:
+                for line in lines:
+                    await event_queue.put(
+                        OutputDelta(
+                            timestamp=now_iso(), content=line, delta_type="log_line"
+                        )
+                    )
+
+            async def _part_handler(
+                part_type: str, part: dict[str, Any], delta_text: Optional[str]
+            ) -> None:
+                nonlocal latest_usage_snapshot
+                if part_type == "usage" and isinstance(part, dict):
+                    latest_usage_snapshot = dict(part)
+                    await _enqueue_lines(self._event_formatter.format_usage(part))
+                else:
+                    await _enqueue_lines(
+                        self._event_formatter.format_part(part_type, part, delta_text)
+                    )
+                if part_type == "text" and isinstance(delta_text, str) and delta_text:
+                    for chunk in assistant_stream_coalescer.add(delta_text):
+                        await event_queue.put(
+                            OutputDelta(
+                                timestamp=now_iso(),
+                                content=chunk,
+                                delta_type="assistant_stream",
+                            )
+                        )
+
+            ready_event = asyncio.Event()
+            output_task = asyncio.create_task(
+                collect_opencode_output(
+                    client,
+                    session_id=self._session_id,
+                    workspace_path=str(workspace_root),
+                    model_payload=model_payload,
+                    permission_policy=permission_policy,
+                    part_handler=_part_handler,
+                    ready_event=ready_event,
+                    stall_timeout_seconds=self._session_stall_timeout_seconds,
+                )
+            )
+            try:
+                await asyncio.wait_for(ready_event.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
                 await event_queue.put(
-                    OutputDelta(
-                        timestamp=now_iso(), content=line, delta_type="log_line"
+                    RunNotice(
+                        timestamp=now_iso(),
+                        kind="ready_timeout",
+                        message="OpenCode stream readiness wait timed out",
+                        data={"timeout_seconds": 2.0},
                     )
                 )
 
-        async def _part_handler(
-            part_type: str, part: dict[str, Any], delta_text: Optional[str]
-        ) -> None:
-            nonlocal latest_usage_snapshot
-            if part_type == "usage" and isinstance(part, dict):
-                latest_usage_snapshot = dict(part)
-                await _enqueue_lines(self._event_formatter.format_usage(part))
-            else:
-                await _enqueue_lines(
-                    self._event_formatter.format_part(part_type, part, delta_text)
+            prompt_response: Any = None
+            prompt_task: Optional[asyncio.Task[Any]] = asyncio.create_task(
+                client.prompt_async(
+                    self._session_id,
+                    message=message,
+                    agent=self._agent,
+                    model=model_payload,
+                    variant=self._reasoning,
                 )
-            if part_type == "text" and isinstance(delta_text, str) and delta_text:
-                for chunk in assistant_stream_coalescer.add(delta_text):
+            )
+            output_result = None
+            try:
+                while True:
+                    queue_task = asyncio.create_task(event_queue.get())
+                    tasks = {output_task, queue_task}
+                    if prompt_task is not None:
+                        tasks.add(prompt_task)
+                    done, pending = await asyncio.wait(
+                        tasks, return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    if queue_task in done:
+                        yield queue_task.result()
+                    else:
+                        queue_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await queue_task
+
+                    if prompt_task is not None and prompt_task in done:
+                        try:
+                            prompt_response = prompt_task.result()
+                        except Exception as exc:
+                            output_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await output_task
+                            yield Failed(timestamp=now_iso(), error_message=str(exc))
+                            return
+                        prompt_task = None
+
+                    if output_task in done:
+                        output_result = await output_task
+                        break
+
+            finally:
+                if prompt_task is not None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await prompt_task
+                for line in self._event_formatter.flush_all_reasoning():
+                    await event_queue.put(
+                        OutputDelta(
+                            timestamp=now_iso(), content=line, delta_type="log_line"
+                        )
+                    )
+                for chunk in assistant_stream_coalescer.flush():
                     await event_queue.put(
                         OutputDelta(
                             timestamp=now_iso(),
@@ -299,134 +396,50 @@ class OpenCodeBackend(AgentBackend):
                         )
                     )
 
-        ready_event = asyncio.Event()
-        output_task = asyncio.create_task(
-            collect_opencode_output(
-                client,
-                session_id=self._session_id,
-                workspace_path=str(workspace_root),
-                model_payload=model_payload,
-                permission_policy=permission_policy,
-                part_handler=_part_handler,
-                ready_event=ready_event,
-                stall_timeout_seconds=self._session_stall_timeout_seconds,
-            )
-        )
-        try:
-            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
-            await event_queue.put(
-                RunNotice(
-                    timestamp=now_iso(),
-                    kind="ready_timeout",
-                    message="OpenCode stream readiness wait timed out",
-                    data={"timeout_seconds": 2.0},
+            while not event_queue.empty():
+                yield event_queue.get_nowait()
+
+            if output_result is None:
+                yield Failed(
+                    timestamp=now_iso(), error_message="OpenCode output failed"
                 )
-            )
+                return
 
-        prompt_response: Any = None
-        prompt_task: Optional[asyncio.Task[Any]] = asyncio.create_task(
-            client.prompt_async(
-                self._session_id,
-                message=message,
-                agent=self._agent,
-                model=model_payload,
-                variant=self._reasoning,
-            )
-        )
+            if prompt_response is not None and not output_result.text:
+                fallback = parse_message_response(prompt_response)
+                if fallback.text:
+                    output_result = OpenCodeTurnOutput(
+                        text=fallback.text,
+                        error=output_result.error,
+                        usage=output_result.usage,
+                    )
+                if fallback.error and not output_result.error:
+                    output_result = OpenCodeTurnOutput(
+                        text=output_result.text,
+                        error=fallback.error,
+                        usage=output_result.usage,
+                    )
 
-        output_result = None
-        try:
-            while True:
-                queue_task = asyncio.create_task(event_queue.get())
-                tasks = {output_task, queue_task}
-                if prompt_task is not None:
-                    tasks.add(prompt_task)
-                done, pending = await asyncio.wait(
-                    tasks, return_when=asyncio.FIRST_COMPLETED
+            canonical_usage = output_result.usage or latest_usage_snapshot
+            if isinstance(canonical_usage, dict):
+                persist_opencode_usage_snapshot(
+                    workspace_root,
+                    session_id=self._session_id,
+                    turn_id=self._last_turn_id,
+                    usage=canonical_usage,
+                    source="live_stream",
                 )
+                self._last_token_total = _usage_to_token_total(canonical_usage)
+                yield TokenUsage(timestamp=now_iso(), usage=dict(canonical_usage))
 
-                if queue_task in done:
-                    yield queue_task.result()
-                else:
-                    queue_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await queue_task
-
-                if prompt_task is not None and prompt_task in done:
-                    try:
-                        prompt_response = prompt_task.result()
-                    except Exception as exc:
-                        output_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await output_task
-                        yield Failed(timestamp=now_iso(), error_message=str(exc))
-                        return
-                    prompt_task = None
-
-                if output_task in done:
-                    output_result = await output_task
-                    break
-
+            if output_result.text:
+                yield Completed(timestamp=now_iso(), final_message=output_result.text)
+            elif output_result.error:
+                yield Failed(timestamp=now_iso(), error_message=output_result.error)
+            else:
+                yield Completed(timestamp=now_iso(), final_message="")
         finally:
-            if prompt_task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await prompt_task
-            for line in self._event_formatter.flush_all_reasoning():
-                await event_queue.put(
-                    OutputDelta(
-                        timestamp=now_iso(), content=line, delta_type="log_line"
-                    )
-                )
-            for chunk in assistant_stream_coalescer.flush():
-                await event_queue.put(
-                    OutputDelta(
-                        timestamp=now_iso(),
-                        content=chunk,
-                        delta_type="assistant_stream",
-                    )
-                )
-
-        while not event_queue.empty():
-            yield event_queue.get_nowait()
-
-        if output_result is None:
-            yield Failed(timestamp=now_iso(), error_message="OpenCode output failed")
-            return
-
-        if prompt_response is not None and not output_result.text:
-            fallback = parse_message_response(prompt_response)
-            if fallback.text:
-                output_result = OpenCodeTurnOutput(
-                    text=fallback.text,
-                    error=output_result.error,
-                    usage=output_result.usage,
-                )
-            if fallback.error and not output_result.error:
-                output_result = OpenCodeTurnOutput(
-                    text=output_result.text,
-                    error=fallback.error,
-                    usage=output_result.usage,
-                )
-
-        canonical_usage = output_result.usage or latest_usage_snapshot
-        if isinstance(canonical_usage, dict):
-            persist_opencode_usage_snapshot(
-                workspace_root,
-                session_id=self._session_id,
-                turn_id=self._last_turn_id,
-                usage=canonical_usage,
-                source="live_stream",
-            )
-            self._last_token_total = _usage_to_token_total(canonical_usage)
-            yield TokenUsage(timestamp=now_iso(), usage=dict(canonical_usage))
-
-        if output_result.text:
-            yield Completed(timestamp=now_iso(), final_message=output_result.text)
-        elif output_result.error:
-            yield Failed(timestamp=now_iso(), error_message=output_result.error)
-        else:
-            yield Completed(timestamp=now_iso(), final_message="")
+            await self._dispose_temporary_session(active_session_id)
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         if session_id:
@@ -679,6 +692,27 @@ class OpenCodeBackend(AgentBackend):
         raise RuntimeError(
             "OpenCode client unavailable: no supervisor and no base_url set"
         )
+
+    async def _dispose_temporary_session(self, session_id: Optional[str]) -> None:
+        if not session_id or self._temporary_session_id != session_id:
+            return
+        try:
+            client = await self._ensure_client()
+            await client.dispose(session_id)
+            self._logger.info("Disposed temporary OpenCode session: %s", session_id)
+        except Exception as exc:
+            self._logger.warning(
+                "Failed to dispose temporary OpenCode session %s: %s",
+                session_id,
+                exc,
+            )
+        finally:
+            if self._temporary_session_id == session_id:
+                self._temporary_session_id = None
+            if self._session_id == session_id:
+                self._session_id = None
+            if self._last_turn_id and self._last_turn_id.startswith(f"{session_id}:"):
+                self._last_turn_id = None
 
     @property
     def last_turn_id(self) -> Optional[str]:
