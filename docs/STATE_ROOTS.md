@@ -42,7 +42,7 @@ All durable artifacts must live under one of these roots:
 
 **Location**: `<hub_root>/.codex-autorunner/`
 
-**Purpose**: Hub-level state for multi-repo management.
+**Purpose**: Hub-level state for multi-repo management, orchestration metadata, and cross-repo coordination.
 
 **Contents**:
 - `manifest.yml` - Managed repositories list (including repo/worktree `destination` config)
@@ -51,8 +51,26 @@ All durable artifacts must live under one of these roots:
 - `codex-autorunner-hub.log` - Hub logs
 - `templates/` - Hub-scoped templates
 - `chat/channel_directory.json` - Cross-platform channel directory used for lightweight routing context
+- **`orchestration.sqlite3`** - Hub SQLite store for orchestration metadata, bindings, executions, transcript mirrors, and event projections
 
 **Resolution**: Hub root is typically the hub's repo root, using repo-local patterns.
+
+#### Orchestration SQLite Database
+
+The `orchestration.sqlite3` database is the canonical store for:
+
+- **Thread/binding metadata**: Agent thread registrations, external channel bindings (Discord channel IDs, Telegram chat IDs)
+- **Execution state**: Active/running/queued orchestration work items
+- **Transcript mirrors**: Plain-text user/assistant message copies for search, previews, and debugging
+- **Event projections**: Aggregated views of automation events, flow executions
+
+**What orchestration.sqlite3 does NOT store** (remains authoritative elsewhere):
+- **Flow engine internals**: Still stored in repo-local `flows.db`
+- **Delivery/outbox state**: Discord and Telegram state databases remain authoritative for message delivery
+- **Runtime conversation history**: Downstream runtimes (Codex, OpenCode) own their canonical conversation state
+- **Reasoning traces/tool payloads**: Kept in runtime-native stores
+
+**Resolution**: `resolve_hub_orchestration_db_path(hub_root)` in `core/state_roots.py`
 
 ### 3. Global Root
 
@@ -91,6 +109,48 @@ These locations are explicitly **non-canonical** (ephemeral, disposable):
 2. Explicitly documented here
 3. Safe to delete without data loss
 
+## Authority Boundaries
+
+This section defines which store is authoritative for which data domain.
+
+### Repo-Local `flows.db` (Flow Engine Internals)
+
+**Location**: `<repo_root>/.codex-autorunner/flows.db`
+
+**Remains authoritative for**:
+- Flow definition storage and versioning
+- Flow execution state machine (pending, running, completed, failed)
+- Flow step orchestration and dependency resolution
+- Flow variable and context persistence
+
+The hub `orchestration.sqlite3` may contain **projections** of flow execution status, but `flows.db` is the source of truth for flow-engine internals.
+
+### Transport State Databases (Discord, Telegram)
+
+**Discord**: `<repo_root>/.codex-autorunner/discord_state.sqlite3`
+**Telegram**: `<repo_root>/.codex-autorunner/telegram_state.sqlite3`
+
+These transport-specific databases remain authoritative for:
+- Per-channel/topic delivery state and outbox queues
+- Platform-specific message metadata
+- Webhook state and callback tracking
+
+After the orchestration SQLite cutover, **binding metadata** (which agent thread is bound to which Discord channel/Telegram chat) moves to hub `orchestration.sqlite3`, but **delivery state** remains in the transport databases.
+
+### Legacy PMA Artifacts (Migration/Compatibility)
+
+**Locations**:
+- `<repo_root>/.codex-autorunner/pma/deliveries.jsonl`
+- `<repo_root>/.codex-autorunner/pma/thread_*.json`
+- `<repo_root>/.codex-autorunner/pma/queue.json`
+
+These artifacts are now **compatibility inputs** rather than canonical stores:
+- Used only for migration to hub SQLite and orchestration bindings
+- No new data should be written to these paths
+- Over time, these will become read-only archives
+
+The canonical thread/binding state is now in `orchestration.sqlite3`.
+
 ## No Shadow State Contract
 
 **Invariant**: All durable state and artifacts must be representable under a
@@ -119,6 +179,12 @@ def resolve_repo_state_root(repo_root: Path) -> Path:
 
 def resolve_global_state_root(*, config=None, repo_root=None) -> Path:
     """Resolve the global state root for cross-repo caches and locks."""
+
+def resolve_hub_state_root(hub_root: Path) -> Path:
+    """Return the hub-scoped state root."""
+
+def resolve_hub_orchestration_db_path(hub_root: Path) -> Path:
+    """Return the canonical orchestration SQLite path under the hub state root."""
 
 def resolve_hub_templates_root(hub_root: Path) -> Path:
     """Return the hub-scoped templates root."""

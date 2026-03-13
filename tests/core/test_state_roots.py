@@ -6,12 +6,14 @@ import pytest
 
 from codex_autorunner.core.state_roots import (
     GLOBAL_STATE_ROOT_ENV,
+    ORCHESTRATION_DB_FILENAME,
     REPO_STATE_DIR,
     StateRootError,
     get_canonical_roots,
     is_within_allowed_root,
     resolve_cache_root,
     resolve_global_state_root,
+    resolve_hub_orchestration_db_path,
     resolve_hub_state_root,
     resolve_hub_templates_root,
     resolve_repo_state_root,
@@ -56,6 +58,23 @@ class TestResolveHubStateRoot:
     def test_hub_state_includes_templates(self, tmp_path):
         templates = resolve_hub_templates_root(Path(tmp_path))
         assert templates == Path(tmp_path) / REPO_STATE_DIR / "templates"
+
+
+class TestResolveHubOrchestrationDbPath:
+    def test_returns_orchestration_sqlite_under_hub_state(self, tmp_path):
+        result = resolve_hub_orchestration_db_path(Path(tmp_path))
+        expected = Path(tmp_path) / REPO_STATE_DIR / ORCHESTRATION_DB_FILENAME
+        assert result == expected
+
+    def test_orchestration_db_is_within_hub_state_root(self, tmp_path):
+        result = resolve_hub_orchestration_db_path(Path(tmp_path))
+        hub_state = resolve_hub_state_root(Path(tmp_path))
+        assert is_within_allowed_root(result, allowed_roots=[hub_state])
+
+    def test_orchestration_db_is_within_canonical_roots(self, tmp_path):
+        result = resolve_hub_orchestration_db_path(Path(tmp_path))
+        canonical = get_canonical_roots(hub_root=Path(tmp_path))
+        assert is_within_allowed_root(result, allowed_roots=canonical)
 
 
 class TestResolveCacheRoot:
@@ -189,9 +208,17 @@ class TestStateRootContract:
             state_root / "chat" / "channel_directory.json",
             state_root / "flows" / "run-id" / "chat" / "inbound.jsonl",
             state_root / "flows" / "run-id" / "chat" / "outbound.jsonl",
+            state_root / "discord_state.sqlite3",
+            state_root / "telegram_state.sqlite3",
         ]
         for path in canonical_paths:
             assert is_within_allowed_root(path, allowed_roots=[state_root])
+
+    def test_hub_state_paths_include_orchestration_db(self, tmp_path):
+        hub_root = Path(tmp_path)
+        hub_state = resolve_hub_state_root(hub_root)
+        orchestration_db = resolve_hub_orchestration_db_path(hub_root)
+        assert is_within_allowed_root(orchestration_db, allowed_roots=[hub_state])
 
     def test_global_state_paths_are_within_global_root(self, tmp_path, monkeypatch):
         global_root = tmp_path / "global_state"

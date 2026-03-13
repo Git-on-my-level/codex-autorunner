@@ -65,6 +65,8 @@ Mapping the conceptual layers to the codebase:
   - `.codex-autorunner/`: Hub state.
     - `manifest.yml`: Lists managed repositories.
     - `hub_state.json`, `config.yml`, logs.
+    - `orchestration.sqlite3`: Orchestration metadata, bindings, executions, transcript mirrors.
+    - `templates/`: Hub-scoped templates.
   - `repos/`: Managed repositories (default location).
 - **Per-Repo** (under hub, or standalone for CAR development):
   - `.codex-autorunner/`: Canonical runtime state.
@@ -72,6 +74,8 @@ Mapping the conceptual layers to the codebase:
     - `contextspace/`: Optional context (`active_context.md`, `decisions.md`, `spec.md`).
     - `config.yml`: Generated config.
     - `state.sqlite3`, logs, lock.
+    - `flows.db`: Flow engine internals (source of truth).
+    - `discord_state.sqlite3`, `telegram_state.sqlite3`: Transport delivery/outbox state.
 - **Global Root** (cross-repo caches):
   - `~/.codex-autorunner/`: update cache, update status/lock, shared app-server workspaces.
 - **Config Precedence**: Built-ins < `codex-autorunner.yml` < override < `.codex-autorunner/config.yml` < env.
