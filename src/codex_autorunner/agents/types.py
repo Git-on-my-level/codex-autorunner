@@ -23,12 +23,16 @@ class ModelCatalog:
 
 @dataclass(frozen=True)
 class ConversationRef:
+    """Runtime-native durable conversation/session handle."""
+
     agent: AgentId
     id: str
 
 
 @dataclass(frozen=True)
 class TurnRef:
+    """Runtime-native execution handle within a conversation/session."""
+
     conversation_id: str
     turn_id: str
 
