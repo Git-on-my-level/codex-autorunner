@@ -99,6 +99,17 @@ def test_archive_dispatch_invalid_frontmatter_does_not_delete(
     assert parse_errors
 
 
+def test_parse_dispatch_reports_non_utf8_file(tmp_path: Path) -> None:
+    path = tmp_path / "DISPATCH.md"
+    path.write_bytes(b"\xff\xfe\x00bad")
+
+    dispatch, errors = parse_dispatch(path)
+
+    assert dispatch is None
+    assert errors
+    assert "Failed to read dispatch file:" in errors[0]
+
+
 @pytest.mark.integration
 def test_archive_dispatch_emits_lifecycle_event(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"

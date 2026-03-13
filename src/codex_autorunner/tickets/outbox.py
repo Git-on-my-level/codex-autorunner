@@ -94,7 +94,7 @@ def parse_dispatch(path: Path) -> tuple[Optional[Dispatch], list[str]]:
     """Parse a dispatch file (DISPATCH.md) into a Dispatch object."""
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         return None, [f"Failed to read dispatch file: {exc}"]
 
     data, body = parse_markdown_frontmatter(raw)

@@ -97,6 +97,40 @@ def test_load_latest_paused_ticket_flow_dispatch_prefers_pause_over_turn_summary
     assert snapshot.dispatch_dir == history_root / "0001"
 
 
+def test_load_latest_paused_ticket_flow_dispatch_ignores_older_non_utf8_history(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(repo_root, run_id="run-utf8")
+
+    history_root = (
+        repo_root / ".codex-autorunner" / "runs" / "run-utf8" / "dispatch_history"
+    )
+    (history_root / "0001").mkdir(parents=True)
+    (history_root / "0001" / "DISPATCH.md").write_bytes(b"\xff\xfe\x00bad")
+    (history_root / "0002").mkdir(parents=True)
+    (history_root / "0002" / "DISPATCH.md").write_text(
+        "---\nmode: pause\ntitle: Need input\n---\n\nPlease use the latest valid dispatch.\n",
+        encoding="utf-8",
+    )
+    (history_root / "0003").mkdir(parents=True)
+    (history_root / "0003" / "DISPATCH.md").write_text(
+        "---\nmode: turn_summary\n---\n\nLatest summary should not hide the pause.\n",
+        encoding="utf-8",
+    )
+
+    snapshot = load_latest_paused_ticket_flow_dispatch(repo_root)
+    assert snapshot is not None
+    assert snapshot.run_id == "run-utf8"
+    assert snapshot.dispatch_seq == "0002"
+    assert snapshot.allow_resume_hint is True
+    assert (
+        snapshot.dispatch_markdown
+        == "Need input\n\nPlease use the latest valid dispatch."
+    )
+    assert snapshot.dispatch_dir == history_root / "0002"
+
+
 def test_load_latest_paused_ticket_flow_dispatch_fails_closed_for_latest_invalid_dispatch(
     tmp_path: Path,
 ) -> None:
