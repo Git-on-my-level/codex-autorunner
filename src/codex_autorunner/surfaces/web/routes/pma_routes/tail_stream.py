@@ -9,10 +9,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from .....core.app_server_logging import AppServerEventFormatter
-from .....core.pma_thread_store import PmaThreadStore
 from .....core.redaction import redact_text
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
+from .managed_threads import (
+    _serialize_thread_target,
+    build_managed_thread_orchestration_service,
+)
 
 
 def coerce_dict(value: Any) -> dict[str, Any]:
@@ -200,25 +203,24 @@ def _serialize_tail_event(
 async def _build_managed_thread_tail_snapshot(
     *,
     request: Request,
+    service: Any,
     managed_thread_id: str,
     limit: int,
     level: str,
     since_ms: Optional[int],
     resume_after: Optional[int],
 ) -> dict[str, Any]:
-    store = PmaThreadStore(request.app.state.config.root)
-    thread = store.get_thread(managed_thread_id)
+    thread = service.get_thread_target(managed_thread_id)
     if thread is None:
         raise HTTPException(status_code=404, detail="Managed thread not found")
-    running_turn = store.get_running_turn(managed_thread_id)
-    turn = running_turn or next(
-        iter(store.list_turns(managed_thread_id, limit=1)), None
-    )
+    turn = service.get_running_execution(
+        managed_thread_id
+    ) or service.get_latest_execution(managed_thread_id)
     if turn is None:
         return {
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": None,
-            "agent": thread.get("agent"),
+            "agent": thread.agent_id,
             "turn_status": None,
             "lifecycle_events": [],
             "events": [],
@@ -229,10 +231,10 @@ async def _build_managed_thread_tail_snapshot(
             "stream_available": False,
         }
 
-    managed_turn_id = str(turn.get("managed_turn_id") or "")
-    turn_status = str(turn.get("status") or "").strip().lower()
-    started_at = normalize_optional_text(turn.get("started_at"))
-    finished_at = normalize_optional_text(turn.get("finished_at"))
+    managed_turn_id = str(turn.execution_id or "")
+    turn_status = str(turn.status or "").strip().lower()
+    started_at = normalize_optional_text(turn.started_at)
+    finished_at = normalize_optional_text(turn.finished_at)
     started_dt = parse_iso_datetime(started_at)
     finished_dt = parse_iso_datetime(finished_at)
     now_dt = datetime.now(timezone.utc)
@@ -250,11 +252,11 @@ async def _build_managed_thread_tail_snapshot(
     elif turn_status == "interrupted":
         lifecycle_events.append("turn_interrupted")
 
-    backend_thread_id = normalize_optional_text(thread.get("backend_thread_id"))
-    backend_turn_id = normalize_optional_text(turn.get("backend_turn_id"))
+    backend_thread_id = normalize_optional_text(thread.backend_thread_id)
+    backend_turn_id = normalize_optional_text(turn.backend_id)
     app_server_events = getattr(request.app.state, "app_server_events", None)
     can_stream_codex = (
-        str(thread.get("agent") or "").strip().lower() == "codex"
+        str(thread.agent_id or "").strip().lower() == "codex"
         and app_server_events is not None
         and bool(backend_thread_id)
         and bool(backend_turn_id)
@@ -304,7 +306,7 @@ async def _build_managed_thread_tail_snapshot(
     return {
         "managed_thread_id": managed_thread_id,
         "managed_turn_id": managed_turn_id,
-        "agent": thread.get("agent"),
+        "agent": thread.agent_id,
         "backend_thread_id": backend_thread_id,
         "backend_turn_id": backend_turn_id,
         "turn_status": turn_status,
@@ -339,28 +341,26 @@ def build_managed_thread_tail_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        service = build_managed_thread_orchestration_service(request)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
+            service=service,
             managed_thread_id=managed_thread_id,
             limit=min(limit, 200),
             level=normalize_tail_level(level),
             since_ms=since_ms_from_duration(since),
             resume_after=resolve_resume_after(request, since_event_id),
         )
-        store = PmaThreadStore(request.app.state.config.root)
-        thread = store.get_thread(managed_thread_id)
+        thread = service.get_thread_target(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        # Import lazily to avoid a module-level cycle with managed_threads.py.
-        from .managed_threads import _serialize_managed_thread
-
-        serialized_thread = _serialize_managed_thread(thread)
-        turn = store.get_running_turn(managed_thread_id) or next(
-            iter(store.list_turns(managed_thread_id, limit=1)), None
-        )
+        serialized_thread = _serialize_thread_target(thread)
+        turn = service.get_running_execution(
+            managed_thread_id
+        ) or service.get_latest_execution(managed_thread_id)
         latest_output_excerpt = ""
-        if isinstance(turn, dict):
-            latest_output_excerpt = truncate_text(turn.get("assistant_text") or "", 240)
+        if turn is not None:
+            latest_output_excerpt = truncate_text(turn.output_text or "", 240)
         turn_status = str(snapshot.get("turn_status") or "")
         return {
             "managed_thread_id": managed_thread_id,
@@ -404,8 +404,10 @@ def build_managed_thread_tail_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        service = build_managed_thread_orchestration_service(request)
         return await _build_managed_thread_tail_snapshot(
             request=request,
+            service=service,
             managed_thread_id=managed_thread_id,
             limit=min(limit, 200),
             level=normalize_tail_level(level),
@@ -426,8 +428,10 @@ def build_managed_thread_tail_routes(
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         normalized_level = normalize_tail_level(level)
         since_ms = since_ms_from_duration(since)
+        service = build_managed_thread_orchestration_service(request)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
+            service=service,
             managed_thread_id=managed_thread_id,
             limit=min(limit, 200),
             level=normalized_level,
@@ -455,13 +459,17 @@ def build_managed_thread_tail_routes(
             if snapshot.get("turn_status") != "running":
                 return
             if not snapshot.get("stream_available"):
-                store = PmaThreadStore(request.app.state.config.root)
                 while True:
                     await asyncio.sleep(10.0)
-                    turn = store.get_turn(
-                        managed_thread_id, str(snapshot.get("managed_turn_id") or "")
+                    turn = service.get_execution(
+                        managed_thread_id,
+                        str(snapshot.get("managed_turn_id") or ""),
                     )
-                    status = str((turn or {}).get("status") or "").strip().lower()
+                    status = (
+                        str((turn.status if turn is not None else "") or "")
+                        .strip()
+                        .lower()
+                    )
                     if status != "running":
                         yield (
                             "event: state\ndata: "
@@ -487,7 +495,6 @@ def build_managed_thread_tail_routes(
                 return
 
             formatter = AppServerEventFormatter(redact_enabled=True)
-            store = PmaThreadStore(request.app.state.config.root)
             last_event_id = int(snapshot.get("last_event_id") or 0)
             async for entry in app_server_events.stream_entries(
                 backend_thread_id,
@@ -496,10 +503,15 @@ def build_managed_thread_tail_routes(
                 heartbeat_interval=10.0,
             ):
                 if entry is None:
-                    turn = store.get_turn(
-                        managed_thread_id, str(snapshot.get("managed_turn_id") or "")
+                    turn = service.get_execution(
+                        managed_thread_id,
+                        str(snapshot.get("managed_turn_id") or ""),
                     )
-                    status = str((turn or {}).get("status") or "").strip().lower()
+                    status = (
+                        str((turn.status if turn is not None else "") or "")
+                        .strip()
+                        .lower()
+                    )
                     now = datetime.now(timezone.utc)
                     started_dt = parse_iso_datetime(snapshot.get("started_at"))
                     elapsed = None

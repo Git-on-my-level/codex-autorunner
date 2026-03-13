@@ -126,6 +126,10 @@ class ThreadExecutionStore(Protocol):
         self, thread_target_id: str, *, backend_thread_id: str
     ) -> Optional[ThreadTarget]: ...
 
+    def archive_thread_target(
+        self, thread_target_id: str
+    ) -> Optional[ThreadTarget]: ...
+
     def set_thread_backend_id(
         self, thread_target_id: str, backend_thread_id: Optional[str]
     ) -> None: ...
@@ -145,6 +149,10 @@ class ThreadExecutionStore(Protocol):
     ) -> Optional[ExecutionRecord]: ...
 
     def get_running_execution(
+        self, thread_target_id: str
+    ) -> Optional[ExecutionRecord]: ...
+
+    def get_latest_execution(
         self, thread_target_id: str
     ) -> Optional[ExecutionRecord]: ...
 
@@ -224,6 +232,8 @@ class OrchestrationThreadService(Protocol):
         self, thread_target_id: str, *, backend_thread_id: str
     ) -> ThreadTarget: ...
 
+    def archive_thread_target(self, thread_target_id: str) -> ThreadTarget: ...
+
     async def send_message(
         self,
         request: MessageRequest,
@@ -239,6 +249,10 @@ class OrchestrationThreadService(Protocol):
     ) -> Optional[ExecutionRecord]: ...
 
     def get_running_execution(
+        self, thread_target_id: str
+    ) -> Optional[ExecutionRecord]: ...
+
+    def get_latest_execution(
         self, thread_target_id: str
     ) -> Optional[ExecutionRecord]: ...
 

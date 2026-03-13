@@ -1,10 +1,12 @@
 """Tests for PMA CLI commands."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
 
@@ -317,6 +319,270 @@ def test_pma_context_reset(tmp_path: Path):
     result2 = runner.invoke(pma_app, ["context", "reset", "--path", str(tmp_path)])
     assert result2.exit_code == 0
     assert "Reset active_context.md" in result2.stdout
+
+
+def test_pma_cli_thread_query_commands_use_orchestration_routes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    responses = {
+        "/hub/pma/threads": {
+            "threads": [
+                {
+                    "managed_thread_id": "thread-1",
+                    "agent": "codex",
+                    "status": "idle",
+                    "status_reason": "thread_created",
+                    "repo_id": "repo-1",
+                }
+            ]
+        },
+        "/hub/pma/threads/thread-1": {
+            "thread": {
+                "managed_thread_id": "thread-1",
+                "agent": "codex",
+                "status": "completed",
+            }
+        },
+        "/hub/pma/threads/thread-1/status": {
+            "managed_thread_id": "thread-1",
+            "thread": {
+                "managed_thread_id": "thread-1",
+                "agent": "codex",
+                "repo_id": "repo-1",
+                "status": "completed",
+                "lifecycle_status": "active",
+                "status_reason": "managed_turn_completed",
+            },
+            "status": "completed",
+            "status_reason": "managed_turn_completed",
+            "turn": {
+                "managed_turn_id": "turn-1",
+                "status": "ok",
+                "activity": "completed",
+                "elapsed_seconds": 60,
+                "idle_seconds": 0,
+            },
+            "recent_progress": [],
+            "latest_output_excerpt": "assistant output",
+        },
+        "/hub/pma/threads/thread-1/tail": {
+            "managed_thread_id": "thread-1",
+            "managed_turn_id": "turn-1",
+            "turn_status": "ok",
+            "activity": "completed",
+            "elapsed_seconds": 60,
+            "idle_seconds": 0,
+            "lifecycle_events": ["turn_started", "turn_completed"],
+            "events": [],
+        },
+    }
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env
+        calls.append((method, url, params))
+        for suffix, response in responses.items():
+            if url.endswith(suffix):
+                return response
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    list_result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "list",
+            "--agent",
+            "codex",
+            "--status",
+            "idle",
+            "--repo",
+            "repo-1",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    info_result = runner.invoke(
+        pma_app, ["thread", "info", "--id", "thread-1", "--path", str(tmp_path)]
+    )
+    status_result = runner.invoke(
+        pma_app, ["thread", "status", "--id", "thread-1", "--path", str(tmp_path)]
+    )
+    tail_result = runner.invoke(
+        pma_app, ["thread", "tail", "--id", "thread-1", "--path", str(tmp_path)]
+    )
+
+    assert list_result.exit_code == 0
+    assert "thread-1 agent=codex status=idle" in list_result.stdout
+    assert info_result.exit_code == 0
+    assert '"managed_thread_id": "thread-1"' in info_result.stdout
+    assert status_result.exit_code == 0
+    assert (
+        "id=thread-1 agent=codex repo=repo-1 thread=completed lifecycle=active"
+        in status_result.stdout
+    )
+    assert "latest output:" in status_result.stdout
+    assert tail_result.exit_code == 0
+    assert "turn=turn-1 status=ok activity=completed" in tail_result.stdout
+
+    assert calls == [
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads",
+            {"agent": "codex", "status": "idle", "repo_id": "repo-1", "limit": 200},
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1",
+            None,
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1/status",
+            {"limit": 20, "level": "info"},
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1/tail",
+            {"limit": 50, "level": "info"},
+        ),
+    ]
+
+
+def test_pma_cli_thread_control_commands_use_orchestration_routes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env, params
+        calls.append((method, url, payload))
+        if url.endswith("/hub/pma/threads"):
+            return {"thread": {"managed_thread_id": "thread-1"}}
+        if url.endswith("/resume"):
+            return {
+                "thread": {
+                    "managed_thread_id": "thread-1",
+                    "backend_thread_id": "backend-thread-2",
+                }
+            }
+        if url.endswith("/archive"):
+            return {"thread": {"managed_thread_id": "thread-1", "status": "archived"}}
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+    monkeypatch.setattr(
+        pma_cli,
+        "_fetch_agent_capabilities",
+        lambda config, path: {"codex": {"durable_threads"}},
+    )
+
+    runner = CliRunner()
+    create_result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "create",
+            "--agent",
+            "codex",
+            "--repo",
+            "repo-1",
+            "--name",
+            "CLI thread",
+            "--backend-id",
+            "backend-thread-1",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    resume_result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "resume",
+            "--id",
+            "thread-1",
+            "--backend-id",
+            "backend-thread-2",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    archive_result = runner.invoke(
+        pma_app,
+        ["thread", "archive", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+
+    assert create_result.exit_code == 0
+    assert create_result.stdout.strip() == "thread-1"
+    assert resume_result.exit_code == 0
+    assert "Resumed thread-1" in resume_result.stdout
+    assert archive_result.exit_code == 0
+    assert "Archived thread-1" in archive_result.stdout
+
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads",
+            {
+                "agent": "codex",
+                "repo_id": "repo-1",
+                "workspace_root": None,
+                "name": "CLI thread",
+                "backend_thread_id": "backend-thread-1",
+                "notify_on": None,
+                "notify_lane": None,
+                "notify_once": True,
+            },
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1/resume",
+            {"backend_thread_id": "backend-thread-2"},
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1/archive",
+            None,
+        ),
+    ]
 
 
 def test_pma_context_snapshot(tmp_path: Path):

@@ -124,6 +124,16 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             return None
         return _thread_target_from_store_row(updated)
 
+    def archive_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
+        record = self._store.get_thread(thread_target_id)
+        if record is None:
+            return None
+        self._store.archive_thread(thread_target_id)
+        updated = self._store.get_thread(thread_target_id)
+        if updated is None:
+            return None
+        return _thread_target_from_store_row(updated)
+
     def set_thread_backend_id(
         self, thread_target_id: str, backend_thread_id: Optional[str]
     ) -> None:
@@ -157,6 +167,14 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
 
     def get_running_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         record = self._store.get_running_turn(thread_target_id)
+        if record is None:
+            return None
+        return _execution_record_from_store_row(record)
+
+    def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
+        record = self._store.get_running_turn(thread_target_id)
+        if record is None:
+            record = next(iter(self._store.list_turns(thread_target_id, limit=1)), None)
         if record is None:
             return None
         return _execution_record_from_store_row(record)
@@ -392,6 +410,12 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
         return thread
 
+    def archive_thread_target(self, thread_target_id: str) -> ThreadTarget:
+        thread = self.thread_store.archive_thread_target(thread_target_id)
+        if thread is None:
+            raise KeyError(f"Unknown thread target '{thread_target_id}'")
+        return thread
+
     async def send_message(
         self,
         request: MessageRequest,
@@ -550,6 +574,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
     def get_running_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         return self.thread_store.get_running_execution(thread_target_id)
+
+    def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
+        return self.thread_store.get_latest_execution(thread_target_id)
 
     def record_execution_result(
         self,

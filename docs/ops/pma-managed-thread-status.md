@@ -40,3 +40,8 @@ API, CLI, and hub UI surfaces read these persisted fields instead of re-inferrin
 status from mixed lifecycle signals. Operator-facing payloads keep compatibility
 aliases such as `status_reason` and `status_changed_at`, while lifecycle write
 admission remains separate in `lifecycle_status`.
+
+As of the orchestration cutover, PMA thread create/list/get/resume/archive and
+status/tail reads go through the shared orchestration service seam. PMA keeps
+its operator-facing response shape, but the web and CLI surfaces no longer
+treat direct PMA store access as the primary runtime-thread query/control path.

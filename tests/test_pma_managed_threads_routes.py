@@ -6,7 +6,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration import ThreadTarget
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes.pma_routes import managed_threads
 from tests.conftest import write_test_config
 
 
@@ -329,3 +331,207 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
     assert fake_supervisor.client.resume_calls == [resumed_backend_id]
     assert fake_supervisor.client.thread_start_calls == 0
     assert len(fake_supervisor.client.turn_start_calls) == 1
+
+
+def test_managed_thread_crud_routes_use_orchestration_service(
+    hub_env, monkeypatch
+) -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+            self.thread = ThreadTarget(
+                thread_target_id="thread-orch-1",
+                agent_id="codex",
+                backend_thread_id="backend-thread-1",
+                repo_id=hub_env.repo_id,
+                workspace_root=str(hub_env.repo_root.resolve()),
+                display_name="Orchestrated thread",
+                status="idle",
+                lifecycle_status="active",
+                status_reason="thread_created",
+                status_changed_at="2026-03-13T00:00:00Z",
+                status_terminal=False,
+            )
+
+        def create_thread_target(
+            self,
+            agent_id,
+            workspace_root,
+            *,
+            repo_id=None,
+            display_name=None,
+            backend_thread_id=None,
+        ):
+            self.calls.append(
+                (
+                    "create",
+                    {
+                        "agent_id": agent_id,
+                        "workspace_root": str(workspace_root),
+                        "repo_id": repo_id,
+                        "display_name": display_name,
+                        "backend_thread_id": backend_thread_id,
+                    },
+                )
+            )
+            self.thread = ThreadTarget(
+                thread_target_id=self.thread.thread_target_id,
+                agent_id=agent_id,
+                backend_thread_id=backend_thread_id,
+                repo_id=repo_id,
+                workspace_root=str(workspace_root),
+                display_name=display_name,
+                status="idle",
+                lifecycle_status="active",
+                status_reason="thread_created",
+                status_changed_at="2026-03-13T00:00:00Z",
+                status_terminal=False,
+            )
+            return self.thread
+
+        def list_thread_targets(
+            self,
+            *,
+            agent_id=None,
+            lifecycle_status=None,
+            runtime_status=None,
+            repo_id=None,
+            limit=200,
+        ):
+            self.calls.append(
+                (
+                    "list",
+                    {
+                        "agent_id": agent_id,
+                        "lifecycle_status": lifecycle_status,
+                        "runtime_status": runtime_status,
+                        "repo_id": repo_id,
+                        "limit": limit,
+                    },
+                )
+            )
+            return [self.thread]
+
+        def get_thread_target(self, thread_target_id):
+            self.calls.append(("get", {"thread_target_id": thread_target_id}))
+            if thread_target_id != self.thread.thread_target_id:
+                return None
+            return self.thread
+
+        def resume_thread_target(self, thread_target_id, *, backend_thread_id):
+            self.calls.append(
+                (
+                    "resume",
+                    {
+                        "thread_target_id": thread_target_id,
+                        "backend_thread_id": backend_thread_id,
+                    },
+                )
+            )
+            self.thread = ThreadTarget(
+                **{
+                    **self.thread.to_dict(),
+                    "backend_thread_id": backend_thread_id,
+                    "status": "idle",
+                    "lifecycle_status": "active",
+                    "status_reason": "thread_resumed",
+                    "status_terminal": False,
+                }
+            )
+            return self.thread
+
+        def archive_thread_target(self, thread_target_id):
+            self.calls.append(("archive", {"thread_target_id": thread_target_id}))
+            self.thread = ThreadTarget(
+                **{
+                    **self.thread.to_dict(),
+                    "status": "archived",
+                    "lifecycle_status": "archived",
+                    "status_reason": "thread_archived",
+                    "status_terminal": True,
+                }
+            )
+            return self.thread
+
+    fake_service = FakeService()
+    monkeypatch.setattr(
+        managed_threads,
+        "build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+    monkeypatch.setattr(
+        managed_threads.PmaThreadStore,
+        "append_action",
+        lambda self, action_type, *, managed_thread_id=None, payload_json=None: 1,
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "repo_id": hub_env.repo_id,
+                "name": "Orchestrated thread",
+                "backend_thread_id": "backend-thread-1",
+            },
+        )
+        list_resp = client.get(
+            "/hub/pma/threads",
+            params={"agent": "codex", "status": "idle", "repo_id": hub_env.repo_id},
+        )
+        get_resp = client.get("/hub/pma/threads/thread-orch-1")
+        resume_resp = client.post(
+            "/hub/pma/threads/thread-orch-1/resume",
+            json={"backend_thread_id": "backend-thread-2"},
+        )
+        archive_resp = client.post("/hub/pma/threads/thread-orch-1/archive")
+
+    assert create_resp.status_code == 200
+    assert list_resp.status_code == 200
+    assert get_resp.status_code == 200
+    assert resume_resp.status_code == 200
+    assert archive_resp.status_code == 200
+
+    created = create_resp.json()["thread"]
+    assert created["managed_thread_id"] == "thread-orch-1"
+    assert created["workspace_root"] == str(hub_env.repo_root.resolve())
+    assert list_resp.json()["threads"][0]["managed_thread_id"] == "thread-orch-1"
+    assert get_resp.json()["thread"]["managed_thread_id"] == "thread-orch-1"
+    assert resume_resp.json()["thread"]["backend_thread_id"] == "backend-thread-2"
+    assert archive_resp.json()["thread"]["lifecycle_status"] == "archived"
+    assert archive_resp.json()["thread"]["status"] == "archived"
+
+    assert fake_service.calls == [
+        (
+            "create",
+            {
+                "agent_id": "codex",
+                "workspace_root": str(hub_env.repo_root.resolve()),
+                "repo_id": hub_env.repo_id,
+                "display_name": "Orchestrated thread",
+                "backend_thread_id": "backend-thread-1",
+            },
+        ),
+        (
+            "list",
+            {
+                "agent_id": "codex",
+                "lifecycle_status": None,
+                "runtime_status": "idle",
+                "repo_id": hub_env.repo_id,
+                "limit": 200,
+            },
+        ),
+        ("get", {"thread_target_id": "thread-orch-1"}),
+        ("get", {"thread_target_id": "thread-orch-1"}),
+        (
+            "resume",
+            {
+                "thread_target_id": "thread-orch-1",
+                "backend_thread_id": "backend-thread-2",
+            },
+        ),
+        ("get", {"thread_target_id": "thread-orch-1"}),
+        ("archive", {"thread_target_id": "thread-orch-1"}),
+    ]

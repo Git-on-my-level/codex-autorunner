@@ -66,6 +66,9 @@ class _FakeStore:
     ) -> Optional[ThreadTarget]:
         return self.thread
 
+    def archive_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
+        return self.thread
+
     def set_thread_backend_id(
         self, thread_target_id: str, backend_thread_id: Optional[str]
     ) -> None:
@@ -88,6 +91,9 @@ class _FakeStore:
         return self.execution
 
     def get_running_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
+        return self.execution
+
+    def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         return self.execution
 
     def set_execution_backend_id(
@@ -269,6 +275,9 @@ class _FakeService:
             or self.store.thread
         )
 
+    def archive_thread_target(self, thread_target_id: str) -> ThreadTarget:
+        return self.store.archive_thread_target(thread_target_id) or self.store.thread
+
     def resolve_thread_target(
         self,
         *,
@@ -307,6 +316,9 @@ class _FakeService:
         return self.store.execution
 
     def get_running_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
+        return self.store.execution
+
+    def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         return self.store.execution
 
     def record_execution_result(

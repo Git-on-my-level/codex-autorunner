@@ -56,6 +56,14 @@ class ThreadTarget:
     workspace_root: Optional[str] = None
     display_name: Optional[str] = None
     status: Optional[str] = None
+    lifecycle_status: Optional[str] = None
+    status_reason: Optional[str] = None
+    status_changed_at: Optional[str] = None
+    status_terminal: bool = False
+    status_turn_id: Optional[str] = None
+    last_execution_id: Optional[str] = None
+    last_message_preview: Optional[str] = None
+    compact_seed: Optional[str] = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTarget":
@@ -75,6 +83,24 @@ class ThreadTarget:
             status=_normalize_optional_text(
                 data.get("normalized_status") or data.get("status")
             ),
+            lifecycle_status=_normalize_optional_text(
+                data.get("lifecycle_status") or data.get("status")
+            ),
+            status_reason=_normalize_optional_text(
+                data.get("status_reason") or data.get("status_reason_code")
+            ),
+            status_changed_at=_normalize_optional_text(
+                data.get("status_changed_at") or data.get("status_updated_at")
+            ),
+            status_terminal=bool(data.get("status_terminal")),
+            status_turn_id=_normalize_optional_text(data.get("status_turn_id")),
+            last_execution_id=_normalize_optional_text(
+                data.get("last_execution_id") or data.get("last_turn_id")
+            ),
+            last_message_preview=_normalize_optional_text(
+                data.get("last_message_preview")
+            ),
+            compact_seed=_normalize_optional_text(data.get("compact_seed")),
         )
 
     def to_dict(self) -> dict[str, Any]:

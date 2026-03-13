@@ -8,12 +8,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .....agents.registry import get_registered_agents
 from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
-from .....core.orchestration import (
-    MessageRequest,
-    build_harness_backed_orchestration_service,
-)
+from .....core.orchestration import MessageRequest
 from .....core.orchestration.runtime_threads import (
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
@@ -33,6 +29,9 @@ from .automation_adapter import (
     get_automation_store,
     normalize_optional_text,
 )
+from .managed_threads import (
+    build_managed_thread_orchestration_service as _shared_managed_thread_orchestration_service,
+)
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -43,6 +42,13 @@ MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
 PMA_TIMEOUT_SECONDS = 7200
 PMA_MAX_TEXT = PMA_DEFAULT_MAX_TEXT_CHARS
+
+
+def _build_managed_thread_orchestration_service(
+    request: Request, *, thread_store: Optional[PmaThreadStore] = None
+):
+    _ = thread_store
+    return _shared_managed_thread_orchestration_service(request)
 
 
 def _truncate_text(value: Any, limit: int) -> str:
@@ -248,26 +254,6 @@ async def register_managed_thread_terminal_notify(
     if isinstance(created, dict) and "subscription" in created:
         return created
     return {"subscription": created}
-
-
-def _build_managed_thread_orchestration_service(
-    request: Request, *, thread_store: Optional[PmaThreadStore] = None
-):
-    descriptors = get_registered_agents()
-
-    def _make_harness(agent_id: str):
-        descriptor = descriptors.get(agent_id)
-        if descriptor is None:
-            raise KeyError(f"Unknown agent definition '{agent_id}'")
-        return descriptor.make_harness(request.app.state)
-
-    kwargs: dict[str, Any] = {
-        "descriptors": descriptors,
-        "harness_factory": _make_harness,
-    }
-    if thread_store is not None:
-        kwargs["pma_thread_store"] = thread_store
-    return build_harness_backed_orchestration_service(**kwargs)
 
 
 def build_managed_thread_runtime_routes(
