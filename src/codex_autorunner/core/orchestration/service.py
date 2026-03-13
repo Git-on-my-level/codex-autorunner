@@ -210,11 +210,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         execution_id: Optional[str],
         message_preview: Optional[str],
     ) -> None:
-        self._store.update_thread_after_turn(
-            thread_target_id,
-            last_turn_id=execution_id,
-            last_message_preview=message_preview,
-        )
+        _ = thread_target_id, execution_id, message_preview
 
 
 @dataclass
@@ -315,6 +311,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         *,
         client_request_id: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
+        harness: Optional[RuntimeThreadHarness] = None,
     ) -> ExecutionRecord:
         if request.target_kind != "thread":
             raise ValueError("Thread orchestration service only handles thread targets")
@@ -329,9 +326,13 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if definition is None:
             raise KeyError(f"Unknown agent definition '{thread.agent_id}'")
 
-        harness = self.harness_factory(definition.agent_id)
+        harness = harness or self.harness_factory(definition.agent_id)
         workspace_root = Path(thread.workspace_root)
         await harness.ensure_ready(workspace_root)
+        runtime_prompt = request.message_text
+        raw_runtime_prompt = request.metadata.get("runtime_prompt")
+        if isinstance(raw_runtime_prompt, str) and raw_runtime_prompt.strip():
+            runtime_prompt = raw_runtime_prompt
 
         conversation_id = thread.backend_thread_id
         if conversation_id:
@@ -361,27 +362,61 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             message_preview=_truncate_text(request.message_text),
         )
 
-        if request.kind == "review":
-            turn = await harness.start_review(
-                workspace_root,
-                conversation_id,
-                request.message_text,
-                request.model,
-                request.reasoning,
-                approval_mode=request.approval_mode,
-                sandbox_policy=sandbox_policy,
+        try:
+            if request.kind == "review":
+                turn = await harness.start_review(
+                    workspace_root,
+                    conversation_id,
+                    runtime_prompt,
+                    request.model,
+                    request.reasoning,
+                    approval_mode=request.approval_mode,
+                    sandbox_policy=sandbox_policy,
+                )
+            else:
+                turn = await harness.start_turn(
+                    workspace_root,
+                    conversation_id,
+                    runtime_prompt,
+                    request.model,
+                    request.reasoning,
+                    approval_mode=request.approval_mode,
+                    sandbox_policy=sandbox_policy,
+                )
+        except Exception as exc:
+            detail = (
+                str(request.metadata.get("execution_error_message") or "").strip()
+                or str(exc).strip()
+                or "Runtime thread execution failed"
             )
-        else:
-            turn = await harness.start_turn(
-                workspace_root,
-                conversation_id,
-                request.message_text,
-                request.model,
-                request.reasoning,
-                approval_mode=request.approval_mode,
-                sandbox_policy=sandbox_policy,
-            )
+            try:
+                return self.thread_store.record_execution_result(
+                    thread.thread_target_id,
+                    execution.execution_id,
+                    status="error",
+                    assistant_text="",
+                    error=detail,
+                    backend_turn_id=None,
+                    transcript_turn_id=None,
+                )
+            except KeyError:
+                refreshed = self.get_execution(
+                    thread.thread_target_id, execution.execution_id
+                )
+                if refreshed is not None:
+                    return refreshed
+                raise
 
+        resolved_conversation_id = getattr(turn, "conversation_id", conversation_id)
+        if (
+            isinstance(resolved_conversation_id, str)
+            and resolved_conversation_id
+            and resolved_conversation_id != conversation_id
+        ):
+            conversation_id = resolved_conversation_id
+            self.thread_store.set_thread_backend_id(
+                thread.thread_target_id, conversation_id
+            )
         self.thread_store.set_execution_backend_id(execution.execution_id, turn.turn_id)
         refreshed = self.get_execution(thread.thread_target_id, execution.execution_id)
         if refreshed is None:

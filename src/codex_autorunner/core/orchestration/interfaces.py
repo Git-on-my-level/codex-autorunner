@@ -26,6 +26,7 @@ class RuntimeConversationHandle(Protocol):
 class RuntimeTurnHandle(Protocol):
     """Structural handle returned by runtime backends for individual turns."""
 
+    conversation_id: str
     turn_id: str
 
 
