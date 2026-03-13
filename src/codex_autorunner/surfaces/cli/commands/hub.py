@@ -12,6 +12,8 @@ from ....core.destinations import (
     validate_destination_write_payload,
 )
 from ....core.hub import HubSupervisor
+from ....core.orchestration import verify_migration
+from ....core.orchestration.sqlite import open_orchestration_sqlite
 from ....manifest import Manifest, load_manifest, save_manifest
 from ...web.app import create_hub_app
 
@@ -31,6 +33,11 @@ def register_hub_commands(
         add_completion=False, help="Inspect and set per-repo runtime destinations."
     )
     hub_app.add_typer(destination_app, name="destination")
+
+    orchestration_app = typer.Typer(
+        add_completion=False, help="Orchestration state migration and verification."
+    )
+    hub_app.add_typer(orchestration_app, name="orchestration")
 
     def _resolve_repo_entry(config: HubConfig, repo_id: str):
         manifest = load_manifest(config.manifest_path, config.root)
@@ -262,6 +269,145 @@ def register_hub_commands(
             f"Updated destination for {repo.id} to "
             f"{resolution.destination.kind} (source={resolution.source})"
         )
+
+    @orchestration_app.command("verify")
+    def orchestration_verify(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ):
+        """Verify orchestration state migration parity between legacy stores and orchestration.sqlite3.
+
+        This command compares row counts, representative IDs, and content hashes
+        between legacy PMA stores and the new orchestration SQLite database.
+
+        Examples:
+        - `car hub orchestration verify --path <hub_root>`
+        - `car hub orchestration verify --path <hub_root> --json`
+        """
+        config = require_hub_config(path)
+        try:
+            with open_orchestration_sqlite(config.root, migrate=False) as conn:
+                summary = verify_migration(config.root, conn)
+        except Exception as exc:
+            raise_exit(f"Migration verification failed: {exc}", cause=exc)
+        if output_json:
+            typer.echo(json.dumps(summary.to_dict(), indent=2))
+            return
+        typer.echo("Migration Verification Summary")
+        typer.echo("=" * 50)
+        typer.echo(f"Run ID: {summary.run_id}")
+        typer.echo(f"Status: {summary.status}")
+        typer.echo(f"Overall Passed: {summary.overall_passed}")
+        typer.echo(f"Rollback Available: {summary.rollback_available}")
+        typer.echo("")
+        typer.echo("Thread Parity:")
+        for check in summary.thread_parity:
+            status_icon = "✓" if check.status == "passed" else "✗"
+            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
+        typer.echo("")
+        typer.echo("Automation Parity:")
+        for check in summary.automation_parity:
+            status_icon = "✓" if check.status == "passed" else "✗"
+            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
+        typer.echo("")
+        typer.echo("Queue Parity:")
+        for check in summary.queue_parity:
+            status_icon = "✓" if check.status == "passed" else "✗"
+            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
+        typer.echo("")
+        tp = summary.transcript_parity
+        if tp:
+            status_icon = "✓" if tp.status == "passed" else "✗"
+            typer.echo("Transcript Parity:")
+            typer.echo(f"  {status_icon} {tp.check_name}: {tp.message}")
+        typer.echo("")
+        typer.echo("Event Parity:")
+        for check in summary.event_parity:
+            status_icon = "✓" if check.status == "passed" else "✗"
+            typer.echo(f"  {status_icon} {check.check_name}: {check.message}")
+        typer.echo("")
+        ap = summary.audit_parity
+        status_icon = "✓" if ap.status == "passed" else "✗"
+        typer.echo("Audit Parity:")
+        typer.echo(f"  {status_icon} {ap.check_name}: {ap.message}")
+        typer.echo("")
+        typer.echo("Recommendations:")
+        for rec in summary.recommendations:
+            typer.echo(f"  - {rec}")
+
+    @orchestration_app.command("status")
+    def orchestration_status(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ):
+        """Show orchestration SQLite state and migration status.
+
+        Displays schema version, migration history, and table statistics.
+        """
+        config = require_hub_config(path)
+        from ....core.orchestration.migrate_legacy_state import (
+            LEGACY_PMA_AUDIT_LOG_PATH,
+            LEGACY_PMA_AUTOMATION_PATH,
+            LEGACY_PMA_LIFECYCLE_LOG_PATH,
+            LEGACY_PMA_QUEUE_DIR,
+            LEGACY_PMA_THREADS_DB_PATH,
+            LEGACY_PMA_TRANSCRIPTS_DIR,
+        )
+        from ....core.orchestration.migrations import (
+            ORCHESTRATION_SCHEMA_VERSION,
+            current_orchestration_schema_version,
+        )
+
+        try:
+            with open_orchestration_sqlite(config.root, migrate=False) as conn:
+                current_version = current_orchestration_schema_version(conn)
+                tables = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'orch_%' ORDER BY name"
+                ).fetchall()
+                table_counts = {}
+                for row in tables:
+                    table_name = row["name"]
+                    cnt = conn.execute(
+                        f"SELECT COUNT(*) as cnt FROM {table_name}"
+                    ).fetchone()
+                    table_counts[table_name] = int(cnt["cnt"]) if cnt else 0
+        except Exception as exc:
+            raise_exit(f"Failed to read orchestration state: {exc}", cause=exc)
+        legacy_status = {
+            "threads_db": (config.root / LEGACY_PMA_THREADS_DB_PATH).exists(),
+            "automation": (config.root / LEGACY_PMA_AUTOMATION_PATH).exists(),
+            "queue": (config.root / LEGACY_PMA_QUEUE_DIR).exists(),
+            "transcripts": (config.root / LEGACY_PMA_TRANSCRIPTS_DIR).exists(),
+            "audit_log": (config.root / LEGACY_PMA_AUDIT_LOG_PATH).exists(),
+            "lifecycle": (config.root / LEGACY_PMA_LIFECYCLE_LOG_PATH).exists(),
+        }
+        payload = {
+            "schema_version": current_version,
+            "target_version": ORCHESTRATION_SCHEMA_VERSION,
+            "tables": table_counts,
+            "legacy_stores": legacy_status,
+        }
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo("Orchestration Status")
+        typer.echo("=" * 50)
+        typer.echo(
+            f"Schema Version: {current_version} / {ORCHESTRATION_SCHEMA_VERSION}"
+        )
+        typer.echo("")
+        typer.echo("Table Counts:")
+        for table, count in sorted(table_counts.items()):
+            typer.echo(f"  {table}: {count}")
+        typer.echo("")
+        typer.echo("Legacy Stores Available:")
+        for store, exists in legacy_status.items():
+            status = "yes" if exists else "no"
+            typer.echo(f"  {store}: {status}")
 
     @hub_app.command("create")
     def hub_create(

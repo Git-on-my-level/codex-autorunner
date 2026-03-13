@@ -50,6 +50,18 @@ from .sqlite import (
     resolve_orchestration_sqlite_path,
 )
 from .transcript_mirror import TranscriptMirrorRow, TranscriptMirrorStore
+from .verification import (
+    MigrationVerificationSummary,
+    ParityCheckResult,
+    TranscriptParityResult,
+    verify_audit_parity,
+    verify_automation_parity,
+    verify_event_parity,
+    verify_migration,
+    verify_queue_parity,
+    verify_thread_parity,
+    verify_transcript_parity,
+)
 
 __all__ = [
     "AgentDefinition",
@@ -62,9 +74,11 @@ __all__ = [
     "ORCHESTRATION_SCHEMA_VERSION",
     "MappingAgentDefinitionCatalog",
     "MessageRequest",
+    "MigrationVerificationSummary",
     "OrchestrationTableDefinition",
     "OrchestrationTableRole",
     "OrchestrationThreadService",
+    "ParityCheckResult",
     "PmaThreadExecutionStore",
     "RuntimeAgentDescriptor",
     "RuntimeConversationHandle",
@@ -78,6 +92,7 @@ __all__ = [
     "ThreadTarget",
     "TranscriptMirrorRow",
     "TranscriptMirrorStore",
+    "TranscriptParityResult",
     "await_runtime_thread_outcome",
     "apply_orchestration_migrations",
     "begin_runtime_thread_execution",
@@ -91,4 +106,11 @@ __all__ = [
     "map_agent_capabilities",
     "resolve_orchestration_sqlite_path",
     "stream_runtime_thread_events",
+    "verify_audit_parity",
+    "verify_automation_parity",
+    "verify_event_parity",
+    "verify_migration",
+    "verify_queue_parity",
+    "verify_thread_parity",
+    "verify_transcript_parity",
 ]
