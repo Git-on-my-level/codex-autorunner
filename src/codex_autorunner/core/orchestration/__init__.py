@@ -14,12 +14,20 @@ from .interfaces import (
     RuntimeTurnHandle,
     ThreadExecutionStore,
 )
+from .migrations import (
+    ORCHESTRATION_SCHEMA_VERSION,
+    apply_orchestration_migrations,
+    current_orchestration_schema_version,
+    list_orchestration_table_definitions,
+)
 from .models import (
     AgentDefinition,
     Binding,
     ExecutionRecord,
     FlowTarget,
     MessageRequest,
+    OrchestrationTableDefinition,
+    OrchestrationTableRole,
     TargetCapability,
     TargetKind,
     ThreadTarget,
@@ -36,6 +44,11 @@ from .service import (
     PmaThreadExecutionStore,
     build_harness_backed_orchestration_service,
 )
+from .sqlite import (
+    ORCHESTRATION_DB_FILENAME,
+    initialize_orchestration_sqlite,
+    resolve_orchestration_sqlite_path,
+)
 
 __all__ = [
     "AgentDefinition",
@@ -44,8 +57,12 @@ __all__ = [
     "ExecutionRecord",
     "FlowTarget",
     "HarnessBackedOrchestrationService",
+    "ORCHESTRATION_DB_FILENAME",
+    "ORCHESTRATION_SCHEMA_VERSION",
     "MappingAgentDefinitionCatalog",
     "MessageRequest",
+    "OrchestrationTableDefinition",
+    "OrchestrationTableRole",
     "OrchestrationThreadService",
     "PmaThreadExecutionStore",
     "RuntimeAgentDescriptor",
@@ -59,11 +76,16 @@ __all__ = [
     "ThreadExecutionStore",
     "ThreadTarget",
     "await_runtime_thread_outcome",
+    "apply_orchestration_migrations",
     "begin_runtime_thread_execution",
     "build_harness_backed_orchestration_service",
     "build_agent_definition",
+    "current_orchestration_schema_version",
     "get_agent_definition",
+    "initialize_orchestration_sqlite",
     "list_agent_definitions",
+    "list_orchestration_table_definitions",
     "map_agent_capabilities",
+    "resolve_orchestration_sqlite_path",
     "stream_runtime_thread_events",
 ]

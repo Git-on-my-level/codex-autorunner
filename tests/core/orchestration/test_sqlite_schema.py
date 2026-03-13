@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from codex_autorunner.core.orchestration import (
+    ORCHESTRATION_DB_FILENAME,
+    ORCHESTRATION_SCHEMA_VERSION,
+    initialize_orchestration_sqlite,
+    list_orchestration_table_definitions,
+    resolve_orchestration_sqlite_path,
+)
+from codex_autorunner.core.state_roots import (
+    resolve_hub_orchestration_db_path,
+    resolve_hub_state_root,
+)
+
+
+def _table_names(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+    ).fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def test_orchestration_sqlite_path_uses_hub_state_root(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    expected = resolve_hub_state_root(hub_root) / ORCHESTRATION_DB_FILENAME
+
+    assert resolve_hub_orchestration_db_path(hub_root) == expected
+    assert resolve_orchestration_sqlite_path(hub_root) == expected
+
+
+def test_initialize_orchestration_sqlite_creates_canonical_tables(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    db_path = initialize_orchestration_sqlite(hub_root, durable=False)
+
+    assert db_path == resolve_orchestration_sqlite_path(hub_root)
+    assert db_path.name == ORCHESTRATION_DB_FILENAME
+    assert db_path.exists()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        names = _table_names(conn)
+        expected_tables = {
+            table.name for table in list_orchestration_table_definitions()
+        }
+        assert expected_tables.issubset(names)
+        version = conn.execute(
+            "SELECT MAX(version) AS version FROM orch_schema_migrations"
+        ).fetchone()
+        assert int(version["version"] or 0) == ORCHESTRATION_SCHEMA_VERSION
+
+
+def test_table_definition_roles_cover_authoritative_mirror_projection_and_ops() -> None:
+    definitions = list_orchestration_table_definitions()
+    roles = {definition.role for definition in definitions}
+
+    assert roles == {"authoritative", "mirror", "projection", "ops"}
+    assert "flows.db" not in " ".join(
+        definition.description
+        for definition in definitions
+        if definition.role != "projection"
+    )

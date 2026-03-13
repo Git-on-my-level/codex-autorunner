@@ -24,6 +24,7 @@ from .path_utils import ConfigPathError, resolve_config_path
 GLOBAL_STATE_ROOT_ENV = "CAR_GLOBAL_STATE_ROOT"
 
 REPO_STATE_DIR = ".codex-autorunner"
+ORCHESTRATION_DB_FILENAME = "orchestration.sqlite3"
 
 
 class StateRootError(Exception):
@@ -92,6 +93,17 @@ def resolve_repo_state_root(repo_root: Path) -> Path:
 def resolve_hub_state_root(hub_root: Path) -> Path:
     """Return the hub-scoped state root."""
     return hub_root / REPO_STATE_DIR
+
+
+def resolve_hub_orchestration_db_path(hub_root: Path) -> Path:
+    """Return the canonical orchestration SQLite path under the hub state root."""
+    state_root = resolve_hub_state_root(hub_root)
+    validate_path_within_roots(
+        state_root,
+        allowed_roots=get_canonical_roots(hub_root=hub_root),
+        resolve=False,
+    )
+    return state_root / ORCHESTRATION_DB_FILENAME
 
 
 def resolve_hub_templates_root(hub_root: Path) -> Path:
@@ -190,14 +202,17 @@ def get_canonical_roots(
     if hub_root is not None:
         roots.append(resolve_hub_state_root(hub_root))
 
-    return roots
+    cache_root = resolve_cache_root()
+    return [root for root in roots if root != cache_root]
 
 
 __all__ = [
     "GLOBAL_STATE_ROOT_ENV",
+    "ORCHESTRATION_DB_FILENAME",
     "REPO_STATE_DIR",
     "StateRootError",
     "resolve_global_state_root",
+    "resolve_hub_orchestration_db_path",
     "resolve_repo_state_root",
     "resolve_hub_state_root",
     "resolve_hub_templates_root",

@@ -13,6 +13,7 @@ TargetCapability = Literal[
 ]
 TargetKind = Literal["thread", "flow"]
 MessageRequestKind = Literal["message", "review"]
+OrchestrationTableRole = Literal["authoritative", "mirror", "projection", "ops"]
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -112,6 +113,18 @@ class ExecutionRecord:
 
 
 @dataclass(frozen=True)
+class OrchestrationTableDefinition:
+    """Schema metadata for one orchestration SQLite table."""
+
+    name: str
+    role: OrchestrationTableRole
+    description: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class FlowTarget:
     """Orchestration-visible CAR-native flow target."""
 
@@ -179,6 +192,8 @@ __all__ = [
     "ExecutionRecord",
     "FlowTarget",
     "MessageRequest",
+    "OrchestrationTableDefinition",
+    "OrchestrationTableRole",
     "TargetCapability",
     "TargetKind",
     "ThreadTarget",
