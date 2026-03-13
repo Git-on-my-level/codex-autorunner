@@ -12,10 +12,15 @@ from codex_autorunner.core.orchestration import (
     HarnessBackedOrchestrationService,
     MappingAgentDefinitionCatalog,
     MessageRequest,
+    PausedFlowTarget,
     PmaThreadExecutionStore,
+    SurfaceThreadMessageRequest,
 )
+from codex_autorunner.core.orchestration.models import FlowTarget
 from codex_autorunner.core.orchestration.service import (
     build_harness_backed_orchestration_service,
+    build_surface_orchestration_ingress,
+    get_surface_orchestration_ingress,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
@@ -375,3 +380,68 @@ async def test_thread_service_rejects_flow_targets(tmp_path: Path) -> None:
                 message_text="run flow",
             )
         )
+
+
+async def test_surface_ingress_routes_paused_flow_before_thread(tmp_path: Path) -> None:
+    ingress = build_surface_orchestration_ingress()
+    request = SurfaceThreadMessageRequest(
+        surface_kind="discord",
+        workspace_root=tmp_path,
+        prompt_text="resume this run",
+        agent_id="codex",
+    )
+    thread_calls: list[str] = []
+
+    async def _resolve_paused_flow(
+        _request: SurfaceThreadMessageRequest,
+    ) -> PausedFlowTarget:
+        return PausedFlowTarget(
+            flow_target=FlowTarget(
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                display_name="ticket_flow",
+                workspace_root=str(tmp_path),
+            ),
+            run_id="run-1",
+            status="paused",
+            workspace_root=tmp_path,
+        )
+
+    async def _submit_flow_reply(
+        _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
+    ) -> str:
+        return flow_target.run_id
+
+    async def _submit_thread_message(
+        _request: SurfaceThreadMessageRequest,
+    ) -> str:
+        thread_calls.append("thread")
+        return "thread"
+
+    result = await ingress.submit_message(
+        request,
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+
+    assert result.route == "flow"
+    assert result.flow_result == "run-1"
+    assert thread_calls == []
+    assert [event.event_type for event in result.events] == [
+        "ingress.received",
+        "ingress.target_resolved",
+        "ingress.flow_resumed",
+    ]
+
+
+def test_get_surface_orchestration_ingress_reuses_owner_instance() -> None:
+    class _Owner:
+        pass
+
+    owner = _Owner()
+
+    first = get_surface_orchestration_ingress(owner)
+    second = get_surface_orchestration_ingress(owner)
+
+    assert first is second

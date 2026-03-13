@@ -19,6 +19,12 @@ from codex_autorunner.browser.orchestration import (
 )
 from codex_autorunner.browser.runtime import BrowserRunResult
 from codex_autorunner.browser.server import BrowserServeSession
+from codex_autorunner.core.orchestration import (
+    FlowTarget,
+    PausedFlowTarget,
+    SurfaceThreadMessageRequest,
+    build_surface_orchestration_ingress,
+)
 
 
 class _FakeRuntime:
@@ -491,3 +497,90 @@ publish:
     assert "Unable to expand path '~missing-user/demo-script.yaml'" in str(
         exc_info.value
     )
+
+
+@pytest.mark.anyio
+async def test_surface_orchestration_ingress_routes_thread_messages_without_flow_target(
+    tmp_path: Path,
+) -> None:
+    ingress = build_surface_orchestration_ingress()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls: list[str] = []
+
+    async def _resolve_paused_flow(_request: SurfaceThreadMessageRequest):
+        calls.append("resolve")
+        return None
+
+    async def _submit_flow_reply(_request, _target):  # type: ignore[no-untyped-def]
+        calls.append("flow")
+        return "flow"
+
+    async def _submit_thread_message(_request: SurfaceThreadMessageRequest) -> str:
+        calls.append("thread")
+        return "thread-result"
+
+    result = await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="web",
+            workspace_root=workspace,
+            prompt_text="hello",
+            agent_id="codex",
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+
+    assert result.route == "thread"
+    assert result.thread_result == "thread-result"
+    assert calls == ["resolve", "thread"]
+
+
+@pytest.mark.anyio
+async def test_surface_orchestration_ingress_preserves_flow_target_distinctness(
+    tmp_path: Path,
+) -> None:
+    ingress = build_surface_orchestration_ingress()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls: list[str] = []
+
+    async def _resolve_paused_flow(_request: SurfaceThreadMessageRequest):
+        calls.append("resolve")
+        return PausedFlowTarget(
+            flow_target=FlowTarget(
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                display_name="ticket_flow",
+                workspace_root=str(workspace),
+            ),
+            run_id="run-1",
+            status="paused",
+            workspace_root=workspace,
+        )
+
+    async def _submit_flow_reply(_request, target):  # type: ignore[no-untyped-def]
+        calls.append(f"flow:{target.run_id}")
+        return {"route": "flow"}
+
+    async def _submit_thread_message(_request: SurfaceThreadMessageRequest) -> str:
+        calls.append("thread")
+        return "thread-result"
+
+    result = await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="web",
+            workspace_root=workspace,
+            prompt_text="resume please",
+            agent_id="codex",
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+
+    assert result.route == "flow"
+    assert result.flow_target is not None
+    assert result.flow_target.flow_target.flow_type == "ticket_flow"
+    assert calls == ["resolve", "flow:run-1"]

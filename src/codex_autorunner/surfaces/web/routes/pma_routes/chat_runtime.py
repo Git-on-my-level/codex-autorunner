@@ -12,6 +12,10 @@ from fastapi.responses import StreamingResponse
 
 from .....agents.codex.harness import CodexHarness
 from .....agents.opencode.harness import OpenCodeHarness
+from .....core.orchestration import (
+    SurfaceThreadMessageRequest,
+    build_surface_orchestration_ingress,
+)
 from .....core.pma_audit import PmaActionType
 from .....core.pma_context import (
     PMA_MAX_TEXT,
@@ -825,12 +829,35 @@ async def _execute_queue_item(
     except Exception:
         stall_timeout_seconds = None
 
-    try:
+    ingress = build_surface_orchestration_ingress(
+        event_sink=lambda orchestration_event: logger.info(
+            "web.pma.%s surface=%s target_kind=%s target_id=%s status=%s meta=%s",
+            orchestration_event.event_type,
+            orchestration_event.surface_kind,
+            orchestration_event.target_kind,
+            orchestration_event.target_id,
+            orchestration_event.status,
+            orchestration_event.metadata,
+        )
+    )
+
+    async def _resolve_no_flow(
+        _request: SurfaceThreadMessageRequest,
+    ) -> None:
+        return None
+
+    async def _submit_flow_reply(
+        _request: SurfaceThreadMessageRequest, _flow_target: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("PMA web ingress does not route ticket_flow replies")
+
+    async def _submit_thread_message(
+        _request: SurfaceThreadMessageRequest,
+    ) -> dict[str, Any]:
         if agent_id == "opencode":
             if opencode is None:
-                result = {"status": "error", "detail": "OpenCode unavailable"}
-                return await _finalize_queue_result_payload(result)
-            result = await _execute_opencode(
+                return {"status": "error", "detail": "OpenCode unavailable"}
+            return await _execute_opencode(
                 opencode,
                 hub_root,
                 prompt,
@@ -842,22 +869,36 @@ async def _execute_queue_item(
                 stall_timeout_seconds=stall_timeout_seconds,
                 on_meta=_meta,
             )
-        else:
-            if supervisor is None or events is None:
-                result = {"status": "error", "detail": "App-server unavailable"}
-                return await _finalize_queue_result_payload(result)
-            result = await _execute_app_server(
-                supervisor,
-                events,
-                hub_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=registry,
-                thread_key=PMA_KEY,
-                on_meta=_meta,
-            )
+        if supervisor is None or events is None:
+            return {"status": "error", "detail": "App-server unavailable"}
+        return await _execute_app_server(
+            supervisor,
+            events,
+            hub_root,
+            prompt,
+            interrupt_event,
+            model=model,
+            reasoning=reasoning,
+            thread_registry=registry,
+            thread_key=PMA_KEY,
+            on_meta=_meta,
+        )
+
+    try:
+        ingress_result = await ingress.submit_message(
+            SurfaceThreadMessageRequest(
+                surface_kind="web",
+                workspace_root=hub_root,
+                prompt_text=message,
+                agent_id=agent_id,
+                pma_enabled=True,
+                metadata={"client_turn_id": client_turn_id or ""},
+            ),
+            resolve_paused_flow_target=_resolve_no_flow,
+            submit_flow_reply=_submit_flow_reply,
+            submit_thread_message=_submit_thread_message,
+        )
+        result = dict(ingress_result.thread_result or {})
     except Exception as exc:
         error_result = {
             "status": "error",

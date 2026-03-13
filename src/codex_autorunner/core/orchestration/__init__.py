@@ -7,6 +7,8 @@ from .catalog import (
     map_agent_capabilities,
     merge_agent_capabilities,
 )
+from .events import OrchestrationEvent, OrchestrationEventType
+from .flows import PausedFlowTarget
 from .interfaces import (
     AgentDefinitionCatalog,
     OrchestrationThreadService,
@@ -43,13 +45,18 @@ from .runtime_threads import (
 from .service import (
     HarnessBackedOrchestrationService,
     PmaThreadExecutionStore,
+    SurfaceIngressResult,
+    SurfaceOrchestrationIngress,
     build_harness_backed_orchestration_service,
+    build_surface_orchestration_ingress,
+    get_surface_orchestration_ingress,
 )
 from .sqlite import (
     ORCHESTRATION_DB_FILENAME,
     initialize_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
+from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 from .transcript_mirror import TranscriptMirrorRow, TranscriptMirrorStore
 from .verification import (
     MigrationVerificationSummary,
@@ -76,9 +83,12 @@ __all__ = [
     "MappingAgentDefinitionCatalog",
     "MessageRequest",
     "MigrationVerificationSummary",
+    "OrchestrationEvent",
+    "OrchestrationEventType",
     "OrchestrationTableDefinition",
     "OrchestrationTableRole",
     "OrchestrationThreadService",
+    "PausedFlowTarget",
     "ParityCheckResult",
     "PmaThreadExecutionStore",
     "RuntimeAgentDescriptor",
@@ -87,9 +97,13 @@ __all__ = [
     "RuntimeThreadExecution",
     "RuntimeThreadOutcome",
     "RuntimeTurnHandle",
+    "SurfaceIngressResult",
+    "SurfaceOrchestrationIngress",
+    "SurfaceThreadMessageRequest",
     "TargetCapability",
     "TargetKind",
     "ThreadExecutionStore",
+    "ThreadControlRequest",
     "ThreadTarget",
     "TranscriptMirrorRow",
     "TranscriptMirrorStore",
@@ -97,10 +111,12 @@ __all__ = [
     "await_runtime_thread_outcome",
     "apply_orchestration_migrations",
     "begin_runtime_thread_execution",
+    "build_surface_orchestration_ingress",
     "build_harness_backed_orchestration_service",
     "build_agent_definition",
     "current_orchestration_schema_version",
     "get_agent_definition",
+    "get_surface_orchestration_ingress",
     "initialize_orchestration_sqlite",
     "list_agent_definitions",
     "list_orchestration_table_definitions",

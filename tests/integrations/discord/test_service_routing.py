@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,8 +24,11 @@ from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.chat.models import (
     ChatInteractionEvent,
     ChatInteractionRef,
+    ChatMessageEvent,
+    ChatMessageRef,
     ChatThreadRef,
 )
+from codex_autorunner.integrations.discord import message_turns as discord_message_turns
 from codex_autorunner.integrations.discord import service as discord_service_module
 from codex_autorunner.integrations.discord.car_autocomplete import (
     repo_autocomplete_value,
@@ -130,6 +134,89 @@ class _FakeOutboxManager:
 
     async def run_loop(self) -> None:
         await asyncio.Event().wait()
+
+
+@pytest.mark.anyio
+async def test_discord_message_turns_route_through_orchestration_ingress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    captured: dict[str, object] = {}
+
+    class _StoreStub:
+        async def get_binding(self, *, channel_id: str) -> dict[str, object] | None:
+            assert channel_id == "channel-1"
+            return {
+                "workspace_path": str(workspace),
+                "agent": "codex",
+                "pma_enabled": False,
+                "model_override": None,
+                "reasoning_effort": None,
+            }
+
+    class _ServiceStub:
+        def __init__(self) -> None:
+            self._store = _StoreStub()
+            self._logger = logging.getLogger("test")
+
+        def _normalize_agent(self, value: object) -> str:
+            return str(value or "codex")
+
+        def _build_message_session_key(self, **_kwargs: object) -> str:
+            return "session-key"
+
+    class _IngressStub:
+        async def submit_message(self, request, **kwargs):  # type: ignore[no-untyped-def]
+            captured["request"] = request
+            captured["callbacks"] = set(kwargs)
+            return SimpleNamespace(route="flow", thread_result=None)
+
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+
+    event = ChatMessageEvent(
+        update_id="update-1",
+        thread=ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None),
+        message=ChatMessageRef(
+            thread=ChatThreadRef(
+                platform="discord",
+                chat_id="channel-1",
+                thread_id=None,
+            ),
+            message_id="msg-1",
+        ),
+        from_user_id="user-1",
+        text="hello",
+    )
+    context = build_dispatch_context(event)
+
+    await discord_message_turns.handle_message_event(
+        _ServiceStub(),
+        event,
+        context,
+        channel_id="channel-1",
+        text="hello",
+        has_attachments=False,
+        policy_result=None,
+        log_event_fn=lambda *args, **kwargs: None,
+        build_ticket_flow_controller_fn=lambda *_args, **_kwargs: None,
+        ensure_worker_fn=lambda *_args, **_kwargs: None,
+    )
+
+    request = captured.get("request")
+    assert request is not None
+    assert request.surface_kind == "discord"
+    assert request.prompt_text == "hello"
+    assert request.workspace_root == workspace
+    assert captured["callbacks"] == {
+        "resolve_paused_flow_target",
+        "submit_flow_reply",
+        "submit_thread_message",
+    }
 
 
 def _config(

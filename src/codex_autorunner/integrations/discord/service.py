@@ -60,6 +60,10 @@ from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
+from ...core.orchestration import (
+    ThreadControlRequest,
+    build_surface_orchestration_ingress,
+)
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
 from ...core.ticket_flow_projection import select_authoritative_run_record
@@ -4882,7 +4886,18 @@ class DiscordBotService:
         orchestrator = await self._orchestrator_for_workspace(
             workspace_root, channel_id=orchestrator_channel_key
         )
-        had_previous = orchestrator.reset_thread_id(session_key)
+        ingress = build_surface_orchestration_ingress()
+        control_result = await ingress.run_thread_control(
+            ThreadControlRequest(
+                surface_kind="discord",
+                action="reset",
+                target_id=session_key,
+            ),
+            control_runner=lambda _request: asyncio.to_thread(
+                orchestrator.reset_thread_id, session_key
+            ),
+        )
+        had_previous = bool(control_result.control_result)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
@@ -5037,7 +5052,18 @@ class DiscordBotService:
         orchestrator = await self._orchestrator_for_workspace(
             workspace_root, channel_id=orchestrator_channel_key
         )
-        had_previous = orchestrator.reset_thread_id(session_key)
+        ingress = build_surface_orchestration_ingress()
+        control_result = await ingress.run_thread_control(
+            ThreadControlRequest(
+                surface_kind="discord",
+                action="reset",
+                target_id=session_key,
+            ),
+            control_runner=lambda _request: asyncio.to_thread(
+                orchestrator.reset_thread_id, session_key
+            ),
+        )
+        had_previous = bool(control_result.control_result)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
         setup_note = (
@@ -5167,7 +5193,18 @@ class DiscordBotService:
                 if resolved_thread_id is None:
                     return
                 thread_id = resolved_thread_id
-            orchestrator.set_thread_id(session_key, thread_id)
+            ingress = build_surface_orchestration_ingress()
+            await ingress.run_thread_control(
+                ThreadControlRequest(
+                    surface_kind="discord",
+                    action="attach",
+                    target_id=thread_id,
+                    metadata={"session_key": session_key},
+                ),
+                control_runner=lambda _request: asyncio.to_thread(
+                    orchestrator.set_thread_id, session_key, thread_id
+                ),
+            )
             mode_label = "PMA" if pma_enabled else "repo"
             text = format_discord_message(
                 f"Resumed {mode_label} session for `{agent}` with thread `{thread_id}`."
@@ -8970,7 +9007,18 @@ class DiscordBotService:
         orchestrator = await self._orchestrator_for_workspace(
             workspace_root, channel_id=orchestrator_channel_key
         )
-        had_previous = orchestrator.reset_thread_id(session_key)
+        ingress = build_surface_orchestration_ingress()
+        control_result = await ingress.run_thread_control(
+            ThreadControlRequest(
+                surface_kind="discord",
+                action="reset",
+                target_id=session_key,
+            ),
+            control_runner=lambda _request: asyncio.to_thread(
+                orchestrator.reset_thread_id, session_key
+            ),
+        )
+        had_previous = bool(control_result.control_result)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "fresh state"
 
@@ -9953,8 +10001,16 @@ class DiscordBotService:
             reasoning_effort=None,
         )
 
+        ingress = build_surface_orchestration_ingress()
         try:
-            await orchestrator.interrupt(agent, state)
+            await ingress.run_thread_control(
+                ThreadControlRequest(
+                    surface_kind="discord",
+                    action="interrupt",
+                    target_id=context.session_id,
+                ),
+                control_runner=lambda _request: orchestrator.interrupt(agent, state),
+            )
             text = format_discord_message("Stopping current turn...")
             await self._respond_ephemeral(interaction_id, interaction_token, text)
         except Exception as exc:

@@ -22,6 +22,9 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramPhotoSize,
     TelegramVoice,
 )
+from codex_autorunner.integrations.telegram.handlers import (
+    messages as telegram_messages_module,
+)
 from codex_autorunner.integrations.telegram.handlers.commands import (
     build_command_specs,
 )
@@ -237,6 +240,115 @@ async def test_pma_prompt_routing_preserves_native_input_items(tmp_path: Path) -
 
 
 @pytest.mark.anyio
+async def test_telegram_text_messages_route_through_orchestration_ingress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    captured: dict[str, object] = {}
+
+    class _RouterStub:
+        async def get_topic(self, _key: str) -> TelegramTopicRecord:
+            return TelegramTopicRecord(
+                workspace_path=str(workspace),
+                pma_enabled=False,
+                agent="codex",
+            )
+
+        def runtime_for(self, _key: str) -> object:
+            return SimpleNamespace()
+
+    class _HandlerStub:
+        def __init__(self) -> None:
+            self._router = _RouterStub()
+            self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace(trigger_mode="all")
+            self._pending_questions = {}
+            self._resume_options = {}
+            self._bind_options = {}
+            self._flow_run_options = {}
+            self._agent_options = {}
+            self._model_options = {}
+            self._model_pending = {}
+            self._review_commit_options = {}
+            self._review_commit_subjects = {}
+            self._pending_review_custom = {}
+            self._ticket_flow_pause_targets = {}
+            self._bot_username = None
+            self._command_specs = {}
+
+        async def _resolve_topic_key(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> str:
+            return f"{chat_id}:{thread_id}"
+
+        def _get_paused_ticket_flow(
+            self, _workspace_root: Path, *, preferred_run_id: Optional[str]
+        ) -> Optional[tuple[str, object]]:
+            return None
+
+        def _enqueue_topic_work(self, _key: str, work):  # type: ignore[no-untyped-def]
+            asyncio.get_running_loop().create_task(work())
+
+        def _wrap_placeholder_work(self, **kwargs):  # type: ignore[no-untyped-def]
+            return kwargs["work"]
+
+        async def _send_message(self, *_args, **_kwargs) -> None:
+            return None
+
+        def _handle_pending_resume(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def _handle_pending_bind(self, *_args, **_kwargs) -> bool:
+            return False
+
+        async def _handle_pending_review_commit(self, *_args, **_kwargs) -> bool:
+            return False
+
+        async def _handle_pending_review_custom(self, *_args, **_kwargs) -> bool:
+            return False
+
+        async def _dismiss_review_custom_prompt(self, *_args, **_kwargs) -> None:
+            return None
+
+    class _IngressStub:
+        async def submit_message(self, request, **kwargs):  # type: ignore[no-untyped-def]
+            captured["request"] = request
+            captured["callbacks"] = set(kwargs)
+            return SimpleNamespace(route="thread", thread_result=None)
+
+    monkeypatch.setattr(
+        telegram_messages_module,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=111,
+        thread_id=222,
+        from_user_id=333,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+    await telegram_messages_module.handle_message_inner(_HandlerStub(), message)
+    await asyncio.sleep(0)
+
+    request = captured.get("request")
+    assert request is not None
+    assert request.surface_kind == "telegram"
+    assert request.prompt_text == "hello"
+    assert request.workspace_root == workspace
+    assert captured["callbacks"] == {
+        "resolve_paused_flow_target",
+        "submit_flow_reply",
+        "submit_thread_message",
+    }
+
+
+@pytest.mark.anyio
 async def test_pma_media_uses_hub_root(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir(parents=True, exist_ok=True)
@@ -332,6 +444,94 @@ async def test_pma_media_uses_hub_root(tmp_path: Path) -> None:
     assert captured["workspace_path"] == str(hub_root)
     assert captured["caption"] == "please review"
     assert captured["kind"] == "file"
+
+
+@pytest.mark.anyio
+async def test_telegram_media_messages_route_through_orchestration_ingress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    captured: dict[str, object] = {}
+
+    class _RouterStub:
+        async def get_topic(self, _key: str) -> TelegramTopicRecord:
+            return TelegramTopicRecord(
+                workspace_path=str(workspace),
+                pma_enabled=False,
+                agent="codex",
+            )
+
+    class _HandlerStub:
+        def __init__(self) -> None:
+            self._router = _RouterStub()
+            self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace(
+                media=SimpleNamespace(
+                    enabled=True,
+                    images=True,
+                    voice=True,
+                    files=True,
+                    max_image_bytes=10_000_000,
+                    max_voice_bytes=10_000_000,
+                    max_file_bytes=10_000_000,
+                )
+            )
+            self._ticket_flow_pause_targets = {}
+            self._bot_username = None
+
+        async def _resolve_topic_key(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> str:
+            return f"{chat_id}:{thread_id}"
+
+        def _get_paused_ticket_flow(
+            self, _workspace_root: Path, *, preferred_run_id: Optional[str]
+        ) -> Optional[tuple[str, object]]:
+            return None
+
+        async def _send_message(self, *_args, **_kwargs) -> None:
+            return None
+
+    class _IngressStub:
+        async def submit_message(self, request, **kwargs):  # type: ignore[no-untyped-def]
+            captured["request"] = request
+            captured["callbacks"] = set(kwargs)
+            return SimpleNamespace(route="thread", thread_result=None)
+
+    monkeypatch.setattr(
+        telegram_messages_module,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=111,
+        thread_id=222,
+        from_user_id=333,
+        text=None,
+        date=None,
+        is_topic_message=True,
+        document=TelegramDocument(
+            file_id="file-1",
+            file_unique_id=None,
+            file_name="notes.txt",
+            mime_type="text/plain",
+            file_size=10,
+        ),
+        caption="please review",
+    )
+    await handle_media_message(
+        _HandlerStub(), message, runtime=object(), caption_text="please review"
+    )
+
+    request = captured.get("request")
+    assert request is not None
+    assert request.surface_kind == "telegram"
+    assert request.prompt_text == "please review"
+    assert request.workspace_root == workspace
 
 
 @pytest.mark.anyio
@@ -517,6 +717,163 @@ async def test_pma_image_uses_hub_root(tmp_path: Path) -> None:
     assert captured["workspace_path"] == str(hub_root)
     assert captured["caption"] == "please inspect"
     assert captured["kind"] == "image"
+
+
+@pytest.mark.anyio
+async def test_message_routing_submits_thread_work_through_orchestration_ingress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        workspace_path=str(tmp_path / "workspace"),
+        pma_enabled=False,
+    )
+    Path(record.workspace_path or "").mkdir(parents=True, exist_ok=True)
+    captured: dict[str, object] = {}
+
+    class _Router:
+        async def get_topic(self, _key: str) -> TelegramTopicRecord:
+            return record
+
+        def runtime_for(self, _key: str) -> object:
+            return object()
+
+    class _Handler:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+            self._router = _Router()
+            self._bot_username = None
+            self._config = SimpleNamespace(trigger_mode="all")
+            self._pending_questions: dict[str, object] = {}
+            self._resume_options: dict[str, object] = {}
+            self._bind_options: dict[str, object] = {}
+            self._flow_run_options: dict[str, object] = {}
+            self._agent_options: dict[str, object] = {}
+            self._model_options: dict[str, object] = {}
+            self._model_pending: dict[str, object] = {}
+            self._review_commit_options: dict[str, object] = {}
+            self._review_commit_subjects: dict[str, object] = {}
+            self._pending_review_custom: dict[str, object] = {}
+            self._ticket_flow_pause_targets: dict[str, str] = {}
+            self._ticket_flow_bridge = SimpleNamespace(
+                auto_resume_run=lambda *args, **kwargs: None
+            )
+            self._command_specs: dict[str, object] = {}
+            self._last_task: Optional[asyncio.Task[None]] = None
+
+        async def _resolve_topic_key(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> str:
+            return f"{chat_id}:{thread_id}"
+
+        def _handle_pending_resume(
+            self, key: str, text: str, *, user_id: Optional[int]
+        ) -> bool:
+            _ = key, text, user_id
+            return False
+
+        def _handle_pending_bind(
+            self, key: str, text: str, *, user_id: Optional[int]
+        ) -> bool:
+            _ = key, text, user_id
+            return False
+
+        async def _handle_pending_review_commit(
+            self, message: TelegramMessage, runtime: object, key: str, text: str
+        ) -> bool:
+            _ = message, runtime, key, text
+            return False
+
+        async def _handle_pending_review_custom(
+            self,
+            key: str,
+            message: TelegramMessage,
+            runtime: object,
+            command: object,
+            raw_text: str,
+            raw_caption: str,
+        ) -> bool:
+            _ = key, message, runtime, command, raw_text, raw_caption
+            return False
+
+        async def _dismiss_review_custom_prompt(
+            self, message: TelegramMessage, pending: object
+        ) -> None:
+            _ = message, pending
+
+        def _get_paused_ticket_flow(
+            self, workspace_root: Path, *, preferred_run_id: Optional[str]
+        ) -> Optional[tuple[str, object]]:
+            _ = workspace_root, preferred_run_id
+            return None
+
+        async def _handle_normal_message(
+            self,
+            message: TelegramMessage,
+            runtime: object,
+            *,
+            text_override: Optional[str] = None,
+            placeholder_id: Optional[int] = None,
+        ) -> None:
+            _ = runtime, placeholder_id
+            captured["handled_text"] = text_override
+            captured["message_id"] = message.message_id
+
+        def _wrap_placeholder_work(
+            self,
+            *,
+            chat_id: int,
+            placeholder_id: Optional[int],
+            work: object,
+        ):
+            _ = chat_id, placeholder_id
+            return work
+
+        def _enqueue_topic_work(self, key: str, work: object) -> None:
+            _ = key
+            assert callable(work)
+            self._last_task = asyncio.create_task(work())
+
+    class _FakeIngress:
+        async def submit_message(
+            self,
+            request,
+            *,
+            resolve_paused_flow_target,
+            submit_flow_reply,
+            submit_thread_message,
+        ):
+            _ = resolve_paused_flow_target, submit_flow_reply
+            captured["surface_kind"] = request.surface_kind
+            captured["prompt_text"] = request.prompt_text
+            await submit_thread_message(request)
+            return SimpleNamespace(route="thread", thread_result=None)
+
+    monkeypatch.setattr(
+        telegram_messages_module,
+        "build_surface_orchestration_ingress",
+        lambda **_: _FakeIngress(),
+    )
+
+    handler = _Handler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=123,
+        thread_id=456,
+        from_user_id=789,
+        text="route through ingress",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await telegram_messages_module.handle_message_inner(handler, message)
+    assert handler._last_task is not None
+    await handler._last_task
+
+    assert captured["surface_kind"] == "telegram"
+    assert captured["prompt_text"] == "route through ingress"
+    assert captured["handled_text"] == "route through ingress"
+    assert captured["message_id"] == 10
 
 
 class _TurnResult:

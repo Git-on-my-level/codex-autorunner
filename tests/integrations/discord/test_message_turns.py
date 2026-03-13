@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 import pytest
 
+import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
 import codex_autorunner.integrations.discord.service as discord_service_module
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.context_awareness import (
@@ -524,6 +525,71 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
         assert any(
             "Done from fake turn" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_event_submits_through_surface_orchestration_ingress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("route via ingress"))])
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    captured: dict[str, object] = {}
+
+    async def _fake_run_turn(**kwargs: Any) -> DiscordMessageTurnResult:
+        captured["session_key"] = kwargs["session_key"]
+        return DiscordMessageTurnResult(final_message="handled by ingress")
+
+    class _FakeIngress:
+        async def submit_message(
+            self,
+            request,
+            *,
+            resolve_paused_flow_target,
+            submit_flow_reply,
+            submit_thread_message,
+        ):
+            _ = resolve_paused_flow_target, submit_flow_reply
+            captured["surface_kind"] = request.surface_kind
+            captured["prompt_text"] = request.prompt_text
+            thread_result = await submit_thread_message(request)
+            return SimpleNamespace(route="thread", thread_result=thread_result)
+
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "build_surface_orchestration_ingress",
+        lambda **_: _FakeIngress(),
+    )
+    service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert captured["surface_kind"] == "discord"
+        assert captured["prompt_text"] == "route via ingress"
+        assert isinstance(captured["session_key"], str)
+        assert any(
+            message["payload"]["content"] == "handled by ingress"
+            for message in rest.channel_messages
         )
     finally:
         await store.close()

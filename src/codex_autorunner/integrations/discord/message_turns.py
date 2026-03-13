@@ -13,6 +13,12 @@ from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_prompt_writing_hint,
 )
+from ...core.orchestration import (
+    FlowTarget,
+    PausedFlowTarget,
+    SurfaceThreadMessageRequest,
+    build_surface_orchestration_ingress,
+)
 from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
@@ -123,203 +129,6 @@ async def handle_message_event(
         )
         return
 
-    if not pma_enabled:
-        paused = await service._find_paused_flow_run(workspace_root)
-        if paused is not None:
-            if service._is_user_ticket_pause(workspace_root, paused):
-                log_event_fn(
-                    service._logger,
-                    logging.INFO,
-                    "discord.flow.reply.skipped_for_user_ticket_pause",
-                    channel_id=channel_id,
-                    run_id=paused.id,
-                )
-            else:
-                reply_text = text
-                if has_attachments:
-                    (
-                        reply_text,
-                        saved_attachments,
-                        failed_attachments,
-                        transcript_message,
-                        _native_input_items,
-                    ) = await service._with_attachment_context(
-                        prompt_text=text,
-                        workspace_root=workspace_root,
-                        attachments=event.attachments,
-                        channel_id=channel_id,
-                    )
-                    if transcript_message:
-                        await service._send_channel_message_safe(
-                            channel_id,
-                            {
-                                "content": transcript_message,
-                                "allowed_mentions": {"parse": []},
-                            },
-                        )
-                    if failed_attachments > 0:
-                        warning = (
-                            "Some Discord attachments could not be downloaded. "
-                            "Continuing with available inputs."
-                        )
-                        await service._send_channel_message_safe(
-                            channel_id,
-                            {"content": warning},
-                        )
-                    if not reply_text.strip() and saved_attachments == 0:
-                        await service._send_channel_message_safe(
-                            channel_id,
-                            {
-                                "content": (
-                                    "Failed to download attachments from Discord. "
-                                    "Please retry."
-                                ),
-                            },
-                        )
-                        return
-
-                reply_path = service._write_user_reply(
-                    workspace_root, paused, reply_text
-                )
-                run_mirror = service._flow_run_mirror(workspace_root)
-                run_mirror.mirror_inbound(
-                    run_id=paused.id,
-                    platform="discord",
-                    event_type="flow_reply_message",
-                    kind="command",
-                    actor="user",
-                    text=reply_text,
-                    chat_id=channel_id,
-                    thread_id=event.thread.thread_id,
-                    message_id=event.message.message_id,
-                )
-                controller = build_ticket_flow_controller_fn(workspace_root)
-                try:
-                    updated = await controller.resume_flow(paused.id)
-                except ValueError as exc:
-                    await service._send_channel_message_safe(
-                        channel_id,
-                        {"content": f"Failed to resume paused run: {exc}"},
-                    )
-                    return
-                ensure_result = ensure_worker_fn(
-                    workspace_root,
-                    updated.id,
-                    is_terminal=updated.status.is_terminal(),
-                )
-                service._close_worker_handles(ensure_result)
-                content = format_discord_message(
-                    f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
-                )
-                await service._send_channel_message_safe(
-                    channel_id,
-                    {"content": content},
-                )
-                run_mirror.mirror_outbound(
-                    run_id=updated.id,
-                    platform="discord",
-                    event_type="flow_reply_notice",
-                    kind="notice",
-                    actor="car",
-                    text=content,
-                    chat_id=channel_id,
-                    thread_id=event.thread.thread_id,
-                )
-                return
-
-    prompt_text = text
-    (
-        prompt_text,
-        saved_attachments,
-        failed_attachments,
-        transcript_message,
-        attachment_input_items,
-    ) = await service._with_attachment_context(
-        prompt_text=prompt_text,
-        workspace_root=workspace_root,
-        attachments=event.attachments,
-        channel_id=channel_id,
-    )
-    if transcript_message:
-        await service._send_channel_message_safe(
-            channel_id,
-            {
-                "content": transcript_message,
-                "allowed_mentions": {"parse": []},
-            },
-        )
-    if failed_attachments > 0:
-        warning = (
-            "Some Discord attachments could not be downloaded. "
-            "Continuing with available inputs."
-        )
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": warning},
-        )
-    if not prompt_text.strip():
-        if has_attachments and saved_attachments == 0:
-            await service._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": "Failed to download attachments from Discord. Please retry.",
-                },
-            )
-        return
-
-    if not pma_enabled:
-        prompt_text, injected = maybe_inject_car_awareness(prompt_text)
-        if injected:
-            log_event_fn(
-                service._logger,
-                logging.INFO,
-                "discord.car_context.injected",
-                channel_id=channel_id,
-                message_id=event.message.message_id,
-            )
-        prompt_text, injected = maybe_inject_prompt_writing_hint(prompt_text)
-        if injected:
-            log_event_fn(
-                service._logger,
-                logging.INFO,
-                "discord.prompt_context.injected",
-                channel_id=channel_id,
-                message_id=event.message.message_id,
-            )
-
-    if pma_enabled:
-        try:
-            snapshot = await build_hub_snapshot(
-                service._hub_supervisor, hub_root=service._config.root
-            )
-            prompt_base = load_pma_prompt(service._config.root)
-            prompt_text = format_pma_prompt(
-                prompt_base,
-                snapshot,
-                prompt_text,
-                hub_root=service._config.root,
-            )
-        except Exception as exc:
-            log_event_fn(
-                service._logger,
-                logging.WARNING,
-                "discord.pma.prompt_build.failed",
-                channel_id=channel_id,
-                exc=exc,
-            )
-            await service._send_channel_message_safe(
-                channel_id,
-                {"content": "Failed to build PMA context. Please try again."},
-            )
-            return
-
-    prompt_text, _github_injected = await service._maybe_inject_github_context(
-        prompt_text,
-        workspace_root,
-        link_source_text=text,
-        allow_cross_repo=pma_enabled,
-    )
-
     agent = service._normalize_agent(binding.get("agent"))
     model_override = binding.get("model_override")
     if not isinstance(model_override, str) or not model_override.strip():
@@ -327,50 +136,311 @@ async def handle_message_event(
     reasoning_effort = binding.get("reasoning_effort")
     if not isinstance(reasoning_effort, str) or not reasoning_effort.strip():
         reasoning_effort = None
-
     session_key = service._build_message_session_key(
         channel_id=channel_id,
         workspace_root=workspace_root,
         pma_enabled=pma_enabled,
         agent=agent,
     )
-    turn_input_items: Optional[list[dict[str, Any]]] = None
-    if attachment_input_items:
-        turn_input_items = [
-            {"type": "text", "text": prompt_text},
-            *attachment_input_items,
-        ]
-    run_turn_kwargs: dict[str, Any] = {
-        "workspace_root": workspace_root,
-        "prompt_text": prompt_text,
-        "agent": agent,
-        "model_override": model_override,
-        "reasoning_effort": reasoning_effort,
-        "session_key": session_key,
-        "orchestrator_channel_key": (
-            channel_id if not pma_enabled else f"pma:{channel_id}"
-        ),
-    }
-    if turn_input_items:
-        run_turn_kwargs["input_items"] = turn_input_items
-    try:
-        turn_result = await service._run_agent_turn_for_message(**run_turn_kwargs)
-    except Exception as exc:
-        log_event_fn(
+
+    ingress = build_surface_orchestration_ingress(
+        event_sink=lambda orchestration_event: log_event_fn(
             service._logger,
-            logging.WARNING,
-            "discord.turn.failed",
+            logging.INFO,
+            f"discord.{orchestration_event.event_type}",
             channel_id=channel_id,
             conversation_id=context.conversation_id,
-            workspace_root=str(workspace_root),
-            agent=agent,
-            exc=exc,
+            surface_kind=orchestration_event.surface_kind,
+            target_kind=orchestration_event.target_kind,
+            target_id=orchestration_event.target_id,
+            status=orchestration_event.status,
+            **orchestration_event.metadata,
         )
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": f"Turn failed: {exc} (conversation {context.conversation_id})"},
+    )
+    paused_records: dict[str, Any] = {}
+
+    async def _resolve_paused_flow(
+        _request: SurfaceThreadMessageRequest,
+    ) -> Optional[PausedFlowTarget]:
+        paused = await service._find_paused_flow_run(workspace_root)
+        if paused is None:
+            return None
+        if service._is_user_ticket_pause(workspace_root, paused):
+            log_event_fn(
+                service._logger,
+                logging.INFO,
+                "discord.flow.reply.skipped_for_user_ticket_pause",
+                channel_id=channel_id,
+                run_id=paused.id,
+            )
+            return None
+        paused_records[paused.id] = paused
+        paused_status = getattr(paused, "status", None)
+        return PausedFlowTarget(
+            flow_target=FlowTarget(
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                display_name="ticket_flow",
+                workspace_root=str(workspace_root),
+            ),
+            run_id=paused.id,
+            status=(
+                str(getattr(paused_status, "value", paused_status))
+                if paused_status is not None
+                else None
+            ),
+            workspace_root=workspace_root,
         )
+
+    async def _submit_flow_reply(
+        _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
+    ) -> None:
+        paused_record = paused_records.get(flow_target.run_id)
+        if paused_record is None:
+            return
+        reply_text = text
+        if has_attachments:
+            (
+                reply_text,
+                saved_attachments,
+                failed_attachments,
+                transcript_message,
+                _native_input_items,
+            ) = await service._with_attachment_context(
+                prompt_text=text,
+                workspace_root=workspace_root,
+                attachments=event.attachments,
+                channel_id=channel_id,
+            )
+            if transcript_message:
+                await service._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": transcript_message,
+                        "allowed_mentions": {"parse": []},
+                    },
+                )
+            if failed_attachments > 0:
+                warning = (
+                    "Some Discord attachments could not be downloaded. "
+                    "Continuing with available inputs."
+                )
+                await service._send_channel_message_safe(
+                    channel_id,
+                    {"content": warning},
+                )
+            if not reply_text.strip() and saved_attachments == 0:
+                await service._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": (
+                            "Failed to download attachments from Discord. "
+                            "Please retry."
+                        ),
+                    },
+                )
+                return
+
+        reply_path = service._write_user_reply(
+            workspace_root, paused_record, reply_text
+        )
+        run_mirror = service._flow_run_mirror(workspace_root)
+        run_mirror.mirror_inbound(
+            run_id=flow_target.run_id,
+            platform="discord",
+            event_type="flow_reply_message",
+            kind="command",
+            actor="user",
+            text=reply_text,
+            chat_id=channel_id,
+            thread_id=event.thread.thread_id,
+            message_id=event.message.message_id,
+        )
+        controller = build_ticket_flow_controller_fn(workspace_root)
+        try:
+            updated = await controller.resume_flow(flow_target.run_id)
+        except ValueError as exc:
+            await service._send_channel_message_safe(
+                channel_id,
+                {"content": f"Failed to resume paused run: {exc}"},
+            )
+            return
+        ensure_result = ensure_worker_fn(
+            workspace_root,
+            updated.id,
+            is_terminal=updated.status.is_terminal(),
+        )
+        service._close_worker_handles(ensure_result)
+        content = format_discord_message(
+            f"Reply saved to `{reply_path.name}` and resumed paused run `{updated.id}`."
+        )
+        await service._send_channel_message_safe(channel_id, {"content": content})
+        run_mirror.mirror_outbound(
+            run_id=updated.id,
+            platform="discord",
+            event_type="flow_reply_notice",
+            kind="notice",
+            actor="car",
+            text=content,
+            chat_id=channel_id,
+            thread_id=event.thread.thread_id,
+        )
+
+    async def _submit_thread_message(
+        _request: SurfaceThreadMessageRequest,
+    ) -> DiscordMessageTurnResult:
+        prompt_text = text
+        (
+            prompt_text,
+            saved_attachments,
+            failed_attachments,
+            transcript_message,
+            attachment_input_items,
+        ) = await service._with_attachment_context(
+            prompt_text=prompt_text,
+            workspace_root=workspace_root,
+            attachments=event.attachments,
+            channel_id=channel_id,
+        )
+        if transcript_message:
+            await service._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": transcript_message,
+                    "allowed_mentions": {"parse": []},
+                },
+            )
+        if failed_attachments > 0:
+            warning = (
+                "Some Discord attachments could not be downloaded. "
+                "Continuing with available inputs."
+            )
+            await service._send_channel_message_safe(
+                channel_id,
+                {"content": warning},
+            )
+        if not prompt_text.strip():
+            if has_attachments and saved_attachments == 0:
+                await service._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": (
+                            "Failed to download attachments from Discord. Please retry."
+                        ),
+                    },
+                )
+            return DiscordMessageTurnResult(final_message="")
+
+        if not pma_enabled:
+            prompt_text, injected = maybe_inject_car_awareness(prompt_text)
+            if injected:
+                log_event_fn(
+                    service._logger,
+                    logging.INFO,
+                    "discord.car_context.injected",
+                    channel_id=channel_id,
+                    message_id=event.message.message_id,
+                )
+            prompt_text, injected = maybe_inject_prompt_writing_hint(prompt_text)
+            if injected:
+                log_event_fn(
+                    service._logger,
+                    logging.INFO,
+                    "discord.prompt_context.injected",
+                    channel_id=channel_id,
+                    message_id=event.message.message_id,
+                )
+
+        if pma_enabled:
+            try:
+                snapshot = await build_hub_snapshot(
+                    service._hub_supervisor, hub_root=service._config.root
+                )
+                prompt_base = load_pma_prompt(service._config.root)
+                prompt_text = format_pma_prompt(
+                    prompt_base,
+                    snapshot,
+                    prompt_text,
+                    hub_root=service._config.root,
+                )
+            except Exception as exc:
+                log_event_fn(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.pma.prompt_build.failed",
+                    channel_id=channel_id,
+                    exc=exc,
+                )
+                await service._send_channel_message_safe(
+                    channel_id,
+                    {"content": "Failed to build PMA context. Please try again."},
+                )
+                return DiscordMessageTurnResult(final_message="")
+
+        prompt_text, _github_injected = await service._maybe_inject_github_context(
+            prompt_text,
+            workspace_root,
+            link_source_text=text,
+            allow_cross_repo=pma_enabled,
+        )
+
+        turn_input_items: Optional[list[dict[str, Any]]] = None
+        if attachment_input_items:
+            turn_input_items = [
+                {"type": "text", "text": prompt_text},
+                *attachment_input_items,
+            ]
+        run_turn_kwargs: dict[str, Any] = {
+            "workspace_root": workspace_root,
+            "prompt_text": prompt_text,
+            "agent": agent,
+            "model_override": model_override,
+            "reasoning_effort": reasoning_effort,
+            "session_key": session_key,
+            "orchestrator_channel_key": (
+                channel_id if not pma_enabled else f"pma:{channel_id}"
+            ),
+        }
+        if turn_input_items:
+            run_turn_kwargs["input_items"] = turn_input_items
+        try:
+            return await service._run_agent_turn_for_message(**run_turn_kwargs)
+        except Exception as exc:
+            log_event_fn(
+                service._logger,
+                logging.WARNING,
+                "discord.turn.failed",
+                channel_id=channel_id,
+                conversation_id=context.conversation_id,
+                workspace_root=str(workspace_root),
+                agent=agent,
+                exc=exc,
+            )
+            await service._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": (
+                        f"Turn failed: {exc} (conversation {context.conversation_id})"
+                    )
+                },
+            )
+            return DiscordMessageTurnResult(final_message="")
+
+    result = await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="discord",
+            workspace_root=workspace_root,
+            prompt_text=text,
+            agent_id=agent,
+            pma_enabled=pma_enabled,
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+    if result.route == "flow":
         return
+    turn_result = result.thread_result
 
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message

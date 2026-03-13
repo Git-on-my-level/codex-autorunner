@@ -257,31 +257,6 @@ _CAPABILITY_REQUIREMENTS = {
 }
 
 
-def _check_thread_capability(
-    config,
-    managed_thread_id: str,
-    capability: str,
-    path: Optional[Path] = None,
-) -> Optional[str]:
-    thread_url = _build_pma_url(config, f"/threads/{managed_thread_id}")
-    try:
-        thread_data = _request_json(
-            "GET", thread_url, token_env=config.server_auth_token_env
-        )
-    except Exception:
-        return None
-    thread = thread_data.get("thread", {}) if isinstance(thread_data, dict) else {}
-    if not isinstance(thread, dict):
-        return None
-    agent = thread.get("agent", "")
-    if not agent:
-        return None
-    capabilities = _fetch_agent_capabilities(config, path)
-    if not _check_capability(agent, capability, capabilities):
-        return agent
-    return None
-
-
 def _fetch_agent_capabilities(
     config, path: Optional[Path] = None
 ) -> dict[str, list[str]]:

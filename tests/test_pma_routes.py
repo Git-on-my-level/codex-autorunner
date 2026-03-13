@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import anyio
@@ -21,6 +22,7 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
+from codex_autorunner.surfaces.web.routes.pma_routes import chat_runtime
 from tests.conftest import write_test_config
 
 
@@ -217,6 +219,55 @@ def test_pma_chat_requires_message(hub_env) -> None:
     client = TestClient(app)
     resp = client.post("/hub/pma/chat", json={})
     assert resp.status_code == 400
+
+
+def test_pma_chat_submits_through_surface_orchestration_ingress(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    captured: dict[str, Any] = {}
+
+    class _FakeIngress:
+        async def submit_message(
+            self,
+            request,
+            *,
+            resolve_paused_flow_target,
+            submit_flow_reply,
+            submit_thread_message,
+        ):
+            _ = resolve_paused_flow_target, submit_flow_reply, submit_thread_message
+            captured["surface_kind"] = request.surface_kind
+            captured["prompt_text"] = request.prompt_text
+            captured["pma_enabled"] = request.pma_enabled
+            return SimpleNamespace(
+                route="thread",
+                thread_result={"status": "ok", "message": "ingress ok"},
+            )
+
+    monkeypatch.setattr(
+        chat_runtime,
+        "build_surface_orchestration_ingress",
+        lambda **_: _FakeIngress(),
+    )
+    app.state.app_server_supervisor = object()
+    app.state.app_server_events = object()
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hello through ingress"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "message": "ingress ok",
+        "client_turn_id": "",
+    }
+    assert captured == {
+        "surface_kind": "web",
+        "prompt_text": "hello through ingress",
+        "pma_enabled": True,
+    }
 
 
 def test_pma_chat_rejects_oversize_message(hub_env) -> None:

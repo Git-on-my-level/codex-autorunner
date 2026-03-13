@@ -10,6 +10,12 @@ from types import SimpleNamespace
 from typing import Any, Optional, Sequence
 
 from ....core.logging_utils import log_event
+from ....core.orchestration import (
+    FlowTarget,
+    PausedFlowTarget,
+    SurfaceThreadMessageRequest,
+    build_surface_orchestration_ingress,
+)
 from ....core.utils import canonicalize_path
 from ...chat.handlers.messages import message_text_candidate
 from ...chat.media import audio_content_type_for_input, is_image_mime_or_path
@@ -63,6 +69,20 @@ def _log_message_policy_result(
     logger = getattr(handlers, "_log_collaboration_policy_result", None)
     if callable(logger):
         logger(message, result)
+
+
+def _event_logger(handlers: Any) -> logging.Logger:
+    candidate = getattr(handlers, "_logger", None)
+    if hasattr(candidate, "log"):
+        return candidate
+    return logging.getLogger(__name__)
+
+
+def _paused_flow_status(run_record: Any) -> str:
+    status = getattr(run_record, "status", None)
+    if status is None:
+        return "paused"
+    return str(getattr(status, "value", status))
 
 
 def _has_pending_custom_question(handlers: Any, message: TelegramMessage) -> bool:
@@ -156,6 +176,29 @@ async def _clear_pending_options(
     handlers._review_commit_subjects.pop(key, None)
     pending_review_custom = handlers._pending_review_custom.pop(key, None)
     await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
+
+
+async def _enqueue_or_run_topic_work(
+    handlers: Any,
+    key: str,
+    *,
+    chat_id: int,
+    placeholder_id: Optional[int],
+    work: Any,
+) -> None:
+    wrapped = work
+    wrap = getattr(handlers, "_wrap_placeholder_work", None)
+    if callable(wrap):
+        wrapped = wrap(
+            chat_id=chat_id,
+            placeholder_id=placeholder_id,
+            work=work,
+        )
+    enqueue = getattr(handlers, "_enqueue_topic_work", None)
+    if callable(enqueue):
+        enqueue(key, wrapped)
+        return
+    await wrapped()
 
 
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
@@ -388,13 +431,12 @@ async def handle_message_inner(
         async def work() -> None:
             await handlers._handle_bang_shell(message, text, runtime)
 
-        handlers._enqueue_topic_work(
+        await _enqueue_or_run_topic_work(
+            handlers,
             key,
-            handlers._wrap_placeholder_work(
-                chat_id=message.chat_id,
-                placeholder_id=placeholder_id,
-                work=work,
-            ),
+            chat_id=message.chat_id,
+            placeholder_id=placeholder_id,
+            work=work,
         )
         return
 
@@ -481,13 +523,12 @@ async def handle_message_inner(
             )
             handlers._spawn_task(wrapped())
         else:
-            handlers._enqueue_topic_work(
+            await _enqueue_or_run_topic_work(
+                handlers,
                 key,
-                handlers._wrap_placeholder_work(
-                    chat_id=message.chat_id,
-                    placeholder_id=placeholder_id,
-                    work=work,
-                ),
+                chat_id=message.chat_id,
+                placeholder_id=placeholder_id,
+                work=work,
             )
         return
 
@@ -503,24 +544,6 @@ async def handle_message_inner(
         paused = handlers._get_paused_ticket_flow(
             workspace_root, preferred_run_id=preferred_run_id
         )
-    if paused and text and not command and not has_media:
-        run_id, run_record = paused
-        success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root or Path("."), run_id, run_record, message, text
-        )
-        await handlers._send_message(
-            message.chat_id,
-            result,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        if success:
-            await handlers._ticket_flow_bridge.auto_resume_run(
-                workspace_root or Path("."), run_id
-            )
-        await _clear_placeholder()
-        return
-
     policy_result = _evaluate_message_policy(
         handlers,
         message,
@@ -553,7 +576,65 @@ async def handle_message_inner(
         )
         return
 
-    async def work() -> None:
+    event_logger = _event_logger(handlers)
+    ingress = build_surface_orchestration_ingress(
+        event_sink=lambda orchestration_event: log_event(
+            event_logger,
+            logging.INFO,
+            f"telegram.{orchestration_event.event_type}",
+            topic_key=key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            surface_kind=orchestration_event.surface_kind,
+            target_kind=orchestration_event.target_kind,
+            target_id=orchestration_event.target_id,
+            status=orchestration_event.status,
+            **orchestration_event.metadata,
+        )
+    )
+
+    async def _resolve_paused_flow(
+        _request: SurfaceThreadMessageRequest,
+    ) -> Optional[PausedFlowTarget]:
+        if paused is None:
+            return None
+        run_id, _run_record = paused
+        return PausedFlowTarget(
+            flow_target=FlowTarget(
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                display_name="ticket_flow",
+                workspace_root=str(workspace_root or Path(".")),
+            ),
+            run_id=run_id,
+            status=_paused_flow_status(_run_record),
+            workspace_root=workspace_root or Path("."),
+        )
+
+    async def _submit_flow_reply(
+        _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
+    ) -> None:
+        if paused is None:
+            return
+        run_id, run_record = paused
+        success, result = await handlers._write_user_reply_from_telegram(
+            workspace_root or Path("."), run_id, run_record, message, text
+        )
+        await handlers._send_message(
+            message.chat_id,
+            result,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        if success:
+            await handlers._ticket_flow_bridge.auto_resume_run(
+                workspace_root or Path("."), flow_target.run_id
+            )
+
+    async def _submit_thread_message(
+        _request: SurfaceThreadMessageRequest,
+    ) -> None:
         await handlers._handle_normal_message(
             message,
             runtime,
@@ -561,13 +642,26 @@ async def handle_message_inner(
             placeholder_id=placeholder_id,
         )
 
-    handlers._enqueue_topic_work(
+    async def work() -> None:
+        await ingress.submit_message(
+            SurfaceThreadMessageRequest(
+                surface_kind="telegram",
+                workspace_root=workspace_root or Path("."),
+                prompt_text=text,
+                agent_id=getattr(record, "agent", None),
+                pma_enabled=pma_enabled,
+            ),
+            resolve_paused_flow_target=_resolve_paused_flow,
+            submit_flow_reply=_submit_flow_reply,
+            submit_thread_message=_submit_thread_message,
+        )
+
+    await _enqueue_or_run_topic_work(
+        handlers,
         key,
-        handlers._wrap_placeholder_work(
-            chat_id=message.chat_id,
-            placeholder_id=placeholder_id,
-            work=work,
-        ),
+        chat_id=message.chat_id,
+        placeholder_id=placeholder_id,
+        work=work,
     )
 
 
@@ -991,7 +1085,47 @@ async def handle_media_message(
         paused = handlers._get_paused_ticket_flow(
             workspace_root, preferred_run_id=preferred_run_id
         )
-    if paused:
+    event_logger = _event_logger(handlers)
+    ingress = build_surface_orchestration_ingress(
+        event_sink=lambda orchestration_event: log_event(
+            event_logger,
+            logging.INFO,
+            f"telegram.{orchestration_event.event_type}",
+            topic_key=key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            surface_kind=orchestration_event.surface_kind,
+            target_kind=orchestration_event.target_kind,
+            target_id=orchestration_event.target_id,
+            status=orchestration_event.status,
+            **orchestration_event.metadata,
+        )
+    )
+
+    async def _resolve_paused_flow(
+        _request: SurfaceThreadMessageRequest,
+    ) -> Optional[PausedFlowTarget]:
+        if paused is None:
+            return None
+        run_id, run_record = paused
+        return PausedFlowTarget(
+            flow_target=FlowTarget(
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                display_name="ticket_flow",
+                workspace_root=str(workspace_root),
+            ),
+            run_id=run_id,
+            status=_paused_flow_status(run_record),
+            workspace_root=workspace_root,
+        )
+
+    async def _submit_flow_reply(
+        _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
+    ) -> None:
+        if paused is None:
+            return
         run_id, run_record = paused
         reply_text = caption_text.strip() if isinstance(caption_text, str) else ""
         if not reply_text:
@@ -1018,7 +1152,6 @@ async def handle_media_message(
                     files.append((filename, data))
                 except Exception as exc:
                     handlers._logger.debug("Failed to download photo: %s", exc)
-                    pass
         elif message.document:
             try:
                 file_info = await handlers._bot.get_file(message.document.file_id)
@@ -1032,7 +1165,6 @@ async def handle_media_message(
                 files.append((filename, data))
             except Exception as exc:
                 handlers._logger.debug("Failed to download document: %s", exc)
-                pass
         elif message.audio:
             try:
                 file_info = await handlers._bot.get_file(message.audio.file_id)
@@ -1044,7 +1176,6 @@ async def handle_media_message(
                 files.append((filename, data))
             except Exception as exc:
                 handlers._logger.debug("Failed to download audio: %s", exc)
-                pass
         elif message.voice:
             try:
                 file_info = await handlers._bot.get_file(message.voice.file_id)
@@ -1055,7 +1186,6 @@ async def handle_media_message(
                 files.append((f"voice_{message.voice.file_id}.ogg", data))
             except Exception as exc:
                 handlers._logger.debug("Failed to download voice: %s", exc)
-                pass
         if expected_media and not files:
             await handlers._send_message(
                 message.chat_id,
@@ -1074,81 +1204,98 @@ async def handle_media_message(
             reply_to=message.message_id,
         )
         if success:
-            await handlers._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
-        return
+            await handlers._ticket_flow_bridge.auto_resume_run(
+                workspace_root, flow_target.run_id
+            )
 
-    image_candidate = select_image_candidate(message)
-    if image_candidate:
-        if not handlers._config.media.images:
-            await handlers._send_message(
-                message.chat_id,
-                "Image handling is disabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+    async def _submit_thread_message(
+        _request: SurfaceThreadMessageRequest,
+    ) -> None:
+        image_candidate = select_image_candidate(message)
+        if image_candidate:
+            if not handlers._config.media.images:
+                await handlers._send_message(
+                    message.chat_id,
+                    "Image handling is disabled.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await handlers._handle_image_message(
+                message,
+                runtime,
+                record,
+                image_candidate,
+                caption_text,
+                placeholder_id=placeholder_id,
             )
             return
-        await handlers._handle_image_message(
-            message,
-            runtime,
-            record,
-            image_candidate,
-            caption_text,
-            placeholder_id=placeholder_id,
-        )
-        return
 
-    voice_candidate = select_voice_candidate(message)
-    if voice_candidate:
-        if not handlers._config.media.voice:
-            await handlers._send_message(
-                message.chat_id,
-                "Voice transcription is disabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+        voice_candidate = select_voice_candidate(message)
+        if voice_candidate:
+            if not handlers._config.media.voice:
+                await handlers._send_message(
+                    message.chat_id,
+                    "Voice transcription is disabled.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await handlers._handle_voice_message(
+                message,
+                runtime,
+                record,
+                voice_candidate,
+                caption_text,
+                placeholder_id=placeholder_id,
             )
             return
-        await handlers._handle_voice_message(
-            message,
-            runtime,
-            record,
-            voice_candidate,
-            caption_text,
-            placeholder_id=placeholder_id,
-        )
-        return
 
-    file_candidate = select_file_candidate(message)
-    if file_candidate:
-        if not handlers._config.media.files:
-            await handlers._send_message(
-                message.chat_id,
-                "File handling is disabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+        file_candidate = select_file_candidate(message)
+        if file_candidate:
+            if not handlers._config.media.files:
+                await handlers._send_message(
+                    message.chat_id,
+                    "File handling is disabled.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await handlers._handle_file_message(
+                message,
+                runtime,
+                record,
+                file_candidate,
+                caption_text,
+                placeholder_id=placeholder_id,
             )
             return
-        await handlers._handle_file_message(
-            message,
-            runtime,
-            record,
-            file_candidate,
-            caption_text,
-            placeholder_id=placeholder_id,
-        )
-        return
 
-    if caption_text:
-        await handlers._handle_normal_message(
-            message,
-            runtime,
-            text_override=caption_text,
-            record=record,
-            placeholder_id=placeholder_id,
+        if caption_text:
+            await handlers._handle_normal_message(
+                message,
+                runtime,
+                text_override=caption_text,
+                record=record,
+                placeholder_id=placeholder_id,
+            )
+            return
+        await handlers._send_message(
+            message.chat_id,
+            "Unsupported media type.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
         )
-        return
-    await handlers._send_message(
-        message.chat_id,
-        "Unsupported media type.",
-        thread_id=message.thread_id,
-        reply_to=message.message_id,
+
+    await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="telegram",
+            workspace_root=workspace_root,
+            prompt_text=caption_text,
+            agent_id=getattr(record, "agent", None),
+            pma_enabled=pma_enabled,
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
     )
