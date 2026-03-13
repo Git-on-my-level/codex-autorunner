@@ -241,6 +241,72 @@ def _normalize_notify_on(value: Optional[str]) -> Optional[str]:
     return text
 
 
+_CAPABILITY_REQUIREMENTS = {
+    "models": "model_listing",
+    "interrupt": "interrupt",
+    "thread_interrupt": "interrupt",
+    "thread_send": "message_turns",
+    "thread_turns": "transcript_history",
+    "thread_output": "transcript_history",
+    "thread_tail": "event_streaming",
+    "thread_compact": "message_turns",
+    "thread_resume": "durable_threads",
+    "thread_archive": "durable_threads",
+    "thread_spawn": "durable_threads",
+    "review": "review",
+}
+
+
+def _check_thread_capability(
+    config,
+    managed_thread_id: str,
+    capability: str,
+    path: Optional[Path] = None,
+) -> Optional[str]:
+    thread_url = _build_pma_url(config, f"/threads/{managed_thread_id}")
+    try:
+        thread_data = _request_json(
+            "GET", thread_url, token_env=config.server_auth_token_env
+        )
+    except Exception:
+        return None
+    thread = thread_data.get("thread", {}) if isinstance(thread_data, dict) else {}
+    if not isinstance(thread, dict):
+        return None
+    agent = thread.get("agent", "")
+    if not agent:
+        return None
+    capabilities = _fetch_agent_capabilities(config, path)
+    if not _check_capability(agent, capability, capabilities):
+        return agent
+    return None
+
+
+def _fetch_agent_capabilities(
+    config, path: Optional[Path] = None
+) -> dict[str, list[str]]:
+    url = _build_pma_url(config, "/agents")
+    try:
+        data = _request_json("GET", url, token_env=config.server_auth_token_env)
+    except Exception:
+        return {}
+    agents = data.get("agents", []) if isinstance(data, dict) else []
+    return {
+        agent.get("id", ""): agent.get("capabilities", [])
+        for agent in agents
+        if isinstance(agent, dict)
+    }
+
+
+def _check_capability(
+    agent_id: str,
+    capability: str,
+    capabilities: dict[str, list[str]],
+) -> bool:
+    agent_caps = capabilities.get(agent_id, [])
+    return capability in agent_caps
+
+
 def _request_json_with_status(
     method: str,
     url: str,
@@ -528,6 +594,28 @@ def pma_interrupt(
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
+    active_url = _build_pma_url(config, "/active")
+    try:
+        active_data = _request_json(
+            "GET", active_url, token_env=config.server_auth_token_env
+        )
+    except Exception:
+        active_data = {}
+    current = active_data.get("current", {}) if isinstance(active_data, dict) else {}
+    if isinstance(current, dict):
+        agent = current.get("agent", "")
+        if agent:
+            capabilities = _fetch_agent_capabilities(config, path)
+            required_cap = _CAPABILITY_REQUIREMENTS.get("interrupt")
+            if required_cap and not _check_capability(
+                agent, required_cap, capabilities
+            ):
+                typer.echo(
+                    f"Agent '{agent}' does not support interrupt (missing capability: {required_cap})",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from None
+
     url = _build_pma_url(config, "/interrupt")
 
     try:
@@ -713,6 +801,15 @@ def pma_models(
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
+    capabilities = _fetch_agent_capabilities(config, path)
+    required_cap = _CAPABILITY_REQUIREMENTS.get("models")
+    if required_cap and not _check_capability(agent, required_cap, capabilities):
+        typer.echo(
+            f"Agent '{agent}' does not support model listing (missing capability: {required_cap})",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
     url = _build_pma_url(config, f"/agents/{agent}/models")
 
     try:
@@ -782,8 +879,23 @@ def pma_thread_spawn(
 
     hub_root = _resolve_hub_path(path)
     try:
-        normalized_notify_on = _normalize_notify_on(notify_on)
         config = load_hub_config(hub_root)
+    except Exception as exc:
+        typer.echo(f"Failed to load hub config: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    required_cap = _CAPABILITY_REQUIREMENTS.get("thread_spawn")
+    if required_cap:
+        capabilities = _fetch_agent_capabilities(config, path)
+        if not _check_capability(agent, required_cap, capabilities):
+            typer.echo(
+                f"Agent '{agent}' does not support thread creation (missing capability: {required_cap})",
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+
+    try:
+        normalized_notify_on = _normalize_notify_on(notify_on)
         data = _request_json(
             "POST",
             _build_pma_url(config, "/threads"),
@@ -1380,6 +1492,33 @@ def pma_thread_interrupt(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
+    except Exception as exc:
+        typer.echo(f"Failed to load hub config: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    thread_url = _build_pma_url(config, f"/threads/{managed_thread_id}")
+    try:
+        thread_data = _request_json(
+            "GET", thread_url, token_env=config.server_auth_token_env
+        )
+    except Exception:
+        pass
+    else:
+        thread = thread_data.get("thread", {}) if isinstance(thread_data, dict) else {}
+        if isinstance(thread, dict):
+            agent = thread.get("agent", "")
+            capabilities = _fetch_agent_capabilities(config, path)
+            required_cap = _CAPABILITY_REQUIREMENTS.get("thread_interrupt")
+            if required_cap and not _check_capability(
+                agent, required_cap, capabilities
+            ):
+                typer.echo(
+                    f"Agent '{agent}' does not support interrupt (missing capability: {required_cap})",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from None
+
+    try:
         data = _request_json(
             "POST",
             _build_pma_url(config, f"/threads/{managed_thread_id}/interrupt"),

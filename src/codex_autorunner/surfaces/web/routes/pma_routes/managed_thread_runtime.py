@@ -750,11 +750,26 @@ def build_managed_thread_runtime_routes(
         managed_thread_id: str,
         request: Request,
     ) -> dict[str, Any]:
+        from .....agents.registry import get_available_agents
+        from .....core.orchestration.catalog import map_agent_capabilities
+
         hub_root = request.app.state.config.root
         store = PmaThreadStore(hub_root)
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        agent = str(thread.get("agent") or "").strip().lower()
+        if agent:
+            available = get_available_agents(request.app.state)
+            descriptor = available.get(agent)
+            if descriptor is not None:
+                capabilities = map_agent_capabilities(descriptor.capabilities)
+                if "interrupt" not in capabilities:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Agent '{agent}' does not support interrupt (missing capability: interrupt)",
+                    )
 
         running_turn = store.get_running_turn(managed_thread_id)
         if running_turn is None:

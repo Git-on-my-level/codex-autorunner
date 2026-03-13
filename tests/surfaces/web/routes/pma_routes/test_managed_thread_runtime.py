@@ -186,3 +186,46 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
 
     assert response.status_code == 200
     assert calls == [managed_thread_id]
+
+
+def test_interrupt_fails_for_agent_without_interrupt_capability(
+    hub_env,
+    monkeypatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+
+    def mock_get_running_turn(thread_id: str):
+        return {"managed_turn_id": "test-turn-id", "status": "running"}
+
+    monkeypatch.setattr(store, "get_running_turn", mock_get_running_turn)
+
+    def mock_get_available_agents(state):
+        return {
+            "codex": MagicMock(
+                capabilities=frozenset(["durable_threads", "message_turns"])
+            )
+        }
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_available_agents",
+        mock_get_available_agents,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.orchestration.catalog.map_agent_capabilities",
+        lambda caps: list(caps),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(f"/hub/pma/threads/{managed_thread_id}/interrupt")
+
+    assert response.status_code == 403
+    assert "does not support interrupt" in response.json()["detail"]
+    assert "interrupt" in response.json()["detail"]
