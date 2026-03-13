@@ -329,6 +329,14 @@ class FlowController:
             flow_type=self.definition.flow_type, status=status
         )
 
+    def list_active_runs(self, *, include_paused: bool = True) -> list[FlowRunRecord]:
+        return [
+            record
+            for record in self.list_runs()
+            if record.status.is_active()
+            or (include_paused and record.status.is_paused())
+        ]
+
     async def stream_events(
         self, run_id: str, after_seq: Optional[int] = None
     ) -> AsyncGenerator[FlowEvent, None]:

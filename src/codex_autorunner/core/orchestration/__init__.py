@@ -9,9 +9,15 @@ from .catalog import (
     merge_agent_capabilities,
 )
 from .events import OrchestrationEvent, OrchestrationEventType
-from .flows import PausedFlowTarget
+from .flows import (
+    PausedFlowTarget,
+    TicketFlowTargetWrapper,
+    build_ticket_flow_target,
+    build_ticket_flow_target_wrapper,
+)
 from .interfaces import (
     AgentDefinitionCatalog,
+    OrchestrationFlowService,
     OrchestrationThreadService,
     RuntimeConversationHandle,
     RuntimeThreadHarness,
@@ -28,6 +34,7 @@ from .models import (
     AgentDefinition,
     Binding,
     ExecutionRecord,
+    FlowRunTarget,
     FlowTarget,
     MessageRequest,
     OrchestrationTableDefinition,
@@ -44,12 +51,14 @@ from .runtime_threads import (
     stream_runtime_thread_events,
 )
 from .service import (
+    FlowBackedOrchestrationService,
     HarnessBackedOrchestrationService,
     PmaThreadExecutionStore,
     SurfaceIngressResult,
     SurfaceOrchestrationIngress,
     build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
+    build_ticket_flow_orchestration_service,
     get_surface_orchestration_ingress,
 )
 from .sqlite import (
@@ -78,6 +87,8 @@ __all__ = [
     "ActiveWorkSummary",
     "Binding",
     "ExecutionRecord",
+    "FlowBackedOrchestrationService",
+    "FlowRunTarget",
     "FlowTarget",
     "HarnessBackedOrchestrationService",
     "ORCHESTRATION_DB_FILENAME",
@@ -87,6 +98,7 @@ __all__ = [
     "MigrationVerificationSummary",
     "OrchestrationEvent",
     "OrchestrationEventType",
+    "OrchestrationFlowService",
     "OrchestrationBindingStore",
     "OrchestrationTableDefinition",
     "OrchestrationTableRole",
@@ -103,6 +115,7 @@ __all__ = [
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
     "SurfaceThreadMessageRequest",
+    "TicketFlowTargetWrapper",
     "TargetCapability",
     "TargetKind",
     "ThreadExecutionStore",
@@ -116,6 +129,9 @@ __all__ = [
     "begin_runtime_thread_execution",
     "build_surface_orchestration_ingress",
     "build_harness_backed_orchestration_service",
+    "build_ticket_flow_orchestration_service",
+    "build_ticket_flow_target",
+    "build_ticket_flow_target_wrapper",
     "build_agent_definition",
     "current_orchestration_schema_version",
     "get_agent_definition",

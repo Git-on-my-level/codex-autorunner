@@ -8,6 +8,7 @@ including DB state transitions and SSE event ordering.
 import asyncio
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,9 @@ from codex_autorunner.core.flows import (
     FlowRunRecord,
     FlowRunStatus,
     StepOutcome,
+)
+from codex_autorunner.core.orchestration.service import (
+    build_ticket_flow_orchestration_service,
 )
 
 pytestmark = pytest.mark.integration
@@ -412,3 +416,106 @@ async def test_flow_controller_error_handling(flow_controller):
 
     finally:
         failing_controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_ticket_flow_orchestration_wrapper_preserves_pause_resume_lifecycle(
+    temp_dir, monkeypatch
+):
+    repo_root = temp_dir.resolve()
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    artifacts_root = repo_root / ".codex-autorunner" / "flows"
+
+    async def pause_then_complete(
+        record: FlowRunRecord, input_data: dict
+    ) -> StepOutcome:
+        if record.state.get("paused_once"):
+            return StepOutcome.complete(output={"completed_after_resume": True})
+        return StepOutcome.pause(output={"paused_once": True})
+
+    definition = FlowDefinition(
+        flow_type="ticket_flow",
+        initial_step="await_reply",
+        steps={"await_reply": pause_then_complete},
+    )
+    definition.validate()
+
+    class FakeAgentPool:
+        async def close_all(self) -> None:
+            return None
+
+    def build_resources(_: Path) -> SimpleNamespace:
+        controller = FlowController(
+            definition=definition,
+            db_path=db_path,
+            artifacts_root=artifacts_root,
+        )
+        controller.initialize()
+        return SimpleNamespace(controller=controller, agent_pool=FakeAgentPool())
+
+    worker_calls: list[tuple[str, bool]] = []
+
+    def record_worker_call(
+        repo_root_arg: Path, run_id: str, *, is_terminal: bool
+    ) -> None:
+        assert repo_root_arg == repo_root
+        worker_calls.append((run_id, is_terminal))
+
+    monkeypatch.setattr(
+        "codex_autorunner.flows.ticket_flow.runtime_helpers.build_ticket_flow_runtime_resources",
+        build_resources,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.flows.ticket_flow.runtime_helpers.ensure_worker",
+        record_worker_call,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.flows.ticket_flow.runtime_helpers.load_repo_config",
+        lambda _: SimpleNamespace(durable_writes=False),
+    )
+
+    service = build_ticket_flow_orchestration_service(
+        workspace_root=repo_root,
+        repo_id="repo-1",
+    )
+
+    started = await service.start_flow_run(
+        "ticket_flow",
+        input_data={"ticket": 620},
+        metadata={"source": "test"},
+    )
+    assert started.status == FlowRunStatus.PENDING.value
+    assert [run.run_id for run in service.list_active_flow_runs()] == [started.run_id]
+
+    runner = FlowController(
+        definition=definition,
+        db_path=db_path,
+        artifacts_root=artifacts_root,
+    )
+    runner.initialize()
+    try:
+        paused = await runner.run_flow(started.run_id)
+        assert paused.status == FlowRunStatus.PAUSED
+        assert paused.state["paused_once"] is True
+        paused_from_service = service.get_flow_run(started.run_id)
+        assert paused_from_service is not None
+        assert paused_from_service.status == FlowRunStatus.PAUSED.value
+        assert [run.run_id for run in service.list_active_flow_runs()] == [
+            started.run_id
+        ]
+
+        resumed = await service.resume_flow_run(started.run_id)
+        assert resumed.status == FlowRunStatus.RUNNING.value
+        completed = await runner.run_flow(started.run_id)
+        assert completed.status == FlowRunStatus.COMPLETED
+        completed_from_service = service.get_flow_run(started.run_id)
+        assert completed_from_service is not None
+        assert completed_from_service.status == FlowRunStatus.COMPLETED.value
+        assert service.list_active_flow_runs() == []
+    finally:
+        runner.shutdown()
+
+    assert worker_calls == [
+        (started.run_id, False),
+        (started.run_id, False),
+    ]

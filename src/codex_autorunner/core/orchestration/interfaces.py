@@ -3,7 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
-from .models import AgentDefinition, ExecutionRecord, MessageRequest, ThreadTarget
+from .models import (
+    AgentDefinition,
+    ExecutionRecord,
+    FlowRunTarget,
+    FlowTarget,
+    MessageRequest,
+    ThreadTarget,
+)
 
 
 @runtime_checkable
@@ -273,8 +280,39 @@ class OrchestrationThreadService(Protocol):
     ) -> ExecutionRecord: ...
 
 
+@runtime_checkable
+class OrchestrationFlowService(Protocol):
+    """Canonical flow-target service boundary for CAR-native orchestration."""
+
+    def list_flow_targets(self) -> list[FlowTarget]: ...
+
+    def get_flow_target(self, flow_target_id: str) -> Optional[FlowTarget]: ...
+
+    async def start_flow_run(
+        self,
+        flow_target_id: str,
+        *,
+        input_data: Optional[dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+    ) -> FlowRunTarget: ...
+
+    async def resume_flow_run(
+        self, run_id: str, *, force: bool = False
+    ) -> FlowRunTarget: ...
+
+    async def stop_flow_run(self, run_id: str) -> FlowRunTarget: ...
+
+    def get_flow_run(self, run_id: str) -> Optional[FlowRunTarget]: ...
+
+    def list_active_flow_runs(
+        self, *, flow_target_id: Optional[str] = None
+    ) -> list[FlowRunTarget]: ...
+
+
 __all__ = [
     "AgentDefinitionCatalog",
+    "OrchestrationFlowService",
     "OrchestrationThreadService",
     "RuntimeConversationHandle",
     "RuntimeThreadHarness",

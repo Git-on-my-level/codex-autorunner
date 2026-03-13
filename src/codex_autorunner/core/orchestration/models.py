@@ -170,6 +170,28 @@ class FlowTarget:
 
 
 @dataclass(frozen=True)
+class FlowRunTarget:
+    """Orchestration-visible flow-run status backed by CAR's native flow engine."""
+
+    run_id: str
+    flow_target_id: str
+    flow_type: str
+    status: str
+    current_step: Optional[str] = None
+    repo_id: Optional[str] = None
+    workspace_root: Optional[str] = None
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    error_message: Optional[str] = None
+    state: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class Binding:
     """Durable association between a surface context and a thread target."""
 
@@ -222,6 +244,7 @@ __all__ = [
     "AgentDefinition",
     "Binding",
     "ExecutionRecord",
+    "FlowRunTarget",
     "FlowTarget",
     "MessageRequest",
     "OrchestrationTableDefinition",

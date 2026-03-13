@@ -8,14 +8,26 @@ from ..pma_thread_store import PmaThreadStore
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
 from .events import OrchestrationEvent
-from .flows import PausedFlowTarget
+from .flows import (
+    PausedFlowTarget,
+    TicketFlowTargetWrapper,
+    build_ticket_flow_target_wrapper,
+)
 from .interfaces import (
     AgentDefinitionCatalog,
+    OrchestrationFlowService,
     OrchestrationThreadService,
     RuntimeThreadHarness,
     ThreadExecutionStore,
 )
-from .models import AgentDefinition, ExecutionRecord, MessageRequest, ThreadTarget
+from .models import (
+    AgentDefinition,
+    ExecutionRecord,
+    FlowRunTarget,
+    FlowTarget,
+    MessageRequest,
+    ThreadTarget,
+)
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 
 MessagePreviewLimit = 120
@@ -607,6 +619,81 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
 
 
+@dataclass
+class FlowBackedOrchestrationService(OrchestrationFlowService):
+    """Canonical orchestration service boundary for CAR-native flow targets."""
+
+    flow_wrappers: Mapping[str, TicketFlowTargetWrapper]
+
+    def list_flow_targets(self) -> list[FlowTarget]:
+        return [wrapper.flow_target for wrapper in self.flow_wrappers.values()]
+
+    def get_flow_target(self, flow_target_id: str) -> Optional[FlowTarget]:
+        wrapper = self.flow_wrappers.get(flow_target_id)
+        if wrapper is None:
+            return None
+        return wrapper.flow_target
+
+    def _require_wrapper(self, flow_target_id: str) -> TicketFlowTargetWrapper:
+        wrapper = self.flow_wrappers.get(flow_target_id)
+        if wrapper is None:
+            raise KeyError(f"Unknown flow target '{flow_target_id}'")
+        return wrapper
+
+    def _find_wrapper_for_run(
+        self, run_id: str
+    ) -> tuple[Optional[TicketFlowTargetWrapper], Optional[FlowRunTarget]]:
+        for wrapper in self.flow_wrappers.values():
+            run = wrapper.get_run(run_id)
+            if run is not None:
+                return wrapper, run
+        return None, None
+
+    async def start_flow_run(
+        self,
+        flow_target_id: str,
+        *,
+        input_data: Optional[dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+    ) -> FlowRunTarget:
+        return await self._require_wrapper(flow_target_id).start_run(
+            input_data=input_data,
+            metadata=metadata,
+            run_id=run_id,
+        )
+
+    async def resume_flow_run(
+        self, run_id: str, *, force: bool = False
+    ) -> FlowRunTarget:
+        wrapper, existing = self._find_wrapper_for_run(run_id)
+        if wrapper is None or existing is None:
+            raise KeyError(f"Unknown flow run '{run_id}'")
+        return await wrapper.resume_run(existing.run_id, force=force)
+
+    async def stop_flow_run(self, run_id: str) -> FlowRunTarget:
+        wrapper, existing = self._find_wrapper_for_run(run_id)
+        if wrapper is None or existing is None:
+            raise KeyError(f"Unknown flow run '{run_id}'")
+        return await wrapper.stop_run(existing.run_id)
+
+    def get_flow_run(self, run_id: str) -> Optional[FlowRunTarget]:
+        _, run = self._find_wrapper_for_run(run_id)
+        return run
+
+    def list_active_flow_runs(
+        self, *, flow_target_id: Optional[str] = None
+    ) -> list[FlowRunTarget]:
+        if flow_target_id is not None:
+            wrapper = self.flow_wrappers.get(flow_target_id)
+            return [] if wrapper is None else wrapper.list_active_runs()
+
+        active_runs: list[FlowRunTarget] = []
+        for wrapper in self.flow_wrappers.values():
+            active_runs.extend(wrapper.list_active_runs())
+        return active_runs
+
+
 ResolvePausedFlowTarget = Callable[
     [SurfaceThreadMessageRequest],
     Awaitable[Optional[PausedFlowTarget]],
@@ -810,7 +897,21 @@ def build_harness_backed_orchestration_service(
     )
 
 
+def build_ticket_flow_orchestration_service(
+    *,
+    workspace_root: Path,
+    repo_id: Optional[str] = None,
+) -> FlowBackedOrchestrationService:
+    """Build the orchestration wrapper that exposes `ticket_flow` as a flow target."""
+
+    wrapper = build_ticket_flow_target_wrapper(workspace_root, repo_id=repo_id)
+    return FlowBackedOrchestrationService(
+        flow_wrappers={wrapper.flow_target.flow_target_id: wrapper}
+    )
+
+
 __all__ = [
+    "FlowBackedOrchestrationService",
     "HarnessBackedOrchestrationService",
     "MessagePreviewLimit",
     "PmaThreadExecutionStore",
@@ -818,5 +919,6 @@ __all__ = [
     "SurfaceOrchestrationIngress",
     "build_surface_orchestration_ingress",
     "build_harness_backed_orchestration_service",
+    "build_ticket_flow_orchestration_service",
     "get_surface_orchestration_ingress",
 ]
