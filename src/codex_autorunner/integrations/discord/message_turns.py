@@ -45,6 +45,17 @@ from .rendering import (
 )
 
 
+def _compose_pending_compact_prompt(summary_text: str, message: str) -> str:
+    summary = summary_text.strip() or "(no summary)"
+    return (
+        "Context from previous session:\n\n"
+        f"{summary}\n\n"
+        "Continue from this context. Ask for missing info if needed.\n\n"
+        "User message:\n"
+        f"{message}"
+    )
+
+
 @dataclass(frozen=True)
 class DiscordMessageTurnResult:
     final_message: str
@@ -334,6 +345,16 @@ async def handle_message_event(
         pma_enabled=pma_enabled,
         agent=agent,
     )
+    pending_compact_seed = binding.get("pending_compact_seed")
+    pending_compact_session_key = binding.get("pending_compact_session_key")
+    apply_pending_compact = (
+        isinstance(pending_compact_seed, str)
+        and bool(pending_compact_seed.strip())
+        and pending_compact_session_key == session_key
+    )
+    if apply_pending_compact:
+        prompt_text = _compose_pending_compact_prompt(pending_compact_seed, prompt_text)
+
     turn_input_items: Optional[list[dict[str, Any]]] = None
     if attachment_input_items:
         turn_input_items = [
@@ -407,6 +428,8 @@ async def handle_message_event(
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
         )
+    if apply_pending_compact:
+        await service._store.clear_pending_compact_seed(channel_id=channel_id)
     await service._flush_outbox_files(
         workspace_root=workspace_root,
         channel_id=channel_id,

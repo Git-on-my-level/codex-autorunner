@@ -4855,6 +4855,7 @@ class DiscordBotService:
             workspace_root, channel_id=orchestrator_channel_key
         )
         had_previous = orchestrator.reset_thread_id(session_key)
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
@@ -5010,6 +5011,7 @@ class DiscordBotService:
             workspace_root, channel_id=orchestrator_channel_key
         )
         had_previous = orchestrator.reset_thread_id(session_key)
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
         setup_note = (
@@ -5140,6 +5142,7 @@ class DiscordBotService:
                     return
                 thread_id = resolved_thread_id
             orchestrator.set_thread_id(session_key, thread_id)
+            await self._store.clear_pending_compact_seed(channel_id=channel_id)
             mode_label = "PMA" if pma_enabled else "repo"
             text = format_discord_message(
                 f"Resumed {mode_label} session for `{agent}` with thread `{thread_id}`."
@@ -5425,6 +5428,7 @@ class DiscordBotService:
             model_override=switch_state.model,
             reasoning_effort=switch_state.effort,
         )
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
@@ -8693,6 +8697,7 @@ class DiscordBotService:
             workspace_path=str(workspace),
             repo_id=selected_repo_id,
         )
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
 
         if selected_repo_id:
             message = f"Bound this channel to: {selected_repo_id} ({workspace})"
@@ -8943,6 +8948,7 @@ class DiscordBotService:
             workspace_root, channel_id=orchestrator_channel_key
         )
         had_previous = orchestrator.reset_thread_id(session_key)
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "fresh state"
 
@@ -9572,6 +9578,12 @@ class DiscordBotService:
         )
         if not response_text:
             response_text = "(No summary generated.)"
+        await self._store.set_pending_compact_seed(
+            channel_id=channel_id,
+            seed_text=response_text,
+            session_key=session_key,
+        )
+        orchestrator.reset_thread_id(session_key)
 
         chunks = chunk_discord_message(
             f"**Conversation Summary:**\n\n{response_text}",

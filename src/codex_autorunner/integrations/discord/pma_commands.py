@@ -37,6 +37,7 @@ async def handle_pma_on(
         pma_prev_workspace_path=prev_workspace,
         pma_prev_repo_id=prev_repo_id,
     )
+    await service._store.clear_pending_compact_seed(channel_id=channel_id)
 
     hint = (
         "Use /pma off to exit. Previous binding saved."
@@ -75,6 +76,7 @@ async def handle_pma_off(
         pma_prev_workspace_path=None,
         pma_prev_repo_id=None,
     )
+    await service._store.clear_pending_compact_seed(channel_id=channel_id)
 
     if prev_workspace:
         await service._store.upsert_binding(

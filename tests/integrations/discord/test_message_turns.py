@@ -530,6 +530,86 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
 
 
 @pytest.mark.anyio
+async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("please continue"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    session_key = service._build_message_session_key(
+        channel_id="channel-1",
+        workspace_root=workspace.resolve(),
+        pma_enabled=False,
+        agent="codex",
+    )
+    await store.set_pending_compact_seed(
+        channel_id="channel-1",
+        seed_text="previous summary",
+        session_key=session_key,
+    )
+
+    captured: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured.append(prompt_text)
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured
+        assert "Context from previous session:" in captured[0]
+        assert "previous summary" in captured[0]
+        assert "please continue" in captured[0]
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["pending_compact_seed"] is None
+        assert binding["pending_compact_session_key"] is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_flushes_pending_outbox_files_after_turn(
     tmp_path: Path,
 ) -> None:
@@ -4956,13 +5036,22 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
     )
 
     class _CompactOrchestrator:
+        def __init__(self) -> None:
+            self.reset_calls: list[str] = []
+
         def get_thread_id(self, session_key: str) -> Optional[str]:
             _ = session_key
             return "thread-1"
 
+        def reset_thread_id(self, session_key: str) -> bool:
+            self.reset_calls.append(session_key)
+            return True
+
+    orchestrator = _CompactOrchestrator()
+
     async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
         _ = args, kwargs
-        return _CompactOrchestrator()
+        return orchestrator
 
     summary = "\n".join(
         [
@@ -5028,6 +5117,11 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
             not re.match(r"^Part \d+/\d+$", (chunk.splitlines() or [""])[0].strip())
             for chunk in rendered_chunks
         )
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["pending_compact_seed"] == summary
+        assert binding["pending_compact_session_key"]
+        assert orchestrator.reset_calls == [binding["pending_compact_session_key"]]
     finally:
         await store.close()
 
@@ -5058,13 +5152,22 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
     )
 
     class _CompactOrchestrator:
+        def __init__(self) -> None:
+            self.reset_calls: list[str] = []
+
         def get_thread_id(self, session_key: str) -> Optional[str]:
             _ = session_key
             return "thread-1"
 
+        def reset_thread_id(self, session_key: str) -> bool:
+            self.reset_calls.append(session_key)
+            return True
+
+    orchestrator = _CompactOrchestrator()
+
     async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
         _ = args, kwargs
-        return _CompactOrchestrator()
+        return orchestrator
 
     summary = "\n".join(
         [
@@ -5125,5 +5228,10 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
             not re.match(r"^Part \d+/\d+$", (chunk.splitlines() or [""])[0].strip())
             for chunk in rendered_chunks
         )
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["pending_compact_seed"] == summary
+        assert binding["pending_compact_session_key"]
+        assert orchestrator.reset_calls == [binding["pending_compact_session_key"]]
     finally:
         await store.close()
