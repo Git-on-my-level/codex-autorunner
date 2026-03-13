@@ -584,3 +584,133 @@ async def test_surface_orchestration_ingress_preserves_flow_target_distinctness(
     assert result.flow_target is not None
     assert result.flow_target.flow_target.flow_type == "ticket_flow"
     assert calls == ["resolve", "flow:run-1"]
+
+
+@pytest.mark.anyio
+async def test_orchestration_thread_and_flow_targets_remain_distinct(
+    tmp_path: Path,
+) -> None:
+    ingress = build_surface_orchestration_ingress()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls: list[str] = []
+
+    async def _resolve_paused_flow(_request: SurfaceThreadMessageRequest):
+        calls.append("resolve")
+        return PausedFlowTarget(
+            flow_target=FlowTarget(
+                flow_target_id="ticket_flow",
+                flow_type="ticket_flow",
+                display_name="ticket_flow",
+                workspace_root=str(workspace),
+            ),
+            run_id="run-distinct",
+            status="paused",
+            workspace_root=workspace,
+        )
+
+    async def _submit_flow_reply(_request, target):
+        calls.append(f"flow:{target.run_id}")
+        return {"route": "flow", "flow_result": "flow-ok"}
+
+    async def _submit_thread_message(_request: SurfaceThreadMessageRequest) -> str:
+        calls.append("thread")
+        return "thread-result"
+
+    thread_result = await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="web",
+            workspace_root=workspace,
+            prompt_text="start a thread",
+            agent_id="codex",
+            pma_enabled=True,
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+
+    assert thread_result.route == "thread"
+    assert thread_result.thread_result == "thread-result"
+    assert "resolve" not in calls
+    assert "thread" in calls
+    assert "flow" not in calls
+
+    calls.clear()
+    flow_result = await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="web",
+            workspace_root=workspace,
+            prompt_text="resume the flow",
+            agent_id="codex",
+            pma_enabled=False,
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+
+    assert flow_result.route == "flow"
+    assert flow_result.flow_target is not None
+    assert flow_result.flow_target.flow_target.flow_type == "ticket_flow"
+    assert "resolve" in calls
+    assert "flow:run-distinct" in calls
+
+
+@pytest.mark.anyio
+async def test_orchestration_ingress_provides_observability_for_thread_and_flow(
+    tmp_path: Path,
+) -> None:
+    ingress = build_surface_orchestration_ingress()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    thread_requests: list[SurfaceThreadMessageRequest] = []
+    flow_requests: list[SurfaceThreadMessageRequest] = []
+
+    async def _resolve_paused_flow(request: SurfaceThreadMessageRequest):
+        return None
+
+    async def _submit_flow_reply(request, target):
+        flow_requests.append(request)
+        return {"route": "flow"}
+
+    async def _submit_thread_message(request: SurfaceThreadMessageRequest) -> str:
+        thread_requests.append(request)
+        return "observed-thread-result"
+
+    await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="discord",
+            workspace_root=workspace,
+            prompt_text="discord thread message",
+            agent_id="codex",
+            pma_enabled=True,
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+
+    await ingress.submit_message(
+        SurfaceThreadMessageRequest(
+            surface_kind="telegram",
+            workspace_root=workspace,
+            prompt_text="telegram thread message",
+            agent_id="opencode",
+            pma_enabled=True,
+        ),
+        resolve_paused_flow_target=_resolve_paused_flow,
+        submit_flow_reply=_submit_flow_reply,
+        submit_thread_message=_submit_thread_message,
+    )
+
+    assert len(thread_requests) == 2
+    assert thread_requests[0].surface_kind == "discord"
+    assert thread_requests[0].prompt_text == "discord thread message"
+    assert thread_requests[0].agent_id == "codex"
+    assert thread_requests[1].surface_kind == "telegram"
+    assert thread_requests[1].prompt_text == "telegram thread message"
+    assert thread_requests[1].agent_id == "opencode"
+
+    assert len(flow_requests) == 0

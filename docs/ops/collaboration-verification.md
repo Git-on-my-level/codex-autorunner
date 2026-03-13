@@ -94,3 +94,62 @@ If you changed Python files in the collaboration area, also run:
 - The parity check passes.
 - No manual Telegram or Discord environment is required for confidence in the
   collaboration rollout.
+
+## Orchestration verification
+
+Run the orchestration verification suite to verify the integrated build works
+across runtime threads, bindings, PMA shims, and flow targets:
+
+```bash
+./.venv/bin/pytest \
+  tests/browser/test_orchestration.py \
+  tests/test_pma_routes.py \
+  tests/test_pma_cli.py \
+  tests/integrations/discord/test_service_routing.py \
+  tests/test_telegram_pma_routing.py \
+  tests/routes/test_flows_route_characterization.py \
+  tests/routes/test_flow_status_history_routes_extracted.py \
+  -v
+```
+
+### What this covers
+
+- **Runtime-backed thread targets**: Surface orchestration ingress routes messages
+  to thread targets correctly for web, Discord, and Telegram surfaces.
+- **Authoritative bindings**: Discord and Telegram bindings are resolved and used
+  for routing without bypassing the orchestration layer.
+- **PMA shims**: PMA routes use the orchestration service for thread status,
+  tail, and listing operations.
+- **Flow-target controls**: `ticket_flow` remains a distinct flow target and
+  does not collapse into a normal chat thread.
+- **Observability**: Thread and flow targets share discovery and observability
+  surfaces without losing their distinct identities.
+- **Capability filtering**: ZeroClaw-capability differences and capability-aware
+  filtering continue to work inside the integrated build.
+
+### Acceptance criteria
+
+1. The surface orchestration ingress correctly routes messages to thread targets
+   when no paused flow is detected.
+2. The surface orchestration ingress correctly routes messages to flow targets
+   (e.g., `ticket_flow`) when a paused flow is detected.
+3. Thread and flow targets remain operationally distinct - operations on one do
+   not affect the other.
+4. Discord message handling uses the orchestration ingress for routing.
+5. Telegram message handling uses the orchestration ingress for routing.
+6. PMA thread status, tail, and list routes use the orchestration service.
+7. Flow routes use the orchestration service for status and resume operations.
+8. No PMA-only bypasses or transport-local binding authority are used for
+   routing decisions.
+
+### ZeroClaw capability verification
+
+Verify that richer adapter capabilities remain visible and are not flattened to
+the weakest common interface:
+
+```bash
+./.venv/bin/pytest \
+  tests/test_pma_routes.py::test_pma_managed_thread_status_and_tail_use_orchestration_service \
+  tests/test_pma_cli.py::test_pma_cli_thread_query_commands_use_orchestration_routes \
+  -v
+```
