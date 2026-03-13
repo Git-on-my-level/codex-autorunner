@@ -21,7 +21,9 @@ class UnsupportedAgentCapabilityError(RuntimeError):
     """Raised when a harness helper is called without the required capability."""
 
     def __init__(self, capability: str, *, agent_id: Optional[str] = None) -> None:
-        normalized = next(iter(normalize_runtime_capabilities([capability])), capability)
+        normalized = next(
+            iter(normalize_runtime_capabilities([capability])), capability
+        )
         message = f"Agent capability '{normalized}' is not supported"
         if agent_id:
             message = f"Agent '{agent_id}' does not support capability '{normalized}'"

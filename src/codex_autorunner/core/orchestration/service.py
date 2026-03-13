@@ -446,9 +446,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         harness = self.harness_factory(thread.agent_id)
         if not harness.supports("interrupt"):
-            raise RuntimeError(
-                f"Agent '{thread.agent_id}' does not support interrupt"
-            )
+            raise RuntimeError(f"Agent '{thread.agent_id}' does not support interrupt")
         await harness.interrupt(
             Path(thread.workspace_root),
             thread.backend_thread_id,

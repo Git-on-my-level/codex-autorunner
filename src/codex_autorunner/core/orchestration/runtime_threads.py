@@ -34,6 +34,7 @@ class RuntimeThreadOutcome:
     backend_thread_id: str
     backend_turn_id: Optional[str]
 
+
 async def begin_runtime_thread_execution(
     service: HarnessBackedOrchestrationService,
     request: MessageRequest,
