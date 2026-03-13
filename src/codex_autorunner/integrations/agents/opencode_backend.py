@@ -81,6 +81,7 @@ class OpenCodeBackend(AgentBackend):
 
         self._session_id: Optional[str] = None
         self._temporary_session_id: Optional[str] = None
+        self._reuse_session: bool = False
         self._message_count: int = 0
         self._final_messages: list[str] = []
         self._last_turn_id: Optional[str] = None
@@ -141,10 +142,12 @@ class OpenCodeBackend(AgentBackend):
             reasoning = options.get("reasoning_effort")
         self._reasoning = reasoning
         self._approval_policy = options.get("approval_policy")
+        self._reuse_session = bool(options.get("reuse_session", False))
 
     async def start_session(self, target: dict, context: dict) -> str:
         client = await self._ensure_client()
         workspace_root = self._workspace_root or Path(context.get("workspace") or ".")
+        reuse_session = bool(context.get("reuse_session", self._reuse_session))
         resume_session = context.get("session_id") or context.get("thread_id")
         if isinstance(resume_session, str) and resume_session:
             try:
@@ -177,7 +180,7 @@ class OpenCodeBackend(AgentBackend):
                 directory=str(workspace_root),
             )
             self._session_id = extract_session_id(result, allow_fallback_id=True)
-            self._temporary_session_id = self._session_id
+            self._temporary_session_id = None if reuse_session else self._session_id
             if self._session_id:
                 log_event(
                     self._logger,

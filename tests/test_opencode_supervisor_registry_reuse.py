@@ -229,6 +229,68 @@ async def test_ensure_started_reuses_healthy_registry_record(
 
 
 @pytest.mark.anyio
+async def test_ensure_started_revalidates_stale_reused_handle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    handle.started = True
+    handle.base_url = "http://127.0.0.1:9001"
+    handle.managed_process_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=9991,
+        pgid=9991,
+        base_url=handle.base_url,
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={},
+    )
+
+    class _Client:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    stale_client = _Client()
+    handle.client = stale_client
+    reused_calls: list[str] = []
+
+    async def _fake_registry_reuse(_handle: OpenCodeHandle) -> bool:
+        reused_calls.append("reused")
+        _handle.client = object()
+        _handle.base_url = "http://127.0.0.1:9002"
+        _handle.managed_process_record = ProcessRecord(
+            kind="opencode",
+            workspace_id="ws-1",
+            pid=9992,
+            pgid=9992,
+            base_url="http://127.0.0.1:9002",
+            command=["opencode", "serve"],
+            owner_pid=111,
+            started_at="2026-02-15T00:00:00Z",
+            metadata={},
+        )
+        _handle.started = True
+        return True
+
+    monkeypatch.setattr(supervisor, "_record_is_running", lambda _record: False)
+    monkeypatch.setattr(
+        supervisor, "_ensure_started_from_registry", _fake_registry_reuse
+    )
+
+    await supervisor._ensure_started(handle)
+
+    assert stale_client.closed is True
+    assert reused_calls == ["reused"]
+    assert handle.base_url == "http://127.0.0.1:9002"
+    assert handle.started is True
+
+
+@pytest.mark.anyio
 async def test_ensure_started_restarts_on_pid_command_mismatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -576,6 +638,48 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         (tmp_path, "opencode", "9992"),
     ]
     assert start_calls == ["spawned"]
+
+
+@pytest.mark.anyio
+async def test_ensure_started_does_not_spawn_when_missing_base_url_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    registry_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=9993,
+        pgid=9993,
+        base_url=None,
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={},
+    )
+    start_calls: list[str] = []
+
+    async def _fake_start_process(_handle: OpenCodeHandle) -> None:
+        start_calls.append("spawned")
+
+    async def _fake_terminate(_record: ProcessRecord) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        supervisor_module, "read_process_record", lambda *_a, **_k: registry_record
+    )
+    monkeypatch.setattr(supervisor, "_record_pid_is_running", lambda _record: True)
+    monkeypatch.setattr(supervisor, "_record_is_running", lambda _record: True)
+    monkeypatch.setattr(supervisor, "_terminate_record_process", _fake_terminate)
+    monkeypatch.setattr(supervisor, "_start_process", _fake_start_process)
+
+    with pytest.raises(
+        supervisor_module.OpenCodeSupervisorError,
+        match="without base URL",
+    ):
+        await supervisor._ensure_started(handle)
+
+    assert start_calls == []
 
 
 @pytest.mark.anyio

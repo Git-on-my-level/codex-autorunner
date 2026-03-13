@@ -124,6 +124,7 @@ async def test_backend_orchestrator_uses_generic_backend_configure(
     assert configure_call["approval_policy_default"] == "never"
     assert configure_call["sandbox_policy"] is None
     assert configure_call["sandbox_policy_default"] == "dangerFullAccess"
+    assert configure_call["reuse_session"] is False
     assert configure_call["model"] == "gpt-test"
     assert configure_call["reasoning"] == "high"
     assert configure_call["reasoning_effort"] == "high"

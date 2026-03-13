@@ -459,9 +459,16 @@ class OpenCodeSupervisor:
         async with handle.start_lock:
             if handle.started:
                 if handle.process is None:
+                    record = handle.managed_process_record
+                    if record is None:
+                        return
+                    if self._record_is_running(record):
+                        return
+                    await self._reset_handle_state(handle, clear_process=False)
+                elif handle.process.returncode is None:
                     return
-                if handle.process.returncode is None:
-                    return
+                else:
+                    await self._reset_handle_state(handle, clear_process=True)
             if self._base_url:
                 await self._ensure_started_base_url(handle)
             else:
@@ -469,6 +476,20 @@ class OpenCodeSupervisor:
                 if reused:
                     return
                 await self._start_process(handle)
+
+    async def _reset_handle_state(
+        self, handle: OpenCodeHandle, *, clear_process: bool
+    ) -> None:
+        await self._safe_close_client(handle.client)
+        handle.client = None
+        handle.base_url = None
+        handle.health_info = None
+        handle.version = None
+        handle.openapi_spec = None
+        handle.started = False
+        handle.managed_process_record = None
+        if clear_process:
+            handle.process = None
 
     async def _ensure_started_base_url(self, handle: OpenCodeHandle) -> None:
         base_url = self._base_url
@@ -651,7 +672,9 @@ class OpenCodeSupervisor:
                             pid=record.pid,
                             pgid=record.pgid,
                         )
-                        return False
+                        raise OpenCodeSupervisorError(
+                            "Failed to terminate OpenCode registry record without base URL"
+                        )
                     if self._record_is_running(record):
                         log_event(
                             self._logger,
@@ -662,7 +685,9 @@ class OpenCodeSupervisor:
                             pid=record.pid,
                             pgid=record.pgid,
                         )
-                        return False
+                        raise OpenCodeSupervisorError(
+                            "OpenCode registry record without base URL remained running after termination"
+                        )
                 self._delete_registry_record(
                     handle,
                     pid=record.pid,
@@ -690,7 +715,7 @@ class OpenCodeSupervisor:
                 return True
             except OpenCodeSupervisorAttachAuthError:
                 raise
-            except Exception:
+            except Exception as exc:
                 terminated = False
                 if self._record_is_running(record):
                     terminated = await self._terminate_record_process(record)
@@ -704,7 +729,9 @@ class OpenCodeSupervisor:
                         pid=record.pid,
                         pgid=record.pgid,
                     )
-                    return False
+                    raise OpenCodeSupervisorError(
+                        "Failed to terminate stale OpenCode registry record after reuse attach failure"
+                    ) from exc
                 log_event(
                     self._logger,
                     logging.INFO,

@@ -114,6 +114,9 @@ class BackendOrchestrator:
 
         effective_workspace = workspace_root or self._repo_root
         context: dict[str, Any] = {"workspace": str(effective_workspace)}
+        context["reuse_session"] = bool(
+            getattr(self._config, "autorunner_reuse_session", False)
+        )
         if session_id:
             context["session_id"] = session_id
 
@@ -175,6 +178,7 @@ class BackendOrchestrator:
             approval_policy_default="never",
             sandbox_policy=state.autorunner_sandbox_mode,
             sandbox_policy_default="dangerFullAccess",
+            reuse_session=reuse_session,
             model=model,
             reasoning=reasoning,
             reasoning_effort=reasoning,

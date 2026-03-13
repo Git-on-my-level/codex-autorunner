@@ -7,8 +7,13 @@ import pytest
 
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisor
+from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.ports.agent_backend import AgentEvent
 from codex_autorunner.core.ports.run_event import Completed, Started
+from codex_autorunner.core.state import RunnerState
+from codex_autorunner.integrations.agents.backend_orchestrator import (
+    BackendOrchestrator,
+)
 from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
@@ -340,3 +345,70 @@ async def test_run_turn_events_keeps_resumed_session_alive(
     assert client.disposed_session_ids == []
     assert backend._session_id == "resume-1"
     assert backend._temporary_session_id is None
+
+
+@pytest.mark.anyio
+async def test_backend_orchestrator_reuses_fresh_opencode_session_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    from codex_autorunner.integrations.agents import opencode_backend as backend_module
+
+    backend = OpenCodeBackend(base_url="http://localhost:8080", workspace_root=tmp_path)
+    client = _SessionClientStub()
+    backend._client = client
+
+    async def _fake_collect(*_args: object, **_kwargs: object) -> OpenCodeTurnOutput:
+        ready_event = _kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        return OpenCodeTurnOutput(text="done")
+
+    async def _fake_missing_env(*_args: object, **_kwargs: object) -> list[str]:
+        return []
+
+    async def _fake_get_session(session_id: str) -> dict[str, str]:
+        client.requested_session_ids.append(session_id)
+        if session_id in client.disposed_session_ids:
+            raise RuntimeError("session missing")
+        return {"sessionId": session_id}
+
+    monkeypatch.setattr(backend_module, "collect_opencode_output", _fake_collect)
+    monkeypatch.setattr(backend_module, "opencode_missing_env", _fake_missing_env)
+    monkeypatch.setattr(
+        backend_module, "build_turn_id", lambda session_id: f"{session_id}:turn"
+    )
+    client.get_session = _fake_get_session  # type: ignore[method-assign]
+
+    config = SimpleNamespace(
+        autorunner_reuse_session=True,
+        app_server=SimpleNamespace(turn_timeout_seconds=321.0),
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
+    orchestrator = BackendOrchestrator(repo_root=tmp_path, config=config)
+    orchestrator._backend_factory = lambda _agent_id, _state, _handler: backend
+    state = RunnerState(None, "idle", None, None, None)
+
+    first_events = [
+        event
+        async for event in orchestrator.run_turn(
+            "opencode", state, "hello", session_key="autorunner.opencode"
+        )
+    ]
+    second_events = [
+        event
+        async for event in orchestrator.run_turn(
+            "opencode", state, "again", session_key="autorunner.opencode"
+        )
+    ]
+
+    assert isinstance(first_events[-1], Completed)
+    assert isinstance(second_events[-1], Completed)
+    assert client.created_session_ids == ["session-1"]
+    assert client.requested_session_ids == ["session-1"]
+    assert client.disposed_session_ids == []
