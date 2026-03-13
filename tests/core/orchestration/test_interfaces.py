@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.orchestration import (
     AgentDefinition,
     AgentDefinitionCatalog,
@@ -135,10 +136,16 @@ class _FakeTurn:
 @dataclass
 class _FakeHarness:
     display_name: str = "Codex"
+    capabilities: frozenset[str] = frozenset(
+        ["durable_threads", "message_turns", "interrupt", "review"]
+    )
     interrupted: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         return None
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -180,6 +187,17 @@ class _FakeHarness:
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
     ) -> None:
         self.interrupted.append((workspace_root, conversation_id, turn_id))
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> TerminalTurnResult:
+        _ = workspace_root, conversation_id, turn_id, timeout
+        return TerminalTurnResult(status="ok", assistant_text="done")
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str

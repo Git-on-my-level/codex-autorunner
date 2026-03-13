@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.orchestration import (
     HarnessBackedOrchestrationService,
     MappingAgentDefinitionCatalog,
@@ -42,6 +43,9 @@ class _WaitResult:
 @dataclass
 class _HarnessWithWait:
     display_name: str = "Codex"
+    capabilities: frozenset[str] = frozenset(
+        ["durable_threads", "message_turns", "interrupt", "review"]
+    )
     ensure_ready_calls: list[Path] = field(default_factory=list)
     start_turn_calls: list[dict[str, Any]] = field(default_factory=list)
     interrupt_calls: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
@@ -49,6 +53,9 @@ class _HarnessWithWait:
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ensure_ready_calls.append(workspace_root)
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -119,11 +126,12 @@ class _HarnessWithWait:
         turn_id: Optional[str],
         *,
         timeout: Optional[float] = None,
-    ) -> _WaitResult:
+    ) -> TerminalTurnResult:
         _ = timeout
         self.wait_calls.append((workspace_root, conversation_id, turn_id))
-        return _WaitResult(
-            agent_messages=["assistant-output"],
+        return TerminalTurnResult(
+            status="ok",
+            assistant_text="assistant-output",
             raw_events=[],
             errors=[],
         )
@@ -138,11 +146,18 @@ class _HarnessWithWait:
 @dataclass
 class _HarnessWithStream:
     display_name: str = "OpenCode"
+    capabilities: frozenset[str] = frozenset(
+        ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+    )
     ensure_ready_calls: list[Path] = field(default_factory=list)
     interrupt_calls: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
+    wait_calls: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ensure_ready_calls.append(workspace_root)
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -195,6 +210,18 @@ class _HarnessWithStream:
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
     ) -> None:
         self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> TerminalTurnResult:
+        _ = timeout
+        self.wait_calls.append((workspace_root, conversation_id, turn_id))
+        return TerminalTurnResult(status="ok", assistant_text="hello world")
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -280,7 +307,7 @@ async def test_runtime_threads_begin_and_wait_with_agent_harness(
     assert outcome.assistant_text == "assistant-output"
 
 
-async def test_runtime_threads_collect_streamed_output_when_wait_helper_missing(
+async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
     tmp_path: Path,
 ) -> None:
     harness = _HarnessWithStream()
@@ -305,6 +332,7 @@ async def test_runtime_threads_collect_streamed_output_when_wait_helper_missing(
     )
 
     assert outcome.status == "ok"
+    assert harness.wait_calls == [(workspace_root, "session-1", "stream-turn-1")]
     assert outcome.assistant_text == "hello world"
 
 

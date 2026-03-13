@@ -8,7 +8,15 @@ from ...integrations.app_server.client import CodexAppServerResponseError
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..base import AgentHarness
-from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
+from ..types import (
+    AgentId,
+    ConversationRef,
+    ModelCatalog,
+    ModelSpec,
+    RuntimeCapability,
+    TerminalTurnResult,
+    TurnRef,
+)
 
 _DEFAULT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 _INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
@@ -90,6 +98,18 @@ def _select_display_name(model_id: str, display_name_raw: Any) -> str:
 class CodexHarness(AgentHarness):
     agent_id: AgentId = AgentId("codex")
     display_name = "Codex"
+    capabilities = frozenset(
+        [
+            RuntimeCapability("durable_threads"),
+            RuntimeCapability("message_turns"),
+            RuntimeCapability("interrupt"),
+            RuntimeCapability("active_thread_discovery"),
+            RuntimeCapability("review"),
+            RuntimeCapability("model_listing"),
+            RuntimeCapability("event_streaming"),
+            RuntimeCapability("approvals"),
+        ]
+    )
 
     def __init__(
         self,
@@ -266,7 +286,7 @@ class CodexHarness(AgentHarness):
         turn_id: Optional[str],
         *,
         timeout: Optional[float] = None,
-    ) -> Any:
+    ) -> TerminalTurnResult:
         _ = workspace_root
         if not turn_id:
             raise ValueError("turn_id is required")
@@ -276,9 +296,37 @@ class CodexHarness(AgentHarness):
                 f"Unknown Codex turn handle for thread={conversation_id} turn={turn_id}"
             )
         try:
-            return await handle.wait(timeout=timeout)
+            result = await handle.wait(timeout=timeout)
         finally:
             self._turn_handles.pop((conversation_id, turn_id), None)
+        agent_messages = [
+            message.strip()
+            for message in getattr(result, "agent_messages", []) or []
+            if isinstance(message, str) and message.strip()
+        ]
+        assistant_text = "\n".join(agent_messages).strip()
+        if not assistant_text:
+            final_message = getattr(result, "final_message", "")
+            if isinstance(final_message, str):
+                assistant_text = final_message.strip()
+        return TerminalTurnResult(
+            status=(
+                str(result.status)
+                if getattr(result, "status", None) is not None
+                else None
+            ),
+            assistant_text=assistant_text,
+            errors=[
+                str(error)
+                for error in (getattr(result, "errors", []) or [])
+                if str(error).strip()
+            ],
+            raw_events=[
+                event
+                for event in (getattr(result, "raw_events", []) or [])
+                if isinstance(event, dict)
+            ],
+        )
 
 
 __all__ = ["CodexHarness"]

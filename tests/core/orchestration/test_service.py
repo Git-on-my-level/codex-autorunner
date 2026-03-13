@@ -7,6 +7,7 @@ from typing import Any, Optional
 import pytest
 
 from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.orchestration import (
     HarnessBackedOrchestrationService,
     MappingAgentDefinitionCatalog,
@@ -32,6 +33,9 @@ class _FakeTurn:
 @dataclass
 class _FakeHarness:
     display_name: str = "Codex"
+    capabilities: frozenset[str] = frozenset(
+        ["durable_threads", "message_turns", "interrupt", "review"]
+    )
     next_conversation_id: str = "backend-conversation-1"
     next_turn_id: str = "backend-turn-1"
     ensure_ready_calls: list[Path] = field(default_factory=list)
@@ -45,6 +49,9 @@ class _FakeHarness:
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ensure_ready_calls.append(workspace_root)
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -110,6 +117,17 @@ class _FakeHarness:
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
     ) -> None:
         self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> TerminalTurnResult:
+        _ = workspace_root, conversation_id, turn_id, timeout
+        return TerminalTurnResult(status="ok", assistant_text="Done")
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -261,6 +279,48 @@ async def test_interrupt_thread_uses_harness_and_marks_execution(
         (workspace_root, "backend-conversation-1", "backend-turn-1")
     ]
     assert interrupted.status == "interrupted"
+
+
+async def test_send_review_rejects_when_harness_lacks_review_capability(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(capabilities=frozenset(["durable_threads", "message_turns"]))
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Review this",
+            kind="review",
+        )
+    )
+
+    assert execution.status == "error"
+    assert execution.error == "Agent 'codex' does not support review mode"
+
+
+async def test_interrupt_thread_rejects_when_harness_lacks_interrupt_capability(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(capabilities=frozenset(["durable_threads", "message_turns"]))
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="does not support interrupt"):
+        await service.interrupt_thread(thread.thread_target_id)
 
 
 async def test_record_execution_result_updates_execution_state(tmp_path: Path) -> None:

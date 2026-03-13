@@ -364,6 +364,10 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         try:
             if request.kind == "review":
+                if not harness.supports("review"):
+                    raise RuntimeError(
+                        f"Agent '{thread.agent_id}' does not support review mode"
+                    )
                 turn = await harness.start_review(
                     workspace_root,
                     conversation_id,
@@ -441,6 +445,10 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             )
 
         harness = self.harness_factory(thread.agent_id)
+        if not harness.supports("interrupt"):
+            raise RuntimeError(
+                f"Agent '{thread.agent_id}' does not support interrupt"
+            )
         await harness.interrupt(
             Path(thread.workspace_root),
             thread.backend_thread_id,

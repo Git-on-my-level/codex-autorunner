@@ -40,8 +40,11 @@ class RuntimeThreadHarness(Protocol):
     """
 
     display_name: str
+    capabilities: frozenset[str]
 
     async def ensure_ready(self, workspace_root: Path) -> None: ...
+
+    def supports(self, capability: str) -> bool: ...
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -74,6 +77,15 @@ class RuntimeThreadHarness(Protocol):
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
     ) -> RuntimeTurnHandle: ...
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> Any: ...
 
     async def interrupt(
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]

@@ -6,9 +6,17 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from ...core.sse import format_sse
+from ...core.sse import format_sse, parse_sse_lines
 from ..base import AgentHarness
-from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
+from ..types import (
+    AgentId,
+    ConversationRef,
+    ModelCatalog,
+    ModelSpec,
+    RuntimeCapability,
+    TerminalTurnResult,
+    TurnRef,
+)
 from .constants import DEFAULT_TICKET_MODEL
 from .runtime import (
     build_turn_id,
@@ -19,6 +27,123 @@ from .runtime import (
 from .supervisor import OpenCodeSupervisor
 
 _logger = logging.getLogger(__name__)
+
+
+def _normalize_message_text(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, list):
+        parts: list[str] = []
+        for part in value:
+            if isinstance(part, dict):
+                part_text = part.get("text")
+                if isinstance(part_text, str):
+                    parts.append(part_text)
+        joined = "".join(parts).strip()
+        return joined or None
+    if isinstance(value, dict):
+        for key in ("text", "message", "content"):
+            nested_text = _normalize_message_text(value.get(key))
+            if nested_text:
+                return nested_text
+        return None
+    return None
+
+
+def _extract_delta_text(params: dict[str, Any]) -> Optional[str]:
+    for key in ("content", "delta", "text"):
+        text = _normalize_message_text(params.get(key))
+        if text:
+            return text
+    message = params.get("message")
+    if isinstance(message, dict):
+        return _extract_delta_text(message)
+    item = params.get("item")
+    if isinstance(item, dict):
+        return _extract_delta_text(item)
+    return None
+
+
+def _extract_completed_text(params: dict[str, Any]) -> Optional[str]:
+    item = params.get("item")
+    if isinstance(item, dict):
+        return _normalize_message_text(item.get("content")) or _normalize_message_text(
+            item
+        )
+    result = params.get("result")
+    if isinstance(result, dict):
+        return _normalize_message_text(result)
+    return _normalize_message_text(params)
+
+
+def _extract_error_text(params: dict[str, Any]) -> Optional[str]:
+    error = params.get("error")
+    if isinstance(error, dict):
+        return _normalize_message_text(error)
+    return _normalize_message_text(params.get("message")) or _normalize_message_text(
+        params.get("detail")
+    )
+
+
+def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    if isinstance(payload.get("message"), dict):
+        message = payload["message"]
+        method = message.get("method")
+        params = message.get("params")
+        if isinstance(method, str) and isinstance(params, dict):
+            return method, params
+    method = payload.get("method")
+    params = payload.get("params")
+    if isinstance(method, str) and isinstance(params, dict):
+        return method, params
+    return "", {}
+
+
+def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    output_chunks: list[str] = []
+    completed_message: Optional[str] = None
+    errors: list[str] = []
+    for payload in payloads:
+        method, params = _unwrap_harness_payload(payload)
+        method_lower = method.lower()
+
+        if method in {"message.delta", "message.updated", "message.completed"}:
+            text = _extract_delta_text(params) or _extract_completed_text(params)
+            if text:
+                if method == "message.delta":
+                    output_chunks.append(text)
+                else:
+                    completed_message = text
+            continue
+
+        if method == "item/agentMessage/delta" or method == "turn/streamDelta":
+            text = _extract_delta_text(params)
+            if text:
+                output_chunks.append(text)
+            continue
+
+        if "outputdelta" in method_lower:
+            text = _extract_delta_text(params)
+            if text:
+                output_chunks.append(text)
+            continue
+
+        if method == "item/completed":
+            item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "agentMessage":
+                text = _extract_completed_text(params)
+                if text:
+                    completed_message = text
+            continue
+
+        if method in {"turn/error", "error"}:
+            error = _extract_error_text(params)
+            if error:
+                errors.append(error)
+
+    assistant_text = (completed_message or "".join(output_chunks)).strip()
+    return assistant_text, errors
 
 
 def _coerce_providers(payload: Any) -> list[dict[str, Any]]:
@@ -55,6 +180,17 @@ def _iter_provider_models(models_raw: Any) -> list[tuple[str, dict[str, Any]]]:
 class OpenCodeHarness(AgentHarness):
     agent_id: AgentId = AgentId("opencode")
     display_name = "OpenCode"
+    capabilities = frozenset(
+        [
+            RuntimeCapability("durable_threads"),
+            RuntimeCapability("message_turns"),
+            RuntimeCapability("interrupt"),
+            RuntimeCapability("active_thread_discovery"),
+            RuntimeCapability("review"),
+            RuntimeCapability("model_listing"),
+            RuntimeCapability("event_streaming"),
+        ]
+    )
 
     def __init__(self, supervisor: OpenCodeSupervisor) -> None:
         self._supervisor = supervisor
@@ -263,6 +399,49 @@ class OpenCodeHarness(AgentHarness):
                 continue
             wrapped = {"message": {"method": event.event, "params": parsed}}
             yield format_sse("app-server", wrapped)
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> TerminalTurnResult:
+        _ = turn_id
+
+        async def _collect() -> TerminalTurnResult:
+            payloads: list[dict[str, Any]] = []
+
+            async def _iter_lines(raw_event_text: str) -> AsyncIterator[str]:
+                for line in raw_event_text.splitlines():
+                    yield line
+                yield ""
+
+            async for raw_event in self.stream_events(
+                workspace_root,
+                conversation_id,
+                turn_id or "",
+            ):
+                async for sse_event in parse_sse_lines(_iter_lines(str(raw_event))):
+                    try:
+                        payload = json.loads(sse_event.data) if sse_event.data else {}
+                    except json.JSONDecodeError:
+                        payload = {}
+                    if isinstance(payload, dict):
+                        payloads.append(payload)
+
+            assistant_text, errors = _collect_terminal_text(payloads)
+            return TerminalTurnResult(
+                status="error" if errors else "ok",
+                assistant_text=assistant_text,
+                errors=errors,
+                raw_events=payloads,
+            )
+
+        if timeout is None:
+            return await _collect()
+        return await asyncio.wait_for(_collect(), timeout=timeout)
 
 
 __all__ = ["OpenCodeHarness"]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, NewType
+from typing import Any, Iterable, NewType, Optional
 
 # When adding agents, update core/config.py agents defaults + validation (config-driven).
 AgentId = NewType("AgentId", str)
@@ -44,6 +44,26 @@ class TurnRef:
 
 
 @dataclass(frozen=True)
+class TerminalTurnResult:
+    """Plain-text terminal outcome returned by a durable runtime turn helper."""
+
+    status: Optional[str]
+    assistant_text: str
+    errors: list[str] = field(default_factory=list)
+    raw_events: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TranscriptEntry:
+    """Plain-text transcript row mirrored out of a runtime-owned history surface."""
+
+    role: str
+    text: str
+    turn_id: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class RuntimeCapabilityReport:
     """Optional runtime-reported capability supplement for one agent."""
 
@@ -70,6 +90,8 @@ __all__ = [
     "ModelSpec",
     "RuntimeCapability",
     "RuntimeCapabilityReport",
+    "TerminalTurnResult",
+    "TranscriptEntry",
     "TurnRef",
     "normalize_runtime_capabilities",
 ]
