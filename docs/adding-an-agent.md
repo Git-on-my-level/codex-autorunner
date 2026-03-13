@@ -455,3 +455,42 @@ Before submitting, verify:
 - Existing implementations: `src/codex_autorunner/agents/codex/`, `src/codex_autorunner/agents/opencode/`
 - Agent harness protocol: `src/codex_autorunner/agents/base.py`
 - Registry: `src/codex_autorunner/agents/registry.py`
+
+## CAR-Native Targets vs Helper Subsystems
+
+CAR distinguishes between **orchestration-visible native targets** and **helper subsystems**:
+
+### Native Targets (Durable, Addressable)
+
+Native targets are CAR-native services that participate in orchestration routing. They are:
+- Durable: persist across CAR restarts
+- Addressable: can be targeted by surfaces for work distribution
+- First-class: visible in orchestration catalog for discovery
+
+**Examples:**
+- `ticket_flow`: CAR-native flow execution engine for deterministic multi-step delivery work
+- `pma`: CAR-native thread management and orchestration client for durable conversation threads
+
+### Helper Subsystems (Internal Plumbing)
+
+Helper subsystems are internal components that should NOT be exposed as standalone orchestration targets:
+- Dispatch interception handlers
+- Reactive debounce logic
+- Event projection services
+- Transcript mirroring services
+
+These remain internal plumbing rather than user-addressable target identities.
+
+### How Native Targets Are Registered
+
+Native targets are registered in the orchestration catalog:
+
+```python
+from codex_autorunner.core.orchestration import (
+    list_native_target_definitions,
+    get_native_target_definition,
+    NativeTargetCatalog,
+)
+```
+
+See `src/codex_autorunner/core/orchestration/catalog.py` for the registry of native targets.
