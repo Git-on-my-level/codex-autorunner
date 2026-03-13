@@ -121,6 +121,23 @@ def test_load_repo_config_inherits_hub_shared_settings(tmp_path: Path) -> None:
     assert config.agent_binary("opencode") == "/opt/opencode"
 
 
+def test_load_repo_config_uses_tighter_default_opencode_retention(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    assert config.opencode.server_scope == "workspace"
+    assert config.opencode.max_handles == 4
+    assert config.opencode.idle_ttl_seconds == 900
+
+
 def test_load_repo_config_parses_typed_core_sections(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

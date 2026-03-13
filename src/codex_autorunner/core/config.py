@@ -267,8 +267,8 @@ def _default_opencode_section() -> Dict[str, Any]:
         "server_scope": "workspace",
         "session_stall_timeout_seconds": None,
         "max_text_chars": 20000,
-        "max_handles": 20,
-        "idle_ttl_seconds": 3600,
+        "max_handles": 4,
+        "idle_ttl_seconds": 900,
     }
 
 

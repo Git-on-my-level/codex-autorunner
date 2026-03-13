@@ -52,8 +52,14 @@ was killed and whether process records were removed.
 
 Recommended global defaults for long-lived OpenCode processes:
 
-- `opencode.max_handles`: default `20` (same behavior as app_server)
-- `opencode.idle_ttl_seconds`: default `3600`
+- `opencode.server_scope`: default `workspace`
+- `opencode.max_handles`: default `4`
+- `opencode.idle_ttl_seconds`: default `900`
+
+This keeps reuse on by default without letting long-running CAR hosts accumulate
+dozens of idle workspace-scoped OpenCode servers. Operators that prefer fewer
+processes across many repos can opt into `opencode.server_scope: global`; operators
+that want hotter reuse can raise `max_handles` and `idle_ttl_seconds` explicitly.
 
 If a process becomes orphaned or a previous run crashed before cleanup, these
 commands let operators confirm ownership and recover without resorting to manual

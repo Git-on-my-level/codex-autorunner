@@ -236,21 +236,35 @@ Maximum number of concurrent OpenCode handles to keep in-memory before evicting 
 least recently used handle in the same host process.
 
 - Type: integer or null
-- Default: `20`
+- Default: `4`
 
 ### opencode.idle_ttl_seconds
 
 How long an unused OpenCode handle may stay idle before being pruned.
 
 - Type: integer (seconds) or null
-- Default: `3600`
+- Default: `900`
+
+The default posture keeps OpenCode reuse available but trims steady-state pressure in
+long-lived CAR workloads. Increase these only when you want hotter reuse and accept
+more idle OpenCode processes.
 
 Using both values in hub scope is helpful for host pressure control:
 
 ```yaml
 opencode:
-  max_handles: 20
-  idle_ttl_seconds: 3600
+  max_handles: 4
+  idle_ttl_seconds: 900
+```
+
+For heavier reuse across many repos on the same machine, combine explicit tuning with
+global scope:
+
+```yaml
+opencode:
+  server_scope: global
+  max_handles: 8
+  idle_ttl_seconds: 1800
 ```
 
 ### state_roots.global

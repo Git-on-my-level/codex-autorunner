@@ -7,6 +7,8 @@ from codex_autorunner.integrations.telegram.config import (
     DEFAULT_MEDIA_MAX_FILE_BYTES,
     DEFAULT_MESSAGE_OVERFLOW,
     DEFAULT_METRICS_MODE,
+    DEFAULT_OPENCODE_IDLE_TTL_SECONDS,
+    DEFAULT_OPENCODE_MAX_HANDLES,
     TelegramBotConfig,
     TelegramBotConfigError,
 )
@@ -76,6 +78,26 @@ def test_telegram_bot_config_uses_explicit_opencode_lifecycle_settings(
     assert cfg.app_server_idle_ttl_seconds == 120
     assert cfg.opencode_max_handles == 7
     assert cfg.opencode_idle_ttl_seconds == 2222
+
+
+def test_telegram_bot_config_uses_tighter_default_opencode_lifecycle_settings(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "-100",
+    }
+
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+
+    assert cfg.opencode_max_handles == DEFAULT_OPENCODE_MAX_HANDLES == 4
+    assert cfg.opencode_idle_ttl_seconds == DEFAULT_OPENCODE_IDLE_TTL_SECONDS == 900
 
 
 def test_telegram_bot_config_validate_requires_allowlist(tmp_path: Path) -> None:
