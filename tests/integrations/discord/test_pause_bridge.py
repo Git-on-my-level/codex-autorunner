@@ -154,6 +154,11 @@ async def test_pause_bridge_dedupes_by_run_and_dispatch_seq(tmp_path: Path) -> N
         await service._scan_and_enqueue_pause_notifications()
         queued = await store.list_outbox()
         assert len(queued) == 1
+        content = str(queued[0].payload_json.get("content", ""))
+        assert f"Ticket flow paused (run {run_id}). Latest dispatch #0001:" in content
+        assert f"Source: {workspace}" in content
+        assert "Paused: need reply" in content
+        assert "Use `/car flow resume` to continue." in content
         mirror_path = (
             workspace
             / ".codex-autorunner"
@@ -223,6 +228,11 @@ async def test_pause_bridge_chunked_messages_have_no_part_prefix(
         for record in queued:
             content = str(record.payload_json.get("content", ""))
             assert not content.startswith("Part ")
+        assert any(
+            "Use `/car flow resume` to continue."
+            in str(record.payload_json.get("content", ""))
+            for record in queued
+        )
     finally:
         await store.close()
 
@@ -275,10 +285,59 @@ async def test_pause_bridge_prefers_pause_dispatch_over_turn_summary(
         queued = await store.list_outbox()
         assert len(queued) == 1
         content = str(queued[0].payload_json.get("content", ""))
+        assert f"Ticket flow paused (run {run_id}). Latest dispatch #0001:" in content
+        assert f"Source: {workspace}" in content
         assert "Need input" in content
         assert "Please answer the blocker before I continue." in content
+        assert "Use `/car flow resume` to continue." in content
         assert "turn_summary" not in content
         assert "This summary should not be mirrored to Discord." not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pause_bridge_surfaces_latest_invalid_dispatch_notice(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_paused_run_with_dispatch(
+        workspace,
+        run_id,
+        "0001",
+        dispatch_text="---\nmode: broken\n---\n\nMalformed latest dispatch.\n",
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) == 1
+        content = str(queued[0].payload_json.get("content", ""))
+        assert f"Ticket flow paused (run {run_id}). Latest dispatch #0001:" in content
+        assert "Latest paused dispatch #0001 is unreadable or invalid." in content
+        assert "frontmatter.mode must be 'notify', 'pause', or 'turn_summary'." in (
+            content
+        )
+        assert "Use `/car flow resume` to continue." in content
     finally:
         await store.close()
 

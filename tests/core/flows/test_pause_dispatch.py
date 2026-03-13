@@ -97,6 +97,65 @@ def test_load_latest_paused_ticket_flow_dispatch_prefers_pause_over_turn_summary
     assert snapshot.dispatch_dir == history_root / "0001"
 
 
+def test_load_latest_paused_ticket_flow_dispatch_fails_closed_for_latest_invalid_dispatch(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(repo_root, run_id="run-invalid")
+
+    history_root = (
+        repo_root / ".codex-autorunner" / "runs" / "run-invalid" / "dispatch_history"
+    )
+    (history_root / "0001").mkdir(parents=True)
+    (history_root / "0001" / "DISPATCH.md").write_text(
+        "---\nmode: pause\ntitle: Older prompt\n---\n\nThis should not be surfaced.\n",
+        encoding="utf-8",
+    )
+    (history_root / "0002").mkdir(parents=True)
+    (history_root / "0002" / "DISPATCH.md").write_text(
+        "---\nmode: broken\n---\n\nMalformed latest dispatch.\n",
+        encoding="utf-8",
+    )
+
+    snapshot = load_latest_paused_ticket_flow_dispatch(repo_root)
+    assert snapshot is not None
+    assert snapshot.run_id == "run-invalid"
+    assert snapshot.dispatch_seq == "0002"
+    assert (
+        snapshot.dispatch_markdown
+        == "Latest paused dispatch #0002 is unreadable or invalid.\n\n"
+        "Errors:\n"
+        "- frontmatter.mode must be 'notify', 'pause', or 'turn_summary'.\n\n"
+        "Fix DISPATCH.md for that paused turn before resuming."
+    )
+    assert snapshot.dispatch_dir == history_root / "0002"
+
+
+def test_load_latest_paused_ticket_flow_dispatch_reports_unreadable_latest_dispatch(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(repo_root, run_id="run-missing")
+
+    history_root = (
+        repo_root / ".codex-autorunner" / "runs" / "run-missing" / "dispatch_history"
+    )
+    (history_root / "0001").mkdir(parents=True)
+
+    snapshot = load_latest_paused_ticket_flow_dispatch(repo_root)
+    assert snapshot is not None
+    assert snapshot.run_id == "run-missing"
+    assert snapshot.dispatch_seq == "0001"
+    assert "Latest paused dispatch #0001 is unreadable or invalid." in (
+        snapshot.dispatch_markdown
+    )
+    assert "Failed to read dispatch file:" in snapshot.dispatch_markdown
+    assert "Fix DISPATCH.md for that paused turn before resuming." in (
+        snapshot.dispatch_markdown
+    )
+    assert snapshot.dispatch_dir == history_root / "0001"
+
+
 def test_load_latest_paused_ticket_flow_dispatch_falls_back_to_reason(
     tmp_path: Path,
 ) -> None:

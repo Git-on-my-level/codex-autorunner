@@ -259,10 +259,77 @@ async def test_pause_dispatch_prefers_pause_dispatch_over_turn_summary(
 
     assert len(calls) == 1
     text = calls[0][1]
+    assert "Ticket flow paused (run run-real). Latest dispatch #0001:" in text
+    assert f"Source: {workspace}" in text
     assert "Need input" in text
     assert "Please answer the blocker before I continue." in text
+    assert "Use `/flow resume` to continue." in text
     assert "turn_summary" not in text
     assert "This summary should not be sent to Telegram." not in text
+
+
+@pytest.mark.asyncio
+async def test_pause_dispatch_surfaces_latest_invalid_dispatch_notice(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws_invalid"
+    workspace.mkdir()
+    _init_repo(workspace)
+    _create_paused_run_with_dispatch(
+        workspace,
+        "run-invalid",
+        "0001",
+        dispatch_text="---\nmode: broken\n---\n\nMalformed latest dispatch.\n",
+    )
+
+    calls: list[tuple[int, str, int | None]] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append((chat_id, text, thread_id))
+        return True
+
+    async def send_document(
+        chat_id: int,
+        data: bytes,
+        *,
+        filename: str,
+        thread_id=None,
+        reply_to=None,
+        caption=None,
+    ):
+        return True
+
+    pause_config = PauseDispatchNotifications(
+        enabled=True,
+        send_attachments=False,
+        max_file_size_bytes=50 * 1024 * 1024,
+        chunk_long_messages=False,
+    )
+    record = _DummyRecord(workspace)
+    store = _DummyStore({"123:root": record})
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=store,
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=pause_config,
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+
+    await bridge._notify_ticket_flow_pause(workspace, [("123:root", record)])
+
+    assert len(calls) == 1
+    text = calls[0][1]
+    assert "Ticket flow paused (run run-invalid). Latest dispatch #0001:" in text
+    assert "Latest paused dispatch #0001 is unreadable or invalid." in text
+    assert "frontmatter.mode must be 'notify', 'pause', or 'turn_summary'." in text
+    assert "Use `/flow resume` to continue." in text
 
 
 @pytest.mark.asyncio

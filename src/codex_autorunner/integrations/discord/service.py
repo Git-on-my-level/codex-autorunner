@@ -131,6 +131,10 @@ from ...integrations.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
+from ...integrations.chat.pause_notifications import (
+    format_pause_notification_source,
+    format_pause_notification_text,
+)
 from ...integrations.chat.picker_filter import (
     filter_picker_items,
     resolve_picker_query,
@@ -2544,8 +2548,18 @@ class DiscordBotService:
             ):
                 continue
 
+            content = format_pause_notification_text(
+                run_id=snapshot.run_id,
+                dispatch_seq=snapshot.dispatch_seq,
+                content=snapshot.dispatch_markdown,
+                source=self._format_pause_notification_source(
+                    workspace_root=workspace_root,
+                    repo_id=binding.get("repo_id"),
+                ),
+                resume_hint="`/car flow resume`",
+            )
             chunks = chunk_discord_message(
-                snapshot.dispatch_markdown,
+                content,
                 max_len=self._config.max_message_length,
                 with_numbering=False,
             )
@@ -2610,6 +2624,18 @@ class DiscordBotService:
                 dispatch_seq=snapshot.dispatch_seq,
                 chunk_count=len(chunks),
             )
+
+    def _format_pause_notification_source(
+        self, *, workspace_root: Optional[Path], repo_id: Optional[str]
+    ) -> str:
+        return format_pause_notification_source(
+            workspace_root=workspace_root,
+            repo_id=repo_id,
+            hub_root=self._config.root,
+            manifest_path=self._manifest_path,
+            logger=self._logger,
+            debug_label="discord.pause_watch.manifest_label_failed",
+        )
 
     def _preferred_bound_source_for_workspace(self, workspace_root: Path) -> str | None:
         raw_config = self._hub_raw_config_cache

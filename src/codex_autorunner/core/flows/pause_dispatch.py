@@ -83,6 +83,20 @@ def _render_dispatch_for_chat(*, title: Optional[str], body: str) -> str:
     return "\n\n".join(parts).strip()
 
 
+def _format_dispatch_parse_failure(*, seq: str, errors: list[str]) -> str:
+    lines = [f"Latest paused dispatch #{seq} is unreadable or invalid."]
+    if errors:
+        lines.append("")
+        lines.append("Errors:")
+        for error in errors[:5]:
+            lines.append(f"- {_format_public_error(error, limit=300)}")
+        if len(errors) > 5:
+            lines.append(f"- ...and {len(errors) - 5} more")
+    lines.append("")
+    lines.append("Fix DISPATCH.md for that paused turn before resuming.")
+    return "\n".join(lines)
+
+
 def load_latest_paused_ticket_flow_dispatch(
     workspace_root: Path,
 ) -> Optional[PauseDispatchSnapshot]:
@@ -125,11 +139,26 @@ def load_latest_paused_ticket_flow_dispatch(
     handoff_snapshot: Optional[PauseDispatchSnapshot] = None
     non_summary_snapshot: Optional[PauseDispatchSnapshot] = None
     turn_summary_snapshot: Optional[PauseDispatchSnapshot] = None
+    error_snapshot: Optional[PauseDispatchSnapshot] = None
+    latest_seq = seq_dirs[0].name
 
     for dispatch_dir in seq_dirs:
         dispatch_path = dispatch_dir / "DISPATCH.md"
         dispatch, errors = parse_dispatch(dispatch_path)
         if errors or dispatch is None:
+            failure_snapshot = PauseDispatchSnapshot(
+                run_id=latest.id,
+                dispatch_seq=dispatch_dir.name,
+                dispatch_markdown=_format_dispatch_parse_failure(
+                    seq=dispatch_dir.name,
+                    errors=errors,
+                ),
+                dispatch_dir=dispatch_dir,
+            )
+            if dispatch_dir.name == latest_seq:
+                return failure_snapshot
+            if error_snapshot is None:
+                error_snapshot = failure_snapshot
             continue
         snapshot = PauseDispatchSnapshot(
             run_id=latest.id,
@@ -151,10 +180,12 @@ def load_latest_paused_ticket_flow_dispatch(
     selected = handoff_snapshot or non_summary_snapshot or turn_summary_snapshot
     if selected is not None:
         return selected
+    if error_snapshot is not None:
+        return error_snapshot
 
     return PauseDispatchSnapshot(
         run_id=latest.id,
-        dispatch_seq=seq_dirs[0].name,
+        dispatch_seq=latest_seq,
         dispatch_markdown=format_pause_reason(latest),
         dispatch_dir=seq_dirs[0],
     )
