@@ -5,6 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
+from codex_autorunner.core.config import ConfigError
 from codex_autorunner.core.diagnostics.process_snapshot import (
     ProcessCategory,
     ProcessInfo,
@@ -135,3 +136,38 @@ def test_cleanup_processes_force_requires_attestation(repo: Path) -> None:
     assert result.exit_code == 1, result.output
     error_text = result.output or str(result.exception)
     assert FORCE_ATTESTATION_REQUIRED_ERROR in error_text
+
+
+def test_doctor_processes_skips_opencode_lifecycle_when_repo_config_missing(
+    monkeypatch, repo: Path
+) -> None:
+    from codex_autorunner.surfaces.cli.commands import doctor as doctor_cmd
+
+    snapshot = ProcessSnapshot(
+        opencode_processes=[], app_server_processes=[], other_processes=[]
+    )
+
+    monkeypatch.setattr(doctor_cmd, "collect_processes", lambda: snapshot)
+    monkeypatch.setattr(doctor_cmd, "find_repo_root", lambda _start: repo)
+    monkeypatch.setattr(
+        doctor_cmd,
+        "summarize_opencode_lifecycle",
+        lambda _repo: (_ for _ in ()).throw(ConfigError("missing config")),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "processes",
+            "--repo",
+            str(repo),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    import json
+
+    payload = json.loads(result.output)
+    assert payload["opencode_lifecycle"] == {}

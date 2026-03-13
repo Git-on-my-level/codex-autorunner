@@ -348,6 +348,41 @@ async def test_run_turn_events_keeps_resumed_session_alive(
 
 
 @pytest.mark.anyio
+async def test_run_turn_events_keeps_last_turn_id_after_temporary_session_disposal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from codex_autorunner.integrations.agents import opencode_backend as backend_module
+
+    backend = OpenCodeBackend(base_url="http://localhost:8080", workspace_root=tmp_path)
+    client = _SessionClientStub()
+    backend._client = client
+
+    async def _fake_collect(*_args: object, **_kwargs: object) -> OpenCodeTurnOutput:
+        ready_event = _kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        return OpenCodeTurnOutput(text="done")
+
+    async def _fake_missing_env(*_args: object, **_kwargs: object) -> list[str]:
+        return []
+
+    monkeypatch.setattr(backend_module, "collect_opencode_output", _fake_collect)
+    monkeypatch.setattr(backend_module, "opencode_missing_env", _fake_missing_env)
+    monkeypatch.setattr(
+        backend_module, "build_turn_id", lambda session_id: f"{session_id}:turn"
+    )
+
+    events = [event async for event in backend.run_turn_events("", "hello")]
+
+    assert isinstance(events[-1], Completed)
+    assert client.created_session_ids == ["session-1"]
+    assert client.disposed_session_ids == ["session-1"]
+    assert backend._session_id is None
+    assert backend._temporary_session_id is None
+    assert backend.last_turn_id == "session-1:turn"
+
+
+@pytest.mark.anyio
 async def test_backend_orchestrator_reuses_fresh_opencode_session_when_enabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

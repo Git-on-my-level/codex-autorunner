@@ -641,6 +641,63 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
 
 
 @pytest.mark.anyio
+async def test_ensure_started_restarts_when_reused_record_already_exited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    registry_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=9996,
+        pgid=9996,
+        base_url="http://127.0.0.1:9006",
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={},
+    )
+    start_calls: list[str] = []
+    delete_calls: list[tuple[Path, str, str]] = []
+    terminate_calls: list[tuple[int | None, int | None]] = []
+
+    async def _fake_attach(_handle: OpenCodeHandle, _base_url: str) -> None:
+        raise supervisor_module.OpenCodeSupervisorError("health failed")
+
+    async def _fake_start_process(_handle: OpenCodeHandle) -> None:
+        start_calls.append("spawned")
+        _handle.started = True
+
+    async def _fake_terminate(record: ProcessRecord) -> bool:
+        terminate_calls.append((record.pid, record.pgid))
+        return False
+
+    monkeypatch.setattr(
+        supervisor_module, "read_process_record", lambda *_a, **_k: registry_record
+    )
+    monkeypatch.setattr(supervisor, "_record_pid_is_running", lambda _record: True)
+    monkeypatch.setattr(supervisor, "_attach_to_base_url", _fake_attach)
+    monkeypatch.setattr(supervisor, "_record_is_running", lambda _record: False)
+    monkeypatch.setattr(supervisor, "_terminate_record_process", _fake_terminate)
+    monkeypatch.setattr(supervisor, "_start_process", _fake_start_process)
+    monkeypatch.setattr(
+        supervisor_module,
+        "delete_process_record",
+        lambda repo_root, kind, key: delete_calls.append((repo_root, kind, key))
+        or True,
+    )
+
+    await supervisor._ensure_started(handle)
+
+    assert terminate_calls == []
+    assert delete_calls == [
+        (tmp_path, "opencode", "ws-1"),
+        (tmp_path, "opencode", "9996"),
+    ]
+    assert start_calls == ["spawned"]
+
+
+@pytest.mark.anyio
 async def test_ensure_started_does_not_spawn_when_missing_base_url_cleanup_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

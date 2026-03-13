@@ -760,8 +760,6 @@ class OpenCodeBackend(AgentBackend):
                 self._temporary_session_id = None
             if self._session_id == session_id:
                 self._session_id = None
-            if self._last_turn_id and self._last_turn_id.startswith(f"{session_id}:"):
-                self._last_turn_id = None
 
     @property
     def last_turn_id(self) -> Optional[str]:

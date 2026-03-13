@@ -441,9 +441,12 @@ def register_doctor_commands(
         if repo_root:
             snapshot = enrich_with_ownership(snapshot, repo_root)
         registry_counts, registry_records = _build_process_registry_payload(repo_root)
-        opencode_lifecycle = (
-            summarize_opencode_lifecycle(repo_root) if repo_root is not None else {}
-        )
+        opencode_lifecycle = {}
+        if repo_root is not None:
+            try:
+                opencode_lifecycle = summarize_opencode_lifecycle(repo_root)
+            except ConfigError:
+                opencode_lifecycle = {}
 
         if json_output:
             payload = {

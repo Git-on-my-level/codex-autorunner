@@ -660,9 +660,11 @@ class OpenCodeSupervisor:
                     pid=record.pid,
                     pgid=record.pgid,
                 )
-                if self._record_is_running(record):
+                running = self._record_is_running(record)
+                if running:
                     terminated = await self._terminate_record_process(record)
-                    if not terminated:
+                    running = self._record_is_running(record)
+                    if not terminated and running:
                         log_event(
                             self._logger,
                             logging.WARNING,
@@ -675,7 +677,7 @@ class OpenCodeSupervisor:
                         raise OpenCodeSupervisorError(
                             "Failed to terminate OpenCode registry record without base URL"
                         )
-                    if self._record_is_running(record):
+                    if running:
                         log_event(
                             self._logger,
                             logging.WARNING,
@@ -716,10 +718,12 @@ class OpenCodeSupervisor:
             except OpenCodeSupervisorAttachAuthError:
                 raise
             except Exception as exc:
+                running = self._record_is_running(record)
                 terminated = False
-                if self._record_is_running(record):
+                if running:
                     terminated = await self._terminate_record_process(record)
-                if not terminated or self._record_is_running(record):
+                    running = self._record_is_running(record)
+                if not terminated and running:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -731,6 +735,19 @@ class OpenCodeSupervisor:
                     )
                     raise OpenCodeSupervisorError(
                         "Failed to terminate stale OpenCode registry record after reuse attach failure"
+                    ) from exc
+                if running:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "opencode.handle.close_failed",
+                        workspace_id=handle.workspace_id,
+                        workspace_root=str(handle.workspace_root),
+                        pid=record.pid,
+                        pgid=record.pgid,
+                    )
+                    raise OpenCodeSupervisorError(
+                        "Stale OpenCode registry record remained running after reuse attach failure"
                     ) from exc
                 log_event(
                     self._logger,
