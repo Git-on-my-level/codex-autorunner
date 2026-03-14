@@ -272,6 +272,8 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     assert execution.backend_id == "backend-turn-1"
     assert refreshed_thread is not None
     assert refreshed_thread.backend_thread_id == "backend-conversation-1"
+    assert refreshed_thread.last_execution_id == execution.execution_id
+    assert refreshed_thread.last_message_preview == "Ship it"
     assert running is not None
     assert running.execution_id == execution.execution_id
 
@@ -363,7 +365,11 @@ async def test_send_message_queues_when_thread_is_busy_by_default(
     assert len(harness.start_turn_calls) == 1
     assert service.get_queue_depth(thread.thread_target_id) == 1
     queued_rows = service.list_queued_executions(thread.thread_target_id)
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
     assert [row.execution_id for row in queued_rows] == [queued.execution_id]
+    assert refreshed_thread is not None
+    assert refreshed_thread.last_execution_id == queued.execution_id
+    assert refreshed_thread.last_message_preview == "second"
 
 
 async def test_send_message_interrupts_busy_thread_when_requested(

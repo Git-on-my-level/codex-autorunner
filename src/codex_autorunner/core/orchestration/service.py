@@ -271,7 +271,11 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         execution_id: Optional[str],
         message_preview: Optional[str],
     ) -> None:
-        _ = thread_target_id, execution_id, message_preview
+        self._store.update_thread_after_turn(
+            thread_target_id,
+            last_turn_id=execution_id,
+            last_message_preview=message_preview,
+        )
 
 
 @dataclass

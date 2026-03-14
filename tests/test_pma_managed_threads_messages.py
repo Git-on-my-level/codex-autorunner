@@ -629,7 +629,7 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
     thread = store.get_thread(managed_thread_id)
     assert thread is not None
     assert thread["last_turn_id"] == payload["managed_turn_id"]
-    assert thread["last_message_preview"] is None
+    assert thread["last_message_preview"] == "first"
 
 
 def test_send_message_sanitizes_unexpected_execution_errors(hub_env) -> None:
