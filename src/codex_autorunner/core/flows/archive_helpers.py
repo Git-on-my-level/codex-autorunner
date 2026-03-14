@@ -6,7 +6,6 @@ from typing import Any, Mapping, Optional
 
 from ...bootstrap import seed_repo_files
 from ...manifest import ManifestError, load_manifest
-from ..pma_thread_store import PmaThreadStore
 from ...tickets.files import list_ticket_paths
 from ...tickets.outbox import resolve_outbox_paths
 from ..archive import (
@@ -15,6 +14,7 @@ from ..archive import (
     execute_archive_entries,
 )
 from ..config import ConfigError, load_repo_config
+from ..pma_thread_store import PmaThreadStore
 from .models import FlowRunStatus
 from .store import FlowStore
 
