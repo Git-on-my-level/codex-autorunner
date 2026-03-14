@@ -82,8 +82,8 @@ def test_create_managed_thread_rejects_agent_without_durable_threads(hub_env) ->
             },
         )
 
-    assert resp.status_code == 400
-    assert "does not support durable_threads" in (resp.json().get("detail") or "")
+    assert resp.status_code == 422
+    assert "Input should be 'codex' or 'opencode'" in str(resp.json())
 
 
 def test_create_managed_thread_rejects_invalid_notify_on_without_side_effect(
