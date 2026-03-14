@@ -161,6 +161,7 @@ class ExecutionRecord:
     target_id: str
     target_kind: TargetKind
     status: str
+    request_kind: MessageRequestKind = "message"
     backend_id: Optional[str] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None

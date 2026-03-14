@@ -87,11 +87,18 @@ def test_backfill_legacy_thread_state_imports_threads_turns_and_actions(
     assert thread_row["runtime_status"] == "completed"
     assert turn_row is not None
     assert turn_row["thread_target_id"] == thread["managed_thread_id"]
+    assert turn_row["request_kind"] == "managed_turn"
     assert turn_row["backend_turn_id"] == "backend-turn-1"
     assert turn_row["assistant_text"] == "world"
     assert action_row is not None
     assert action_row["thread_target_id"] == thread["managed_thread_id"]
     assert action_row["action_type"] == "chat_completed"
+
+    normalized_turn = PmaThreadStore(hub_root).get_turn(
+        thread["managed_thread_id"], turn["managed_turn_id"]
+    )
+    assert normalized_turn is not None
+    assert normalized_turn["request_kind"] == "message"
 
 
 def test_backfill_legacy_automation_state_imports_json_store(tmp_path: Path) -> None:

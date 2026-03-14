@@ -96,6 +96,7 @@ def test_message_execution_and_flow_targets_serialize() -> None:
         execution_id="exec-1",
         target_id="thread-1",
         target_kind="thread",
+        request_kind="review",
         status="running",
         backend_id="turn-1",
     )
@@ -107,5 +108,6 @@ def test_message_execution_and_flow_targets_serialize() -> None:
     )
 
     assert request.to_dict()["kind"] == "review"
+    assert execution.to_dict()["request_kind"] == "review"
     assert execution.to_dict()["backend_id"] == "turn-1"
     assert flow.to_dict()["flow_type"] == "ticket_flow"

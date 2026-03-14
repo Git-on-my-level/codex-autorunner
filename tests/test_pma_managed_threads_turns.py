@@ -107,6 +107,7 @@ def test_managed_thread_turns_list_and_get(hub_env) -> None:
         assert len(turns) == 2
         assert turns[0]["managed_turn_id"] == second_turn_id
         assert turns[1]["managed_turn_id"] == first_turn_id
+        assert turns[0]["request_kind"] == "message"
         assert turns[0]["status"] == "ok"
         assert turns[0]["prompt_preview"] == "second prompt content"
         assert turns[0]["assistant_preview"] == "assistant full output 2"
@@ -119,6 +120,7 @@ def test_managed_thread_turns_list_and_get(hub_env) -> None:
         assert get_resp.status_code == 200
         turn = get_resp.json()["turn"]
         assert turn["managed_turn_id"] == first_turn_id
+        assert turn["request_kind"] == "message"
         assert turn["prompt"] == "first prompt content"
         assert turn["assistant_text"] == "assistant full output 1"
 

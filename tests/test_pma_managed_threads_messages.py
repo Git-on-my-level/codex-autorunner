@@ -404,13 +404,23 @@ def test_send_message_handles_not_active_race(hub_env, monkeypatch) -> None:
         managed_thread_id: str,
         *,
         prompt: str,
+        request_kind: str = "message",
         busy_policy: str = "reject",
         model: str | None = None,
         reasoning: str | None = None,
         client_turn_id: str | None = None,
         queue_payload: dict[str, object] | None = None,
     ):
-        _ = self, prompt, busy_policy, model, reasoning, client_turn_id, queue_payload
+        _ = (
+            self,
+            prompt,
+            request_kind,
+            busy_policy,
+            model,
+            reasoning,
+            client_turn_id,
+            queue_payload,
+        )
         raise ManagedThreadNotActiveError(managed_thread_id, "archived")
 
     monkeypatch.setattr(PmaThreadStore, "create_turn", _raise_not_active)

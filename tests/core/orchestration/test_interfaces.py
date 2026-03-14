@@ -10,6 +10,7 @@ from codex_autorunner.core.orchestration import (
     AgentDefinitionCatalog,
     ExecutionRecord,
     MessageRequest,
+    MessageRequestKind,
     OrchestrationThreadService,
     RuntimeThreadHarness,
     ThreadExecutionStore,
@@ -79,13 +80,14 @@ class _FakeStore:
         thread_target_id: str,
         *,
         prompt: str,
+        request_kind: MessageRequestKind = "message",
         busy_policy: str = "reject",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_request_id: Optional[str] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
-        _ = busy_policy, queue_payload
+        _ = request_kind, busy_policy, queue_payload
         return self.execution
 
     def get_execution(
@@ -396,6 +398,7 @@ def test_runtime_protocols_match_orchestration_contract() -> None:
         execution_id="exec-1",
         target_id="thread-1",
         target_kind="thread",
+        request_kind="message",
         status="running",
         backend_id="turn-1",
     )

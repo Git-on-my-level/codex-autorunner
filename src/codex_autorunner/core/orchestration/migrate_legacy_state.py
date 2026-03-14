@@ -167,7 +167,11 @@ def backfill_legacy_thread_state(hub_root: Path, conn: Any) -> dict[str, int]:
                     ON CONFLICT(execution_id) DO UPDATE SET
                         thread_target_id = excluded.thread_target_id,
                         client_request_id = excluded.client_request_id,
-                        request_kind = excluded.request_kind,
+                        request_kind = CASE
+                            WHEN orch_thread_executions.request_kind IN ('message', 'review')
+                                THEN orch_thread_executions.request_kind
+                            ELSE excluded.request_kind
+                        END,
                         prompt_text = excluded.prompt_text,
                         status = excluded.status,
                         backend_turn_id = excluded.backend_turn_id,

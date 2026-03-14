@@ -64,11 +64,13 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     turn = store.create_turn(
         thread["managed_thread_id"],
         prompt="hello",
+        request_kind="review",
         model="gpt-test",
         reasoning="high",
         client_turn_id="client-1",
     )
     assert turn["status"] == "running"
+    assert turn["request_kind"] == "review"
     assert turn["started_at"]
 
     store.mark_turn_finished(
@@ -81,6 +83,7 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
 
     fetched = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
     assert fetched is not None
+    assert fetched["request_kind"] == "review"
     assert fetched["status"] == "ok"
     assert fetched["assistant_text"] == "world"
     assert fetched["backend_turn_id"] == "backend-turn-1"
@@ -90,6 +93,7 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     listed = store.list_turns(thread["managed_thread_id"])
     assert len(listed) == 1
     assert listed[0]["managed_turn_id"] == turn["managed_turn_id"]
+    assert listed[0]["request_kind"] == "review"
 
     thread_after = store.get_thread(thread["managed_thread_id"])
     assert thread_after is not None
@@ -121,9 +125,10 @@ def test_create_turn_can_queue_behind_running_turn(tmp_path: Path) -> None:
     queued_turn = store.create_turn(
         thread["managed_thread_id"],
         prompt="second",
+        request_kind="review",
         busy_policy="queue",
         client_turn_id="client-2",
-        queue_payload={"request": {"message_text": "second"}},
+        queue_payload={"request": {"message_text": "second", "kind": "review"}},
     )
 
     assert running_turn["status"] == "running"
@@ -132,6 +137,7 @@ def test_create_turn_can_queue_behind_running_turn(tmp_path: Path) -> None:
     queued_items = store.list_pending_turn_queue_items(thread["managed_thread_id"])
     assert len(queued_items) == 1
     assert queued_items[0]["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert queued_items[0]["request_kind"] == "review"
 
 
 def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> None:
@@ -142,8 +148,9 @@ def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> Non
     queued_turn = store.create_turn(
         thread["managed_thread_id"],
         prompt="second",
+        request_kind="review",
         busy_policy="queue",
-        queue_payload={"request": {"message_text": "second"}},
+        queue_payload={"request": {"message_text": "second", "kind": "review"}},
     )
 
     assert store.claim_next_queued_turn(thread["managed_thread_id"]) is None
@@ -155,7 +162,9 @@ def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> Non
     assert claimed is not None
     execution, payload = claimed
     assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert execution["request_kind"] == "review"
     assert execution["status"] == "running"
+    assert payload["request"]["kind"] == "review"
     assert payload["request"]["message_text"] == "second"
     assert store.get_queue_depth(thread["managed_thread_id"]) == 0
 

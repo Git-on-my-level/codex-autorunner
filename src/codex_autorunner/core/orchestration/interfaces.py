@@ -10,6 +10,7 @@ from .models import (
     FlowRunTarget,
     FlowTarget,
     MessageRequest,
+    MessageRequestKind,
     ThreadTarget,
 )
 
@@ -148,6 +149,7 @@ class ThreadExecutionStore(Protocol):
         thread_target_id: str,
         *,
         prompt: str,
+        request_kind: MessageRequestKind = "message",
         busy_policy: BusyThreadPolicy = "reject",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,

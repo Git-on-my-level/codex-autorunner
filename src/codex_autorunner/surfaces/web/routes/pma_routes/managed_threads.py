@@ -641,6 +641,7 @@ def build_managed_thread_crud_routes(
             "turns": [
                 {
                     "managed_turn_id": turn.get("managed_turn_id"),
+                    "request_kind": turn.get("request_kind"),
                     "status": turn.get("status"),
                     "prompt_preview": _truncate_text(turn.get("prompt") or "", 120),
                     "assistant_preview": _truncate_text(

@@ -397,6 +397,7 @@ def build_managed_thread_tail_routes(
             "queued_turns": [
                 {
                     "managed_turn_id": item.get("managed_turn_id"),
+                    "request_kind": item.get("request_kind"),
                     "state": item.get("state"),
                     "enqueued_at": item.get("enqueued_at"),
                     "prompt_preview": truncate_text(item.get("prompt") or "", 120),

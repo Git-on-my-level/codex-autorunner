@@ -77,6 +77,13 @@ def _coerce_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _normalize_request_kind(value: Any) -> str:
+    normalized = (_coerce_text(value) or "").lower()
+    if normalized == "review":
+        return "review"
+    return "message"
+
+
 def _json_dumps(value: dict[str, Any]) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
 
@@ -383,6 +390,7 @@ class PmaThreadStore:
             "managed_turn_id": row["execution_id"],
             "managed_thread_id": row["thread_target_id"],
             "client_turn_id": row["client_request_id"],
+            "request_kind": _normalize_request_kind(row["request_kind"]),
             "backend_turn_id": row["backend_turn_id"],
             "prompt": row["prompt_text"],
             "status": row["status"],
@@ -709,6 +717,7 @@ class PmaThreadStore:
         managed_thread_id: str,
         *,
         prompt: str,
+        request_kind: str = "message",
         busy_policy: str = "reject",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
@@ -718,6 +727,7 @@ class PmaThreadStore:
         managed_turn_id = str(uuid.uuid4())
         started_at = now_iso()
         queue_item_id = uuid.uuid4().hex
+        normalized_request_kind = _normalize_request_kind(request_kind)
 
         with self._write_conn() as conn:
             status_row = conn.execute(
@@ -773,7 +783,7 @@ class PmaThreadStore:
                         managed_turn_id,
                         managed_thread_id,
                         client_turn_id,
-                        "managed_turn",
+                        normalized_request_kind,
                         prompt,
                         execution_status,
                         None,
@@ -1129,6 +1139,7 @@ class PmaThreadStore:
                     q.visible_at,
                     q.created_at,
                     e.execution_id,
+                    e.request_kind,
                     e.prompt_text,
                     e.model_id,
                     e.reasoning_level,
@@ -1156,6 +1167,7 @@ class PmaThreadStore:
                 "visible_at": row["visible_at"],
                 "enqueued_at": row["created_at"],
                 "managed_turn_id": str(row["execution_id"]),
+                "request_kind": _normalize_request_kind(row["request_kind"]),
                 "prompt": str(row["prompt_text"] or ""),
                 "model": row["model_id"],
                 "reasoning": row["reasoning_level"],
