@@ -178,7 +178,9 @@ def _archive_flow_run_artifacts(
         "deleted_run": False,
         "archived_tickets": moved_ticket_count,
         "archived_runs": False,
-        "archived_contextspace": False,
+        "archived_contextspace": any(
+            entry.label == "contextspace" for entry in entries
+        ),
         "archived_paths": [entry.label for entry in entries],
     }
 

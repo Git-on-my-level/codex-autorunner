@@ -39,7 +39,6 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_approval_callback,
     encode_bind_callback,
     encode_cancel_callback,
-    encode_compact_callback,
     encode_flow_callback,
     encode_flow_run_callback,
     encode_page_callback,
@@ -720,7 +719,7 @@ def test_build_keyboards() -> None:
 
 
 def test_compact_callback_round_trip() -> None:
-    data = encode_compact_callback("apply")
+    data = "compact:apply"
     parsed = parse_callback_data(data)
     assert parsed == CompactCallback(action="apply")
 

@@ -160,6 +160,8 @@ async def await_runtime_thread_outcome(
         )
     finally:
         cleanup_tasks: list[asyncio.Task[Any]] = [timeout_task]
+        if not collector_task.done():
+            cleanup_tasks.append(collector_task)
         if interrupt_task is not None:
             cleanup_tasks.append(interrupt_task)
         for task in cleanup_tasks:

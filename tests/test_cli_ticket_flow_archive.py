@@ -52,6 +52,8 @@ def _seed_contextspace(repo_root: Path) -> None:
     context_dir = repo_root / ".codex-autorunner" / "contextspace"
     context_dir.mkdir(parents=True, exist_ok=True)
     (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+    (context_dir / "decisions.md").write_text("Decision log\n", encoding="utf-8")
+    (context_dir / "notes.md").write_text("Scratch note\n", encoding="utf-8")
 
 
 def _setup_repo(tmp_path: Path) -> Path:
@@ -125,7 +127,28 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
         / "contextspace"
         / "active_context.md"
     ).read_text(encoding="utf-8") == "Active context\n"
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "flows"
+        / run_id
+        / "contextspace"
+        / "decisions.md"
+    ).read_text(encoding="utf-8") == "Decision log\n"
+    assert (
+        repo_root / ".codex-autorunner" / "flows" / run_id / "contextspace" / "notes.md"
+    ).read_text(encoding="utf-8") == "Scratch note\n"
     assert not (repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
+    assert (
+        repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
+    ).read_text(encoding="utf-8") == ""
+    assert (
+        repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    ).read_text(encoding="utf-8") == ""
+    assert (repo_root / ".codex-autorunner" / "contextspace" / "spec.md").read_text(
+        encoding="utf-8"
+    ) == ""
+    assert not (repo_root / ".codex-autorunner" / "contextspace" / "notes.md").exists()
 
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     with FlowStore(db_path) as store:

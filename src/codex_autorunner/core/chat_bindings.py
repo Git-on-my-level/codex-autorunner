@@ -594,35 +594,27 @@ def active_chat_binding_counts_by_source(
         hub_root=hub_root,
         repo_id_by_workspace=repo_id_by_workspace,
     )
-    orchestrated_sources = {
-        source
-        for counts in orchestration_counts.values()
-        for source, count in counts.items()
-        if int(count) > 0
-    }
     for repo_id, counts in orchestration_counts.items():
         for source, count in counts.items():
             _merge_counts(source, {repo_id: count})
 
-    if "discord" not in orchestrated_sources:
-        discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
-        _merge_counts(
-            "discord",
-            _read_discord_repo_counts(
-                db_path=discord_state_path,
-                repo_id_by_workspace=repo_id_by_workspace,
-            ),
-        )
+    discord_state_path = _resolve_discord_state_path(hub_root, raw_config)
+    for repo_id, count in _read_discord_repo_counts(
+        db_path=discord_state_path,
+        repo_id_by_workspace=repo_id_by_workspace,
+    ).items():
+        if _coerce_count(orchestration_counts.get(repo_id, {}).get("discord")) > 0:
+            continue
+        _merge_counts("discord", {repo_id: count})
 
-    if "telegram" not in orchestrated_sources:
-        telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
-        _merge_counts(
-            "telegram",
-            _read_current_telegram_repo_counts(
-                db_path=telegram_state_path,
-                repo_id_by_workspace=repo_id_by_workspace,
-            ),
-        )
+    telegram_state_path = _resolve_telegram_state_path(hub_root, raw_config)
+    for repo_id, count in _read_current_telegram_repo_counts(
+        db_path=telegram_state_path,
+        repo_id_by_workspace=repo_id_by_workspace,
+    ).items():
+        if _coerce_count(orchestration_counts.get(repo_id, {}).get("telegram")) > 0:
+            continue
+        _merge_counts("telegram", {repo_id: count})
 
     return source_counts
 

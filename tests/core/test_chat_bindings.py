@@ -512,6 +512,53 @@ def test_chat_binding_queries_prefer_orchestration_owned_bindings(
     )
 
 
+def test_chat_binding_queries_keep_legacy_counts_for_unmigrated_repos(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["discord_bot"]["enabled"] = True
+    cfg["telegram_bot"]["enabled"] = True
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    migrated_workspace = _write_manifest_repo(
+        hub_root,
+        repo_id="repo-migrated",
+        relative_path="worktrees/repo-migrated",
+    )
+    legacy_workspace = _write_manifest_repo(
+        hub_root,
+        repo_id="repo-legacy",
+        relative_path="worktrees/repo-legacy",
+    )
+
+    _write_orchestration_binding(
+        hub_root,
+        surface_kind="discord",
+        surface_key="channel-migrated",
+        repo_id="repo-migrated",
+        workspace_path=str(migrated_workspace),
+    )
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-legacy",
+        repo_id="repo-legacy",
+        workspace_path=str(legacy_workspace),
+    )
+    _write_telegram_binding(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        topic_key="777:root",
+        repo_id="repo-legacy",
+        workspace_path=str(legacy_workspace),
+    )
+
+    counts = active_chat_binding_counts_by_source(hub_root=hub_root, raw_config=cfg)
+
+    assert counts["repo-migrated"]["discord"] == 1
+    assert counts["repo-legacy"]["discord"] == 1
+    assert counts["repo-legacy"]["telegram"] == 1
+
+
 def test_preferred_non_pma_chat_notification_source_uses_freshest_binding(
     tmp_path: Path,
 ) -> None:

@@ -36,6 +36,7 @@ from ...core.ports.run_event import (
 )
 from ...core.utils import canonicalize_path
 from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
+from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
 from ...integrations.chat.models import ChatMessageEvent
 from ..chat.progress_primitives import TurnProgressTracker, render_progress_text
@@ -142,7 +143,11 @@ async def handle_message_event(
         pma_enabled=pma_enabled,
         agent=agent,
     )
-
+    pending_compact_seed = match_pending_compact_seed(
+        binding.get("pending_compact_seed"),
+        pending_target_id=binding.get("pending_compact_session_key"),
+        active_target_id=session_key,
+    )
     ingress = build_surface_orchestration_ingress(
         event_sink=lambda orchestration_event: log_event_fn(
             service._logger,
@@ -383,6 +388,8 @@ async def handle_message_event(
             link_source_text=text,
             allow_cross_repo=pma_enabled,
         )
+        if pending_compact_seed:
+            prompt_text = f"{pending_compact_seed}\n\n{prompt_text}"
 
         turn_input_items: Optional[list[dict[str, Any]]] = None
         if attachment_input_items:
@@ -477,6 +484,8 @@ async def handle_message_event(
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
         )
+    if pending_compact_seed is not None:
+        await service._store.clear_pending_compact_seed(channel_id=channel_id)
     await service._flush_outbox_files(
         workspace_root=workspace_root,
         channel_id=channel_id,

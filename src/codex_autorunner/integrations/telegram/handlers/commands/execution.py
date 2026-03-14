@@ -40,6 +40,7 @@ from .....integrations.app_server.threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
+from .....integrations.chat.compaction import match_pending_compact_seed
 from .....integrations.github.context_injection import maybe_inject_github_context
 from ....app_server.client import (
     CodexAppServerClient,
@@ -877,13 +878,11 @@ class ExecutionCommands(SharedHelpers):
                     ),
                 )
 
-            pending_seed = None
-            pending_seed_thread_id = record.pending_compact_seed_thread_id
-            if record.pending_compact_seed:
-                if pending_seed_thread_id is None:
-                    pending_seed = record.pending_compact_seed
-                elif thread_id and pending_seed_thread_id == thread_id:
-                    pending_seed = record.pending_compact_seed
+            pending_seed = match_pending_compact_seed(
+                record.pending_compact_seed,
+                pending_target_id=record.pending_compact_seed_thread_id,
+                active_target_id=thread_id,
+            )
             if pending_seed:
                 prompt_text = f"{pending_seed}\n\n{prompt_text}"
 
@@ -1766,14 +1765,12 @@ class ExecutionCommands(SharedHelpers):
                 )
 
             pending_seed = None
-            pending_seed_thread_id = record.pending_compact_seed_thread_id
-            if record.pending_compact_seed:
-                if pma_mode:
-                    pending_seed = None
-                elif pending_seed_thread_id is None:
-                    pending_seed = record.pending_compact_seed
-                elif thread_id and pending_seed_thread_id == thread_id:
-                    pending_seed = record.pending_compact_seed
+            if not pma_mode:
+                pending_seed = match_pending_compact_seed(
+                    record.pending_compact_seed,
+                    pending_target_id=record.pending_compact_seed_thread_id,
+                    active_target_id=thread_id,
+                )
             if pending_seed:
                 if input_items is None:
                     input_items = [

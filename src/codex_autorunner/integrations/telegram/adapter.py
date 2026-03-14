@@ -722,12 +722,6 @@ def encode_page_callback(kind: str, page: int) -> str:
     return data
 
 
-def encode_compact_callback(action: str) -> str:
-    data = f"compact:{action}"
-    _validate_callback_data(data)
-    return data
-
-
 def encode_flow_callback(
     action: str, run_id: Optional[str] = None, *, repo_id: Optional[str] = None
 ) -> str:
@@ -898,19 +892,6 @@ def build_model_keyboard(
         rows.append([InlineButton(label, callback_data)])
     if include_cancel:
         rows.append([InlineButton("Cancel", encode_cancel_callback("model"))])
-    return build_inline_keyboard(rows)
-
-
-def build_compact_keyboard() -> dict[str, Any]:
-    rows = [
-        [
-            InlineButton(
-                "Start new thread with this summary",
-                encode_compact_callback("apply"),
-            )
-        ],
-        [InlineButton("Cancel", encode_compact_callback("cancel"))],
-    ]
     return build_inline_keyboard(rows)
 
 

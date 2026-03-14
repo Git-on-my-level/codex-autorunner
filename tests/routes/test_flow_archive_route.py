@@ -27,6 +27,25 @@ def _create_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
         store.update_flow_run_status(run_id, status)
 
 
+def _seed_ticket_state(repo_root: Path, run_id: str) -> None:
+    tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
+
+    context_dir = repo_root / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+    (context_dir / "decisions.md").write_text("Decision log\n", encoding="utf-8")
+
+    run_dir = (
+        repo_root / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / "0001"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "DISPATCH.md").write_text(
+        "---\nmode: pause\n---\n\nhello\n", encoding="utf-8"
+    )
+
+
 def test_archive_route_deletes_run_record_by_default(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -66,3 +85,39 @@ def test_archive_route_deletes_run_record_by_default(
             "delete_run": True,
         }
     ]
+
+
+def test_archive_route_cleans_live_contextspace_after_archiving(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+    run_id = str(uuid.uuid4())
+    _create_run(repo_root, run_id, FlowRunStatus.COMPLETED)
+    _seed_ticket_state(repo_root, run_id)
+
+    response = client.post(f"/api/flows/{run_id}/archive")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["archived_contextspace"] is True
+    assert payload["tickets_archived"] == 1
+
+    archived_context = (
+        repo_root
+        / ".codex-autorunner"
+        / "flows"
+        / run_id
+        / "contextspace"
+        / "active_context.md"
+    )
+    assert archived_context.read_text(encoding="utf-8") == "Active context\n"
+    assert (
+        repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
+    ).read_text(encoding="utf-8") == ""
+    assert (
+        repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
+    ).read_text(encoding="utf-8") == ""
+    assert not (repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
+    assert not (repo_root / ".codex-autorunner" / "runs" / run_id).exists()

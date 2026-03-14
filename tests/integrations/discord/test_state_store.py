@@ -50,6 +50,38 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_pending_compact_seed_round_trip(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.upsert_binding(
+            channel_id="123",
+            guild_id="456",
+            workspace_path="/tmp/workspace",
+            repo_id="repo-1",
+        )
+
+        await store.set_pending_compact_seed(
+            channel_id="123",
+            seed_text="summary text",
+            session_key="session-key-1",
+        )
+
+        binding = await store.get_binding(channel_id="123")
+        assert binding is not None
+        assert binding["pending_compact_seed"] == "summary text"
+        assert binding["pending_compact_session_key"] == "session-key-1"
+
+        await store.clear_pending_compact_seed(channel_id="123")
+        binding = await store.get_binding(channel_id="123")
+        assert binding is not None
+        assert binding["pending_compact_seed"] is None
+        assert binding["pending_compact_session_key"] is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_outbox_enqueue_list_get_and_deliver(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     try:

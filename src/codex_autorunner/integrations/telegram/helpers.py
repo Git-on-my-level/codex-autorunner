@@ -19,6 +19,10 @@ from ...core.utils import (
     find_repo_root,
     is_within,
 )
+from ...integrations.chat.compaction import (
+    COMPACT_SEED_PREFIX,
+    COMPACT_SEED_SUFFIX,
+)
 from ...integrations.chat.review_commits import (  # noqa: F401
     _format_review_commit_label,
     _parse_review_commit_log,
@@ -1286,10 +1290,6 @@ def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
     return None
 
 
-COMPACT_SEED_PREFIX = "Context from previous thread:"
-COMPACT_SEED_SUFFIX = "Continue from this context. Ask for missing info if needed."
-
-
 def _strip_list_marker(text: str) -> str:
     if text.startswith("- "):
         return text[2:].strip()
@@ -1301,10 +1301,15 @@ def _strip_list_marker(text: str) -> str:
 def _compact_seed_summary(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return None
-    prefix_idx = text.find(COMPACT_SEED_PREFIX)
-    if prefix_idx < 0:
+    prefix = None
+    for candidate in (COMPACT_SEED_PREFIX, "Context from previous thread:"):
+        if candidate in text:
+            prefix = candidate
+            break
+    if prefix is None:
         return None
-    content = text[prefix_idx + len(COMPACT_SEED_PREFIX) :].lstrip()
+    prefix_idx = text.find(prefix)
+    content = text[prefix_idx + len(prefix) :].lstrip()
     suffix_idx = content.find(COMPACT_SEED_SUFFIX)
     if suffix_idx >= 0:
         content = content[:suffix_idx]

@@ -111,6 +111,7 @@ from ...integrations.chat.collaboration_policy import (
     evaluate_collaboration_policy,
 )
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
+from ...integrations.chat.compaction import build_compact_seed_prompt
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -199,7 +200,6 @@ from .components import (
     build_agent_picker,
     build_bind_picker,
     build_button,
-    build_continue_turn_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
     build_model_effort_picker,
@@ -4898,6 +4898,7 @@ class DiscordBotService:
             ),
         )
         had_previous = bool(control_result.control_result)
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
@@ -5064,6 +5065,7 @@ class DiscordBotService:
             ),
         )
         had_previous = bool(control_result.control_result)
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
         setup_note = (
@@ -5205,6 +5207,7 @@ class DiscordBotService:
                     orchestrator.set_thread_id, session_key, thread_id
                 ),
             )
+            await self._store.clear_pending_compact_seed(channel_id=channel_id)
             mode_label = "PMA" if pma_enabled else "repo"
             text = format_discord_message(
                 f"Resumed {mode_label} session for `{agent}` with thread `{thread_id}`."
@@ -5490,6 +5493,7 @@ class DiscordBotService:
             model_override=switch_state.model,
             reasoning_effort=switch_state.effort,
         )
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
@@ -8758,6 +8762,7 @@ class DiscordBotService:
             workspace_path=str(workspace),
             repo_id=selected_repo_id,
         )
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
 
         if selected_repo_id:
             message = f"Bound this channel to: {selected_repo_id} ({workspace})"
@@ -9019,6 +9024,7 @@ class DiscordBotService:
             ),
         )
         had_previous = bool(control_result.control_result)
+        await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "fresh state"
 
@@ -9648,6 +9654,12 @@ class DiscordBotService:
         )
         if not response_text:
             response_text = "(No summary generated.)"
+        await self._store.set_pending_compact_seed(
+            channel_id=channel_id,
+            seed_text=build_compact_seed_prompt(response_text),
+            session_key=session_key,
+        )
+        orchestrator.reset_thread_id(session_key)
 
         chunks = chunk_discord_message(
             f"**Conversation Summary:**\n\n{response_text}",
@@ -9658,7 +9670,6 @@ class DiscordBotService:
             chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
 
         next_chunk_index = 0
-        last_chunk_index = len(chunks) - 1
         preview_chunk_applied = False
         preview_message_id = (
             turn_result.preview_message_id
@@ -9670,11 +9681,6 @@ class DiscordBotService:
         if preview_message_id:
             try:
                 preview_payload: dict[str, Any] = {"content": chunks[0]}
-                if last_chunk_index == 0:
-                    preview_payload["components"] = [build_continue_turn_button()]
-                else:
-                    # This message is not terminal for long compactions.
-                    preview_payload["components"] = []
                 await self._rest.edit_channel_message(
                     channel_id=channel_id,
                     message_id=preview_message_id,
@@ -9694,20 +9700,14 @@ class DiscordBotService:
 
         if not preview_chunk_applied:
             first_payload: dict[str, Any] = {"content": chunks[0]}
-            if last_chunk_index == 0:
-                first_payload["components"] = [build_continue_turn_button()]
             await self._send_channel_message_safe(
                 channel_id,
                 first_payload,
             )
             next_chunk_index = 1
 
-        for chunk_index, chunk in enumerate(
-            chunks[next_chunk_index:], next_chunk_index
-        ):
+        for chunk in chunks[next_chunk_index:]:
             payload: dict[str, Any] = {"content": chunk}
-            if chunk_index == last_chunk_index:
-                payload["components"] = [build_continue_turn_button()]
             await self._send_channel_message_safe(channel_id, payload)
         await self._flush_outbox_files(
             workspace_root=workspace_root,

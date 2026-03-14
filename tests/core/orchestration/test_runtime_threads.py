@@ -144,6 +144,29 @@ class _HarnessWithWait:
 
 
 @dataclass
+class _HarnessWithBlockingWait(_HarnessWithWait):
+    wait_started: asyncio.Event = field(default_factory=asyncio.Event)
+    wait_cancelled: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> TerminalTurnResult:
+        _ = timeout
+        self.wait_calls.append((workspace_root, conversation_id, turn_id))
+        self.wait_started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.wait_cancelled.set()
+            raise
+
+
+@dataclass
 class _HarnessWithStream:
     display_name: str = "OpenCode"
     capabilities: frozenset[str] = frozenset(
@@ -357,3 +380,39 @@ async def test_stream_runtime_thread_events_proxies_harness_stream(
 
     assert len(events) == 3
     assert "message.delta" in events[0]
+
+
+async def test_runtime_thread_timeout_cancels_wait_collector(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithBlockingWait()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome_task = asyncio.create_task(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=asyncio.Event(),
+            timeout_seconds=0.01,
+            execution_error_message="Managed thread execution failed",
+        )
+    )
+    await harness.wait_started.wait()
+    outcome = await outcome_task
+
+    assert outcome.status == "error"
+    assert outcome.error == "PMA chat timed out"
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-thread-1", "backend-turn-1")
+    ]
+    assert harness.wait_cancelled.is_set()
