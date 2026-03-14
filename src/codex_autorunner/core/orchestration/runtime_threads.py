@@ -208,10 +208,18 @@ async def await_runtime_thread_outcome(
 
     status = (result.status or "").strip().lower()
     if result.errors:
+        detail = next(
+            (
+                str(error or "").strip()
+                for error in result.errors
+                if str(error or "").strip()
+            ),
+            "",
+        )
         return RuntimeThreadOutcome(
             status="error",
             assistant_text="",
-            error=execution_error_message,
+            error=detail or execution_error_message,
             backend_thread_id=backend_thread_id,
             backend_turn_id=backend_turn_id,
         )

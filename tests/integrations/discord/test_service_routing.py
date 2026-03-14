@@ -12,10 +12,6 @@ import pytest
 
 from codex_autorunner.core.flows import FlowRunStatus
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
-from codex_autorunner.integrations.app_server.threads import (
-    FILE_CHAT_PREFIX,
-    PMA_OPENCODE_KEY,
-)
 from codex_autorunner.integrations.chat.collaboration_policy import (
     CollaborationPolicy,
     build_discord_collaboration_policy,
@@ -2396,43 +2392,22 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _Orchestrator:
-        def __init__(self) -> None:
-            self.thread_id = "thread-current"
-            self.set_calls: list[tuple[str, str]] = []
-
-        def get_thread_id(self, _session_key: str) -> str:
-            return self.thread_id
-
-        def set_thread_id(self, session_key: str, thread_id: str) -> None:
-            self.set_calls.append((session_key, thread_id))
-
-    orchestrator = _Orchestrator()
-
-    async def _fake_orchestrator_for_workspace(
-        _workspace_root: Path,
-        *,
-        channel_id: str,
-    ) -> Any:
-        _ = channel_id
-        return orchestrator
-
-    async def _fake_list_session_threads_for_picker(
+    def _fake_list_threads(
         *,
         workspace_root: Path,
+        agent: str,
         current_thread_id: str | None,
+        mode: str,
+        limit: int = 25,
     ) -> list[tuple[str, str]]:
-        _ = workspace_root, current_thread_id
+        _ = workspace_root, agent, current_thread_id, mode, limit
         return [
             ("thread-abc", "thread-abc"),
             ("thread-def", "thread-def"),
             ("thread-xyz", "thread-xyz"),
         ]
 
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-    service._list_session_threads_for_picker = (  # type: ignore[assignment]
-        _fake_list_session_threads_for_picker
-    )
+    service._list_discord_thread_targets_for_picker = _fake_list_threads  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -2443,7 +2418,6 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
         select = rest.followup_messages[1]["payload"]["components"][0]["components"][0]
         values = [option["value"] for option in select["options"]]
         assert values == ["thread-def"]
-        assert orchestrator.set_calls == []
     finally:
         await store.close()
 
@@ -2945,25 +2919,18 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeOrchestrator:
-        def get_thread_id(self, _session_key: str) -> str | None:
-            return "thread-1"
-
-        def set_thread_id(self, _session_key: str, _thread_id: str) -> None:
-            return None
-
-    fake_orchestrator = _FakeOrchestrator()
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return fake_orchestrator
-
-    async def _fake_list_threads(*args: Any, **kwargs: Any) -> list[tuple[str, str]]:
-        _ = args, kwargs
+    def _fake_list_threads(
+        *,
+        workspace_root: Path,
+        agent: str,
+        current_thread_id: str | None,
+        mode: str,
+        limit: int = 25,
+    ) -> list[tuple[str, str]]:
+        _ = workspace_root, agent, current_thread_id, mode, limit
         return [("thread-1", "thread-1 (current)"), ("thread-2", "thread-2")]
 
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-    service._list_session_threads_for_picker = _fake_list_threads  # type: ignore[assignment]
+    service._list_discord_thread_targets_for_picker = _fake_list_threads  # type: ignore[assignment]
 
     try:
         event = _normalized_interaction_event(command="car:session:resume")
@@ -3984,26 +3951,21 @@ async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeOrchestrator:
-        def __init__(self) -> None:
-            self.reset_keys: list[str] = []
+    async def _should_not_build_orchestrator(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("legacy BackendOrchestrator should not be used")
 
-        def reset_thread_id(self, session_key: str) -> bool:
-            self.reset_keys.append(session_key)
-            return True
-
-    fake_orchestrator = _FakeOrchestrator()
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return fake_orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+    service._orchestrator_for_workspace = _should_not_build_orchestrator  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert fake_orchestrator.reset_keys
-        assert fake_orchestrator.reset_keys[0].startswith(FILE_CHAT_PREFIX)
+        _orch, binding_row, thread = service._get_discord_thread_binding(
+            channel_id="channel-1",
+            mode="repo",
+        )
+        assert binding_row is not None
+        assert thread is not None
+        assert thread.thread_target_id == binding_row.thread_target_id
+        assert thread.lifecycle_status == "active"
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
@@ -4050,21 +4012,10 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
         discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
     )
 
-    class _FakeOrchestrator:
-        def __init__(self) -> None:
-            self.reset_keys: list[str] = []
+    async def _should_not_build_orchestrator(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("legacy BackendOrchestrator should not be used")
 
-        def reset_thread_id(self, session_key: str) -> bool:
-            self.reset_keys.append(session_key)
-            return True
-
-    fake_orchestrator = _FakeOrchestrator()
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return fake_orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+    service._orchestrator_for_workspace = _should_not_build_orchestrator  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -4078,8 +4029,14 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
                 "branch_name": expected_branch,
             }
         ]
-        assert fake_orchestrator.reset_keys
-        assert fake_orchestrator.reset_keys[0].startswith(FILE_CHAT_PREFIX)
+        _orch, binding_row, thread = service._get_discord_thread_binding(
+            channel_id="channel-1",
+            mode="repo",
+        )
+        assert binding_row is not None
+        assert thread is not None
+        assert thread.thread_target_id == binding_row.thread_target_id
+        assert thread.lifecycle_status == "active"
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
@@ -4239,30 +4196,91 @@ async def test_car_new_resets_pma_session_key_for_current_agent(tmp_path: Path) 
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeOrchestrator:
-        def __init__(self) -> None:
-            self.reset_keys: list[str] = []
+    async def _should_not_build_orchestrator(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("legacy BackendOrchestrator should not be used")
 
-        def reset_thread_id(self, session_key: str) -> bool:
-            self.reset_keys.append(session_key)
-            return True
-
-    fake_orchestrator = _FakeOrchestrator()
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return fake_orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+    service._orchestrator_for_workspace = _should_not_build_orchestrator  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert fake_orchestrator.reset_keys == [PMA_OPENCODE_KEY]
+        _orch, binding_row, thread = service._get_discord_thread_binding(
+            channel_id="channel-1",
+            mode="pma",
+        )
+        assert binding_row is not None
+        assert thread is not None
+        assert thread.thread_target_id == binding_row.thread_target_id
+        assert thread.lifecycle_status == "active"
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "fresh pma session" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    interrupted: list[str] = []
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        def cancel_queued_executions(self, thread_target_id: str) -> int:
+            assert thread_target_id == "thread-1"
+            return 2
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(execution_id="exec-1")
+
+        async def interrupt_thread(self, thread_target_id: str) -> Any:
+            interrupted.append(thread_target_id)
+            return SimpleNamespace(status="interrupted")
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_interrupt(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert interrupted == ["thread-1"]
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "stopping current turn" in content
+        assert "cancelled 2 queued turn" in content
     finally:
         await store.close()
 
@@ -4518,36 +4536,8 @@ async def test_car_experimental_unknown_action_returns_guidance(
         await store.close()
 
 
-def _make_failing_orchestrator(workspace_root: Path) -> Any:
-    class FailingOrchestrator:
-        async def run_turn(
-            self,
-            agent: str,
-            messages: list[dict[str, Any]],
-            *,
-            model_override: str | None = None,
-            session_key: str,
-            session_id: str | None = None,
-            workspace_root: Path,
-            reasoning_effort: str | None = None,
-            autorunner_effort_override: str | None = None,
-        ) -> Any:
-            raise RuntimeError("Simulated backend error")
-
-        def get_thread_id(self, session_key: str) -> str | None:
-            return None
-
-        def set_thread_id(self, session_key: str, thread_id: str) -> None:
-            pass
-
-        def close(self) -> None:
-            pass
-
-    return FailingOrchestrator()
-
-
 @pytest.mark.anyio
-async def test_car_command_handles_turn_failure(tmp_path: Path) -> None:
+async def test_car_new_ignores_legacy_backend_factory(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -4571,15 +4561,18 @@ async def test_car_command_handles_turn_failure(tmp_path: Path) -> None:
         gateway_client=gateway,
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
-        backend_orchestrator_factory=_make_failing_orchestrator,
+        backend_orchestrator_factory=lambda _workspace_root: (_ for _ in ()).throw(
+            AssertionError("legacy backend factory should not be used")
+        ),
     )
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) >= 1
-        last_response = rest.interaction_responses[-1]
-        content = last_response["payload"]["data"]["content"].lower()
-        assert "error" in content or "failed" in content
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "fresh repo session" in content
     finally:
         await store.close()
 
