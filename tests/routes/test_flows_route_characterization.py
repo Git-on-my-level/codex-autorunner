@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
+from codex_autorunner.core.flows.models import FlowRunRecord
 from codex_autorunner.core.orchestration.models import FlowRunTarget
 from codex_autorunner.surfaces.web.routes import flows as flow_routes
 from codex_autorunner.surfaces.web.routes.flow_routes.dependencies import (
@@ -423,6 +424,27 @@ def test_resume_flow_routes_through_orchestration_service(tmp_path, monkeypatch)
     assert resp.status_code == 200
     assert resp.json()["id"] == run_id
     assert observed["resume"] == (run_id, True)
+
+
+def test_flow_status_response_includes_duration_seconds() -> None:
+    record = FlowRunRecord(
+        id="run-1",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.COMPLETED,
+        input_data={},
+        state={},
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-03-13T08:00:00Z",
+        started_at="2026-03-13T08:15:00Z",
+        finished_at="2026-03-13T10:45:00Z",
+        error_message=None,
+        metadata={},
+    )
+
+    response = flow_routes.FlowStatusResponse.from_record(record)
+
+    assert response.duration_seconds == 9000.0
 
 
 def test_extracted_status_history_router_uses_run_scoped_dispatch_history(

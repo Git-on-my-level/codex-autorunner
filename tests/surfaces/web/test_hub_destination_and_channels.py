@@ -2,6 +2,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -246,12 +247,20 @@ def _seed_flow_run(
     run_id: str,
     status: FlowRunStatus,
     diff_events: list[dict],
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
 ) -> None:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with FlowStore(db_path) as store:
         store.create_flow_run(run_id, "ticket_flow", input_data={})
-        store.update_flow_run_status(run_id, status, state={})
+        store.update_flow_run_status(
+            run_id,
+            status,
+            state={},
+            started_at=started_at,
+            finished_at=finished_at,
+        )
         for index, payload in enumerate(diff_events, start=1):
             store.create_event(
                 event_id=f"{run_id}-diff-{index}",
@@ -1099,3 +1108,34 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     assert 'header.textContent = "Channels"' not in hub_source
     assert "copy_channel_key" not in hub_source
     assert "Copied channel ref" not in hub_source
+
+
+def test_hub_repo_list_includes_last_run_duration_seconds(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("base")
+
+    tickets_dir = repo.path / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\ntitle: First\ngoal: ship it\nagent: codex\ndone: true\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    _seed_flow_run(
+        repo.path,
+        run_id="run-completed",
+        status=FlowRunStatus.COMPLETED,
+        diff_events=[],
+        started_at="2026-03-13T08:00:00Z",
+        finished_at="2026-03-13T09:45:00Z",
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/repos")
+    assert response.status_code == 200
+
+    repo_entry = next(item for item in response.json()["repos"] if item["id"] == "base")
+    assert repo_entry["last_run_duration_seconds"] == 6300.0
+    run_state = repo_entry["run_state"] or {}
+    assert run_state["duration_seconds"] == 6300.0

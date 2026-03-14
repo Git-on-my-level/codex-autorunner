@@ -136,6 +136,7 @@ class RepoSnapshot:
     last_run_finished_at: Optional[str]
     last_exit_code: Optional[int]
     runner_pid: Optional[int]
+    last_run_duration_seconds: Optional[float] = None
     effective_destination: Dict[str, Any] = dataclasses.field(
         default_factory=default_local_destination
     )
@@ -172,6 +173,7 @@ class RepoSnapshot:
             "last_run_id": self.last_run_id,
             "last_run_started_at": self.last_run_started_at,
             "last_run_finished_at": self.last_run_finished_at,
+            "last_run_duration_seconds": self.last_run_duration_seconds,
             "last_exit_code": self.last_exit_code,
             "runner_pid": self.runner_pid,
             "effective_destination": self.effective_destination,
@@ -259,6 +261,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 last_run_id=entry.get("last_run_id"),
                 last_run_started_at=entry.get("last_run_started_at"),
                 last_run_finished_at=entry.get("last_run_finished_at"),
+                last_run_duration_seconds=entry.get("last_run_duration_seconds"),
                 last_exit_code=entry.get("last_exit_code"),
                 runner_pid=entry.get("runner_pid"),
                 effective_destination=(
@@ -2505,6 +2508,7 @@ class HubSupervisor:
             last_run_finished_at=(
                 runner_state.last_run_finished_at if runner_state else None
             ),
+            last_run_duration_seconds=None,
             last_exit_code=runner_state.last_exit_code if runner_state else None,
             runner_pid=runner_state.runner_pid if runner_state else None,
             effective_destination=effective_destination,

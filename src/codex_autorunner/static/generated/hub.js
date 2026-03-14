@@ -158,6 +158,27 @@ function formatLastActivity(repo) {
         return "";
     return formatTimeCompact(time);
 }
+function formatRunDuration(seconds) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+        return "";
+    }
+    const rounded = Math.max(0, Math.floor(seconds));
+    if (rounded < 60)
+        return `${rounded}s`;
+    const minutes = Math.floor(rounded / 60);
+    const remainingSeconds = rounded % 60;
+    if (minutes < 60) {
+        return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours < 24) {
+        return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+    }
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    return remainingHours === 0 ? `${days}d` : `${days}d ${remainingHours}h`;
+}
 function formatFreshnessAge(ageSeconds) {
     if (typeof ageSeconds !== "number" || !Number.isFinite(ageSeconds) || ageSeconds < 0) {
         return "";
@@ -1380,6 +1401,7 @@ function renderRepos(repos) {
             : "";
         const runSummary = formatRunSummary(repo);
         const lastActivity = formatLastActivity(repo);
+        const runDuration = repo.last_run_finished_at ? formatRunDuration(repo.last_run_duration_seconds) : "";
         const primaryChannel = inlineChannels[0] || null;
         const infoItems = [];
         if (!primaryChannel) {
@@ -1390,6 +1412,9 @@ function renderRepos(repos) {
             }
             if (lastActivity) {
                 infoItems.push(lastActivity);
+            }
+            if (runDuration) {
+                infoItems.push(`took ${runDuration}`);
             }
         }
         if (freshness?.is_stale === true) {

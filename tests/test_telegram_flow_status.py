@@ -45,7 +45,13 @@ def _health(tmp_path: Path, status: str = "alive") -> FlowWorkerHealth:
     )
 
 
-def _record(status: FlowRunStatus, *, state: dict | None = None) -> FlowRunRecord:
+def _record(
+    status: FlowRunStatus,
+    *,
+    state: dict | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+) -> FlowRunRecord:
     return FlowRunRecord(
         id=str(uuid.uuid4()),
         flow_type="ticket_flow",
@@ -55,8 +61,8 @@ def _record(status: FlowRunStatus, *, state: dict | None = None) -> FlowRunRecor
         current_step=None,
         stop_requested=False,
         created_at="2026-01-30T00:00:00Z",
-        started_at=None,
-        finished_at=None,
+        started_at=started_at,
+        finished_at=finished_at,
         error_message=None,
         metadata={},
     )
@@ -748,6 +754,29 @@ def test_flow_status_includes_freshness_summary(tmp_path: Path) -> None:
     )
 
     assert any(line == "Freshness: stale · last progress 2h ago" for line in lines)
+
+
+def test_flow_status_includes_elapsed_for_finished_run(tmp_path: Path) -> None:
+    handler = FlowCommands()
+    record = _record(
+        FlowRunStatus.COMPLETED,
+        started_at="2026-03-13T08:00:00Z",
+        finished_at="2026-03-13T09:45:00Z",
+    )
+    lines = handler._format_flow_status_lines(
+        tmp_path,
+        record,
+        store=None,
+        health=_health(tmp_path),
+        snapshot={
+            "worker_health": _health(tmp_path),
+            "effective_current_ticket": None,
+            "last_event_seq": 7,
+            "last_event_at": "2026-03-13T09:45:00Z",
+        },
+    )
+
+    assert any(line == "Elapsed: 1h 45m" for line in lines)
 
 
 class _TopicStoreStub:
