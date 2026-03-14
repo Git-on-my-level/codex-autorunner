@@ -187,10 +187,7 @@ class CodexHarness(AgentHarness):
         resume = getattr(client, "thread_resume", None)
         if not callable(resume):
             return ConversationRef(agent=self.agent_id, id=conversation_id)
-        try:
-            result = await resume(conversation_id)
-        except Exception:
-            return ConversationRef(agent=self.agent_id, id=conversation_id)
+        result = await resume(conversation_id)
         thread_id = conversation_id
         if isinstance(result, dict):
             candidate = result.get("id")

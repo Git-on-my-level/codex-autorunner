@@ -45,6 +45,7 @@ class _FakeHarness:
     )
     next_conversation_id: str = "backend-conversation-1"
     resumed_conversation_id: Optional[str] = None
+    resume_conversation_error: Optional[Exception] = None
     next_turn_id: str = "backend-turn-1"
     ensure_ready_error: Optional[Exception] = None
     ensure_ready_calls: list[Path] = field(default_factory=list)
@@ -74,6 +75,8 @@ class _FakeHarness:
         self, workspace_root: Path, conversation_id: str
     ) -> _FakeConversation:
         self.resume_conversation_calls.append((workspace_root, conversation_id))
+        if self.resume_conversation_error is not None:
+            raise self.resume_conversation_error
         return _FakeConversation(id=self.resumed_conversation_id or conversation_id)
 
     async def start_turn(
@@ -341,6 +344,33 @@ async def test_send_message_persists_canonical_resumed_conversation_id(
     assert execution.backend_id == "backend-turn-1"
     assert refreshed_thread is not None
     assert refreshed_thread.backend_thread_id == "backend-canonical-2"
+
+
+async def test_send_message_records_error_when_resume_conversation_fails(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(resume_conversation_error=RuntimeError("missing thread"))
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="hello again",
+        )
+    )
+
+    assert execution.status == "error"
+    assert execution.error == "missing thread"
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert harness.start_turn_calls == []
 
 
 async def test_send_message_queues_when_thread_is_busy_by_default(

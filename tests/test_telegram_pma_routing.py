@@ -71,6 +71,20 @@ class _RouterStub:
         return self._record
 
 
+def test_sanitize_runtime_thread_result_error_returns_public_error_for_unknown_failures() -> (
+    None
+):
+    assert (
+        execution_commands_module._sanitize_runtime_thread_result_error(
+            "backend exploded with private detail",
+            public_error="Telegram PMA turn failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+        )
+        == "Telegram PMA turn failed"
+    )
+
+
 class _ExecutionStub(ExecutionCommands):
     def __init__(self, record: TelegramTopicRecord, hub_root: Path) -> None:
         self._logger = logging.getLogger("test")

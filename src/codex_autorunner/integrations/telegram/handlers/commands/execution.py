@@ -226,8 +226,6 @@ def _sanitize_runtime_thread_result_error(
         return interrupted_error
     if sanitized in {timeout_error, interrupted_error}:
         return sanitized
-    if sanitized:
-        return sanitized
     return public_error
 
 

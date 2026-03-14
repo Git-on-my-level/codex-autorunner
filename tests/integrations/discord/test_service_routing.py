@@ -270,6 +270,70 @@ class _InitialResponseFailingRest(_FakeRest):
         raise DiscordAPIError("simulated initial response failure")
 
 
+def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=None,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    orchestration_service = service._discord_thread_service()
+    repo_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace,
+        repo_id="repo-1",
+        display_name="discord:repo",
+    )
+    pma_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace,
+        repo_id="repo-1",
+        display_name="discord:pma",
+    )
+    orchestration_service.upsert_binding(
+        surface_kind="discord",
+        surface_key="repo-channel",
+        thread_target_id=repo_thread.thread_target_id,
+        agent_id="codex",
+        repo_id="repo-1",
+        mode="repo",
+        metadata={"channel_id": "repo-channel", "pma_enabled": False},
+    )
+    orchestration_service.upsert_binding(
+        surface_kind="discord",
+        surface_key="pma-channel",
+        thread_target_id=pma_thread.thread_target_id,
+        agent_id="codex",
+        repo_id="repo-1",
+        mode="pma",
+        metadata={"channel_id": "pma-channel", "pma_enabled": True},
+    )
+
+    repo_items = service._list_discord_thread_targets_for_picker(
+        workspace_root=workspace,
+        agent="codex",
+        current_thread_id=None,
+        mode="repo",
+    )
+    pma_items = service._list_discord_thread_targets_for_picker(
+        workspace_root=workspace,
+        agent="codex",
+        current_thread_id=None,
+        mode="pma",
+    )
+
+    assert [thread_id for thread_id, _label in repo_items] == [
+        repo_thread.thread_target_id
+    ]
+    assert [thread_id for thread_id, _label in pma_items] == [
+        pma_thread.thread_target_id
+    ]
+
+
 def _interaction(
     *, name: str, options: list[dict[str, Any]], user_id: str = "user-1"
 ) -> dict[str, Any]:

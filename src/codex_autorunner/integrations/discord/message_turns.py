@@ -409,8 +409,7 @@ async def handle_message_event(
                     channel_id,
                     {
                         "content": (
-                            "Failed to download attachments from Discord. "
-                            "Please retry."
+                            "Failed to download attachments from Discord. Please retry."
                         ),
                     },
                 )
@@ -724,8 +723,6 @@ def _sanitize_runtime_thread_result_error(
     if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, interrupted_error}:
         return interrupted_error
     if sanitized in {timeout_error, interrupted_error}:
-        return sanitized
-    if sanitized:
         return sanitized
     return public_error
 

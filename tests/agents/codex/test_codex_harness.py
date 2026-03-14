@@ -18,6 +18,14 @@ class _TurnHandle:
         return self._result
 
 
+class _Supervisor:
+    def __init__(self, client: object) -> None:
+        self._client = client
+
+    async def get_client(self, _workspace_root: Path) -> object:
+        return self._client
+
+
 @pytest.mark.asyncio
 async def test_codex_harness_reports_capabilities_from_contract() -> None:
     harness = CodexHarness(supervisor=object(), events=object())  # type: ignore[arg-type]
@@ -52,3 +60,15 @@ async def test_codex_harness_wait_for_turn_returns_plain_text_terminal_result() 
     assert result.errors == []
     assert result.raw_events == [{"method": "message.completed"}]
     assert ("thread-1", "turn-1") not in harness._turn_handles  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_codex_harness_resume_conversation_propagates_resume_failures() -> None:
+    class _Client:
+        async def thread_resume(self, _thread_id: str) -> None:
+            raise RuntimeError("missing thread")
+
+    harness = CodexHarness(supervisor=_Supervisor(_Client()), events=object())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="missing thread"):
+        await harness.resume_conversation(Path("."), "thread-1")

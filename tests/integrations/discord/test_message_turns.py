@@ -183,6 +183,20 @@ class _FakeRest:
         return commands
 
 
+def test_sanitize_runtime_thread_result_error_returns_public_error_for_unknown_failures() -> (
+    None
+):
+    assert (
+        discord_message_turns_module._sanitize_runtime_thread_result_error(
+            "backend exploded with private detail",
+            public_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
+        == "Discord PMA turn failed"
+    )
+
+
 class _FailingChannelRest(_FakeRest):
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
@@ -2687,7 +2701,7 @@ async def test_message_create_streaming_turn_failure_before_completion_still_fai
         await service.run_forever()
         assert any(
             "Turn failed:" in msg["payload"].get("content", "")
-            and "hard failure before completion" in msg["payload"].get("content", "")
+            and "Discord turn failed" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
         assert not any(
@@ -3496,8 +3510,7 @@ async def test_message_create_streaming_turn_exception_marks_progress_failed(
             for msg in rest.edited_channel_messages
         )
         assert any(
-            "Turn failed: boom (conversation discord:channel-1:guild-1)"
-            in msg["payload"].get("content", "")
+            "Turn failed: Discord turn failed" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
     finally:

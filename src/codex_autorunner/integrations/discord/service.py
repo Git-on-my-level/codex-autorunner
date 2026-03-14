@@ -1794,6 +1794,19 @@ class DiscordBotService:
         limit: int = DISCORD_SELECT_OPTION_MAX_OPTIONS,
     ) -> list[tuple[str, str]]:
         orchestration_service = self._discord_thread_service()
+        normalized_mode = mode.strip().lower()
+        mode_bindings = orchestration_service.list_bindings(
+            agent_id=agent,
+            surface_kind="discord",
+            include_disabled=True,
+            limit=max(limit * 8, limit),
+        )
+        allowed_thread_ids = {
+            str(getattr(binding, "thread_target_id", "") or "").strip()
+            for binding in mode_bindings
+            if str(getattr(binding, "mode", "") or "").strip().lower()
+            == normalized_mode
+        }
         threads = orchestration_service.list_thread_targets(
             agent_id=agent,
             limit=max(limit * 4, limit),
@@ -1801,6 +1814,9 @@ class DiscordBotService:
         canonical_workspace = str(workspace_root.resolve())
         filtered: list[Any] = []
         for thread in threads:
+            thread_id = str(getattr(thread, "thread_target_id", "") or "").strip()
+            if thread_id not in allowed_thread_ids:
+                continue
             if (
                 str(getattr(thread, "workspace_root", "") or "").strip()
                 != canonical_workspace
