@@ -88,4 +88,6 @@ def test_transcript_writes_filter_non_plain_mirror_metadata(tmp_path: Path) -> N
     assert metadata["lifecycle_event"]["event_id"] == "event-1"
     assert "tool_payload" not in metadata
     assert "media" not in metadata
-    assert str(row["text_content"]) == "assistant output"
+    assert (
+        str(row["text_content"]) == "User:\nhello world\n\nAssistant:\nassistant output"
+    )

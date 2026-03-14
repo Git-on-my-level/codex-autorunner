@@ -83,6 +83,28 @@ def build_text_preview(text_content: str) -> str:
     return stripped[:_TRANSCRIPT_PREVIEW_CHARS].rstrip() + "..."
 
 
+def build_plain_text_transcript(*, user_text: str, assistant_text: str) -> str:
+    normalized_user = (user_text or "").strip()
+    normalized_assistant = (assistant_text or "").strip()
+    if normalized_user and normalized_assistant:
+        return f"User:\n{normalized_user}\n\n" f"Assistant:\n{normalized_assistant}"
+    if normalized_user:
+        return normalized_user
+    return normalized_assistant
+
+
+def _resolve_user_text(
+    metadata: Mapping[str, Any], *, explicit_user_text: str | None = None
+) -> str:
+    if explicit_user_text is not None:
+        return explicit_user_text
+    for key in ("user_prompt", "user_text", "prompt_text", "message_text", "prompt"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
 def _normalize_target(metadata: Mapping[str, Any], *, turn_id: str) -> tuple[str, str]:
     managed_thread_id = str(metadata.get("managed_thread_id") or "").strip()
     if managed_thread_id:
@@ -133,6 +155,7 @@ class TranscriptMirrorStore:
         *,
         turn_id: str,
         metadata: Mapping[str, Any],
+        user_text: str | None = None,
         assistant_text: str,
     ) -> None:
         sanitized = sanitize_transcript_metadata(metadata)
@@ -146,7 +169,11 @@ class TranscriptMirrorStore:
         agent_id = str(sanitized.get("agent") or "").strip() or None
         model_id = str(sanitized.get("model") or "").strip() or None
         repo_id = str(sanitized.get("repo_id") or "").strip() or None
-        text_content = assistant_text or ""
+        resolved_user_text = _resolve_user_text(sanitized, explicit_user_text=user_text)
+        text_content = build_plain_text_transcript(
+            user_text=resolved_user_text,
+            assistant_text=assistant_text or "",
+        )
         text_preview = build_text_preview(text_content)
         with open_orchestration_sqlite(self._hub_root) as conn:
             conn.execute(
@@ -185,7 +212,7 @@ class TranscriptMirrorStore:
                     target_kind,
                     target_id,
                     execution_id or None,
-                    "assistant",
+                    "transcript" if resolved_user_text else "assistant",
                     text_content,
                     text_preview,
                     repo_id,
@@ -260,6 +287,7 @@ class TranscriptMirrorStore:
 __all__ = [
     "TranscriptMirrorStore",
     "TranscriptMirrorRow",
+    "build_plain_text_transcript",
     "build_text_preview",
     "sanitize_transcript_metadata",
 ]

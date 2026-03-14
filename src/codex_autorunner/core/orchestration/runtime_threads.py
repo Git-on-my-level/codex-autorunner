@@ -11,6 +11,8 @@ from .service import HarnessBackedOrchestrationService
 
 RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
+RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
+RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
 
 
 @dataclass(frozen=True)
@@ -132,7 +134,7 @@ async def await_runtime_thread_outcome(
             return RuntimeThreadOutcome(
                 status="error",
                 assistant_text="",
-                error="PMA chat timed out",
+                error=RUNTIME_THREAD_TIMEOUT_ERROR,
                 backend_thread_id=backend_thread_id,
                 backend_turn_id=backend_turn_id,
             )
@@ -145,7 +147,7 @@ async def await_runtime_thread_outcome(
             return RuntimeThreadOutcome(
                 status="interrupted",
                 assistant_text="",
-                error="PMA chat interrupted",
+                error=RUNTIME_THREAD_INTERRUPTED_ERROR,
                 backend_thread_id=backend_thread_id,
                 backend_turn_id=backend_turn_id,
             )
@@ -183,7 +185,7 @@ async def await_runtime_thread_outcome(
         return RuntimeThreadOutcome(
             status="interrupted",
             assistant_text="",
-            error="PMA chat interrupted",
+            error=RUNTIME_THREAD_INTERRUPTED_ERROR,
             backend_thread_id=backend_thread_id,
             backend_turn_id=backend_turn_id,
         )
@@ -210,6 +212,8 @@ async def _wait_for_interrupt(interrupt_event: asyncio.Event) -> None:
 
 
 __all__ = [
+    "RUNTIME_THREAD_INTERRUPTED_ERROR",
+    "RUNTIME_THREAD_TIMEOUT_ERROR",
     "RuntimeThreadExecution",
     "RuntimeThreadOutcome",
     "await_runtime_thread_outcome",

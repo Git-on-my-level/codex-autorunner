@@ -10,7 +10,10 @@ from typing import Any, Optional
 
 from .orchestration.migrate_legacy_state import backfill_legacy_transcript_mirrors
 from .orchestration.sqlite import open_orchestration_sqlite
-from .orchestration.transcript_mirror import TranscriptMirrorStore
+from .orchestration.transcript_mirror import (
+    TranscriptMirrorStore,
+    build_plain_text_transcript,
+)
 from .time_utils import now_iso
 from .utils import atomic_write
 
@@ -75,6 +78,7 @@ class PmaTranscriptStore:
         *,
         turn_id: str,
         metadata: dict[str, Any],
+        user_text: Optional[str] = None,
         assistant_text: str,
     ) -> PmaTranscriptPointer:
         safe_turn_id = _safe_segment(turn_id)
@@ -90,13 +94,25 @@ class PmaTranscriptStore:
         payload["metadata_path"] = str(json_path)
         payload["content_path"] = str(md_path)
         payload["assistant_text_chars"] = len(assistant_text or "")
+        resolved_user_text = user_text
+        if resolved_user_text is None:
+            raw_user_prompt = payload.get("user_prompt")
+            if isinstance(raw_user_prompt, str):
+                resolved_user_text = raw_user_prompt
+        if resolved_user_text:
+            payload["user_text_chars"] = len(resolved_user_text)
 
         self._dir.mkdir(parents=True, exist_ok=True)
-        atomic_write(md_path, (assistant_text or "") + "\n")
+        transcript_content = build_plain_text_transcript(
+            user_text=resolved_user_text or "",
+            assistant_text=assistant_text or "",
+        )
+        atomic_write(md_path, transcript_content + "\n")
         atomic_write(json_path, json.dumps(payload, indent=2) + "\n")
         self._mirror_store.write_mirror(
             turn_id=turn_id,
             metadata=payload,
+            user_text=resolved_user_text,
             assistant_text=assistant_text,
         )
 

@@ -396,7 +396,12 @@ def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
         transcript_turn_id
     )
     assert transcript is not None
-    assert transcript["content"].strip() == "assistant transcript payload"
+    assert transcript["content"].strip() == (
+        "User:\n"
+        "persist transcript\n\n"
+        "Assistant:\n"
+        "assistant transcript payload"
+    )
     metadata = transcript["metadata"]
     assert metadata["client_turn_id"] == "client-transcript"
     assert metadata["trigger"] == "user_prompt"
@@ -410,7 +415,12 @@ def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
 
     history_entry = client.get(f"/hub/pma/history/{transcript_turn_id}")
     assert history_entry.status_code == 200
-    assert history_entry.json()["content"].strip() == "assistant transcript payload"
+    assert history_entry.json()["content"].strip() == (
+        "User:\n"
+        "persist transcript\n\n"
+        "Assistant:\n"
+        "assistant transcript payload"
+    )
 
 
 def test_pma_chat_github_injection_uses_raw_user_message(

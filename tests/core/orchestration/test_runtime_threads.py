@@ -412,7 +412,7 @@ async def test_runtime_thread_timeout_cancels_wait_collector(
     outcome = await outcome_task
 
     assert outcome.status == "error"
-    assert outcome.error == "PMA chat timed out"
+    assert outcome.error == "Runtime thread timed out"
     assert harness.interrupt_calls == [
         (workspace_root, "backend-thread-1", "backend-turn-1")
     ]
@@ -484,7 +484,7 @@ async def test_runtime_thread_interrupt_event_can_be_bound_to_foreign_loop(
         foreign_thread.join(timeout=1)
 
     assert outcome.status == "interrupted"
-    assert outcome.error == "PMA chat interrupted"
+    assert outcome.error == "Runtime thread interrupted"
     assert harness.interrupt_calls == [
         (workspace_root, "backend-thread-1", "backend-turn-1")
     ]

@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse
 from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
 from .....core.orchestration import MessageRequest
 from .....core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_INTERRUPTED_ERROR,
+    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
     begin_runtime_thread_execution,
@@ -71,6 +73,10 @@ def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
 
 def _sanitize_managed_thread_result_error(detail: Any) -> str:
     sanitized = normalize_optional_text(detail)
+    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "PMA chat timed out"}:
+        return "PMA chat timed out"
+    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, "PMA chat interrupted"}:
+        return "PMA chat interrupted"
     if sanitized in {"PMA chat timed out", "PMA chat interrupted"}:
         return sanitized
     return MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
