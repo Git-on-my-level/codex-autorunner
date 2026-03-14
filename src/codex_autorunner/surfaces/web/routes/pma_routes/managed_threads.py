@@ -732,6 +732,7 @@ def build_managed_thread_crud_routes(
         repo_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
+        """List busy thread summaries for running or queued work only."""
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         service = build_managed_thread_orchestration_service(request)

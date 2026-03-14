@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.core.orchestration import ThreadTarget
+from codex_autorunner.core.orchestration import ActiveWorkSummary, ThreadTarget
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_threads
 from tests.conftest import write_test_config
@@ -551,4 +551,88 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         ),
         ("get", {"thread_target_id": "thread-orch-1"}),
         ("archive", {"thread_target_id": "thread-orch-1"}),
+    ]
+
+
+def test_list_bindings_work_route_returns_busy_work_summaries(
+    hub_env, monkeypatch
+) -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def list_active_work_summaries(
+            self,
+            *,
+            agent_id=None,
+            repo_id=None,
+            limit=200,
+        ):
+            self.calls.append(
+                (
+                    "list_active_work_summaries",
+                    {
+                        "agent_id": agent_id,
+                        "repo_id": repo_id,
+                        "limit": limit,
+                    },
+                )
+            )
+            return [
+                ActiveWorkSummary(
+                    thread_target_id="thread-orch-1",
+                    agent_id="codex",
+                    repo_id=hub_env.repo_id,
+                    workspace_root=str(hub_env.repo_root.resolve()),
+                    display_name="Busy thread",
+                    lifecycle_status="active",
+                    runtime_status="completed",
+                    execution_id="turn-queued-1",
+                    execution_status="queued",
+                    queued_count=1,
+                    message_preview="Follow-up queued",
+                    binding_count=2,
+                    surface_kinds=("discord", "telegram"),
+                )
+            ]
+
+    fake_service = FakeService()
+    monkeypatch.setattr(
+        managed_threads,
+        "build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        resp = client.get(
+            "/hub/pma/bindings/work",
+            params={"agent": "codex", "repo_id": hub_env.repo_id, "limit": 25},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "summaries": [
+            {
+                "thread_target_id": "thread-orch-1",
+                "agent_id": "codex",
+                "repo_id": hub_env.repo_id,
+                "workspace_root": str(hub_env.repo_root.resolve()),
+                "display_name": "Busy thread",
+                "lifecycle_status": "active",
+                "runtime_status": "completed",
+                "execution_id": "turn-queued-1",
+                "execution_status": "queued",
+                "queued_count": 1,
+                "message_preview": "Follow-up queued",
+                "binding_count": 2,
+                "surface_kinds": ["discord", "telegram"],
+            }
+        ]
+    }
+    assert fake_service.calls == [
+        (
+            "list_active_work_summaries",
+            {"agent_id": "codex", "repo_id": hub_env.repo_id, "limit": 25},
+        )
     ]

@@ -151,6 +151,8 @@ def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
         agent_id="opencode",
         repo_id="repo-2",
     )
+    store = PmaThreadStore(hub_root)
+    running_turn = store.create_turn(codex_thread_id, prompt="busy")
 
     repo_bindings = bindings.list_bindings(repo_id="repo-1")
     agent_bindings = bindings.list_bindings(agent_id="codex")
@@ -163,6 +165,8 @@ def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
     assert len(agent_bindings) == 2
     assert len(active_work) == 1
     assert active_work[0].thread_target_id == codex_thread_id
+    assert active_work[0].execution_id == running_turn["managed_turn_id"]
+    assert active_work[0].execution_status == "running"
     assert active_work[0].binding_count == 2
     assert set(active_work[0].surface_kinds) == {"discord", "telegram"}
 
@@ -199,6 +203,9 @@ def test_binding_store_active_work_by_agent(tmp_path: Path) -> None:
         agent_id="opencode",
         repo_id="repo-1",
     )
+    store = PmaThreadStore(hub_root)
+    store.create_turn(codex_thread_id, prompt="codex busy")
+    store.create_turn(opencode_thread_id, prompt="opencode busy")
 
     codex_work = bindings.list_active_work_summaries(agent_id="codex")
     opencode_work = bindings.list_active_work_summaries(agent_id="opencode")
@@ -244,6 +251,9 @@ def test_binding_store_active_work_by_repo(tmp_path: Path) -> None:
         agent_id="codex",
         repo_id="repo-b",
     )
+    store = PmaThreadStore(hub_root)
+    store.create_turn(thread1_id, prompt="repo a busy")
+    store.create_turn(thread2_id, prompt="repo b busy")
 
     repo_a_work = bindings.list_active_work_summaries(repo_id="repo-a")
     repo_b_work = bindings.list_active_work_summaries(repo_id="repo-b")
@@ -284,6 +294,112 @@ def test_binding_store_active_work_includes_queue_depth(tmp_path: Path) -> None:
     assert active_work[0].execution_id == running_turn["managed_turn_id"]
     assert active_work[0].queued_count == 1
     assert queued_turn["status"] == "queued"
+
+
+def test_binding_store_active_work_excludes_idle_completed_and_archived_threads(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root)
+    bindings = OrchestrationBindingStore(hub_root)
+    store = PmaThreadStore(hub_root)
+    idle_thread_id = _create_thread(
+        hub_root, repo_id="repo-1", workspace_name="idle", name="Idle Thread"
+    )
+    completed_thread_id = _create_thread(
+        hub_root, repo_id="repo-1", workspace_name="completed", name="Completed Thread"
+    )
+    running_thread_id = _create_thread(
+        hub_root, repo_id="repo-1", workspace_name="running", name="Running Thread"
+    )
+    queued_thread_id = _create_thread(
+        hub_root, repo_id="repo-1", workspace_name="queued", name="Queued Thread"
+    )
+    running_and_queued_thread_id = _create_thread(
+        hub_root,
+        repo_id="repo-1",
+        workspace_name="running-and-queued",
+        name="Running and Queued Thread",
+    )
+    archived_thread_id = _create_thread(
+        hub_root, repo_id="repo-1", workspace_name="archived", name="Archived Thread"
+    )
+
+    for surface_key, thread_id in (
+        ("idle", idle_thread_id),
+        ("completed", completed_thread_id),
+        ("running", running_thread_id),
+        ("queued", queued_thread_id),
+        ("running-and-queued", running_and_queued_thread_id),
+        ("archived", archived_thread_id),
+    ):
+        bindings.upsert_binding(
+            surface_kind="discord",
+            surface_key=f"chan-{surface_key}",
+            thread_target_id=thread_id,
+            agent_id="codex",
+            repo_id="repo-1",
+        )
+
+    completed_turn = store.create_turn(completed_thread_id, prompt="completed")
+    assert store.mark_turn_finished(completed_turn["managed_turn_id"], status="ok")
+
+    running_turn = store.create_turn(running_thread_id, prompt="running")
+
+    queued_running_turn = store.create_turn(queued_thread_id, prompt="queued parent")
+    queued_turn = store.create_turn(
+        queued_thread_id,
+        prompt="queued child",
+        busy_policy="queue",
+    )
+    assert store.mark_turn_finished(queued_running_turn["managed_turn_id"], status="ok")
+
+    running_with_queue_turn = store.create_turn(
+        running_and_queued_thread_id,
+        prompt="running parent",
+    )
+    store.create_turn(
+        running_and_queued_thread_id,
+        prompt="running child",
+        busy_policy="queue",
+    )
+
+    archived_running_turn = store.create_turn(archived_thread_id, prompt="archived")
+    store.create_turn(
+        archived_thread_id,
+        prompt="archived child",
+        busy_policy="queue",
+    )
+    store.archive_thread(archived_thread_id)
+
+    active_work = bindings.list_active_work_summaries(repo_id="repo-1")
+    summaries = {summary.thread_target_id: summary for summary in active_work}
+
+    assert set(summaries) == {
+        running_thread_id,
+        queued_thread_id,
+        running_and_queued_thread_id,
+    }
+    assert summaries[running_thread_id].execution_id == running_turn["managed_turn_id"]
+    assert summaries[running_thread_id].execution_status == "running"
+    assert summaries[running_thread_id].queued_count == 0
+
+    assert summaries[queued_thread_id].execution_id == queued_turn["managed_turn_id"]
+    assert summaries[queued_thread_id].execution_status == "queued"
+    assert summaries[queued_thread_id].queued_count == 1
+    assert summaries[queued_thread_id].runtime_status == "completed"
+
+    assert (
+        summaries[running_and_queued_thread_id].execution_id
+        == running_with_queue_turn["managed_turn_id"]
+    )
+    assert summaries[running_and_queued_thread_id].execution_status == "running"
+    assert summaries[running_and_queued_thread_id].queued_count == 1
+
+    assert idle_thread_id not in summaries
+    assert completed_thread_id not in summaries
+    assert archived_thread_id not in summaries
+    assert archived_running_turn["status"] == "running"
 
 
 def test_binding_store_list_bindings_by_surface_kind(tmp_path: Path) -> None:

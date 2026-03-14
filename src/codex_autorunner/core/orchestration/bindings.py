@@ -328,7 +328,18 @@ class OrchestrationBindingStore:
         agent_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ActiveWorkSummary]:
-        filters = ["(t.last_execution_id IS NOT NULL OR t.lifecycle_status = 'active')"]
+        """Return busy-work summaries for threads with running or queued executions.
+
+        `/bindings/work` is intentionally the "is work currently in flight?"
+        view. It excludes active-but-idle threads, completed idle threads, and
+        archived threads; callers that need a broader inventory should use a
+        different query surface instead of widening this one.
+        """
+
+        filters = [
+            "t.lifecycle_status != 'archived'",
+            "(r.execution_id IS NOT NULL OR COALESCE(q.queued_count, 0) > 0)",
+        ]
         params: list[Any] = []
         normalized_repo_id = _normalize_text(repo_id)
         if normalized_repo_id is not None:
@@ -342,6 +353,63 @@ class OrchestrationBindingStore:
         with open_orchestration_sqlite(self._hub_root) as conn:
             rows = conn.execute(
                 f"""
+                WITH running_work AS (
+                    SELECT thread_target_id, execution_id
+                      FROM (
+                            SELECT
+                                thread_target_id,
+                                execution_id,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY thread_target_id
+                                    ORDER BY COALESCE(started_at, created_at) DESC,
+                                             rowid DESC
+                                ) AS running_rank
+                              FROM orch_thread_executions
+                             WHERE status = 'running'
+                      )
+                     WHERE running_rank = 1
+                ),
+                queued_work AS (
+                    SELECT
+                        e.thread_target_id,
+                        COUNT(*) AS queued_count
+                      FROM orch_queue_items AS q
+                      JOIN orch_thread_executions AS e
+                        ON e.execution_id = q.source_key
+                     WHERE q.source_kind = 'thread_execution'
+                       AND q.state IN ('pending', 'queued', 'waiting')
+                       AND e.status = 'queued'
+                  GROUP BY e.thread_target_id
+                ),
+                next_queued_work AS (
+                    SELECT thread_target_id, execution_id
+                      FROM (
+                            SELECT
+                                e.thread_target_id,
+                                e.execution_id,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY e.thread_target_id
+                                    ORDER BY COALESCE(q.visible_at, q.created_at) ASC,
+                                             q.rowid ASC
+                                ) AS queue_rank
+                              FROM orch_queue_items AS q
+                              JOIN orch_thread_executions AS e
+                                ON e.execution_id = q.source_key
+                             WHERE q.source_kind = 'thread_execution'
+                               AND q.state IN ('pending', 'queued', 'waiting')
+                               AND e.status = 'queued'
+                      )
+                     WHERE queue_rank = 1
+                ),
+                binding_summary AS (
+                    SELECT
+                        target_id AS thread_target_id,
+                        COUNT(binding_id) AS binding_count,
+                        GROUP_CONCAT(DISTINCT surface_kind) AS surface_kinds
+                      FROM orch_bindings
+                     WHERE disabled_at IS NULL
+                  GROUP BY target_id
+                )
                 SELECT
                     t.thread_target_id,
                     t.agent_id,
@@ -351,40 +419,28 @@ class OrchestrationBindingStore:
                     t.lifecycle_status,
                     t.runtime_status,
                     t.last_message_preview,
-                    e.execution_id,
-                    e.status AS execution_status,
+                    CASE
+                        WHEN r.execution_id IS NOT NULL THEN r.execution_id
+                        ELSE nq.execution_id
+                    END AS execution_id,
+                    CASE
+                        WHEN r.execution_id IS NOT NULL THEN 'running'
+                        WHEN COALESCE(q.queued_count, 0) > 0 THEN 'queued'
+                        ELSE NULL
+                    END AS execution_status,
                     COALESCE(q.queued_count, 0) AS queued_count,
-                    COUNT(b.binding_id) AS binding_count,
-                    GROUP_CONCAT(DISTINCT b.surface_kind) AS surface_kinds
+                    COALESCE(bs.binding_count, 0) AS binding_count,
+                    bs.surface_kinds
                   FROM orch_thread_targets AS t
-             LEFT JOIN orch_thread_executions AS e
-                    ON e.execution_id = t.last_execution_id
-             LEFT JOIN (
-                    SELECT
-                        REPLACE(lane_id, 'thread:', '') AS thread_target_id,
-                        COUNT(*) AS queued_count
-                      FROM orch_queue_items
-                     WHERE source_kind = 'thread_execution'
-                       AND state IN ('pending', 'queued', 'waiting')
-                  GROUP BY REPLACE(lane_id, 'thread:', '')
-                ) AS q
+             LEFT JOIN running_work AS r
+                    ON r.thread_target_id = t.thread_target_id
+             LEFT JOIN queued_work AS q
                     ON q.thread_target_id = t.thread_target_id
-             LEFT JOIN orch_bindings AS b
-                    ON b.target_id = t.thread_target_id
-                   AND b.disabled_at IS NULL
+             LEFT JOIN next_queued_work AS nq
+                    ON nq.thread_target_id = t.thread_target_id
+             LEFT JOIN binding_summary AS bs
+                    ON bs.thread_target_id = t.thread_target_id
                  WHERE {where_clause}
-              GROUP BY
-                    t.thread_target_id,
-                    t.agent_id,
-                    t.repo_id,
-                    t.workspace_root,
-                    t.display_name,
-                    t.lifecycle_status,
-                    t.runtime_status,
-                    t.last_message_preview,
-                    e.execution_id,
-                    e.status,
-                    q.queued_count
               ORDER BY t.updated_at DESC, t.created_at DESC
                  LIMIT ?
                 """,

@@ -213,6 +213,13 @@ def test_pma_models_help_shows_json_option():
     assert "AGENT" in output, "PMA models should require agent argument"
 
 
+def test_pma_binding_work_help_uses_busy_work_copy() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["binding", "work", "--help"])
+    assert result.exit_code == 0
+    assert "running or queued work" in result.stdout
+
+
 def test_pma_agents_displays_capabilities():
     """Verify PMA agents command displays capabilities."""
     runner = CliRunner()
@@ -653,6 +660,37 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             None,
         ),
     ]
+
+
+def test_pma_cli_binding_work_empty_state_uses_busy_copy(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    monkeypatch.setattr(
+        pma_cli,
+        "_request_json",
+        lambda method, url, payload=None, token_env=None, params=None: {
+            "summaries": []
+        },
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["binding", "work", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "No busy work found" in result.stdout
 
 
 def test_pma_context_snapshot(tmp_path: Path):

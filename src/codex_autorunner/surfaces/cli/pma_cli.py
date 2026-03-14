@@ -41,7 +41,7 @@ binding_app = typer.Typer(
     add_completion=False,
     rich_markup_mode=None,
     name="binding",
-    help="Query orchestration bindings and active work.",
+    help="Query orchestration bindings and busy work.",
 )
 pma_app.add_typer(docs_app)
 pma_app.add_typer(context_app)
@@ -2128,7 +2128,7 @@ def pma_binding_work(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """List active work summaries (threads with recent activity)."""
+    """List busy-work summaries (threads with running or queued work)."""
     hub_root = _resolve_hub_path(path)
     params = {
         key: value
@@ -2160,7 +2160,7 @@ def pma_binding_work(
 
     summaries = data.get("summaries", []) if isinstance(data, dict) else []
     if not isinstance(summaries, list) or not summaries:
-        typer.echo("No active work found")
+        typer.echo("No busy work found")
         return
     for summary in summaries:
         if not isinstance(summary, dict):

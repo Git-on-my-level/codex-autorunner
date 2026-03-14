@@ -792,6 +792,9 @@ def test_service_exposes_binding_queries_when_binding_store_is_configured(
     assert (
         service.get_binding(surface_kind="telegram", surface_key="123:root") is not None
     )
+    turn = PmaThreadStore(hub_root).create_turn(thread.thread_target_id, prompt="busy")
     summaries = service.list_active_work_summaries(repo_id="repo-1")
     assert len(summaries) == 1
     assert summaries[0].thread_target_id == thread.thread_target_id
+    assert summaries[0].execution_id == turn["managed_turn_id"]
+    assert summaries[0].execution_status == "running"
