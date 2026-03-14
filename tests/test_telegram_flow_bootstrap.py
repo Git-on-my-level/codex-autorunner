@@ -15,20 +15,30 @@ from codex_autorunner.integrations.telegram.handlers.commands import (
 from codex_autorunner.integrations.telegram.handlers.commands.flows import FlowCommands
 
 
-class _FlowRecord:
-    def __init__(self, run_id: str) -> None:
-        self.id = run_id
-
-
-class _ControllerStub:
+class _FlowServiceStub:
     def __init__(self) -> None:
         self.start_calls: list[dict[str, object]] = []
+        self.ensure_calls: list[tuple[str, bool]] = []
 
-    async def start_flow(
-        self, *, input_data: dict[str, object], metadata: dict[str, object]
-    ) -> _FlowRecord:
-        self.start_calls.append({"input_data": input_data, "metadata": metadata})
-        return _FlowRecord("run-1")
+    async def start_flow_run(
+        self,
+        _flow_target_id: str,
+        *,
+        input_data: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        run_id: str | None = None,
+    ) -> object:
+        self.start_calls.append(
+            {
+                "input_data": input_data or {},
+                "metadata": metadata or {},
+                "run_id": run_id,
+            }
+        )
+        return type("Run", (), {"run_id": run_id or "run-1"})()
+
+    def ensure_flow_run_worker(self, run_id: str, *, is_terminal: bool = False) -> None:
+        self.ensure_calls.append((run_id, is_terminal))
 
 
 class _FlowBootstrapHandler(FlowCommands):
@@ -95,17 +105,18 @@ async def test_flow_bootstrap_skips_prompt_when_tickets_exist(
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
 
-    controller = _ControllerStub()
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
-    monkeypatch.setattr(flows_module, "_spawn_flow_worker", lambda _root, _run: None)
 
     handler = _FlowBootstrapHandler()
     await handler._handle_flow_bootstrap(_message(), repo_root, argv=[])
 
     assert handler.prompts == []
-    assert controller.start_calls
+    assert flow_service.start_calls
     inbound_path = (
         repo_root / ".codex-autorunner" / "flows" / "run-1" / "chat" / "inbound.jsonl"
     )
@@ -139,17 +150,18 @@ async def test_flow_bootstrap_skips_prompt_when_issue_exists(
     issue_path.parent.mkdir(parents=True, exist_ok=True)
     issue_path.write_text("Issue content", encoding="utf-8")
 
-    controller = _ControllerStub()
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
-    monkeypatch.setattr(flows_module, "_spawn_flow_worker", lambda _root, _run: None)
 
     handler = _FlowBootstrapHandler()
     await handler._handle_flow_bootstrap(_message(), repo_root, argv=[])
 
     assert handler.prompts == []
-    assert controller.start_calls
+    assert flow_service.start_calls
 
 
 @pytest.mark.anyio
@@ -157,11 +169,12 @@ async def test_flow_bootstrap_prompts_for_issue_when_github_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path
-    controller = _ControllerStub()
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
-    monkeypatch.setattr(flows_module, "_spawn_flow_worker", lambda _root, _run: None)
 
     handler = _FlowBootstrapHandler()
 
@@ -175,7 +188,7 @@ async def test_flow_bootstrap_prompts_for_issue_when_github_available(
 
     assert handler.prompts
     assert handler.seed_issue_refs == ["https://github.com/example/repo/issues/123"]
-    assert controller.start_calls
+    assert flow_service.start_calls
 
 
 @pytest.mark.anyio
@@ -183,11 +196,12 @@ async def test_flow_bootstrap_prompts_for_plan_when_github_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path
-    controller = _ControllerStub()
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
-    monkeypatch.setattr(flows_module, "_spawn_flow_worker", lambda _root, _run: None)
 
     handler = _FlowBootstrapHandler()
     handler.prompt_responses = ["do the thing"]
@@ -196,7 +210,7 @@ async def test_flow_bootstrap_prompts_for_plan_when_github_unavailable(
 
     assert handler.prompts
     assert handler.seed_plan_texts == ["do the thing"]
-    assert controller.start_calls
+    assert flow_service.start_calls
 
 
 @pytest.mark.anyio
@@ -213,17 +227,15 @@ async def test_flow_bootstrap_reuses_active_run_without_spawning_new_worker(
     store.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
     store.close()
 
-    ensure_calls: list[tuple[Path, str]] = []
-
-    def _ensure(_repo_root: Path, _run_id: str, is_terminal: bool = False) -> dict:
-        _ = is_terminal
-        ensure_calls.append((_repo_root, _run_id))
-        return {"status": "reused"}
-
-    monkeypatch.setattr(flows_module, "ensure_worker", _ensure)
+    flow_service = _FlowServiceStub()
+    monkeypatch.setattr(
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
 
     handler = _FlowBootstrapHandler()
     await handler._handle_flow_bootstrap(_message(), repo_root, argv=[])
 
-    assert ensure_calls == [(repo_root, run_id)]
+    assert flow_service.ensure_calls == [(run_id, False)]
     assert any("Reusing ticket flow run" in message for message in handler.sent)

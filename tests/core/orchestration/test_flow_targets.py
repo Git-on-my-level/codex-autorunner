@@ -202,6 +202,34 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
             runs[run_id] = stopped
             return stopped
 
+        def ensure_run_worker(self, run_id: str, *, is_terminal: bool = False) -> None:
+            calls.append(("ensure", run_id, is_terminal))
+
+        def reconcile_run(self, run_id: str) -> tuple[FlowRunTarget, bool, bool]:
+            calls.append(("reconcile", run_id))
+            return runs[run_id], True, False
+
+        async def wait_for_terminal(
+            self,
+            run_id: str,
+            *,
+            timeout_seconds: float = 10.0,
+            poll_interval_seconds: float = 0.25,
+        ) -> FlowRunTarget | None:
+            calls.append(("wait", run_id, timeout_seconds, poll_interval_seconds))
+            return runs.get(run_id)
+
+        def archive_run(
+            self, run_id: str, *, force: bool = False, delete_run: bool = True
+        ) -> dict[str, object]:
+            calls.append(("archive", run_id, force, delete_run))
+            return {
+                "run_id": run_id,
+                "archived_tickets": 1,
+                "archived_runs": True,
+                "archived_contextspace": False,
+            }
+
         def get_run(self, run_id: str) -> FlowRunTarget | None:
             calls.append(("get", run_id))
             return runs.get(run_id)
@@ -236,9 +264,18 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
 
     resumed = await service.resume_flow_run("run-1", force=True)
     stopped = await service.stop_flow_run("run-1")
+    service.ensure_flow_run_worker("run-1")
+    reconciled, updated, locked = service.reconcile_flow_run("run-1")
+    waited = await service.wait_for_flow_run_terminal("run-1")
+    archived = service.archive_flow_run("run-1", force=True, delete_run=False)
 
     assert resumed.status == "running"
     assert stopped.status == "stopped"
+    assert reconciled.status == "stopped"
+    assert updated is True
+    assert locked is False
+    assert waited == stopped
+    assert archived["run_id"] == "run-1"
     assert service.list_active_flow_runs() == []
     assert service.get_flow_target("missing") is None
     with pytest.raises(KeyError, match="Unknown flow run 'missing'"):
@@ -259,6 +296,14 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
         ("resume", "run-1", True),
         ("get", "run-1"),
         ("stop", "run-1"),
+        ("get", "run-1"),
+        ("ensure", "run-1", False),
+        ("get", "run-1"),
+        ("reconcile", "run-1"),
+        ("get", "run-1"),
+        ("wait", "run-1", 10.0, 0.25),
+        ("get", "run-1"),
+        ("archive", "run-1", True, False),
         ("list",),
         ("get", "missing"),
     ]

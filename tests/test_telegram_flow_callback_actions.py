@@ -56,18 +56,25 @@ class _TopicStoreStub:
         return self._record
 
 
-class _ControllerStub:
+class _FlowServiceStub:
     def __init__(self) -> None:
         self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
+        self.reconcile_calls: list[str] = []
 
-    async def resume_flow(self, run_id: str, *, force: bool = False) -> SimpleNamespace:
+    async def resume_flow_run(
+        self, run_id: str, *, force: bool = False
+    ) -> SimpleNamespace:
         self.resume_calls.append(run_id)
-        return SimpleNamespace(id=run_id)
+        return SimpleNamespace(run_id=run_id, status="running", force=force)
 
-    async def stop_flow(self, run_id: str) -> SimpleNamespace:
+    async def stop_flow_run(self, run_id: str) -> SimpleNamespace:
         self.stop_calls.append(run_id)
-        return SimpleNamespace(id=run_id, status=FlowRunStatus.STOPPED)
+        return SimpleNamespace(run_id=run_id, status="stopped")
+
+    def reconcile_flow_run(self, run_id: str) -> tuple[SimpleNamespace, bool, bool]:
+        self.reconcile_calls.append(run_id)
+        return SimpleNamespace(run_id=run_id, status="running"), True, False
 
 
 class _FlowCallbackHandler(FlowCommands):
@@ -81,7 +88,6 @@ class _FlowCallbackHandler(FlowCommands):
         self._store = _TopicStoreStub(repo_root)
         self.answers: list[str] = []
         self.rendered: list[tuple[Path, str | None, str | None]] = []
-        self.stopped_workers: list[str] = []
 
     async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
         return "topic"
@@ -100,9 +106,6 @@ class _FlowCallbackHandler(FlowCommands):
         repo_id: str | None = None,
     ) -> None:
         self.rendered.append((repo_root, run_id_raw, repo_id))
-
-    def _stop_flow_worker(self, _repo_root: Path, run_id: str) -> None:
-        self.stopped_workers.append(run_id)
 
     def _resolve_workspace(self, arg: str) -> tuple[str, str] | None:
         if self._repo_root and arg in {
@@ -147,20 +150,17 @@ async def test_flow_callback_resume_latest_paused(
     _create_run(store, run_id, FlowRunStatus.PAUSED)
     store.close()
 
-    controller = _ControllerStub()
-    spawned: list[str] = []
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
-    )
-    monkeypatch.setattr(
-        flows_module, "_spawn_flow_worker", lambda _root, run: spawned.append(run)
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     handler = _FlowCallbackHandler(tmp_path)
     await handler._handle_flow_callback(_callback(), FlowCallback(action="resume"))
 
-    assert controller.resume_calls == [run_id]
-    assert spawned == [run_id]
+    assert flow_service.resume_calls == [run_id]
     assert "Resumed." in handler.answers
     assert handler.rendered
 
@@ -174,16 +174,17 @@ async def test_flow_callback_stop_latest_active(
     _create_run(store, run_id, FlowRunStatus.RUNNING)
     store.close()
 
-    controller = _ControllerStub()
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     handler = _FlowCallbackHandler(tmp_path)
     await handler._handle_flow_callback(_callback(), FlowCallback(action="stop"))
 
-    assert controller.stop_calls == [run_id]
-    assert handler.stopped_workers == [run_id]
+    assert flow_service.stop_calls == [run_id]
     assert "Stopped." in handler.answers
     assert handler.rendered
 
@@ -197,18 +198,17 @@ async def test_flow_callback_recover_latest_active(
     _create_run(store, run_id, FlowRunStatus.RUNNING)
     store.close()
 
-    recovered: list[str] = []
-
-    def _reconcile(_repo_root: Path, record: object, _store: FlowStore):
-        recovered.append(record.id)
-        return record, True, False
-
-    monkeypatch.setattr(flows_module, "reconcile_flow_run", _reconcile)
+    flow_service = _FlowServiceStub()
+    monkeypatch.setattr(
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
 
     handler = _FlowCallbackHandler(tmp_path)
     await handler._handle_flow_callback(_callback(), FlowCallback(action="recover"))
 
-    assert recovered == [run_id]
+    assert flow_service.reconcile_calls == [run_id]
     assert "Recovered." in handler.answers
     assert handler.rendered
 

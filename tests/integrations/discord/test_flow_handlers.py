@@ -13,7 +13,7 @@ import pytest
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows import hub_overview as hub_overview_module
-from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
@@ -92,6 +92,54 @@ class _FakeOutboxManager:
 
     async def run_loop(self) -> None:
         await asyncio.Event().wait()
+
+
+class _FlowServiceStub:
+    def __init__(self) -> None:
+        self.start_calls: list[dict[str, Any]] = []
+        self.stop_calls: list[str] = []
+        self.resume_calls: list[str] = []
+        self.ensure_calls: list[tuple[str, bool]] = []
+        self.reconcile_calls: list[str] = []
+        self.wait_result: SimpleNamespace | None = None
+
+    async def start_flow_run(
+        self,
+        _flow_target_id: str,
+        *,
+        input_data: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        run_id: str | None = None,
+    ) -> SimpleNamespace:
+        self.start_calls.append(
+            {
+                "input_data": input_data or {},
+                "metadata": metadata or {},
+                "run_id": run_id,
+            }
+        )
+        return SimpleNamespace(run_id=run_id or "run-new", status="running")
+
+    async def stop_flow_run(self, run_id: str) -> SimpleNamespace:
+        self.stop_calls.append(run_id)
+        return SimpleNamespace(run_id=run_id, status="stopped")
+
+    async def resume_flow_run(self, run_id: str, *, force: bool = False):
+        _ = force
+        self.resume_calls.append(run_id)
+        return SimpleNamespace(run_id=run_id, status="running")
+
+    def ensure_flow_run_worker(self, run_id: str, *, is_terminal: bool = False) -> None:
+        self.ensure_calls.append((run_id, is_terminal))
+
+    async def wait_for_flow_run_terminal(
+        self, _run_id: str, **_kwargs: Any
+    ) -> SimpleNamespace | None:
+        return self.wait_result
+
+    def reconcile_flow_run(self, run_id: str):
+        self.reconcile_calls.append(run_id)
+        return SimpleNamespace(run_id=run_id, status="running"), True, False
 
 
 def _config(root: Path) -> DiscordBotConfig:
@@ -565,13 +613,10 @@ async def test_flow_start_reuses_active_or_paused_run(
         repo_id=None,
     )
 
-    ensure_calls: list[tuple[Path, str, bool]] = []
-
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.ensure_worker",
-        lambda repo_root, run_id, is_terminal=False: (
-            ensure_calls.append((repo_root, run_id, is_terminal)) or {}
-        ),
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     rest = _FakeRest()
@@ -586,7 +631,7 @@ async def test_flow_start_reuses_active_or_paused_run(
     )
     try:
         await service.run_forever()
-        assert ensure_calls == [(workspace, paused_run_id, False)]
+        assert flow_service.ensure_calls == [(paused_run_id, False)]
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert f"Reusing ticket_flow run {paused_run_id} (paused)." in content
     finally:
@@ -610,46 +655,10 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
         repo_id=None,
     )
 
-    class _FakeController:
-        def __init__(self) -> None:
-            self.start_calls: list[dict[str, Any]] = []
-            self.stop_calls: list[str] = []
-
-        async def start_flow(
-            self, *, input_data: dict[str, Any], metadata: dict[str, Any]
-        ) -> FlowRunRecord:
-            self.start_calls.append({"input_data": input_data, "metadata": metadata})
-            return FlowRunRecord(
-                id="run-new",
-                flow_type="ticket_flow",
-                status=FlowRunStatus.RUNNING,
-                input_data={},
-                state={},
-                created_at="2026-01-01T00:00:00Z",
-            )
-
-        async def stop_flow(self, run_id: str) -> FlowRunRecord:
-            self.stop_calls.append(run_id)
-            return FlowRunRecord(
-                id=run_id,
-                flow_type="ticket_flow",
-                status=FlowRunStatus.STOPPED,
-                input_data={},
-                state={},
-                created_at="2026-01-01T00:00:00Z",
-            )
-
-    controller = _FakeController()
-    ensure_calls: list[tuple[Path, str, bool]] = []
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
-        lambda _workspace_root: controller,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.ensure_worker",
-        lambda repo_root, run_id, is_terminal=False: (
-            ensure_calls.append((repo_root, run_id, is_terminal)) or {}
-        ),
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     rest = _FakeRest()
@@ -671,11 +680,10 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
     )
     try:
         await service.run_forever()
-        assert controller.stop_calls == []
-        assert len(controller.start_calls) == 1
-        assert controller.start_calls[0]["metadata"]["force_new"] is True
-        assert controller.start_calls[0]["metadata"]["origin"] == "discord"
-        assert ensure_calls == [(workspace, "run-new", False)]
+        assert flow_service.stop_calls == []
+        assert len(flow_service.start_calls) == 1
+        assert flow_service.start_calls[0]["metadata"]["force_new"] is True
+        assert flow_service.start_calls[0]["metadata"]["origin"] == "discord"
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Started new ticket_flow run run-new." in content
     finally:
@@ -699,60 +707,11 @@ async def test_flow_restart_aborts_when_active_run_does_not_terminate(
         repo_id=None,
     )
 
-    class _FakeController:
-        def __init__(self) -> None:
-            self.start_calls: list[dict[str, Any]] = []
-            self.stop_calls: list[str] = []
-
-        async def start_flow(
-            self, *, input_data: dict[str, Any], metadata: dict[str, Any]
-        ) -> FlowRunRecord:
-            self.start_calls.append({"input_data": input_data, "metadata": metadata})
-            return FlowRunRecord(
-                id="run-should-not-start",
-                flow_type="ticket_flow",
-                status=FlowRunStatus.RUNNING,
-                input_data={},
-                state={},
-                created_at="2026-01-01T00:00:00Z",
-            )
-
-        async def stop_flow(self, run_id: str) -> FlowRunRecord:
-            self.stop_calls.append(run_id)
-            return FlowRunRecord(
-                id=run_id,
-                flow_type="ticket_flow",
-                status=FlowRunStatus.STOPPING,
-                input_data={},
-                state={},
-                created_at="2026-01-01T00:00:00Z",
-            )
-
-    async def _fake_wait_for_terminal(
-        self, _workspace_root: Path, run_id: str, **_kwargs: Any
-    ) -> FlowRunRecord:
-        return FlowRunRecord(
-            id=run_id,
-            flow_type="ticket_flow",
-            status=FlowRunStatus.STOPPING,
-            input_data={},
-            state={},
-            created_at="2026-01-01T00:00:00Z",
-        )
-
-    stopped_workers: list[str] = []
-    controller = _FakeController()
+    flow_service = _FlowServiceStub()
+    flow_service.wait_result = SimpleNamespace(run_id=running_run_id, status="stopping")
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
-        lambda _workspace_root: controller,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.DiscordBotService._wait_for_flow_terminal",
-        _fake_wait_for_terminal,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.DiscordBotService._stop_flow_worker",
-        staticmethod(lambda _workspace_root, run_id: stopped_workers.append(run_id)),
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     rest = _FakeRest()
@@ -774,9 +733,8 @@ async def test_flow_restart_aborts_when_active_run_does_not_terminate(
     )
     try:
         await service.run_forever()
-        assert controller.stop_calls == [running_run_id]
-        assert stopped_workers == [running_run_id]
-        assert controller.start_calls == []
+        assert flow_service.stop_calls == [running_run_id]
+        assert flow_service.start_calls == []
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "restart aborted to avoid concurrent workers" in content
     finally:
@@ -800,12 +758,10 @@ async def test_flow_recover_reconciles_active_run(
         repo_id=None,
     )
 
-    def _fake_reconcile(_repo_root, record, _store):
-        return record, True, False
-
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.reconcile_flow_run",
-        _fake_reconcile,
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     rest = _FakeRest()
@@ -827,6 +783,7 @@ async def test_flow_recover_reconciles_active_run(
     )
     try:
         await service.run_forever()
+        assert flow_service.reconcile_calls == [running_run_id]
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert f"Recovered for run {running_run_id}" in content
     finally:
@@ -850,29 +807,10 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         repo_id=None,
     )
 
-    class _FakeController:
-        async def resume_flow(self, run_id: str) -> FlowRunRecord:
-            return FlowRunRecord(
-                id=run_id,
-                flow_type="ticket_flow",
-                status=FlowRunStatus.RUNNING,
-                input_data={},
-                state={},
-                created_at="2026-01-01T00:00:00Z",
-            )
-
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
-        lambda _workspace_root: _FakeController(),
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.ensure_worker",
-        lambda _workspace_root, _run_id, is_terminal=False: {
-            "status": "spawned",
-            "stdout": None,
-            "stderr": None,
-            "is_terminal": is_terminal,
-        },
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     rest = _FakeRest()
@@ -898,6 +836,7 @@ async def test_flow_reply_writes_user_reply_and_resumes(
 
     try:
         await service.run_forever()
+        assert flow_service.resume_calls == [paused_run_id]
         reply_path = (
             workspace / ".codex-autorunner" / "runs" / paused_run_id / "USER_REPLY.md"
         )
@@ -1437,15 +1376,10 @@ async def test_flow_recover_uses_explicit_run_id(
         repo_id=None,
     )
 
-    seen: list[str] = []
-
-    def _fake_reconcile(_repo_root, record, _store):
-        seen.append(record.id)
-        return record, True, False
-
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.reconcile_flow_run",
-        _fake_reconcile,
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     rest = _FakeRest()
@@ -1467,7 +1401,7 @@ async def test_flow_recover_uses_explicit_run_id(
     )
     try:
         await service.run_forever()
-        assert seen == [target_run_id]
+        assert flow_service.reconcile_calls == [target_run_id]
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert f"Recovered for run {target_run_id}" in content
     finally:

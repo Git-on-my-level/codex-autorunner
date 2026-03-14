@@ -54,6 +54,60 @@ async def _stop_ticket_flow_run(repo_root: Path, run_id: str) -> FlowRunRecord:
     return await stop_ticket_flow_run(repo_root, run_id)
 
 
+def _ensure_ticket_flow_worker(
+    repo_root: Path,
+    run_id: str,
+    *,
+    is_terminal: bool = False,
+) -> None:
+    from ...flows.ticket_flow.runtime_helpers import ensure_ticket_flow_worker
+
+    ensure_ticket_flow_worker(repo_root, run_id, is_terminal=is_terminal)
+
+
+def _reconcile_ticket_flow_run(
+    repo_root: Path,
+    run_id: str,
+) -> tuple[FlowRunRecord, bool, bool]:
+    from ...flows.ticket_flow.runtime_helpers import reconcile_ticket_flow_run
+
+    return reconcile_ticket_flow_run(repo_root, run_id)
+
+
+async def _wait_for_ticket_flow_terminal(
+    repo_root: Path,
+    run_id: str,
+    *,
+    timeout_seconds: float = 10.0,
+    poll_interval_seconds: float = 0.25,
+) -> Optional[FlowRunRecord]:
+    from ...flows.ticket_flow.runtime_helpers import wait_for_ticket_flow_terminal
+
+    return await wait_for_ticket_flow_terminal(
+        repo_root,
+        run_id,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+
+
+def _archive_ticket_flow_run(
+    repo_root: Path,
+    run_id: str,
+    *,
+    force: bool = False,
+    delete_run: bool = True,
+) -> dict[str, Any]:
+    from ...flows.ticket_flow.runtime_helpers import archive_ticket_flow_run
+
+    return archive_ticket_flow_run(
+        repo_root,
+        run_id,
+        force=force,
+        delete_run=delete_run,
+    )
+
+
 def _get_ticket_flow_run_status(
     repo_root: Path, run_id: str
 ) -> Optional[FlowRunRecord]:
@@ -122,6 +176,14 @@ class TicketFlowTargetWrapper:
         _resume_ticket_flow_run
     )
     stop_flow_run_fn: Callable[..., Awaitable[FlowRunRecord]] = _stop_ticket_flow_run
+    ensure_worker_fn: Callable[..., None] = _ensure_ticket_flow_worker
+    reconcile_flow_run_fn: Callable[..., tuple[FlowRunRecord, bool, bool]] = (
+        _reconcile_ticket_flow_run
+    )
+    wait_for_terminal_fn: Callable[..., Awaitable[Optional[FlowRunRecord]]] = (
+        _wait_for_ticket_flow_terminal
+    )
+    archive_flow_run_fn: Callable[..., dict[str, Any]] = _archive_ticket_flow_run
     get_flow_run_status_fn: Callable[..., Optional[FlowRunRecord]] = (
         _get_ticket_flow_run_status
     )
@@ -163,6 +225,55 @@ class TicketFlowTargetWrapper:
         record = await self.stop_flow_run_fn(self._workspace_root(), run_id)
         return _flow_run_target_from_record(record, flow_target=self.flow_target)
 
+    def ensure_run_worker(self, run_id: str, *, is_terminal: bool = False) -> None:
+        self.ensure_worker_fn(
+            self._workspace_root(),
+            run_id,
+            is_terminal=is_terminal,
+        )
+
+    def reconcile_run(self, run_id: str) -> tuple[FlowRunTarget, bool, bool]:
+        record, updated, locked = self.reconcile_flow_run_fn(
+            self._workspace_root(),
+            run_id,
+        )
+        return (
+            _flow_run_target_from_record(record, flow_target=self.flow_target),
+            updated,
+            locked,
+        )
+
+    async def wait_for_terminal(
+        self,
+        run_id: str,
+        *,
+        timeout_seconds: float = 10.0,
+        poll_interval_seconds: float = 0.25,
+    ) -> Optional[FlowRunTarget]:
+        record = await self.wait_for_terminal_fn(
+            self._workspace_root(),
+            run_id,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        if record is None:
+            return None
+        return _flow_run_target_from_record(record, flow_target=self.flow_target)
+
+    def archive_run(
+        self,
+        run_id: str,
+        *,
+        force: bool = False,
+        delete_run: bool = True,
+    ) -> dict[str, Any]:
+        return self.archive_flow_run_fn(
+            self._workspace_root(),
+            run_id,
+            force=force,
+            delete_run=delete_run,
+        )
+
     def get_run(self, run_id: str) -> Optional[FlowRunTarget]:
         record = self.get_flow_run_status_fn(self._workspace_root(), run_id)
         if record is None:
@@ -194,6 +305,10 @@ def build_ticket_flow_target_wrapper(
         start_flow_run_fn=_start_ticket_flow_run,
         resume_flow_run_fn=_resume_ticket_flow_run,
         stop_flow_run_fn=_stop_ticket_flow_run,
+        ensure_worker_fn=_ensure_ticket_flow_worker,
+        reconcile_flow_run_fn=_reconcile_ticket_flow_run,
+        wait_for_terminal_fn=_wait_for_ticket_flow_terminal,
+        archive_flow_run_fn=_archive_ticket_flow_run,
         get_flow_run_status_fn=_get_ticket_flow_run_status,
         list_flow_runs_fn=_list_ticket_flow_runs,
         list_active_flow_runs_fn=_list_active_ticket_flow_runs,

@@ -9,6 +9,7 @@ from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOut
 from codex_autorunner.core.ports.run_event import (
     ApprovalRequested,
     Completed,
+    Failed,
     OutputDelta,
     RunNotice,
     TokenUsage,
@@ -115,3 +116,54 @@ async def test_terminal_run_event_from_outcome_uses_streamed_fallback_text() -> 
 
     assert isinstance(event, Completed)
     assert event.final_message == "streamed fallback"
+
+
+async def test_terminal_run_event_from_outcome_redacts_unknown_errors() -> None:
+    state = RuntimeThreadRunEventState()
+
+    event = terminal_run_event_from_outcome(
+        RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error="backend exploded with private detail",
+            backend_thread_id="thread-1",
+            backend_turn_id="turn-1",
+        ),
+        state,
+    )
+
+    assert isinstance(event, Failed)
+    assert event.error_message == "Runtime thread failed"
+
+
+async def test_normalize_runtime_thread_raw_event_deduplicates_identical_stream_chunks() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "item/agentMessage/delta",
+                    "params": {"delta": "partial reply"},
+                }
+            },
+        ),
+        state,
+    )
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "item/agentMessage/delta",
+                    "params": {"delta": "partial reply"},
+                }
+            },
+        ),
+        state,
+    )
+
+    assert state.assistant_stream_text == "partial reply"

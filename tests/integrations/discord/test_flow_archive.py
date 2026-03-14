@@ -72,6 +72,20 @@ class _FakeOutboxManager:
         await asyncio.Event().wait()
 
 
+class _FlowServiceStub:
+    def __init__(self, summary: dict[str, Any]) -> None:
+        self.summary = summary
+        self.archive_calls: list[dict[str, Any]] = []
+
+    def archive_flow_run(
+        self, run_id: str, *, force: bool = False, delete_run: bool = True
+    ) -> dict[str, Any]:
+        self.archive_calls.append(
+            {"run_id": run_id, "force": force, "delete_run": delete_run}
+        )
+        return dict(self.summary)
+
+
 def _config(root: Path) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -134,25 +148,18 @@ async def test_flow_archive_command_deletes_run_record_by_default(
 
     rest = _FakeRest()
     service = _service(tmp_path, rest)
-    captured: list[dict[str, Any]] = []
-
-    def _archive_flow_run_artifacts(repo_root: Path, **kwargs: Any) -> dict[str, Any]:
-        captured.append({"repo_root": str(repo_root), **kwargs})
-        if kwargs.get("delete_run"):
-            with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
-                store.initialize()
-                store.delete_flow_run(run_id)
-        return {
-            "run_id": kwargs["run_id"],
+    flow_service = _FlowServiceStub(
+        {
+            "run_id": run_id,
             "archived_tickets": 0,
             "archived_runs": True,
             "archived_contextspace": False,
         }
-
+    )
     monkeypatch.setattr(
         discord_service_module,
-        "archive_flow_run_artifacts",
-        _archive_flow_run_artifacts,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     try:
@@ -167,17 +174,12 @@ async def test_flow_archive_command_deletes_run_record_by_default(
     finally:
         await service._store.close()
 
-    assert captured == [
-        {
-            "repo_root": str(workspace),
-            "run_id": run_id,
-            "force": False,
-            "delete_run": True,
-        }
+    assert flow_service.archive_calls == [
+        {"run_id": run_id, "force": False, "delete_run": True}
     ]
     with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
         store.initialize()
-        assert store.get_flow_run(run_id) is None
+        assert store.get_flow_run(run_id) is not None
     assert "Archived run" in rest.interaction_responses[0]["payload"]["data"]["content"]
 
 
@@ -190,21 +192,18 @@ async def test_flow_archive_button_deletes_run_record_by_default(
 
     rest = _FakeRest()
     service = _service(tmp_path, rest)
-    captured: list[dict[str, Any]] = []
-
-    def _archive_flow_run_artifacts(repo_root: Path, **kwargs: Any) -> dict[str, Any]:
-        captured.append({"repo_root": str(repo_root), **kwargs})
-        return {
-            "run_id": kwargs["run_id"],
+    flow_service = _FlowServiceStub(
+        {
+            "run_id": run_id,
             "archived_tickets": 0,
             "archived_runs": True,
             "archived_contextspace": False,
         }
-
+    )
     monkeypatch.setattr(
         discord_service_module,
-        "archive_flow_run_artifacts",
-        _archive_flow_run_artifacts,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     try:
@@ -219,13 +218,8 @@ async def test_flow_archive_button_deletes_run_record_by_default(
     finally:
         await service._store.close()
 
-    assert captured == [
-        {
-            "repo_root": str(workspace),
-            "run_id": run_id,
-            "force": False,
-            "delete_run": True,
-        }
+    assert flow_service.archive_calls == [
+        {"run_id": run_id, "force": False, "delete_run": True}
     ]
     assert "Archived run" in rest.interaction_responses[0]["payload"]["data"]["content"]
 

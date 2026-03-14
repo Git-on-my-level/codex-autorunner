@@ -25,24 +25,52 @@ class _NowSeq:
         return f"2026-01-30T00:00:0{self._counter}Z"
 
 
-class _ControllerStub:
+class _FlowServiceStub:
     def __init__(self) -> None:
+        self.start_calls: list[dict[str, object]] = []
         self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
+        self.ensure_calls: list[tuple[str, bool]] = []
+        self.reconcile_calls: list[str] = []
 
-    async def resume_flow(self, run_id: str, *, force: bool = False) -> SimpleNamespace:
+    async def start_flow_run(
+        self,
+        _flow_target_id: str,
+        *,
+        input_data: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        run_id: str | None = None,
+    ) -> SimpleNamespace:
+        self.start_calls.append(
+            {
+                "input_data": input_data or {},
+                "metadata": metadata or {},
+                "run_id": run_id,
+            }
+        )
+        return SimpleNamespace(run_id=run_id or "run-1")
+
+    async def resume_flow_run(
+        self, run_id: str, *, force: bool = False
+    ) -> SimpleNamespace:
         self.resume_calls.append(run_id)
-        return SimpleNamespace(id=run_id)
+        return SimpleNamespace(run_id=run_id, status="running", force=force)
 
-    async def stop_flow(self, run_id: str) -> SimpleNamespace:
+    async def stop_flow_run(self, run_id: str) -> SimpleNamespace:
         self.stop_calls.append(run_id)
-        return SimpleNamespace(id=run_id, status=FlowRunStatus.STOPPED)
+        return SimpleNamespace(run_id=run_id, status="stopped")
+
+    def ensure_flow_run_worker(self, run_id: str, *, is_terminal: bool = False) -> None:
+        self.ensure_calls.append((run_id, is_terminal))
+
+    def reconcile_flow_run(self, run_id: str) -> tuple[SimpleNamespace, bool, bool]:
+        self.reconcile_calls.append(run_id)
+        return SimpleNamespace(run_id=run_id, status="running"), True, False
 
 
 class _FlowLifecycleHandler(FlowCommands):
     def __init__(self) -> None:
         self.sent: list[str] = []
-        self.stopped_workers: list[str] = []
 
     async def _send_message(
         self,
@@ -56,9 +84,6 @@ class _FlowLifecycleHandler(FlowCommands):
     ) -> None:
         _ = (thread_id, reply_to, reply_markup, parse_mode)
         self.sent.append(text)
-
-    def _stop_flow_worker(self, _repo_root: Path, run_id: str) -> None:
-        self.stopped_workers.append(run_id)
 
 
 def _message() -> TelegramMessage:
@@ -101,20 +126,17 @@ async def test_flow_resume_defaults_latest_paused(
     _create_run(store, run_new, FlowRunStatus.PAUSED)
     store.close()
 
-    controller = _ControllerStub()
-    spawned: list[str] = []
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
-    )
-    monkeypatch.setattr(
-        flows_module, "_spawn_flow_worker", lambda _root, run: spawned.append(run)
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     handler = _FlowLifecycleHandler()
     await handler._handle_flow_resume(_message(), tmp_path, argv=[])
 
-    assert controller.resume_calls == [run_new]
-    assert spawned == [run_new]
+    assert flow_service.resume_calls == [run_new]
     assert any(f"Resumed run `{run_new}`" in text for text in handler.sent)
 
 
@@ -129,15 +151,17 @@ async def test_flow_stop_defaults_latest_active(
     _create_run(store, run_completed, FlowRunStatus.COMPLETED)
     store.close()
 
-    controller = _ControllerStub()
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     handler = _FlowLifecycleHandler()
     await handler._handle_flow_stop(_message(), tmp_path, argv=[])
 
-    assert controller.stop_calls == [run_running]
+    assert flow_service.stop_calls == [run_running]
     assert any(f"Stopped run `{run_running}`" in text for text in handler.sent)
     inbound_path = (
         tmp_path
@@ -180,20 +204,17 @@ async def test_flow_resume_mirrors_chat_inbound_and_outbound(
     _create_run(store, run_id, FlowRunStatus.PAUSED)
     store.close()
 
-    controller = _ControllerStub()
-    spawned: list[str] = []
+    flow_service = _FlowServiceStub()
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
-    )
-    monkeypatch.setattr(
-        flows_module, "_spawn_flow_worker", lambda _root, run: spawned.append(run)
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     handler = _FlowLifecycleHandler()
     await handler._handle_flow_resume(_message(), tmp_path, argv=[])
 
-    assert controller.resume_calls == [run_id]
-    assert spawned == [run_id]
+    assert flow_service.resume_calls == [run_id]
 
     inbound_path = (
         tmp_path / ".codex-autorunner" / "flows" / run_id / "chat" / "inbound.jsonl"
@@ -244,19 +265,17 @@ async def test_flow_recover_defaults_latest_active(
     _create_run(store, run_completed, FlowRunStatus.COMPLETED)
     store.close()
 
-    recovered: list[str] = []
-
-    def _reconcile(repo_root: Path, record: object, _store: FlowStore):
-        _ = repo_root
-        recovered.append(record.id)
-        return record, True, False
-
-    monkeypatch.setattr(flows_module, "reconcile_flow_run", _reconcile)
+    flow_service = _FlowServiceStub()
+    monkeypatch.setattr(
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
 
     handler = _FlowLifecycleHandler()
     await handler._handle_flow_recover(_message(), tmp_path, argv=[])
 
-    assert recovered == [run_running]
+    assert flow_service.reconcile_calls == [run_running]
     assert any("Recovered" in text for text in handler.sent)
 
 
@@ -335,7 +354,6 @@ async def test_flow_archive_defaults_latest_paused(
     ) == ""
     assert not (tmp_path / ".codex-autorunner" / "flows" / run_paused).exists()
     assert handler.stopped_workers == [run_paused]
-
     store = FlowStore(tmp_path / ".codex-autorunner" / "flows.db")
     store.initialize()
     try:
@@ -353,8 +371,7 @@ async def test_flow_reply_mirrors_chat_inbound_and_outbound(
     paused_record = SimpleNamespace(
         id=run_id, status=FlowRunStatus.PAUSED, input_data={}
     )
-    controller = _ControllerStub()
-    spawned: list[str] = []
+    flow_service = _FlowServiceStub()
 
     async def _get_topic(_key: str):
         return SimpleNamespace(workspace_path=str(tmp_path))
@@ -378,10 +395,9 @@ async def test_flow_reply_mirrors_chat_inbound_and_outbound(
     handler._write_user_reply_from_telegram = _write_user_reply  # type: ignore[assignment]
     handler._resolve_topic_key = _resolve_topic_key  # type: ignore[assignment]
     monkeypatch.setattr(
-        flows_module, "_get_ticket_controller", lambda _root: controller
-    )
-    monkeypatch.setattr(
-        flows_module, "_spawn_flow_worker", lambda _root, run: spawned.append(run)
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
     )
 
     message = TelegramMessage(
@@ -395,8 +411,7 @@ async def test_flow_reply_mirrors_chat_inbound_and_outbound(
         is_topic_message=True,
     )
     await handler._handle_reply(message, "hello")
-    assert controller.resume_calls == [run_id]
-    assert spawned == [run_id]
+    assert flow_service.resume_calls == [run_id]
     assert any("Resumed run" in text for text in handler.sent)
 
     inbound_path = (

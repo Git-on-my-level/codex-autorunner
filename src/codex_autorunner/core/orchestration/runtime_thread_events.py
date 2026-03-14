@@ -32,6 +32,8 @@ def _merge_assistant_stream(current: str, incoming: str) -> str:
         return current
     if not current:
         return incoming
+    if incoming == current:
+        return current
     if len(incoming) > len(current) and incoming.startswith(current):
         return incoming
     max_overlap = min(len(current), max(len(incoming) - 1, 0))
@@ -86,8 +88,15 @@ def terminal_run_event_from_outcome(
         )
     return Failed(
         timestamp=now_iso(),
-        error_message=str(outcome.error or "").strip() or "Runtime thread failed",
+        error_message=_public_terminal_error_message(outcome),
     )
+
+
+def _public_terminal_error_message(outcome: RuntimeThreadOutcome) -> str:
+    detail = str(outcome.error or "").strip()
+    if detail in {"Runtime thread timed out", "Runtime thread interrupted"}:
+        return detail
+    return "Runtime thread failed"
 
 
 async def _parse_runtime_thread_sse(raw_event: str):

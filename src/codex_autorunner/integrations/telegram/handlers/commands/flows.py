@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
-    FlowController,
     FlowStore,
-    archive_flow_run_artifacts,
     flow_duration_seconds,
     flow_run_duration_seconds,
     format_flow_duration,
@@ -23,7 +20,6 @@ from .....core.flows.surface_defaults import should_route_flow_read_to_hub_overv
 from .....core.flows.ux_helpers import (
     bootstrap_check,
     build_flow_status_snapshot,
-    ensure_worker,
     issue_md_has_content,
     issue_md_path,
     seed_issue_from_github,
@@ -32,18 +28,12 @@ from .....core.flows.ux_helpers import (
     summarize_flow_freshness,
     ticket_progress,
 )
-from .....core.flows.worker_process import (
-    FlowWorkerHealth,
-    check_worker_health,
-    clear_worker_metadata,
-)
+from .....core.flows.worker_process import FlowWorkerHealth, check_worker_health
 from .....core.logging_utils import log_event
+from .....core.orchestration import build_ticket_flow_orchestration_service
 from .....core.state import now_iso
 from .....core.ticket_flow_summary import build_ticket_flow_display
 from .....core.utils import atomic_write, canonicalize_path
-from .....flows.ticket_flow.runtime_helpers import (
-    build_ticket_flow_controller,
-)
 from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
 from ....chat.run_mirror import ChatRunMirror
@@ -154,14 +144,6 @@ def _worktree_suffix(repo_id: str) -> Optional[str]:
     return parts[-1]
 
 
-def _get_ticket_controller(repo_root: Path) -> FlowController:
-    return build_ticket_flow_controller(repo_root)
-
-
-def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
-    ensure_worker(repo_root, run_id)
-
-
 def _select_latest_run(
     store: FlowStore, predicate: Callable[[object], bool]
 ) -> Optional[object]:
@@ -172,18 +154,11 @@ def _select_latest_run(
 
 
 class FlowCommands(SharedHelpers):
-    def _ticket_controller_for(self, repo_root: Path) -> FlowController:
-        runtime_services = getattr(self, "_runtime_services", None)
-        if runtime_services is not None:
-            get_controller = getattr(
-                runtime_services, "get_ticket_flow_controller", None
-            )
-            if callable(get_controller):
-                return get_controller(repo_root)
-        return _get_ticket_controller(repo_root)
-
     def _flow_run_mirror(self, repo_root: Path) -> ChatRunMirror:
         return ChatRunMirror(repo_root, logger_=_logger)
+
+    def _ticket_flow_orchestration_service(self, repo_root: Path):
+        return build_ticket_flow_orchestration_service(workspace_root=repo_root)
 
     def _flow_repo_context_cache(self) -> dict[str, str]:
         cache = getattr(self, "_flow_repo_context", None)
@@ -669,6 +644,7 @@ class FlowCommands(SharedHelpers):
 
         error = None
         notice = None
+        flow_service = self._ticket_flow_orchestration_service(repo_root)
         if action == "resume":
             store = _load_flow_store(repo_root)
             try:
@@ -688,13 +664,11 @@ class FlowCommands(SharedHelpers):
             finally:
                 store.close()
             if error is None:
-                controller = self._ticket_controller_for(repo_root)
                 try:
-                    updated = await controller.resume_flow(record.id)
-                except ValueError as exc:
+                    updated = await flow_service.resume_flow_run(record.id)
+                except (KeyError, ValueError) as exc:
                     error = str(exc)
                 else:
-                    _spawn_flow_worker(repo_root, updated.id)
                     notice = "Resumed."
         elif action == "stop":
             store = _load_flow_store(repo_root)
@@ -715,9 +689,7 @@ class FlowCommands(SharedHelpers):
             finally:
                 store.close()
             if error is None:
-                controller = self._ticket_controller_for(repo_root)
-                self._stop_flow_worker(repo_root, record.id)
-                await controller.stop_flow(record.id)
+                await flow_service.stop_flow_run(record.id)
                 notice = "Stopped."
         elif action == "recover":
             store = _load_flow_store(repo_root)
@@ -734,11 +706,11 @@ class FlowCommands(SharedHelpers):
                 if error is None and record is None:
                     error = "No active ticket flow run found."
                 if error is None:
-                    record, updated, locked = reconcile_flow_run(
-                        repo_root, record, store
-                    )
+                    record, updated, locked = flow_service.reconcile_flow_run(record.id)
                     if locked:
-                        error = f"Run {record.id} is locked for reconcile; try again."
+                        error = (
+                            f"Run {record.run_id} is locked for reconcile; try again."
+                        )
                     else:
                         notice = "Recovered." if updated else "No changes needed."
             finally:
@@ -762,11 +734,6 @@ class FlowCommands(SharedHelpers):
                     )
                 if error is None and record is None:
                     error = "No paused or terminal ticket flow run found."
-                if error is None and not record.status.is_terminal():
-                    if record.status in (FlowRunStatus.STOPPING, FlowRunStatus.PAUSED):
-                        self._stop_flow_worker(repo_root, record.id)
-                    else:
-                        error = "Can only archive completed/stopped/failed runs (use --force for stuck flows)."
             finally:
                 store.close()
 
@@ -776,9 +743,8 @@ class FlowCommands(SharedHelpers):
                         FlowRunStatus.STOPPING,
                         FlowRunStatus.PAUSED,
                     )
-                    summary = archive_flow_run_artifacts(
-                        repo_root,
-                        run_id=record.id,
+                    summary = flow_service.archive_flow_run(
+                        record.id,
                         force=force_archive,
                         delete_run=True,
                     )
@@ -925,6 +891,13 @@ class FlowCommands(SharedHelpers):
                 lines.append(f"Freshness: {freshness_summary}")
         if health is None:
             health = snapshot.get("worker_health") if snapshot else None
+        if health is None:
+            run_id = getattr(run, "id", None)
+            if isinstance(run_id, str) and run_id:
+                try:
+                    health = check_worker_health(repo_root, run_id)
+                except Exception:
+                    health = None
         if health is None:
             return lines
         worker_line = f"Worker: {health.status}"
@@ -1386,7 +1359,9 @@ class FlowCommands(SharedHelpers):
                 message_id=message.message_id,
                 meta={"force_new": force_new, "reuse_existing": True},
             )
-            _spawn_flow_worker(repo_root, active_run.id)
+            self._ticket_flow_orchestration_service(repo_root).ensure_flow_run_worker(
+                active_run.id
+            )
             outbound_text = f"Reusing ticket flow run {_code(active_run.id)} ({active_run.status.value})."
             await self._send_message(
                 message.chat_id,
@@ -1500,13 +1475,15 @@ You are the first ticket in a new ticket_flow run.
                 first_ticket.write_text(template, encoding="utf-8")
                 seeded = True
 
-        controller = self._ticket_controller_for(repo_root)
-        flow_record = await controller.start_flow(
+        flow_record = await self._ticket_flow_orchestration_service(
+            repo_root
+        ).start_flow_run(
+            "ticket_flow",
             input_data={},
             metadata={"seeded_ticket": seeded, "origin": "telegram"},
         )
         run_mirror.mirror_inbound(
-            run_id=flow_record.id,
+            run_id=flow_record.run_id,
             platform="telegram",
             event_type="flow_bootstrap_command",
             kind="command",
@@ -1517,12 +1494,11 @@ You are the first ticket in a new ticket_flow run.
             message_id=message.message_id,
             meta={"force_new": force_new, "seeded_ticket": seeded},
         )
-        _spawn_flow_worker(repo_root, flow_record.id)
 
         if not issue_exists and not tickets_exist:
             await self._send_flow_issue_hint(message, repo_root)
 
-        outbound_text = f"Started ticket flow run {_code(flow_record.id)}."
+        outbound_text = f"Started ticket flow run {_code(flow_record.run_id)}."
         await self._send_message(
             message.chat_id,
             outbound_text,
@@ -1531,7 +1507,7 @@ You are the first ticket in a new ticket_flow run.
             parse_mode="Markdown",
         )
         run_mirror.mirror_outbound(
-            run_id=flow_record.id,
+            run_id=flow_record.run_id,
             platform="telegram",
             event_type="flow_bootstrap_started_notice",
             kind="notice",
@@ -1682,10 +1658,11 @@ You are the first ticket in a new ticket_flow run.
             message_id=message.message_id,
             meta={"force": force},
         )
-        controller = self._ticket_controller_for(repo_root)
         try:
-            updated = await controller.resume_flow(record.id, force=force)
-        except ValueError as exc:
+            updated = await self._ticket_flow_orchestration_service(
+                repo_root
+            ).resume_flow_run(record.id, force=force)
+        except (KeyError, ValueError) as exc:
             await self._send_message(
                 message.chat_id,
                 str(exc),
@@ -1693,8 +1670,7 @@ You are the first ticket in a new ticket_flow run.
                 reply_to=message.message_id,
             )
             return
-        _spawn_flow_worker(repo_root, updated.id)
-        outbound_text = f"Resumed run {_code(updated.id)}."
+        outbound_text = f"Resumed run {_code(updated.run_id)}."
         await self._send_message(
             message.chat_id,
             outbound_text,
@@ -1703,7 +1679,7 @@ You are the first ticket in a new ticket_flow run.
             parse_mode="Markdown",
         )
         run_mirror.mirror_outbound(
-            run_id=updated.id,
+            run_id=updated.run_id,
             platform="telegram",
             event_type="flow_resume_notice",
             kind="notice",
@@ -1712,16 +1688,6 @@ You are the first ticket in a new ticket_flow run.
             chat_id=message.chat_id,
             thread_id=message.thread_id,
         )
-
-    def _stop_flow_worker(self, repo_root: Path, run_id: str) -> None:
-        health = check_worker_health(repo_root, run_id)
-        if health.is_alive and health.pid:
-            try:
-                subprocess.run(["kill", str(health.pid)], check=False)
-            except Exception as exc:
-                _logger.warning("Failed to stop worker %s: %s", run_id, exc)
-        if health.status in {"dead", "mismatch", "invalid"}:
-            clear_worker_metadata(health.artifact_path.parent)
 
     async def _handle_flow_stop(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
@@ -1774,10 +1740,10 @@ You are the first ticket in a new ticket_flow run.
             thread_id=message.thread_id,
             message_id=message.message_id,
         )
-        controller = self._ticket_controller_for(repo_root)
-        self._stop_flow_worker(repo_root, record.id)
-        updated = await controller.stop_flow(record.id)
-        outbound_text = f"Stopped run {_code(updated.id)} ({updated.status.value})."
+        updated = await self._ticket_flow_orchestration_service(
+            repo_root
+        ).stop_flow_run(record.id)
+        outbound_text = f"Stopped run {_code(updated.run_id)} ({updated.status})."
         await self._send_message(
             message.chat_id,
             outbound_text,
@@ -1786,7 +1752,7 @@ You are the first ticket in a new ticket_flow run.
             parse_mode="Markdown",
         )
         run_mirror.mirror_outbound(
-            run_id=updated.id,
+            run_id=updated.run_id,
             platform="telegram",
             event_type="flow_stop_notice",
             kind="notice",
@@ -1794,7 +1760,7 @@ You are the first ticket in a new ticket_flow run.
             text=outbound_text,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
-            meta={"status": updated.status.value},
+            meta={"status": updated.status},
         )
 
     async def _handle_flow_recover(
@@ -1824,18 +1790,25 @@ You are the first ticket in a new ticket_flow run.
                     reply_to=message.message_id,
                 )
                 return
-            record, updated, locked = reconcile_flow_run(repo_root, record, store)
+            record, updated, locked = self._ticket_flow_orchestration_service(
+                repo_root
+            ).reconcile_flow_run(record.id)
             if locked:
                 await self._send_message(
                     message.chat_id,
-                    f"Run {_code(record.id)} is locked for reconcile; try again.",
+                    f"Run {_code(record.run_id)} is locked for reconcile; try again.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                     parse_mode="Markdown",
                 )
                 return
             hint = "Recovered" if updated else "No changes needed"
-            lines = [f"{hint} for run {_code(record.id)}."]
+            latest_record = store.get_flow_run(record.run_id)
+            if latest_record is None:
+                lines = [f"{hint} for run {_code(record.run_id)}."]
+            else:
+                lines = [f"{hint} for run {_code(latest_record.id)}."]
+                record = latest_record
             lines.extend(self._format_flow_status_lines(repo_root, record, store))
         finally:
             store.close()
@@ -1886,9 +1859,9 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
         if record and not record.status.is_terminal():
-            controller = self._ticket_controller_for(repo_root)
-            self._stop_flow_worker(repo_root, record.id)
-            await controller.stop_flow(record.id)
+            await self._ticket_flow_orchestration_service(repo_root).stop_flow_run(
+                record.id
+            )
         await self._handle_flow_bootstrap(message, repo_root, argv=["--force-new"])
 
     async def _handle_flow_archive(
@@ -1927,17 +1900,6 @@ You are the first ticket in a new ticket_flow run.
                     reply_to=message.message_id,
                 )
                 return
-            if not record.status.is_terminal():
-                if record.status in (FlowRunStatus.STOPPING, FlowRunStatus.PAUSED):
-                    self._stop_flow_worker(repo_root, record.id)
-                else:
-                    await self._send_message(
-                        message.chat_id,
-                        "Can only archive completed/stopped/failed runs (use --force for stuck flows).",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                    )
-                    return
         finally:
             store.close()
 
@@ -1945,9 +1907,8 @@ You are the first ticket in a new ticket_flow run.
             FlowRunStatus.STOPPING,
             FlowRunStatus.PAUSED,
         )
-        summary = archive_flow_run_artifacts(
-            repo_root,
-            run_id=record.id,
+        summary = self._ticket_flow_orchestration_service(repo_root).archive_flow_run(
+            record.id,
             force=force_archive,
             delete_run=True,
         )
@@ -2013,10 +1974,11 @@ You are the first ticket in a new ticket_flow run.
         outbound_text = result
         resume_success = False
         if success:
-            controller = self._ticket_controller_for(repo_root)
             try:
-                updated = await controller.resume_flow(run_id)
-            except ValueError as exc:
+                updated = await self._ticket_flow_orchestration_service(
+                    repo_root
+                ).resume_flow_run(run_id)
+            except (KeyError, ValueError) as exc:
                 outbound_text = (
                     f"{result} Failed to resume run {run_id}: {exc} "
                     "Use /flow resume to continue."
@@ -2027,16 +1989,8 @@ You are the first ticket in a new ticket_flow run.
                     "Use /flow resume to continue."
                 )
             else:
-                try:
-                    _spawn_flow_worker(repo_root, updated.id)
-                except Exception as exc:
-                    outbound_text = (
-                        f"{result} Resumed run {updated.id}, but failed to start worker: {exc}. "
-                        "Check /flow status for the run state."
-                    )
-                else:
-                    outbound_text = f"{result} Resumed run {updated.id}."
-                    resume_success = True
+                outbound_text = f"{result} Resumed run {updated.run_id}."
+                resume_success = True
         await self._send_message(
             message.chat_id,
             outbound_text,

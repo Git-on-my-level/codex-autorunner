@@ -39,7 +39,6 @@ from ...core.flows import (
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
-    archive_flow_run_artifacts,
     flow_run_duration_seconds,
     format_flow_duration,
     load_latest_paused_ticket_flow_dispatch,
@@ -57,11 +56,11 @@ from ...core.flows.ux_helpers import (
     summarize_flow_freshness,
     ticket_progress,
 )
-from ...core.flows.worker_process import check_worker_health, clear_worker_metadata
 from ...core.git_utils import GitError, reset_branch_from_origin_main
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
+from ...core.orchestration import build_ticket_flow_orchestration_service
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
 from ...core.ticket_flow_projection import select_authoritative_run_record
@@ -6458,6 +6457,17 @@ class DiscordBotService:
     def _flow_run_mirror(self, workspace_root: Path) -> ChatRunMirror:
         return ChatRunMirror(workspace_root, logger_=self._logger)
 
+    def _ticket_flow_orchestration_service(self, workspace_root: Path):
+        return build_ticket_flow_orchestration_service(workspace_root=workspace_root)
+
+    @staticmethod
+    def _close_worker_handles(ensure_result: dict[str, Any]) -> None:
+        for key in ("stdout", "stderr"):
+            handle = ensure_result.get(key)
+            close = getattr(handle, "close", None)
+            if callable(close):
+                close()
+
     @staticmethod
     def _select_default_status_run(
         records: list[FlowRunRecord],
@@ -6844,6 +6854,7 @@ class DiscordBotService:
     ) -> None:
         force_new = bool(options.get("force_new"))
         restart_from = options.get("restart_from")
+        flow_service = self._ticket_flow_orchestration_service(workspace_root)
 
         try:
             store = self._open_flow_store(workspace_root)
@@ -6887,12 +6898,10 @@ class DiscordBotService:
                 None,
             )
             if active_or_paused is not None:
-                ensure_result = ensure_worker(
-                    workspace_root,
+                flow_service.ensure_flow_run_worker(
                     active_or_paused.id,
                     is_terminal=active_or_paused.status.is_terminal(),
                 )
-                self._close_worker_handles(ensure_result)
                 await self._respond_ephemeral(
                     interaction_id,
                     interaction_token,
@@ -6904,22 +6913,21 @@ class DiscordBotService:
         if isinstance(restart_from, str) and restart_from.strip():
             metadata["restart_from"] = restart_from.strip()
 
-        controller = build_ticket_flow_controller(workspace_root)
         try:
-            started = await controller.start_flow(input_data={}, metadata=metadata)
+            started = await flow_service.start_flow_run(
+                "ticket_flow",
+                input_data={},
+                metadata=metadata,
+            )
         except ValueError as exc:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
-        ensure_result = ensure_worker(
-            workspace_root, started.id, is_terminal=started.status.is_terminal()
-        )
-        self._close_worker_handles(ensure_result)
         prefix = "Started new" if force_new else "Started"
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"{prefix} ticket_flow run {started.id}.",
+            f"{prefix} ticket_flow run {started.run_id}.",
         )
 
     async def _handle_flow_restart(
@@ -7001,19 +7009,22 @@ class DiscordBotService:
             )
             return
 
+        flow_service = self._ticket_flow_orchestration_service(workspace_root)
         if target is not None and target.status.is_active():
-            self._stop_flow_worker(workspace_root, target.id)
-            controller = build_ticket_flow_controller(workspace_root)
             try:
-                await controller.stop_flow(target.id)
+                await flow_service.stop_flow_run(target.id)
             except ValueError as exc:
                 await self._respond_ephemeral(
                     interaction_id, interaction_token, str(exc)
                 )
                 return
-            latest = await self._wait_for_flow_terminal(workspace_root, target.id)
-            if latest is None or not latest.status.is_terminal():
-                status_value = latest.status.value if latest is not None else "unknown"
+            latest = await flow_service.wait_for_flow_run_terminal(target.id)
+            if latest is None or latest.status not in {
+                "completed",
+                "stopped",
+                "failed",
+            }:
+                status_value = latest.status if latest is not None else "unknown"
                 await self._respond_ephemeral(
                     interaction_id,
                     interaction_token,
@@ -7112,81 +7123,23 @@ class DiscordBotService:
                 )
                 return
 
-            target, updated, locked = reconcile_flow_run(workspace_root, target, store)
+            flow_service = self._ticket_flow_orchestration_service(workspace_root)
+            target_run, updated, locked = flow_service.reconcile_flow_run(target.id)
             if locked:
                 await self._respond_ephemeral(
                     interaction_id,
                     interaction_token,
-                    f"Run {target.id} is locked for reconcile; try again.",
+                    f"Run {target_run.run_id} is locked for reconcile; try again.",
                 )
                 return
             verdict = "Recovered" if updated else "No changes needed"
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"{verdict} for run {target.id} ({target.status.value}).",
+                f"{verdict} for run {target_run.run_id} ({target_run.status}).",
             )
         finally:
             store.close()
-
-    @staticmethod
-    def _close_worker_handles(ensure_result: dict[str, Any]) -> None:
-        for key in ("stdout", "stderr"):
-            handle = ensure_result.get(key)
-            close = getattr(handle, "close", None)
-            if callable(close):
-                close()
-
-    @staticmethod
-    def _stop_flow_worker(workspace_root: Path, run_id: str) -> None:
-        health = check_worker_health(workspace_root, run_id)
-        if health.is_alive and health.pid:
-            try:
-                subprocess.run(["kill", str(health.pid)], check=False)
-            except Exception as exc:
-                logging.getLogger(__name__).warning(
-                    "Failed to stop worker %s: %s", run_id, exc
-                )
-        if health.status in {"dead", "mismatch", "invalid"}:
-            clear_worker_metadata(health.artifact_path.parent)
-
-    async def _wait_for_flow_terminal(
-        self,
-        workspace_root: Path,
-        run_id: str,
-        *,
-        timeout_seconds: float = 10.0,
-        poll_interval_seconds: float = 0.25,
-    ) -> Optional[FlowRunRecord]:
-        deadline = time.monotonic() + max(timeout_seconds, poll_interval_seconds)
-        latest: Optional[FlowRunRecord] = None
-
-        while time.monotonic() < deadline:
-            try:
-                store = self._open_flow_store(workspace_root)
-            except (sqlite3.Error, OSError, RuntimeError):
-                break
-            try:
-                record = self._resolve_flow_run_by_id(store, run_id=run_id)
-                if record is None:
-                    return None
-                latest = record
-                if record.status.is_terminal():
-                    return record
-                record, _updated, locked = reconcile_flow_run(
-                    workspace_root, record, store
-                )
-                latest = record
-                if record.status.is_terminal():
-                    return record
-                if locked:
-                    # Another reconciler holds the lock; keep polling.
-                    pass
-            finally:
-                store.close()
-            await asyncio.sleep(poll_interval_seconds)
-
-        return latest
 
     async def _handle_flow_resume(
         self,
@@ -7285,25 +7238,21 @@ class DiscordBotService:
             thread_id=guild_id,
             message_id=interaction_id,
         )
-        controller = build_ticket_flow_controller(workspace_root)
+        flow_service = self._ticket_flow_orchestration_service(workspace_root)
         try:
-            updated = await controller.resume_flow(target.id)
+            updated = await flow_service.resume_flow_run(target.id)
         except ValueError as exc:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
-        ensure_result = ensure_worker(
-            workspace_root, updated.id, is_terminal=updated.status.is_terminal()
-        )
-        self._close_worker_handles(ensure_result)
-        outbound_text = f"Resumed run {updated.id}."
+        outbound_text = f"Resumed run {updated.run_id}."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
             outbound_text,
         )
         run_mirror.mirror_outbound(
-            run_id=updated.id,
+            run_id=updated.run_id,
             platform="discord",
             event_type="flow_resume_notice",
             kind="notice",
@@ -7406,21 +7355,21 @@ class DiscordBotService:
             thread_id=guild_id,
             message_id=interaction_id,
         )
-        controller = build_ticket_flow_controller(workspace_root)
+        flow_service = self._ticket_flow_orchestration_service(workspace_root)
         try:
-            updated = await controller.stop_flow(target.id)
+            updated = await flow_service.stop_flow_run(target.id)
         except ValueError as exc:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
-        outbound_text = f"Stop requested for run {updated.id} ({updated.status.value})."
+        outbound_text = f"Stop requested for run {updated.run_id} ({updated.status})."
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
             outbound_text,
         )
         run_mirror.mirror_outbound(
-            run_id=updated.id,
+            run_id=updated.run_id,
             platform="discord",
             event_type="flow_stop_notice",
             kind="notice",
@@ -7428,7 +7377,7 @@ class DiscordBotService:
             text=outbound_text,
             chat_id=channel_id,
             thread_id=guild_id,
-            meta={"status": updated.status.value},
+            meta={"status": updated.status},
         )
 
     async def _handle_flow_archive(
@@ -7521,10 +7470,10 @@ class DiscordBotService:
             thread_id=guild_id,
             message_id=interaction_id,
         )
+        flow_service = self._ticket_flow_orchestration_service(workspace_root)
         try:
-            summary = archive_flow_run_artifacts(
-                workspace_root,
-                run_id=target.id,
+            summary = flow_service.archive_flow_run(
+                target.id,
                 force=False,
                 delete_run=True,
             )
@@ -7537,6 +7486,21 @@ class DiscordBotService:
             f"(tickets={summary['archived_tickets']}, "
             f"runs_archived={summary['archived_runs']}, "
             f"contextspace={summary['archived_contextspace']})."
+        )
+        run_mirror.mirror_outbound(
+            run_id=target.id,
+            platform="discord",
+            event_type="flow_archive_notice",
+            kind="notice",
+            actor="car",
+            text=outbound_text,
+            chat_id=channel_id,
+            thread_id=guild_id,
+            meta={
+                "archived_runs": summary.get("archived_runs"),
+                "archived_tickets": summary.get("archived_tickets"),
+                "archived_contextspace": summary.get("archived_contextspace"),
+            },
         )
         await self._respond_ephemeral(
             interaction_id,
@@ -7670,19 +7634,15 @@ class DiscordBotService:
         )
         reply_path = self._write_user_reply(workspace_root, target, text)
 
-        controller = build_ticket_flow_controller(workspace_root)
+        flow_service = self._ticket_flow_orchestration_service(workspace_root)
         try:
-            updated = await controller.resume_flow(target.id)
+            updated = await flow_service.resume_flow_run(target.id)
         except ValueError as exc:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
-        ensure_result = ensure_worker(
-            workspace_root, updated.id, is_terminal=updated.status.is_terminal()
-        )
-        self._close_worker_handles(ensure_result)
         outbound_text = (
-            f"Reply saved to {reply_path.name} and resumed run {updated.id}."
+            f"Reply saved to {reply_path.name} and resumed run {updated.run_id}."
         )
         await self._respond_ephemeral(
             interaction_id,
@@ -7690,7 +7650,7 @@ class DiscordBotService:
             outbound_text,
         )
         run_mirror.mirror_outbound(
-            run_id=updated.id,
+            run_id=updated.run_id,
             platform="discord",
             event_type="flow_reply_notice",
             kind="notice",
@@ -9185,31 +9145,26 @@ class DiscordBotService:
 
         run_id = parts[1]
         action = parts[2]
+        flow_service = self._ticket_flow_orchestration_service(workspace_root)
 
         if action == "resume":
-            controller = build_ticket_flow_controller(workspace_root)
             try:
-                updated = await controller.resume_flow(run_id)
-            except ValueError as exc:
+                updated = await flow_service.resume_flow_run(run_id)
+            except (KeyError, ValueError) as exc:
                 await self._respond_ephemeral(
                     interaction_id, interaction_token, str(exc)
                 )
                 return
 
-            ensure_result = ensure_worker(
-                workspace_root, updated.id, is_terminal=updated.status.is_terminal()
-            )
-            self._close_worker_handles(ensure_result)
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Resumed run {updated.id}.",
+                f"Resumed run {updated.run_id}.",
             )
         elif action == "stop":
-            controller = build_ticket_flow_controller(workspace_root)
             try:
-                updated = await controller.stop_flow(run_id)
-            except ValueError as exc:
+                updated = await flow_service.stop_flow_run(run_id)
+            except (KeyError, ValueError) as exc:
                 await self._respond_ephemeral(
                     interaction_id, interaction_token, str(exc)
                 )
@@ -9218,17 +9173,16 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Stop requested for run {updated.id} ({updated.status.value}).",
+                f"Stop requested for run {updated.run_id} ({updated.status}).",
             )
         elif action == "archive":
             try:
-                summary = archive_flow_run_artifacts(
-                    workspace_root,
-                    run_id=run_id,
+                summary = flow_service.archive_flow_run(
+                    run_id,
                     force=False,
                     delete_run=True,
                 )
-            except ValueError as exc:
+            except (KeyError, ValueError) as exc:
                 await self._respond_ephemeral(
                     interaction_id, interaction_token, str(exc)
                 )
