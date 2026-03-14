@@ -80,7 +80,7 @@ async def wait_for_turn(...) -> TerminalTurnResult
 - Cannot resume a previous conversation
 - Do not expose a session/conversation ID
 
-If your runtime does not expose a documented public thread/session API, build a narrow CAR-owned wrapper and leave unsupported capabilities absent. The ZeroClaw adapter is the reference example for this pattern.
+If your runtime does not expose a documented public thread/session API, do not advertise the durable-thread contract anyway. Any CAR-owned wrapper around a volatile CLI/process surface must leave `durable_threads` and related orchestration capabilities absent, and should be described as experimental until the runtime exposes a real resumable handle. The current ZeroClaw adapter is the reference example for this downgrade path.
 
 ## Capability Model
 
@@ -121,6 +121,6 @@ The harness automatically gates optional helper methods:
 
 ## Reference Implementations
 
-- **ZeroClaw**: Wrapper-managed durable sessions, limited to `durable_threads`, `message_turns`, `active_thread_discovery`, `event_streaming`
+- **ZeroClaw**: Experimental volatile wrapper around the interactive CLI surface. It is intentionally not advertised as a CAR v1 durable-thread orchestration target until ZeroClaw exposes a documented resumable session primitive.
 - **Codex**: Full-featured, supports all optional capabilities
 - **OpenCode**: Full-featured except `approvals`

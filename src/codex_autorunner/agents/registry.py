@@ -147,14 +147,7 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
     "zeroclaw": AgentDescriptor(
         id="zeroclaw",
         name="ZeroClaw",
-        capabilities=frozenset(
-            [
-                RuntimeCapability("durable_threads"),
-                RuntimeCapability("message_turns"),
-                RuntimeCapability("active_thread_discovery"),
-                RuntimeCapability("event_streaming"),
-            ]
-        ),
+        capabilities=frozenset(),
         make_harness=_make_zeroclaw_harness,
         healthcheck=_check_zeroclaw_health,
     ),

@@ -31,7 +31,7 @@ class ZeroClawSessionHandle:
 
 
 class ZeroClawSupervisor:
-    """Wrapper-managed durable session owner for interactive ZeroClaw agent runs."""
+    """Wrapper-managed volatile session owner for interactive ZeroClaw agent runs."""
 
     def __init__(
         self,

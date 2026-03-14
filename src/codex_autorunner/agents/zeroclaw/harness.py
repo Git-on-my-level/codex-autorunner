@@ -7,7 +7,6 @@ from ..base import AgentHarness
 from ..types import (
     AgentId,
     ConversationRef,
-    RuntimeCapability,
     RuntimeCapabilityReport,
     TerminalTurnResult,
     TurnRef,
@@ -18,14 +17,7 @@ from .supervisor import ZeroClawSupervisor
 class ZeroClawHarness(AgentHarness):
     agent_id: AgentId = AgentId("zeroclaw")
     display_name = "ZeroClaw"
-    capabilities = frozenset(
-        [
-            RuntimeCapability("durable_threads"),
-            RuntimeCapability("message_turns"),
-            RuntimeCapability("active_thread_discovery"),
-            RuntimeCapability("event_streaming"),
-        ]
-    )
+    capabilities = frozenset()
 
     def __init__(self, supervisor: ZeroClawSupervisor) -> None:
         self._supervisor = supervisor

@@ -80,3 +80,9 @@ def test_list_agents_includes_expected_capabilities() -> None:
         assert "durable_threads" in opencode_caps
         assert "message_turns" in opencode_caps
         assert "review" in opencode_caps
+
+    if "zeroclaw" in agents:
+        zeroclaw_caps = agents["zeroclaw"]["capabilities"]
+        assert "durable_threads" not in zeroclaw_caps
+        assert "message_turns" not in zeroclaw_caps
+        assert "active_thread_discovery" not in zeroclaw_caps

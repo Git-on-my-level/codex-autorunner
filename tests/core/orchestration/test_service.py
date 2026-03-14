@@ -157,8 +157,11 @@ def _make_descriptor(
     return AgentDescriptor(
         id=agent_id,
         name=name,
-        capabilities=capabilities
-        or frozenset(["threads", "turns", "review", "approvals"]),
+        capabilities=(
+            capabilities
+            if capabilities is not None
+            else frozenset(["threads", "turns", "review", "approvals"])
+        ),
         make_harness=lambda _ctx: None,  # type: ignore[return-value]
     )
 
@@ -200,6 +203,29 @@ def test_service_lists_definitions_and_resolves_thread_targets(tmp_path: Path) -
     assert resolved.thread_target_id == created.thread_target_id
     assert resolved.workspace_root == str(workspace_root)
     assert service.get_thread_status(created.thread_target_id) is not None
+
+
+def test_create_thread_target_rejects_non_durable_agent(tmp_path: Path) -> None:
+    harness = _FakeHarness(capabilities=frozenset())
+    descriptors = {
+        "zeroclaw": _make_descriptor(
+            "zeroclaw",
+            name="ZeroClaw",
+            capabilities=frozenset(),
+        )
+    }
+    catalog = MappingAgentDefinitionCatalog(descriptors)
+    store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    service = HarnessBackedOrchestrationService(
+        definition_catalog=catalog,
+        thread_store=store,
+        harness_factory=lambda agent_id: harness,
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    with pytest.raises(ValueError, match="does not support durable_threads"):
+        service.create_thread_target("zeroclaw", workspace_root)
 
 
 async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -> None:

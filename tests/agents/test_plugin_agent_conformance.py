@@ -349,20 +349,13 @@ def test_descriptor_capability_normalization() -> None:
 
 
 def test_zeroclaw_descriptor_conforms_to_contract() -> None:
-    """Test that ZeroClaw descriptor advertises only supported wrapper capabilities."""
+    """Test that ZeroClaw is no longer advertised as a durable-thread target."""
     agents = get_registered_agents()
     assert "zeroclaw" in agents
 
     descriptor = agents["zeroclaw"]
 
-    assert descriptor.capabilities == frozenset(
-        [
-            RuntimeCapability("durable_threads"),
-            RuntimeCapability("message_turns"),
-            RuntimeCapability("active_thread_discovery"),
-            RuntimeCapability("event_streaming"),
-        ]
-    )
+    assert descriptor.capabilities == frozenset()
 
 
 def test_codex_descriptor_supports_full_capabilities() -> None:
@@ -403,7 +396,8 @@ def test_plugin_descriptor_loading() -> None:
     for agent_id, descriptor in agents.items():
         assert descriptor.id == agent_id
         assert descriptor.name
-        assert descriptor.capabilities
+        if agent_id != "zeroclaw":
+            assert descriptor.capabilities
         assert callable(descriptor.make_harness)
         assert descriptor.plugin_api_version >= 1
 

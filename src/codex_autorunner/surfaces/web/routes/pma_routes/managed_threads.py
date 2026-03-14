@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from .....agents.registry import get_registered_agents
 from .....core.orchestration import build_harness_backed_orchestration_service
+from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
 from .....core.pma_thread_store import PmaThreadStore
 from ...schemas import (
@@ -145,7 +146,7 @@ def build_managed_thread_orchestration_service(request: Request):
         return descriptor.make_harness(request.app.state)
 
     return build_harness_backed_orchestration_service(
-        descriptors=descriptors,
+        descriptors=cast(dict[str, RuntimeAgentDescriptor], descriptors),
         harness_factory=_make_harness,
         pma_thread_store=PmaThreadStore(request.app.state.config.root),
     )
@@ -452,13 +453,16 @@ def build_managed_thread_crud_routes(
             resolved_workspace = _resolve_workspace_from_input(hub_root, workspace_root)
 
         service = build_managed_thread_orchestration_service(request)
-        thread = service.create_thread_target(
-            payload.agent,
-            resolved_workspace,
-            repo_id=resolved_repo_id,
-            display_name=normalize_optional_text(payload.name),
-            backend_thread_id=normalize_optional_text(payload.backend_thread_id),
-        )
+        try:
+            thread = service.create_thread_target(
+                payload.agent,
+                resolved_workspace,
+                repo_id=resolved_repo_id,
+                display_name=normalize_optional_text(payload.name),
+                backend_thread_id=normalize_optional_text(payload.backend_thread_id),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         notification: Optional[dict[str, Any]] = None
         if notify_on == "terminal":
             notification = await register_managed_thread_terminal_notify(

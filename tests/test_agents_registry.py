@@ -121,6 +121,12 @@ class TestHasCapability:
     def test_opencode_doesnt_have_approvals(self):
         assert has_capability("opencode", "approvals") is False
 
+    def test_zeroclaw_no_longer_advertises_durable_thread_contract(self):
+        assert has_capability("zeroclaw", "durable_threads") is False
+        assert has_capability("zeroclaw", "message_turns") is False
+        assert has_capability("zeroclaw", "active_thread_discovery") is False
+        assert has_capability("zeroclaw", "event_streaming") is False
+
     def test_legacy_capability_aliases_still_normalize(self):
         assert has_capability("codex", "threads") is True
         assert has_capability("codex", "turns") is True

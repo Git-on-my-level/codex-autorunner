@@ -406,8 +406,13 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget:
-        if self.get_agent_definition(agent_id) is None:
+        definition = self.get_agent_definition(agent_id)
+        if definition is None:
             raise KeyError(f"Unknown agent definition '{agent_id}'")
+        if "durable_threads" not in definition.capabilities:
+            raise ValueError(
+                f"Agent definition '{agent_id}' does not support durable_threads"
+            )
         return self.thread_store.create_thread_target(
             agent_id,
             workspace_root,

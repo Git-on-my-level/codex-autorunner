@@ -69,7 +69,7 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     assert thread["name"] == "Workspace thread"
 
 
-def test_create_managed_thread_accepts_zeroclaw_agent(hub_env) -> None:
+def test_create_managed_thread_rejects_agent_without_durable_threads(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
@@ -82,12 +82,8 @@ def test_create_managed_thread_accepts_zeroclaw_agent(hub_env) -> None:
             },
         )
 
-    assert resp.status_code == 200
-    thread = resp.json()["thread"]
-    assert thread["agent"] == "zeroclaw"
-    assert thread["repo_id"] == hub_env.repo_id
-    assert thread["workspace_root"] == str(hub_env.repo_root.resolve())
-    assert thread["name"] == "ZeroClaw thread"
+    assert resp.status_code == 400
+    assert "does not support durable_threads" in (resp.json().get("detail") or "")
 
 
 def test_create_managed_thread_rejects_invalid_notify_on_without_side_effect(

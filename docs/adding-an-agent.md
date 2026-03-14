@@ -9,7 +9,7 @@ CAR supports multiple AI agents through a registry and capability model. Each ag
 - **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
 - **Registry**: Central registration with capabilities
 
-If an external runtime does not expose a documented public thread/session API, build a narrow CAR-owned wrapper around the documented surface and leave unsupported capabilities absent. The ZeroClaw adapter is the reference example for this pattern.
+If an external runtime does not expose a documented public thread/session API, do not claim that it satisfies CAR's durable-thread contract. You may keep a narrow CAR-owned wrapper around the documented surface for experimental use, but leave `durable_threads` and the related orchestration capabilities absent until the runtime exposes a real resumable handle. The current ZeroClaw adapter is the reference example for this downgrade path.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ Before adding a new agent, ensure:
 3. The agent supports durable thread/session operations: create, resume, and execute turns
 4. You have tested the agent works independently of CAR
 
-**Important**: Single-session runtimes (stateless, non-resumable) are out of scope for CAR v1 orchestration. See "Single-Session Runtimes (Out of Scope for v1)" below.
+**Important**: Single-session or wrapper-managed volatile runtimes are out of scope for CAR v1 orchestration. See "Single-Session Runtimes (Out of Scope for v1)" below.
 
 ## Step 1: Create the Harness
 

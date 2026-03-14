@@ -73,9 +73,10 @@ async def test_zeroclaw_harness_reports_capabilities_from_contract() -> None:
     report = await harness.runtime_capability_report(Path("."))
 
     assert harness.capabilities == get_registered_agents()["zeroclaw"].capabilities
-    assert harness.supports("durable_threads") is True
-    assert harness.supports("active_thread_discovery") is True
-    assert harness.supports("event_streaming") is True
+    assert harness.supports("durable_threads") is False
+    assert harness.supports("message_turns") is False
+    assert harness.supports("active_thread_discovery") is False
+    assert harness.supports("event_streaming") is False
     assert harness.supports("interrupt") is False
     assert harness.supports("model_listing") is False
     assert report.capabilities == harness.capabilities

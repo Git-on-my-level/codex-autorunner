@@ -93,11 +93,4 @@ def test_zeroclaw_descriptor_advertises_only_supported_wrapper_capabilities() ->
 
     descriptor = get_registered_agents()["zeroclaw"]
 
-    assert descriptor.capabilities == frozenset(
-        [
-            "durable_threads",
-            "message_turns",
-            "active_thread_discovery",
-            "event_streaming",
-        ]
-    )
+    assert descriptor.capabilities == frozenset()
