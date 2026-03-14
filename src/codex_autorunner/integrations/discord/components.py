@@ -279,15 +279,41 @@ def build_flow_runs_picker(
     *,
     custom_id: str = "flow_runs_select",
     placeholder: str = "Select a run...",
+    current_run_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    options = [
-        build_select_option(
-            label=f"{run_id[:50]} [{status}]"[:100],
-            value=run_id,
-            description=f"Status: {status}",
+    options: list[dict[str, Any]] = []
+    rendered_run_ids: set[str] = set()
+    option_limit = DISCORD_SELECT_OPTION_MAX_OPTIONS
+
+    for run_id, status in runs[:option_limit]:
+        rendered_run_ids.add(run_id)
+        options.append(
+            build_select_option(
+                label=f"{run_id[:50]} [{status}]"[:100],
+                value=run_id,
+                description=f"Status: {status}",
+                default=current_run_id == run_id,
+            )
         )
-        for run_id, status in runs[:DISCORD_SELECT_OPTION_MAX_OPTIONS]
-    ]
+
+    if current_run_id and current_run_id not in rendered_run_ids:
+        current_entry = next(
+            (entry for entry in runs if entry[0] == current_run_id),
+            None,
+        )
+        if current_entry is not None:
+            run_id, status = current_entry
+            if len(options) >= option_limit:
+                options.pop()
+            options.append(
+                build_select_option(
+                    label=f"{run_id[:50]} [{status}]"[:100],
+                    value=run_id,
+                    description=f"Status: {status}",
+                    default=True,
+                )
+            )
+
     if not options:
         options = [build_select_option("No runs available", "none", default=True)]
     return build_action_row(

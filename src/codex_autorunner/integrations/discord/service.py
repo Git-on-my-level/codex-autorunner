@@ -2097,6 +2097,8 @@ class DiscordBotService:
         run_id_opt: Any,
     ) -> Optional[str]:
         if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
+            if action == "status":
+                return ""
             await self._prompt_flow_action_picker(
                 interaction_id,
                 interaction_token,
@@ -6137,6 +6139,27 @@ class DiscordBotService:
             return None
         return select_authoritative_run_record(records)
 
+    @staticmethod
+    def _build_flow_status_components(
+        record: FlowRunRecord,
+        runs: list[FlowRunRecord],
+    ) -> list[dict[str, Any]]:
+        components = build_flow_status_buttons(
+            record.id,
+            record.status.value,
+            include_refresh=True,
+        )
+        run_tuples = [(run.id, run.status.value) for run in runs]
+        if len(run_tuples) > 1:
+            components.append(
+                build_flow_runs_picker(
+                    run_tuples,
+                    placeholder="Select another run...",
+                    current_run_id=record.id,
+                )
+            )
+        return components
+
     async def _handle_flow_status(
         self,
         interaction_id: str,
@@ -6173,11 +6196,13 @@ class DiscordBotService:
             ) from None
         try:
             record: Optional[FlowRunRecord]
+            runs: list[FlowRunRecord] = []
             if isinstance(run_id_opt, str) and run_id_opt.strip():
                 try:
                     record = self._resolve_flow_run_by_id(
                         store, run_id=run_id_opt.strip()
                     )
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
                 except (sqlite3.Error, OSError) as exc:
                     log_event(
                         self._logger,
@@ -6317,11 +6342,7 @@ class DiscordBotService:
             meta={"response_type": "ephemeral"},
         )
 
-        status_buttons = build_flow_status_buttons(
-            record.id,
-            record.status.value,
-            include_refresh=True,
-        )
+        status_buttons = self._build_flow_status_components(record, runs)
         if status_buttons:
             if update_message:
                 await self._update_component_message(

@@ -286,6 +286,62 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
 
 
 @pytest.mark.anyio
+async def test_flow_status_without_run_id_uses_latest_run_and_includes_picker(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    completed_run_id = str(uuid.uuid4())
+    paused_run_id = str(uuid.uuid4())
+    _create_run(workspace, completed_run_id, status=FlowRunStatus.COMPLETED)
+    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]["data"]
+        content = payload["content"]
+        components = payload["components"]
+
+        assert f"Run: {paused_run_id}" in content
+        assert "Status: paused" in content
+        picker_rows = [
+            row
+            for row in components
+            if row["components"][0].get("custom_id") == "flow_runs_select"
+        ]
+        assert len(picker_rows) == 1
+        picker_options = picker_rows[0]["components"][0]["options"]
+        assert [option["value"] for option in picker_options] == [
+            paused_run_id,
+            completed_run_id,
+        ]
+        assert picker_options[0]["default"] is True
+        assert picker_options[1]["default"] is False
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     completed_run_id = str(uuid.uuid4())
