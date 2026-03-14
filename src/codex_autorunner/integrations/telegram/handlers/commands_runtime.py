@@ -469,48 +469,56 @@ class TelegramCommandHandlers(
         record = await self._router.get_topic(key)
         if (
             record is not None
-            and bool(getattr(record, "pma_enabled", False))
             and getattr(self._config, "root", None) is not None
             and callable(getattr(self, "_spawn_task", None))
         ):
             from .commands.execution import (
-                _build_telegram_managed_thread_orchestration_service,
+                _get_telegram_thread_binding,
             )
 
-            orchestration_service = (
-                _build_telegram_managed_thread_orchestration_service(self)
+            mode = "pma" if bool(getattr(record, "pma_enabled", False)) else "repo"
+            orchestration_service, _binding, current_thread = (
+                _get_telegram_thread_binding(
+                    self,
+                    surface_key=key,
+                    mode=mode,
+                )
             )
-            managed_thread_id = orchestration_service.get_active_thread_for_binding(
-                surface_kind="telegram",
-                surface_key=key,
-            )
-            if isinstance(managed_thread_id, str) and managed_thread_id:
+            if current_thread is not None:
                 interrupted_active = False
                 cancelled_queued = 0
+                pma_mode = bool(getattr(record, "pma_enabled", False))
                 running_execution = orchestration_service.get_running_execution(
-                    managed_thread_id
+                    current_thread.thread_target_id
                 )
                 try:
                     cancelled_queued = orchestration_service.cancel_queued_executions(
-                        managed_thread_id
+                        current_thread.thread_target_id
                     )
                     if running_execution is not None:
-                        await orchestration_service.interrupt_thread(managed_thread_id)
+                        await orchestration_service.interrupt_thread(
+                            current_thread.thread_target_id
+                        )
                         interrupted_active = True
                 except Exception as exc:
                     log_event(
                         self._logger,
                         logging.WARNING,
-                        "telegram.interrupt.managed_thread_failed",
+                        "telegram.interrupt.orchestration_failed",
                         chat_id=chat_id,
                         thread_id=thread_id,
                         message_id=message_id,
-                        managed_thread_id=managed_thread_id,
+                        managed_thread_id=current_thread.thread_target_id,
+                        mode=mode,
                         exc=exc,
                     )
                     await self._send_message(
                         chat_id,
-                        "Failed to interrupt PMA turn.",
+                        (
+                            "Failed to interrupt PMA turn."
+                            if pma_mode
+                            else "Failed to interrupt active turn."
+                        ),
                         thread_id=thread_id,
                         reply_to=reply_to,
                     )
@@ -518,10 +526,18 @@ class TelegramCommandHandlers(
                 if interrupted_active or cancelled_queued:
                     parts = []
                     if interrupted_active:
-                        parts.append("Interrupted active PMA turn.")
+                        parts.append(
+                            "Interrupted active PMA turn."
+                            if pma_mode
+                            else "Interrupted active turn."
+                        )
                     if cancelled_queued:
                         parts.append(
-                            f"Cancelled {cancelled_queued} queued PMA turn(s)."
+                            (
+                                f"Cancelled {cancelled_queued} queued PMA turn(s)."
+                                if pma_mode
+                                else f"Cancelled {cancelled_queued} queued turn(s)."
+                            )
                         )
                     await self._send_message(
                         chat_id,

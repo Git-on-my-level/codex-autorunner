@@ -511,7 +511,32 @@ class WorkspaceCommands(SharedHelpers):
             ):
                 record.sandbox_policy = info["sandbox_policy"]
 
-        return await self._router.update_topic(chat_id, thread_id, apply)
+        updated = await self._router.update_topic(chat_id, thread_id, apply)
+        if (
+            updated is not None
+            and not bool(getattr(updated, "pma_enabled", False))
+            and isinstance(active_thread_id, str)
+            and active_thread_id
+            and isinstance(updated.workspace_path, str)
+            and updated.workspace_path
+        ):
+            from .execution import _sync_telegram_thread_binding
+
+            await _sync_telegram_thread_binding(
+                self,
+                surface_key=await self._resolve_topic_key(chat_id, thread_id),
+                workspace_root=Path(updated.workspace_path),
+                agent=self._effective_agent(updated),
+                repo_id=(
+                    updated.repo_id.strip()
+                    if isinstance(updated.repo_id, str) and updated.repo_id.strip()
+                    else None
+                ),
+                backend_thread_id=active_thread_id,
+                mode="repo",
+                pma_enabled=False,
+            )
+        return updated
 
     async def _require_bound_record(
         self,
@@ -1140,6 +1165,8 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
         agent = self._effective_agent(record)
+        from .execution import _sync_telegram_thread_binding
+
         if agent == "opencode":
             supervisor = getattr(self, "_opencode_supervisor", None)
             if supervisor is None:
@@ -1205,6 +1232,21 @@ class WorkspaceCommands(SharedHelpers):
 
             await self._router.update_topic(message.chat_id, message.thread_id, apply)
             thread_id = session_id
+            await _sync_telegram_thread_binding(
+                self,
+                surface_key=key,
+                workspace_root=workspace_root,
+                agent=agent,
+                repo_id=(
+                    record.repo_id.strip()
+                    if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                backend_thread_id=thread_id,
+                mode="repo",
+                pma_enabled=False,
+                replace_existing=True,
+            )
         else:
             try:
                 client = await self._client_for_workspace(record.workspace_path)
@@ -1266,6 +1308,21 @@ class WorkspaceCommands(SharedHelpers):
                 return
             await self._apply_thread_result(
                 message.chat_id, message.thread_id, thread, active_thread_id=thread_id
+            )
+            await _sync_telegram_thread_binding(
+                self,
+                surface_key=key,
+                workspace_root=Path(record.workspace_path),
+                agent=agent,
+                repo_id=(
+                    record.repo_id.strip()
+                    if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                backend_thread_id=thread_id,
+                mode="repo",
+                pma_enabled=False,
+                replace_existing=True,
             )
         effort_label = (
             record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
@@ -1400,6 +1457,8 @@ class WorkspaceCommands(SharedHelpers):
         await self._router.update_topic(message.chat_id, message.thread_id, apply)
 
         agent = self._effective_agent(record)
+        from .execution import _sync_telegram_thread_binding
+
         if agent == "opencode":
             supervisor = getattr(self, "_opencode_supervisor", None)
             if supervisor is None:
@@ -1451,6 +1510,21 @@ class WorkspaceCommands(SharedHelpers):
                 message.chat_id, message.thread_id, apply_session
             )
             thread_id = session_id
+            await _sync_telegram_thread_binding(
+                self,
+                surface_key=key,
+                workspace_root=workspace_root,
+                agent=agent,
+                repo_id=(
+                    record.repo_id.strip()
+                    if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                backend_thread_id=thread_id,
+                mode="repo",
+                pma_enabled=False,
+                replace_existing=True,
+            )
         else:
             try:
                 client = await self._client_for_workspace(str(workspace_root))
@@ -1507,6 +1581,21 @@ class WorkspaceCommands(SharedHelpers):
                 return
             await self._apply_thread_result(
                 message.chat_id, message.thread_id, thread, active_thread_id=thread_id
+            )
+            await _sync_telegram_thread_binding(
+                self,
+                surface_key=key,
+                workspace_root=workspace_root,
+                agent=agent,
+                repo_id=(
+                    record.repo_id.strip()
+                    if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                backend_thread_id=thread_id,
+                mode="repo",
+                pma_enabled=False,
+                replace_existing=True,
             )
 
         effort_label = (
@@ -2699,6 +2788,24 @@ class WorkspaceCommands(SharedHelpers):
             )
 
         updated_record = await self._router.update_topic(chat_id, thread_id_val, apply)
+        if updated_record is not None and updated_record.workspace_path:
+            from .execution import _sync_telegram_thread_binding
+
+            await _sync_telegram_thread_binding(
+                self,
+                surface_key=key,
+                workspace_root=Path(updated_record.workspace_path),
+                agent=self._effective_agent(updated_record),
+                repo_id=(
+                    updated_record.repo_id.strip()
+                    if isinstance(updated_record.repo_id, str)
+                    and updated_record.repo_id.strip()
+                    else None
+                ),
+                backend_thread_id=thread_id,
+                mode="repo",
+                pma_enabled=False,
+            )
         await self._answer_callback(callback, "Resumed thread")
         summary = None
         if updated_record is not None:
