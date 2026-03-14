@@ -1,6 +1,7 @@
 import logging
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -100,3 +101,81 @@ class FlowArtifact(BaseModel):
     path: str
     created_at: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+def parse_flow_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        if normalized.endswith("Z"):
+            normalized = normalized.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def flow_duration_seconds(
+    started_at: Optional[str],
+    finished_at: Optional[str],
+    status: Union[FlowRunStatus, str],
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[float]:
+    start_dt = parse_flow_timestamp(started_at)
+    if start_dt is None:
+        return None
+
+    end_dt = parse_flow_timestamp(finished_at)
+    status_value = (
+        status.value if isinstance(status, FlowRunStatus) else str(status or "").strip()
+    ).lower()
+    if end_dt is None and status_value in {
+        FlowRunStatus.PENDING.value,
+        FlowRunStatus.RUNNING.value,
+        FlowRunStatus.PAUSED.value,
+        FlowRunStatus.STOPPING.value,
+    }:
+        end_dt = now or datetime.now(timezone.utc)
+    if end_dt is None:
+        return None
+    return max(0.0, (end_dt - start_dt).total_seconds())
+
+
+def flow_run_duration_seconds(
+    record: FlowRunRecord, *, now: Optional[datetime] = None
+) -> Optional[float]:
+    return flow_duration_seconds(
+        record.started_at,
+        record.finished_at,
+        record.status,
+        now=now,
+    )
+
+
+def format_flow_duration(seconds: Optional[float]) -> Optional[str]:
+    if seconds is None:
+        return None
+    try:
+        total_seconds = max(0, int(round(float(seconds))))
+    except (TypeError, ValueError):
+        return None
+
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+
+    minutes, secs = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m" if secs == 0 else f"{minutes}m {secs}s"
+
+    hours, mins = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h" if mins == 0 else f"{hours}h {mins}m"
+
+    days, rem_hours = divmod(hours, 24)
+    return f"{days}d" if rem_hours == 0 else f"{days}d {rem_hours}h"

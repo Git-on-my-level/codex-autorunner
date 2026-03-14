@@ -43,6 +43,8 @@ type FlowRun = {
   state?: Record<string, unknown>;
   error_message?: string | null;
   started_at?: string | null;
+  finished_at?: string | null;
+  duration_seconds?: number | null;
   last_event_seq?: number | null;
   last_event_at?: string | null;
   reason_summary?: string | null;
@@ -426,22 +428,31 @@ function renderDispatchMiniList(entries: DispatchEntry[]): void {
   }
 }
 
-function formatElapsed(startTime: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - startTime.getTime();
-  const diffSecs = Math.floor(diffMs / 1000);
-  
+function formatElapsedSeconds(totalSeconds: number): string {
+  const diffSecs = Math.max(0, Math.floor(totalSeconds));
+
   if (diffSecs < 60) {
     return `${diffSecs}s`;
   }
   const mins = Math.floor(diffSecs / 60);
   const secs = diffSecs % 60;
   if (mins < 60) {
-    return `${mins}m ${secs}s`;
+    return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`;
   }
   const hours = Math.floor(mins / 60);
   const remainingMins = mins % 60;
-  return `${hours}h ${remainingMins}m`;
+  if (hours < 24) {
+    return remainingMins === 0 ? `${hours}h` : `${hours}h ${remainingMins}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours === 0 ? `${days}d` : `${days}d ${remainingHours}h`;
+}
+
+function formatElapsed(startTime: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - startTime.getTime();
+  return formatElapsedSeconds(diffMs / 1000);
 }
 
 function startElapsedTimer(): void {
@@ -1919,7 +1930,12 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     } else {
       stopElapsedTimer();
       flowStartedAt = null;
-      if (elapsed) elapsed.textContent = "–";
+      if (elapsed) {
+        elapsed.textContent =
+          typeof latest?.duration_seconds === "number"
+            ? formatElapsedSeconds(latest.duration_seconds)
+            : "–";
+      }
     }
     
     if (reason) {

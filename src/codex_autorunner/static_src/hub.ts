@@ -62,6 +62,7 @@ interface HubRepo {
   last_exit_code: number | null;
   last_run_started_at: string | null;
   last_run_finished_at: string | null;
+  last_run_duration_seconds?: number | null;
   runner_pid: number | null;
   effective_destination: Record<string, unknown>;
   mounted: boolean;
@@ -371,6 +372,27 @@ function formatLastActivity(repo: HubRepo): string {
   const time = repo.last_run_finished_at || repo.last_run_started_at;
   if (!time) return "";
   return formatTimeCompact(time);
+}
+
+function formatRunDuration(seconds: number | null | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+    return "";
+  }
+  const rounded = Math.max(0, Math.floor(seconds));
+  if (rounded < 60) return `${rounded}s`;
+  const minutes = Math.floor(rounded / 60);
+  const remainingSeconds = rounded % 60;
+  if (minutes < 60) {
+    return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) {
+    return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours === 0 ? `${days}d` : `${days}d ${remainingHours}h`;
 }
 
 function formatFreshnessAge(ageSeconds: number | null | undefined): string {
@@ -1793,6 +1815,8 @@ function renderRepos(repos: HubRepo[]): void {
 
     const runSummary = formatRunSummary(repo);
     const lastActivity = formatLastActivity(repo);
+    const runDuration =
+      repo.last_run_finished_at ? formatRunDuration(repo.last_run_duration_seconds) : "";
     const primaryChannel = inlineChannels[0] || null;
     const infoItems: string[] = [];
     if (!primaryChannel) {
@@ -1805,6 +1829,9 @@ function renderRepos(repos: HubRepo[]): void {
       }
       if (lastActivity) {
         infoItems.push(lastActivity);
+      }
+      if (runDuration) {
+        infoItems.push(`took ${runDuration}`);
       }
     }
     if (freshness?.is_stale === true) {
