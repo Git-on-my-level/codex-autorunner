@@ -19,6 +19,7 @@ class HubRepoEnricher:
         chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
     ) -> dict:
         from .....core.archive import has_car_state
+        from .....core.flows.models import flow_run_duration_seconds
         from .....core.freshness import resolve_stale_threshold_seconds
         from .....core.pma_context import (
             get_latest_ticket_flow_run_state_with_record,
@@ -91,6 +92,9 @@ class HubRepoEnricher:
                 repo_dict["last_run_id"] = run_record.id
                 repo_dict["last_run_started_at"] = run_record.started_at
                 repo_dict["last_run_finished_at"] = run_record.finished_at
+                repo_dict["last_run_duration_seconds"] = flow_run_duration_seconds(
+                    run_record
+                )
             repo_dict["canonical_state_v1"] = build_canonical_state_v1(
                 repo_root=snapshot.path,
                 repo_id=snapshot.id,
@@ -108,4 +112,5 @@ class HubRepoEnricher:
             repo_dict["ticket_flow_display"] = None
             repo_dict["run_state"] = None
             repo_dict["canonical_state_v1"] = None
+        repo_dict.setdefault("last_run_duration_seconds", None)
         return repo_dict

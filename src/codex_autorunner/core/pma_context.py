@@ -15,7 +15,12 @@ from ..tickets.replies import resolve_reply_paths
 from .config import load_hub_config, load_repo_config
 from .filebox import list_filebox
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
-from .flows.models import FlowRunRecord, FlowRunStatus
+from .flows.models import (
+    FlowRunRecord,
+    FlowRunStatus,
+    flow_run_duration_seconds,
+    format_flow_duration,
+)
 from .flows.store import FlowStore
 from .flows.worker_process import check_worker_health, read_worker_crash_info
 from .freshness import (
@@ -148,6 +153,7 @@ class TicketFlowRunState(TypedDict, total=False):
     worker_status: Optional[str]
     crash: Optional[TicketFlowWorkerCrash]
     flow_status: str
+    duration_seconds: Optional[float]
     repo_id: str
     run_id: str
     active_run_id: Optional[str]
@@ -594,10 +600,20 @@ def _render_hub_snapshot(
             last_progress_at = _truncate(
                 str(run_state.get("last_progress_at", "")), max_field_chars
             )
+            duration = _truncate(
+                str(
+                    format_flow_duration(
+                        cast(Optional[float], run_state.get("duration_seconds"))
+                    )
+                    or ""
+                ),
+                max_field_chars,
+            )
             lines.append(
                 f"- type={item_type} next_action={next_action} repo_id={repo_id} "
                 f"run_id={run_id} seq={seq} mode={mode} handoff={str(handoff).lower()} "
                 f"state={state} current_ticket={current_ticket} last_progress_at={last_progress_at}"
+                + (f" duration={duration}" if duration else "")
             )
             title = dispatch.get("title")
             if title:
@@ -667,11 +683,21 @@ def _render_hub_snapshot(
             recommended_action = _truncate(
                 str(run_state.get("recommended_action", "")), max_text_chars
             )
+            duration = _truncate(
+                str(
+                    format_flow_duration(
+                        cast(Optional[float], run_state.get("duration_seconds"))
+                    )
+                    or ""
+                ),
+                max_field_chars,
+            )
             lines.append(
                 f"- {repo_id} ({display_name}): status={status} "
                 f"destination={destination_text} "
                 f"last_run_id={last_run_id} last_exit_code={last_exit} "
                 f"ticket_flow={ticket_flow} state={state}"
+                + (f" duration={duration}" if duration else "")
             )
             if blocking_reason:
                 lines.append(f"  blocking_reason: {blocking_reason}")
@@ -1185,6 +1211,7 @@ def build_ticket_flow_run_state(
     last_progress_at = (
         last_event_at or record.started_at or record.created_at or record.finished_at
     )
+    duration_seconds = flow_run_duration_seconds(record)
 
     health = None
     dead_worker = False
@@ -1302,6 +1329,7 @@ def build_ticket_flow_run_state(
             else None
         ),
         "flow_status": record.status.value,
+        "duration_seconds": duration_seconds,
         "repo_id": repo_id,
         "run_id": run_id,
     }
@@ -1814,6 +1842,7 @@ async def build_hub_snapshot(
             "last_run_id": snap.last_run_id,
             "last_run_started_at": snap.last_run_started_at,
             "last_run_finished_at": snap.last_run_finished_at,
+            "last_run_duration_seconds": None,
             "last_exit_code": snap.last_exit_code,
             "effective_destination": effective_destination,
             "ticket_flow": None,
@@ -1832,6 +1861,9 @@ async def build_hub_snapshot(
                 summary["last_run_id"] = run_record.id
                 summary["last_run_started_at"] = run_record.started_at
                 summary["last_run_finished_at"] = run_record.finished_at
+                summary["last_run_duration_seconds"] = flow_run_duration_seconds(
+                    run_record
+                )
             summary["canonical_state_v1"] = build_canonical_state_v1(
                 repo_root=snap.path,
                 repo_id=snap.id,

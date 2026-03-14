@@ -162,7 +162,14 @@ def _flow_component_interaction(custom_id: str) -> dict[str, Any]:
     }
 
 
-def _create_run(workspace: Path, run_id: str, *, status: FlowRunStatus) -> None:
+def _create_run(
+    workspace: Path,
+    run_id: str,
+    *,
+    status: FlowRunStatus,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+) -> None:
     db_path = workspace / ".codex-autorunner" / "flows.db"
     with FlowStore(db_path) as store:
         store.create_flow_run(
@@ -171,7 +178,12 @@ def _create_run(workspace: Path, run_id: str, *, status: FlowRunStatus) -> None:
             input_data={},
             state={"ticket_engine": {"current_ticket": "TICKET-001.md"}},
         )
-        store.update_flow_run_status(run_id, status)
+        store.update_flow_run_status(
+            run_id,
+            status,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
 
 
 def _write_manifest(root: Path, *, repo_id: str, repo_path: str) -> Path:
@@ -269,6 +281,54 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         assert latest["kind"] == "notice"
         assert latest["actor"] == "car"
         assert "Run:" in latest["text"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    completed_run_id = str(uuid.uuid4())
+    _create_run(
+        workspace,
+        completed_run_id,
+        status=FlowRunStatus.COMPLETED,
+        started_at="2026-03-13T08:00:00Z",
+        finished_at="2026-03-13T10:30:00Z",
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": completed_run_id}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Status: completed" in content
+        assert "Elapsed: 2h 30m" in content
     finally:
         await store.close()
 
@@ -868,7 +928,13 @@ async def test_flow_status_in_pma_mode_without_manifest_reports_missing_manifest
 async def test_flow_status_in_pma_mode_shows_hub_overview(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     paused_run_id = str(uuid.uuid4())
-    _create_run(workspace, paused_run_id, status=FlowRunStatus.PAUSED)
+    _create_run(
+        workspace,
+        paused_run_id,
+        status=FlowRunStatus.COMPLETED,
+        started_at="2026-03-13T08:00:00Z",
+        finished_at="2026-03-13T09:45:00Z",
+    )
     manifest_path = _write_manifest(
         tmp_path, repo_id="workspace", repo_path="workspace"
     )
@@ -907,6 +973,7 @@ async def test_flow_status_in_pma_mode_shows_hub_overview(tmp_path: Path) -> Non
         assert "Hub Flow Overview:" in content
         assert "workspace:" in content
         assert paused_run_id in content
+        assert "took 1h 45m" in content
     finally:
         await store.close()
 

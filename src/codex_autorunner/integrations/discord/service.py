@@ -40,6 +40,8 @@ from ...core.flows import (
     FlowRunStatus,
     FlowStore,
     archive_flow_run_artifacts,
+    flow_run_duration_seconds,
+    format_flow_duration,
     load_latest_paused_ticket_flow_dispatch,
 )
 from ...core.flows.hub_overview import build_hub_flow_overview_entries
@@ -6003,6 +6005,13 @@ class DiscordBotService:
                 )
                 run_id = display.get("run_id")
                 run_suffix = f" run {run_id}" if run_id else ""
+                duration_suffix = ""
+                if latest is not None and latest.finished_at:
+                    duration_label = format_flow_duration(
+                        flow_run_duration_seconds(latest)
+                    )
+                    if duration_label:
+                        duration_suffix = f" · took {duration_label}"
                 freshness_suffix = ""
                 if latest is not None:
                     snapshot = build_flow_status_snapshot(
@@ -6021,7 +6030,7 @@ class DiscordBotService:
                         )
                 line = (
                     f"{line_prefix}{display['status_icon']} {line_label}: "
-                    f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}{freshness_suffix}"
+                    f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}{duration_suffix}{freshness_suffix}"
                 )
             except Exception:
                 line = f"{line_prefix}❓ {line_label}: Error reading state"
@@ -6266,6 +6275,9 @@ class DiscordBotService:
         ]
         if progress_label:
             lines.append(f"Tickets: {progress_label}")
+        duration_label = format_flow_duration(flow_run_duration_seconds(record))
+        if duration_label:
+            lines.append(f"Elapsed: {duration_label}")
         freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
         freshness_line = (
             f"Freshness: {freshness_summary}" if freshness_summary else None

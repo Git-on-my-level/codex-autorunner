@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .....core.config import ConfigError, load_repo_config
-from .....core.flows import FlowController, FlowStore, archive_flow_run_artifacts
+from .....core.flows import (
+    FlowController,
+    FlowStore,
+    archive_flow_run_artifacts,
+    flow_duration_seconds,
+    flow_run_duration_seconds,
+    format_flow_duration,
+)
 from .....core.flows.hub_overview import build_hub_flow_overview_entries
 from .....core.flows.models import FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
@@ -876,6 +883,11 @@ class FlowCommands(SharedHelpers):
         finished_at = getattr(run, "finished_at", None)
         if finished_at:
             lines.append(f"Finished: {finished_at}")
+        duration_label = format_flow_duration(
+            flow_duration_seconds(started_at, finished_at, status_value)
+        )
+        if duration_label:
+            lines.append(f"Elapsed: {duration_label}")
         current_step = getattr(run, "current_step", None)
         if current_step:
             lines.append(f"Step: {current_step}")
@@ -1159,6 +1171,13 @@ class FlowCommands(SharedHelpers):
                     total_count=progress.get("total", 0),
                     run_id=latest.id if latest else None,
                 )
+                duration_suffix = ""
+                if latest is not None and latest.finished_at:
+                    duration_label = format_flow_duration(
+                        flow_run_duration_seconds(latest)
+                    )
+                    if duration_label:
+                        duration_suffix = f" · took {duration_label}"
                 freshness_suffix = ""
                 if latest is not None:
                     snapshot = build_flow_status_snapshot(repo_root, latest, store)
@@ -1182,7 +1201,7 @@ class FlowCommands(SharedHelpers):
                     run_id=display.get("run_id"),
                     prefix=line_prefix,
                 )
-                status_line += freshness_suffix
+                status_line += duration_suffix + freshness_suffix
             except Exception:
                 status_line = f"{line_prefix}❓ {_code(label)}: Error reading state"
             finally:

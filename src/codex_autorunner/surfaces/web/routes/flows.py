@@ -27,6 +27,7 @@ from ....core.flows import (
     FlowRunStatus,
     FlowStore,
     archive_flow_run_artifacts,
+    flow_run_duration_seconds,
 )
 from ....core.flows.reconciler import reconcile_flow_run
 from ....core.flows.start_policy import (
@@ -550,6 +551,7 @@ class FlowStatusResponse(BaseModel):
     created_at: str
     started_at: Optional[str]
     finished_at: Optional[str]
+    duration_seconds: Optional[float] = None
     error_message: Optional[str]
     state: Dict = Field(default_factory=dict)
     reason_summary: Optional[str] = None
@@ -581,6 +583,7 @@ class FlowStatusResponse(BaseModel):
             created_at=record.created_at,
             started_at=record.started_at,
             finished_at=record.finished_at,
+            duration_seconds=flow_run_duration_seconds(record),
             error_message=record.error_message,
             state=state,
             reason_summary=reason_summary,

@@ -8,7 +8,6 @@ with the rest of the app.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -18,7 +17,12 @@ from ....core.flows.failure_diagnostics import (
     format_failure_summary,
     get_failure_payload,
 )
-from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
+from ....core.flows.models import (
+    FlowEventType,
+    FlowRunRecord,
+    FlowRunStatus,
+    flow_run_duration_seconds,
+)
 from ....core.flows.store import FlowStore
 from ....core.utils import find_repo_root
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
@@ -49,35 +53,6 @@ def _select_primary_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]
         if failure:
             return newest
     return None
-
-
-def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        if value.endswith("Z"):
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-
-def _duration_seconds(
-    started_at: Optional[str], finished_at: Optional[str], status: str
-) -> Optional[float]:
-    start_dt = _parse_timestamp(started_at)
-    if not start_dt:
-        return None
-    end_dt = _parse_timestamp(finished_at)
-    if not end_dt and status in {
-        FlowRunStatus.RUNNING.value,
-        FlowRunStatus.PAUSED.value,
-        FlowRunStatus.PENDING.value,
-    }:
-        end_dt = datetime.now(timezone.utc)
-    if not end_dt:
-        return None
-    return (end_dt - start_dt).total_seconds()
 
 
 def _ticket_counts(ticket_dir: Path) -> dict[str, int]:
@@ -195,9 +170,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
             "status": run_record.status.value,
             "started_at": run_record.started_at,
             "finished_at": run_record.finished_at,
-            "duration_seconds": _duration_seconds(
-                run_record.started_at, run_record.finished_at, run_record.status.value
-            ),
+            "duration_seconds": flow_run_duration_seconds(run_record),
             "current_step": run_record.current_step,
             "created_at": run_record.created_at,
         }

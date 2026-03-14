@@ -291,21 +291,29 @@ function renderDispatchMiniList(entries) {
         dispatchMiniList.appendChild(more);
     }
 }
-function formatElapsed(startTime) {
-    const now = new Date();
-    const diffMs = now.getTime() - startTime.getTime();
-    const diffSecs = Math.floor(diffMs / 1000);
+function formatElapsedSeconds(totalSeconds) {
+    const diffSecs = Math.max(0, Math.floor(totalSeconds));
     if (diffSecs < 60) {
         return `${diffSecs}s`;
     }
     const mins = Math.floor(diffSecs / 60);
     const secs = diffSecs % 60;
     if (mins < 60) {
-        return `${mins}m ${secs}s`;
+        return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`;
     }
     const hours = Math.floor(mins / 60);
     const remainingMins = mins % 60;
-    return `${hours}h ${remainingMins}m`;
+    if (hours < 24) {
+        return remainingMins === 0 ? `${hours}h` : `${hours}h ${remainingMins}m`;
+    }
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    return remainingHours === 0 ? `${days}d` : `${days}d ${remainingHours}h`;
+}
+function formatElapsed(startTime) {
+    const now = new Date();
+    const diffMs = now.getTime() - startTime.getTime();
+    return formatElapsedSeconds(diffMs / 1000);
 }
 function startElapsedTimer() {
     stopElapsedTimer();
@@ -1617,8 +1625,12 @@ async function loadTicketFlow(ctx) {
         else {
             stopElapsedTimer();
             flowStartedAt = null;
-            if (elapsed)
-                elapsed.textContent = "–";
+            if (elapsed) {
+                elapsed.textContent =
+                    typeof latest?.duration_seconds === "number"
+                        ? formatElapsedSeconds(latest.duration_seconds)
+                        : "–";
+            }
         }
         if (reason) {
             reason.textContent = summarizeReason(latest) || "–";
