@@ -451,26 +451,10 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         harness = harness or self.harness_factory(definition.agent_id)
         workspace_root = Path(thread.workspace_root)
-        await harness.ensure_ready(workspace_root)
         runtime_prompt = request.message_text
         raw_runtime_prompt = request.metadata.get("runtime_prompt")
         if isinstance(raw_runtime_prompt, str) and raw_runtime_prompt.strip():
             runtime_prompt = raw_runtime_prompt
-
-        conversation_id = thread.backend_thread_id
-        if conversation_id:
-            conversation = await harness.resume_conversation(
-                workspace_root, conversation_id
-            )
-        else:
-            conversation = await harness.new_conversation(
-                workspace_root,
-                title=thread.display_name,
-            )
-            conversation_id = conversation.id
-            self.thread_store.set_thread_backend_id(
-                thread.thread_target_id, conversation_id
-            )
 
         execution = self.thread_store.create_execution(
             thread.thread_target_id,
@@ -486,6 +470,32 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
 
         try:
+            await harness.ensure_ready(workspace_root)
+            conversation_id = thread.backend_thread_id
+            if conversation_id:
+                conversation = await harness.resume_conversation(
+                    workspace_root, conversation_id
+                )
+                resumed_conversation_id = getattr(conversation, "id", None)
+                if (
+                    isinstance(resumed_conversation_id, str)
+                    and resumed_conversation_id
+                    and resumed_conversation_id != conversation_id
+                ):
+                    conversation_id = resumed_conversation_id
+                    self.thread_store.set_thread_backend_id(
+                        thread.thread_target_id, conversation_id
+                    )
+            else:
+                conversation = await harness.new_conversation(
+                    workspace_root,
+                    title=thread.display_name,
+                )
+                conversation_id = conversation.id
+                self.thread_store.set_thread_backend_id(
+                    thread.thread_target_id, conversation_id
+                )
+
             if request.kind == "review":
                 if not harness.supports("review"):
                     raise RuntimeError(

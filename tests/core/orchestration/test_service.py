@@ -43,7 +43,9 @@ class _FakeHarness:
         ["durable_threads", "message_turns", "interrupt", "review"]
     )
     next_conversation_id: str = "backend-conversation-1"
+    resumed_conversation_id: Optional[str] = None
     next_turn_id: str = "backend-turn-1"
+    ensure_ready_error: Optional[Exception] = None
     ensure_ready_calls: list[Path] = field(default_factory=list)
     new_conversation_calls: list[tuple[Path, Optional[str]]] = field(
         default_factory=list
@@ -55,6 +57,8 @@ class _FakeHarness:
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ensure_ready_calls.append(workspace_root)
+        if self.ensure_ready_error is not None:
+            raise self.ensure_ready_error
 
     def supports(self, capability: str) -> bool:
         return capability in self.capabilities
@@ -69,7 +73,7 @@ class _FakeHarness:
         self, workspace_root: Path, conversation_id: str
     ) -> _FakeConversation:
         self.resume_conversation_calls.append((workspace_root, conversation_id))
-        return _FakeConversation(id=conversation_id)
+        return _FakeConversation(id=self.resumed_conversation_id or conversation_id)
 
     async def start_turn(
         self,
@@ -263,6 +267,37 @@ async def test_send_review_resumes_existing_backend_thread(tmp_path: Path) -> No
     assert execution.backend_id == "review-turn-1"
 
 
+async def test_send_message_persists_canonical_resumed_conversation_id(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(resumed_conversation_id="backend-canonical-2")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+        display_name="Canonical Thread",
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Continue the session",
+        )
+    )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-canonical-2"
+    assert execution.backend_id == "backend-turn-1"
+    assert refreshed_thread is not None
+    assert refreshed_thread.backend_thread_id == "backend-canonical-2"
+
+
 async def test_interrupt_thread_uses_harness_and_marks_execution(
     tmp_path: Path,
 ) -> None:
@@ -307,6 +342,33 @@ async def test_send_review_rejects_when_harness_lacks_review_capability(
 
     assert execution.status == "error"
     assert execution.error == "Agent 'codex' does not support review mode"
+
+
+async def test_send_message_records_failed_execution_when_runtime_setup_fails(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(ensure_ready_error=FileNotFoundError("codex"))
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+            metadata={"execution_error_message": "Managed thread execution failed"},
+        )
+    )
+
+    running = service.get_running_execution(thread.thread_target_id)
+
+    assert harness.ensure_ready_calls == [workspace_root]
+    assert harness.new_conversation_calls == []
+    assert execution.status == "error"
+    assert execution.error == "Managed thread execution failed"
+    assert running is None
 
 
 async def test_interrupt_thread_rejects_when_harness_lacks_interrupt_capability(

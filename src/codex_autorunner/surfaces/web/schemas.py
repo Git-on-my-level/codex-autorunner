@@ -231,7 +231,7 @@ class AppServerThreadArchiveRequest(Payload):
 
 
 class PmaManagedThreadCreateRequest(Payload):
-    agent: Literal["codex", "opencode"]
+    agent: Literal["codex", "opencode", "zeroclaw"]
     repo_id: Optional[str] = None
     workspace_root: Optional[str] = None
     name: Optional[str] = None
