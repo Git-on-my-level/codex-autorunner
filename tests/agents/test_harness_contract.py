@@ -50,6 +50,7 @@ class _MinimalHarness(AgentHarness):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
         _ = (
             workspace_root,
@@ -58,6 +59,7 @@ class _MinimalHarness(AgentHarness):
             reasoning,
             approval_mode,
             sandbox_policy,
+            input_items,
         )
         return TurnRef(conversation_id=conversation_id, turn_id="turn-1")
 

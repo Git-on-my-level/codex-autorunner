@@ -93,6 +93,7 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
                 backend_thread_id="backend-thread-1",
             ),
             workspace_root=hub_env.repo_root.resolve(),
+            request=request,
         )
 
     async def _fake_await(*args, **kwargs):

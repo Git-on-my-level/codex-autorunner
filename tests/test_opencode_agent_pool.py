@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,6 +47,52 @@ class _FakeOrchestrator:
         self.closed = True
 
 
+class _BlockingFakeOrchestrator:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.closed = False
+        self.first_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+
+    async def run_turn(self, agent_id, state, prompt, **kwargs):
+        call_index = len(self.calls)
+        self.calls.append(
+            {
+                "agent_id": agent_id,
+                "prompt": prompt,
+                "approval_policy": state.autorunner_approval_policy,
+                "sandbox_mode": state.autorunner_sandbox_mode,
+                **kwargs,
+            }
+        )
+        session_id = (
+            kwargs.get("session_id")
+            if isinstance(kwargs.get("session_id"), str) and kwargs.get("session_id")
+            else f"session-{call_index + 1}"
+        )
+        yield Started(
+            timestamp="now",
+            session_id=session_id,
+            turn_id=f"turn-{call_index + 1}",
+        )
+        if call_index == 0:
+            self.first_started.set()
+            await self.release_first.wait()
+        yield Completed(
+            timestamp="now",
+            final_message=f"done-{call_index + 1}",
+        )
+
+    def get_context(self):
+        return None
+
+    def get_last_turn_id(self):
+        return "turn-fallback"
+
+    async def close_all(self):
+        self.closed = True
+
+
 @pytest.mark.asyncio
 async def test_run_turn_maps_events_to_result_and_emits(tmp_path: Path):
     events = [
@@ -83,13 +130,13 @@ async def test_run_turn_maps_events_to_result_and_emits(tmp_path: Path):
 
     assert result.text == "hello"
     assert result.error is None
-    assert result.conversation_id == "session-ctx"
+    assert result.conversation_id
     assert result.turn_id == "turn-1"
-    assert result.raw == {
-        "final_status": "completed",
-        "log_lines": ["log line"],
-        "token_usage": {"input": 3, "output": 5},
-    }
+    assert result.raw["final_status"] == "completed"
+    assert result.raw["log_lines"] == ["log line"]
+    assert result.raw["token_usage"] == {"input": 3, "output": 5}
+    assert isinstance(result.raw["execution_id"], str)
+    assert result.raw["backend_thread_id"] == "session-ctx"
 
     assert [event_type for event_type, _ in emitted] == [
         FlowEventType.AGENT_STREAM_DELTA,
@@ -134,11 +181,11 @@ async def test_run_turn_handles_failure_and_fallback_turn_id(tmp_path: Path):
 
     assert result.error == "boom"
     assert result.turn_id == "turn-fallback"
-    assert result.raw == {
-        "final_status": "failed",
-        "log_lines": [],
-        "token_usage": None,
-    }
+    assert result.raw["final_status"] == "failed"
+    assert result.raw["log_lines"] == []
+    assert result.raw["token_usage"] is None
+    assert isinstance(result.raw["execution_id"], str)
+    assert result.raw["backend_thread_id"] == "session-ctx"
 
 
 @pytest.mark.asyncio
@@ -186,6 +233,64 @@ async def test_run_turn_passes_model_reasoning_session_and_merges_messages(
     assert call["prompt"] == "main\n\nmore\n\nend"
     assert call["approval_policy"] == "on-request"
     assert call["sandbox_mode"] == "workspaceWrite"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_queues_busy_delegated_thread_and_reuses_orchestration_thread_id(
+    tmp_path: Path,
+):
+    cfg = SimpleNamespace(
+        root=tmp_path,
+        ticket_flow=TicketFlowConfig(
+            approval_mode="yolo",
+            default_approval_decision="accept",
+            include_previous_ticket_context=False,
+        ),
+    )
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
+    fake = _BlockingFakeOrchestrator()
+    pool._backend_orchestrator = fake  # type: ignore[assignment]
+
+    first_task = asyncio.create_task(
+        pool.run_turn(
+            AgentTurnRequest(
+                agent_id="codex",
+                prompt="first",
+                workspace_root=tmp_path,
+            )
+        )
+    )
+    await fake.first_started.wait()
+
+    thread = pool._thread_store.list_threads(agent="codex", limit=1)[0]
+    thread_id = str(thread["managed_thread_id"])
+
+    second_task = asyncio.create_task(
+        pool.run_turn(
+            AgentTurnRequest(
+                agent_id="codex",
+                prompt="second",
+                workspace_root=tmp_path,
+                conversation_id=thread_id,
+            )
+        )
+    )
+    await asyncio.sleep(0)
+
+    queued = pool._thread_store.list_queued_turns(thread_id)
+    assert len(queued) == 1
+    assert len(fake.calls) == 1
+
+    fake.release_first.set()
+    first_result = await first_task
+    second_result = await second_task
+
+    assert first_result.conversation_id == thread_id
+    assert second_result.conversation_id == thread_id
+    assert first_result.text == "done-1"
+    assert second_result.text == "done-2"
+    assert len(fake.calls) == 2
+    assert fake.calls[1]["session_id"] == "session-1"
 
 
 @pytest.mark.asyncio

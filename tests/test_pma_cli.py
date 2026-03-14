@@ -90,6 +90,7 @@ def test_pma_cli_thread_send_help_shows_json_option():
     output = result.stdout
     assert "--json" in output, "PMA thread send should support --json"
     assert "--watch" in output, "PMA thread send should support --watch"
+    assert "--if-busy" in output, "PMA thread send should support busy-thread policy"
     assert "--notify-on" in output, "PMA thread send should support --notify-on"
 
 
@@ -467,6 +468,75 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
             {"limit": 50, "level": "info"},
         ),
     ]
+
+
+def test_pma_cli_thread_send_reports_queued_busy_thread(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, token_env, timeout
+        captured["url"] = url
+        captured["payload"] = payload
+        return (
+            200,
+            {
+                "status": "ok",
+                "send_state": "queued",
+                "execution_state": "queued",
+                "managed_turn_id": "turn-2",
+                "active_managed_turn_id": "turn-1",
+                "queue_depth": 1,
+                "assistant_text": "",
+            },
+        )
+
+    monkeypatch.setattr(
+        pma_cli, "_request_json_with_status", _fake_request_json_with_status
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "follow up",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "send_state=queued managed_turn_id=turn-2" in result.stdout
+    assert "active_managed_turn_id=turn-1" in result.stdout
+    assert "queue_depth=1" in result.stdout
+    assert captured["url"] == "http://127.0.0.1:4321/hub/pma/threads/thread-1/messages"
+    assert captured["payload"] == {
+        "message": "follow up",
+        "busy_policy": "queue",
+        "defer_execution": False,
+    }
 
 
 def test_pma_cli_thread_control_commands_use_orchestration_routes(

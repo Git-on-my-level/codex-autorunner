@@ -80,6 +80,7 @@ class _HarnessWithWait:
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> _FakeTurn:
         self.start_turn_calls.append(
             {
@@ -90,6 +91,7 @@ class _HarnessWithWait:
                 "reasoning": reasoning,
                 "approval_mode": approval_mode,
                 "sandbox_policy": sandbox_policy,
+                "input_items": input_items,
             }
         )
         return _FakeTurn(conversation_id=conversation_id, turn_id="backend-turn-1")
@@ -205,8 +207,17 @@ class _HarnessWithStream:
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> _FakeTurn:
-        _ = workspace_root, prompt, model, reasoning, approval_mode, sandbox_policy
+        _ = (
+            workspace_root,
+            prompt,
+            model,
+            reasoning,
+            approval_mode,
+            sandbox_policy,
+            input_items,
+        )
         return _FakeTurn(conversation_id=conversation_id, turn_id="stream-turn-1")
 
     async def start_review(

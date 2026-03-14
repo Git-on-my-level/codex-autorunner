@@ -7,19 +7,38 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
+from ...agents.registry import get_registered_agents
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_prompt_writing_hint,
 )
 from ...core.orchestration import (
     FlowTarget,
+    MessageRequest,
     PausedFlowTarget,
     SurfaceThreadMessageRequest,
+    build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
 )
-from ...core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
+from ...core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_INTERRUPTED_ERROR,
+    RUNTIME_THREAD_TIMEOUT_ERROR,
+    RuntimeThreadExecution,
+    RuntimeThreadOutcome,
+    await_runtime_thread_outcome,
+    begin_next_queued_runtime_thread_execution,
+    begin_runtime_thread_execution,
+)
+from ...core.pma_context import (
+    build_hub_snapshot,
+    format_pma_discoverability_preamble,
+    format_pma_prompt,
+    load_pma_prompt,
+)
+from ...core.pma_thread_store import PmaThreadStore
+from ...core.pma_transcripts import PmaTranscriptStore
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -50,6 +69,9 @@ from .rendering import (
     format_discord_message,
     truncate_for_discord,
 )
+
+DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
+DISCORD_PMA_TIMEOUT_SECONDS = 7200
 
 
 @dataclass(frozen=True)
@@ -411,7 +433,10 @@ async def handle_message_event(
         if turn_input_items:
             run_turn_kwargs["input_items"] = turn_input_items
         try:
-            return await service._run_agent_turn_for_message(**run_turn_kwargs)
+            return cast(
+                DiscordMessageTurnResult,
+                await service._run_agent_turn_for_message(**run_turn_kwargs),
+            )
         except Exception as exc:
             log_event_fn(
                 service._logger,
@@ -828,4 +853,422 @@ async def run_agent_turn_for_message(
         preview_message_id=progress_message_id,
         token_usage=token_usage,
         elapsed_seconds=elapsed_seconds,
+    )
+
+
+def _sanitize_managed_thread_result_error(detail: Any) -> str:
+    sanitized = str(detail or "").strip()
+    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "Discord PMA turn timed out"}:
+        return "Discord PMA turn timed out"
+    if sanitized in {
+        RUNTIME_THREAD_INTERRUPTED_ERROR,
+        "Discord PMA turn interrupted",
+    }:
+        return "Discord PMA turn interrupted"
+    if sanitized in {
+        "Discord PMA turn timed out",
+        "Discord PMA turn interrupted",
+    }:
+        return sanitized
+    return DISCORD_PMA_PUBLIC_EXECUTION_ERROR
+
+
+def _build_managed_thread_input_items(
+    runtime_prompt: str,
+    input_items: Optional[list[dict[str, Any]]],
+) -> Optional[list[dict[str, Any]]]:
+    if not input_items:
+        return None
+    normalized: list[dict[str, Any]] = []
+    replaced_text = False
+    for item in input_items:
+        if not isinstance(item, dict):
+            continue
+        item_copy = dict(item)
+        if not replaced_text and str(item_copy.get("type") or "").strip() == "text":
+            item_copy["text"] = runtime_prompt
+            replaced_text = True
+        normalized.append(item_copy)
+    if not replaced_text:
+        normalized.insert(0, {"type": "text", "text": runtime_prompt})
+    return normalized or None
+
+
+def _build_discord_managed_thread_orchestration_service(service: Any) -> Any:
+    cached = getattr(service, "_discord_managed_thread_orchestration_service", None)
+    if cached is not None:
+        return cached
+
+    descriptors = get_registered_agents()
+
+    def _make_harness(agent_id: str) -> Any:
+        descriptor = descriptors.get(agent_id)
+        if descriptor is None:
+            raise KeyError(f"Unknown agent definition '{agent_id}'")
+        return descriptor.make_harness(service)
+
+    created = build_harness_backed_orchestration_service(
+        descriptors=cast(Any, descriptors),
+        harness_factory=_make_harness,
+        pma_thread_store=PmaThreadStore(service._config.root),
+    )
+    service._discord_managed_thread_orchestration_service = created
+    return created
+
+
+def _resolve_discord_managed_thread(
+    service: Any,
+    *,
+    channel_id: str,
+    workspace_root: Path,
+    agent: str,
+    repo_id: Optional[str],
+) -> Any:
+    orchestration_service = _build_discord_managed_thread_orchestration_service(service)
+    thread_target_id = orchestration_service.get_active_thread_for_binding(
+        surface_kind="discord",
+        surface_key=channel_id,
+    )
+    thread = (
+        orchestration_service.get_thread_target(thread_target_id)
+        if isinstance(thread_target_id, str) and thread_target_id
+        else None
+    )
+    canonical_workspace = str(workspace_root.resolve())
+    if (
+        thread is None
+        or thread.agent_id != agent
+        or str(thread.workspace_root or "").strip() != canonical_workspace
+        or str(thread.lifecycle_status or "").strip().lower() != "active"
+    ):
+        thread = orchestration_service.create_thread_target(
+            agent,
+            workspace_root,
+            repo_id=repo_id,
+            display_name=f"discord:{channel_id}",
+        )
+    orchestration_service.upsert_binding(
+        surface_kind="discord",
+        surface_key=channel_id,
+        thread_target_id=thread.thread_target_id,
+        agent_id=agent,
+        repo_id=repo_id,
+        mode="pma",
+        metadata={"channel_id": channel_id, "pma_enabled": True},
+    )
+    return orchestration_service, thread
+
+
+async def _finalize_discord_managed_thread_execution(
+    service: Any,
+    *,
+    orchestration_service: Any,
+    started: RuntimeThreadExecution,
+    channel_id: str,
+) -> dict[str, Any]:
+    thread_store = PmaThreadStore(service._config.root)
+    transcripts = PmaTranscriptStore(service._config.root)
+    managed_thread_id = started.thread.thread_target_id
+    managed_turn_id = started.execution.execution_id
+    current_thread_row = thread_store.get_thread(managed_thread_id) or {}
+    current_preview = truncate_for_discord(
+        str(started.request.message_text or ""),
+        max_len=120,
+    )
+    current_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+
+    try:
+        outcome = await await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=DISCORD_PMA_TIMEOUT_SECONDS,
+            execution_error_message=DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
+        )
+    except Exception:
+        outcome = RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error=DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
+            backend_thread_id=current_backend_thread_id,
+            backend_turn_id=started.execution.backend_id,
+        )
+
+    finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
+    resolved_backend_thread_id = (
+        str(getattr(finalized_thread, "backend_thread_id", None) or "").strip()
+        or outcome.backend_thread_id
+        or current_backend_thread_id
+    )
+
+    if outcome.status == "ok":
+        transcript_turn_id: Optional[str] = None
+        transcript_metadata = {
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "repo_id": current_thread_row.get("repo_id"),
+            "workspace_root": str(started.workspace_root),
+            "agent": current_thread_row.get("agent"),
+            "backend_thread_id": resolved_backend_thread_id,
+            "backend_turn_id": outcome.backend_turn_id,
+            "model": started.request.model,
+            "reasoning": started.request.reasoning,
+            "status": "ok",
+            "surface_kind": "discord",
+            "surface_key": channel_id,
+        }
+        try:
+            transcripts.write_transcript(
+                turn_id=managed_turn_id,
+                metadata=transcript_metadata,
+                assistant_text=outcome.assistant_text,
+            )
+            transcript_turn_id = managed_turn_id
+        except Exception as exc:
+            service._logger.warning(
+                "Failed to persist Discord PMA transcript (thread=%s turn=%s): %s",
+                managed_thread_id,
+                managed_turn_id,
+                exc,
+            )
+        try:
+            finalized_execution = orchestration_service.record_execution_result(
+                managed_thread_id,
+                managed_turn_id,
+                status="ok",
+                assistant_text=outcome.assistant_text,
+                error=None,
+                backend_turn_id=outcome.backend_turn_id,
+                transcript_turn_id=transcript_turn_id,
+            )
+        except KeyError:
+            finalized_execution = orchestration_service.get_execution(
+                managed_thread_id, managed_turn_id
+            )
+        finalized_status = str(
+            getattr(finalized_execution, "status", "") if finalized_execution else ""
+        ).strip()
+        if finalized_status != "ok":
+            detail = DISCORD_PMA_PUBLIC_EXECUTION_ERROR
+            if finalized_status == "interrupted":
+                detail = "Discord PMA turn interrupted"
+            elif finalized_status == "error" and finalized_execution is not None:
+                detail = _sanitize_managed_thread_result_error(
+                    finalized_execution.error
+                )
+            return {
+                "status": "error",
+                "assistant_text": "",
+                "error": detail,
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": managed_turn_id,
+                "backend_thread_id": resolved_backend_thread_id,
+            }
+        thread_store.update_thread_after_turn(
+            managed_thread_id,
+            last_turn_id=managed_turn_id,
+            last_message_preview=current_preview,
+        )
+        return {
+            "status": "ok",
+            "assistant_text": outcome.assistant_text,
+            "error": None,
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "backend_thread_id": resolved_backend_thread_id,
+        }
+
+    if outcome.status == "interrupted":
+        try:
+            orchestration_service.record_execution_interrupted(
+                managed_thread_id, managed_turn_id
+            )
+        except KeyError:
+            pass
+        return {
+            "status": "interrupted",
+            "assistant_text": "",
+            "error": "Discord PMA turn interrupted",
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "backend_thread_id": resolved_backend_thread_id,
+        }
+
+    detail = _sanitize_managed_thread_result_error(outcome.error)
+    try:
+        orchestration_service.record_execution_result(
+            managed_thread_id,
+            managed_turn_id,
+            status="error",
+            assistant_text="",
+            error=detail,
+            backend_turn_id=outcome.backend_turn_id,
+            transcript_turn_id=None,
+        )
+    except KeyError:
+        pass
+    return {
+        "status": "error",
+        "assistant_text": "",
+        "error": detail,
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "backend_thread_id": resolved_backend_thread_id,
+    }
+
+
+def _ensure_discord_managed_thread_queue_worker(
+    service: Any,
+    *,
+    orchestration_service: Any,
+    managed_thread_id: str,
+    channel_id: str,
+) -> None:
+    task_map = getattr(service, "_discord_managed_thread_queue_tasks", None)
+    if not isinstance(task_map, dict):
+        task_map = {}
+        service._discord_managed_thread_queue_tasks = task_map
+    existing = task_map.get(managed_thread_id)
+    if isinstance(existing, asyncio.Task) and not existing.done():
+        return
+
+    worker_task: Optional[asyncio.Task[Any]] = None
+
+    async def _queue_worker() -> None:
+        try:
+            while True:
+                if (
+                    orchestration_service.get_running_execution(managed_thread_id)
+                    is not None
+                ):
+                    await asyncio.sleep(0.1)
+                    continue
+                started = await begin_next_queued_runtime_thread_execution(
+                    orchestration_service,
+                    managed_thread_id,
+                )
+                if started is None:
+                    break
+                finalized = await _finalize_discord_managed_thread_execution(
+                    service,
+                    orchestration_service=orchestration_service,
+                    started=started,
+                    channel_id=channel_id,
+                )
+                if finalized["status"] == "ok":
+                    message = str(finalized.get("assistant_text") or "").strip()
+                    if message:
+                        await service._send_channel_message_safe(
+                            channel_id,
+                            {"content": message},
+                            record_id=(
+                                f"pma-queued:{managed_thread_id}:{finalized['managed_turn_id']}"
+                            ),
+                        )
+                    continue
+                await service._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": (
+                            f"Turn failed: {finalized.get('error') or DISCORD_PMA_PUBLIC_EXECUTION_ERROR}"
+                        )
+                    },
+                    record_id=(
+                        f"pma-queued-error:{managed_thread_id}:{finalized['managed_turn_id']}"
+                    ),
+                )
+        finally:
+            if (
+                worker_task is not None
+                and task_map.get(managed_thread_id) is worker_task
+            ):
+                task_map.pop(managed_thread_id, None)
+
+    worker_task = service._spawn_task(_queue_worker())
+    task_map[managed_thread_id] = worker_task
+
+
+async def run_managed_thread_turn_for_message(
+    service: Any,
+    *,
+    workspace_root: Path,
+    prompt_text: str,
+    input_items: Optional[list[dict[str, Any]]] = None,
+    agent: str,
+    model_override: Optional[str],
+    reasoning_effort: Optional[str],
+    session_key: str,
+    orchestrator_channel_key: str,
+) -> DiscordMessageTurnResult:
+    _ = session_key
+    channel_id = orchestrator_channel_key.split(":", 1)[1]
+    binding = await service._store.get_binding(channel_id=channel_id)
+    repo_id = binding.get("repo_id") if isinstance(binding, dict) else None
+    orchestration_service, thread = _resolve_discord_managed_thread(
+        service,
+        channel_id=channel_id,
+        workspace_root=workspace_root,
+        agent=agent,
+        repo_id=repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
+    )
+    execution_prompt = (
+        f"{format_pma_discoverability_preamble(hub_root=service._config.root)}"
+        "<user_message>\n"
+        f"{prompt_text}\n"
+        "</user_message>\n"
+    )
+    execution_input_items = _build_managed_thread_input_items(
+        execution_prompt,
+        input_items,
+    )
+    started_execution = await begin_runtime_thread_execution(
+        orchestration_service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text=prompt_text,
+            busy_policy="queue",
+            model=model_override,
+            reasoning=reasoning_effort,
+            approval_mode="on-request",
+            input_items=execution_input_items,
+            metadata={
+                "runtime_prompt": execution_prompt,
+                "execution_error_message": DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
+            },
+        ),
+        client_request_id=f"discord:{channel_id}:{uuid.uuid4().hex[:12]}",
+        sandbox_policy="dangerFullAccess",
+    )
+    if (
+        str(getattr(started_execution.execution, "status", "") or "").strip()
+        == "queued"
+    ):
+        _ensure_discord_managed_thread_queue_worker(
+            service,
+            orchestration_service=orchestration_service,
+            managed_thread_id=thread.thread_target_id,
+            channel_id=channel_id,
+        )
+        return DiscordMessageTurnResult(
+            final_message="Queued (waiting for available worker...)"
+        )
+
+    finalized = await _finalize_discord_managed_thread_execution(
+        service,
+        orchestration_service=orchestration_service,
+        started=started_execution,
+        channel_id=channel_id,
+    )
+    _ensure_discord_managed_thread_queue_worker(
+        service,
+        orchestration_service=orchestration_service,
+        managed_thread_id=thread.thread_target_id,
+        channel_id=channel_id,
+    )
+    if finalized["status"] != "ok":
+        raise RuntimeError(
+            str(finalized.get("error") or DISCORD_PMA_PUBLIC_EXECUTION_ERROR)
+        )
+    return DiscordMessageTurnResult(
+        final_message=str(finalized.get("assistant_text") or "")
     )

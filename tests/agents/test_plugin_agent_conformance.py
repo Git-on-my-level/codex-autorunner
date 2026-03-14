@@ -63,6 +63,7 @@ class _MinimalConformingHarness(AgentHarness):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
         _ = (
             workspace_root,
@@ -72,6 +73,7 @@ class _MinimalConformingHarness(AgentHarness):
             reasoning,
             approval_mode,
             sandbox_policy,
+            input_items,
         )
         return TurnRef(conversation_id=conversation_id, turn_id="turn-new")
 
@@ -131,6 +133,7 @@ class _FullyFeaturedHarness(AgentHarness):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
         _ = (
             workspace_root,
@@ -140,6 +143,7 @@ class _FullyFeaturedHarness(AgentHarness):
             reasoning,
             approval_mode,
             sandbox_policy,
+            input_items,
         )
         return TurnRef(conversation_id=conversation_id, turn_id="turn-full")
 

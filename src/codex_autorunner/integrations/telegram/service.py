@@ -36,6 +36,7 @@ from ...integrations.app_server.threads import (
 from ...manifest import load_manifest
 from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
+from ..app_server.event_buffer import AppServerEventBuffer
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from ..chat.channel_directory import ChannelDirectoryStore
 from ..chat.collaboration_policy import (
@@ -247,21 +248,24 @@ class TelegramBotService(
         )
         self._router = TopicRouter(self._store)
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
+        self.app_server_events = AppServerEventBuffer()
         self._app_server_supervisor = WorkspaceAppServerSupervisor(
             config.app_server_command,
             state_root=self._app_server_state_root,
             env_builder=self._build_workspace_env,
             approval_handler=self._handle_approval_request,
-            notification_handler=self._handle_app_server_notification,
+            notification_handler=self._handle_buffered_app_server_notification,
             logger=self._logger,
             auto_restart=self._app_server_auto_restart,
             max_handles=config.app_server_max_handles,
             idle_ttl_seconds=config.app_server_idle_ttl_seconds,
         )
+        self.app_server_supervisor = self._app_server_supervisor
         self._opencode_supervisor = _build_opencode_supervisor(
             config,
             logger=self._logger,
         )
+        self.opencode_supervisor = self._opencode_supervisor
         self._runtime_services = RuntimeServices(
             app_server_supervisor=self._app_server_supervisor,
             opencode_supervisor=self._opencode_supervisor,
@@ -1328,6 +1332,12 @@ class TelegramBotService(
                 message_id=message.message_id,
                 exc=exc,
             )
+
+    async def _handle_buffered_app_server_notification(
+        self, message: dict[str, Any]
+    ) -> None:
+        await self.app_server_events.handle_notification(message)
+        await self._handle_app_server_notification(message)
 
     def _existing_topic_label(
         self, *, chat_id: str, thread_id: str, chat_label: str

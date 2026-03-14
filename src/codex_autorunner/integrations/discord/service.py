@@ -90,6 +90,7 @@ from ...integrations.agents.opencode_supervisor_factory import (
 )
 from ...integrations.app_server.client import CodexAppServerClient
 from ...integrations.app_server.env import app_server_env, build_app_server_env
+from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
@@ -235,6 +236,7 @@ from .message_turns import (
     DiscordMessageTurnResult,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
+    run_managed_thread_turn_for_message,
 )
 from .message_turns import (
     handle_message_event as handle_discord_message_event,
@@ -430,6 +432,38 @@ class _OpenCodeSupervisorCacheEntry:
     last_requested_at: float
 
 
+class _DiscordAppServerSupervisorAdapter:
+    def __init__(self, service: "DiscordBotService") -> None:
+        self._service = service
+
+    async def get_client(self, workspace_root: Path) -> CodexAppServerClient:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        supervisor = await self._service._app_server_supervisor_for_workspace(
+            canonical_root
+        )
+        return await supervisor.get_client(canonical_root)
+
+    async def close_all(self) -> None:
+        await self._service._close_all_app_server_supervisors()
+
+
+class _DiscordOpenCodeSupervisorAdapter:
+    def __init__(self, service: "DiscordBotService") -> None:
+        self._service = service
+
+    async def get_client(self, workspace_root: Path) -> Any:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        supervisor = await self._service._opencode_supervisor_for_workspace(
+            canonical_root
+        )
+        if supervisor is None:
+            raise RuntimeError("OpenCode supervisor unavailable")
+        return await supervisor.get_client(canonical_root)
+
+    async def close_all(self) -> None:
+        await self._service._close_all_opencode_supervisors()
+
+
 class DiscordBotService:
     def __init__(
         self,
@@ -537,6 +571,9 @@ class DiscordBotService:
         self._app_server_lock = asyncio.Lock()
         self._opencode_supervisors: dict[str, _OpenCodeSupervisorCacheEntry] = {}
         self._opencode_lock = asyncio.Lock()
+        self.app_server_events = AppServerEventBuffer()
+        self.app_server_supervisor = _DiscordAppServerSupervisorAdapter(self)
+        self.opencode_supervisor = _DiscordOpenCodeSupervisorAdapter(self)
         self._opencode_prune_task: Optional[asyncio.Task[None]] = None
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
         self._channel_directory_store = ChannelDirectoryStore(self._config.root)
@@ -1693,6 +1730,7 @@ class DiscordBotService:
                 command,
                 state_root=self._app_server_state_root,
                 env_builder=self._build_workspace_env,
+                notification_handler=self.app_server_events.handle_notification,
                 logger=self._logger,
             )
             self._app_server_supervisors[key] = supervisor
@@ -2179,6 +2217,18 @@ class DiscordBotService:
         session_key: str,
         orchestrator_channel_key: str,
     ) -> DiscordMessageTurnResult:
+        if orchestrator_channel_key.startswith("pma:"):
+            return await run_managed_thread_turn_for_message(
+                self,
+                workspace_root=workspace_root,
+                prompt_text=prompt_text,
+                input_items=input_items,
+                agent=agent,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                session_key=session_key,
+                orchestrator_channel_key=orchestrator_channel_key,
+            )
         return await run_agent_turn_for_message(
             self,
             workspace_root=workspace_root,
@@ -2496,12 +2546,19 @@ class DiscordBotService:
         for orchestrator in orchestrators:
             with contextlib.suppress(Exception):
                 await orchestrator.close_all()
+        await self._close_all_app_server_supervisors()
+        await self._close_all_opencode_supervisors()
+        self._reap_managed_processes(stage="shutdown")
+
+    async def _close_all_app_server_supervisors(self) -> None:
         async with self._app_server_lock:
             supervisors = list(self._app_server_supervisors.values())
             self._app_server_supervisors.clear()
         for supervisor in supervisors:
             with contextlib.suppress(Exception):
                 await supervisor.close_all()
+
+    async def _close_all_opencode_supervisors(self) -> None:
         async with self._opencode_lock:
             opencode_supervisors = [
                 entry.supervisor for entry in self._opencode_supervisors.values()
@@ -2510,7 +2567,6 @@ class DiscordBotService:
         for supervisor in opencode_supervisors:
             with contextlib.suppress(Exception):
                 await supervisor.close_all()
-        self._reap_managed_processes(stage="shutdown")
 
     async def _watch_ticket_flow_pauses(self) -> None:
         while True:

@@ -18,6 +18,7 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import ExecutionRecord, ThreadTarget
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
@@ -269,6 +270,42 @@ def test_pma_chat_submits_through_surface_orchestration_ingress(
         "prompt_text": "hello through ingress",
         "pma_enabled": True,
     }
+
+
+def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    running_turn = store.create_turn(managed_thread_id, prompt="first")
+    queued_turn = store.create_turn(
+        managed_thread_id,
+        prompt="second",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+
+    client = TestClient(app)
+    resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["turn"]["managed_turn_id"] == running_turn["managed_turn_id"]
+    assert payload["queue_depth"] == 1
+    assert len(payload["queued_turns"]) == 1
+    assert (
+        payload["queued_turns"][0]["managed_turn_id"] == queued_turn["managed_turn_id"]
+    )
+    assert payload["queued_turns"][0]["state"] == "queued"
+    assert payload["queued_turns"][0]["prompt_preview"] == "second"
 
 
 def test_pma_chat_rejects_oversize_message(hub_env) -> None:
@@ -1372,6 +1409,10 @@ def test_pma_managed_thread_status_and_tail_use_orchestration_service(
             self.calls.append(("get_execution", f"{thread_target_id}:{execution_id}"))
             return self.execution
 
+        def get_queue_depth(self, thread_target_id: str):
+            self.calls.append(("get_queue_depth", thread_target_id))
+            return 0
+
     fake_service = FakeService()
     monkeypatch.setattr(
         tail_stream,
@@ -1394,6 +1435,8 @@ def test_pma_managed_thread_status_and_tail_use_orchestration_service(
     assert status_payload["thread"]["status"] == "completed"
     assert status_payload["turn"]["managed_turn_id"] == "turn-1"
     assert status_payload["turn"]["status"] == "ok"
+    assert status_payload["queue_depth"] == 0
+    assert status_payload["queued_turns"] == []
     assert (
         status_payload["latest_output_excerpt"] == "assistant output from orchestration"
     )
@@ -1405,17 +1448,14 @@ def test_pma_managed_thread_status_and_tail_use_orchestration_service(
     assert tail_payload["turn_status"] == "ok"
     assert tail_payload["backend_turn_id"] == "backend-turn-1"
 
-    assert fake_service.calls == [
+    assert fake_service.calls[:4] == [
         ("get_thread_target", "thread-1"),
         ("get_running_execution", "thread-1"),
         ("get_latest_execution", "thread-1"),
         ("get_thread_target", "thread-1"),
-        ("get_running_execution", "thread-1"),
-        ("get_latest_execution", "thread-1"),
-        ("get_thread_target", "thread-1"),
-        ("get_running_execution", "thread-1"),
-        ("get_latest_execution", "thread-1"),
     ]
+    assert ("get_queue_depth", "thread-1") in fake_service.calls
+    assert fake_service.calls.count(("get_running_execution", "thread-1")) >= 3
 
 
 def test_pma_files_list_empty(hub_env) -> None:

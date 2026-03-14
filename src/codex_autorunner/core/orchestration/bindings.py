@@ -48,6 +48,7 @@ class ActiveWorkSummary:
     runtime_status: Optional[str]
     execution_id: Optional[str]
     execution_status: Optional[str]
+    queued_count: int
     message_preview: Optional[str]
     binding_count: int
     surface_kinds: tuple[str, ...]
@@ -352,11 +353,22 @@ class OrchestrationBindingStore:
                     t.last_message_preview,
                     e.execution_id,
                     e.status AS execution_status,
+                    COALESCE(q.queued_count, 0) AS queued_count,
                     COUNT(b.binding_id) AS binding_count,
                     GROUP_CONCAT(DISTINCT b.surface_kind) AS surface_kinds
                   FROM orch_thread_targets AS t
              LEFT JOIN orch_thread_executions AS e
                     ON e.execution_id = t.last_execution_id
+             LEFT JOIN (
+                    SELECT
+                        REPLACE(lane_id, 'thread:', '') AS thread_target_id,
+                        COUNT(*) AS queued_count
+                      FROM orch_queue_items
+                     WHERE source_kind = 'thread_execution'
+                       AND state IN ('pending', 'queued', 'waiting')
+                  GROUP BY REPLACE(lane_id, 'thread:', '')
+                ) AS q
+                    ON q.thread_target_id = t.thread_target_id
              LEFT JOIN orch_bindings AS b
                     ON b.target_id = t.thread_target_id
                    AND b.disabled_at IS NULL
@@ -371,7 +383,8 @@ class OrchestrationBindingStore:
                     t.runtime_status,
                     t.last_message_preview,
                     e.execution_id,
-                    e.status
+                    e.status,
+                    q.queued_count
               ORDER BY t.updated_at DESC, t.created_at DESC
                  LIMIT ?
                 """,
@@ -402,6 +415,7 @@ class OrchestrationBindingStore:
                     runtime_status=_normalize_text(row["runtime_status"]),
                     execution_id=_normalize_text(row["execution_id"]),
                     execution_status=_normalize_text(row["execution_status"]),
+                    queued_count=int(row["queued_count"] or 0),
                     message_preview=_normalize_text(row["last_message_preview"]),
                     binding_count=int(row["binding_count"] or 0),
                     surface_kinds=surface_kinds,

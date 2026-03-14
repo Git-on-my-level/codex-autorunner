@@ -18,6 +18,7 @@ TargetCapability = Literal[
 TargetKind = Literal["thread", "flow"]
 NativeTargetKind = Literal["ticket_flow", "pma"]
 MessageRequestKind = Literal["message", "review"]
+BusyThreadPolicy = Literal["queue", "interrupt", "reject"]
 OrchestrationTableRole = Literal["authoritative", "mirror", "projection", "ops"]
 
 
@@ -141,9 +142,11 @@ class MessageRequest:
     target_kind: TargetKind
     message_text: str
     kind: MessageRequestKind = "message"
+    busy_policy: BusyThreadPolicy = "queue"
     model: Optional[str] = None
     reasoning: Optional[str] = None
     approval_mode: Optional[str] = None
+    input_items: Optional[list[dict[str, Any]]] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -269,6 +272,7 @@ class Binding:
 __all__ = [
     "AgentDefinition",
     "Binding",
+    "BusyThreadPolicy",
     "ExecutionRecord",
     "FlowRunTarget",
     "FlowTarget",

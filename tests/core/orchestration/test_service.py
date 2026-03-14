@@ -85,6 +85,7 @@ class _FakeHarness:
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> _FakeTurn:
         self.start_turn_calls.append(
             {
@@ -95,6 +96,7 @@ class _FakeHarness:
                 "reasoning": reasoning,
                 "approval_mode": approval_mode,
                 "sandbox_policy": sandbox_policy,
+                "input_items": input_items,
             }
         )
         return _FakeTurn(turn_id=self.next_turn_id)
@@ -220,6 +222,10 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
             model="gpt-5",
             reasoning="medium",
             approval_mode="on-request",
+            input_items=[
+                {"type": "text", "text": "Ship it"},
+                {"type": "localImage", "path": str(tmp_path / "diagram.png")},
+            ],
         ),
         client_request_id="client-1",
         sandbox_policy={"mode": "workspace-write"},
@@ -232,6 +238,10 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     assert harness.new_conversation_calls == [(workspace_root, "Backlog")]
     assert harness.resume_conversation_calls == []
     assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
+    assert harness.start_turn_calls[0]["input_items"] == [
+        {"type": "text", "text": "Ship it"},
+        {"type": "localImage", "path": str(tmp_path / "diagram.png")},
+    ]
     assert execution.status == "running"
     assert execution.backend_id == "backend-turn-1"
     assert refreshed_thread is not None
@@ -298,6 +308,74 @@ async def test_send_message_persists_canonical_resumed_conversation_id(
     assert refreshed_thread.backend_thread_id == "backend-canonical-2"
 
 
+async def test_send_message_queues_when_thread_is_busy_by_default(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first",
+        )
+    )
+    queued = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="second",
+        )
+    )
+
+    assert running.status == "running"
+    assert queued.status == "queued"
+    assert len(harness.start_turn_calls) == 1
+    assert service.get_queue_depth(thread.thread_target_id) == 1
+    queued_rows = service.list_queued_executions(thread.thread_target_id)
+    assert [row.execution_id for row in queued_rows] == [queued.execution_id]
+
+
+async def test_send_message_interrupts_busy_thread_when_requested(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(next_turn_id="backend-turn-1")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    first = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first",
+        )
+    )
+    harness.next_turn_id = "backend-turn-2"
+    second = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="second",
+            busy_policy="interrupt",
+        )
+    )
+
+    assert first.status == "running"
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-conversation-1", "backend-turn-1")
+    ]
+    assert len(harness.start_turn_calls) == 2
+    assert second.status == "running"
+    assert second.backend_id == "backend-turn-2"
+    assert service.get_queue_depth(thread.thread_target_id) == 0
+
+
 async def test_interrupt_thread_uses_harness_and_marks_execution(
     tmp_path: Path,
 ) -> None:
@@ -320,6 +398,43 @@ async def test_interrupt_thread_uses_harness_and_marks_execution(
         (workspace_root, "backend-conversation-1", "backend-turn-1")
     ]
     assert interrupted.status == "interrupted"
+
+
+async def test_cancel_queued_executions_marks_queued_rows_interrupted(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first",
+        )
+    )
+    queued = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="second",
+        )
+    )
+
+    cancelled = service.cancel_queued_executions(thread.thread_target_id)
+
+    assert running.status == "running"
+    assert queued.status == "queued"
+    assert cancelled == 1
+    cancelled_execution = service.get_execution(
+        thread.thread_target_id, queued.execution_id
+    )
+    assert cancelled_execution is not None
+    assert cancelled_execution.status == "interrupted"
+    assert service.get_queue_depth(thread.thread_target_id) == 0
 
 
 async def test_send_review_rejects_when_harness_lacks_review_capability(

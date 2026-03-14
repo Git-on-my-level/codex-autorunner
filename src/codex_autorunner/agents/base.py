@@ -97,6 +97,7 @@ class AgentHarness(ABC):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
         raise NotImplementedError
 

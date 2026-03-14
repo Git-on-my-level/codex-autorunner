@@ -257,6 +257,35 @@ def test_binding_store_active_work_by_repo(tmp_path: Path) -> None:
     assert repo_b_work[0].thread_target_id == thread2_id
 
 
+def test_binding_store_active_work_includes_queue_depth(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root)
+    bindings = OrchestrationBindingStore(hub_root)
+    thread_id = _create_thread(hub_root, repo_id="repo-1", workspace_name="repo-1")
+    store = PmaThreadStore(hub_root)
+    running_turn = store.create_turn(thread_id, prompt="first")
+    queued_turn = store.create_turn(
+        thread_id,
+        prompt="second",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-1",
+        thread_target_id=thread_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+
+    active_work = bindings.list_active_work_summaries(repo_id="repo-1")
+
+    assert len(active_work) == 1
+    assert active_work[0].execution_id == running_turn["managed_turn_id"]
+    assert active_work[0].queued_count == 1
+    assert queued_turn["status"] == "queued"
+
+
 def test_binding_store_list_bindings_by_surface_kind(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root)

@@ -42,7 +42,8 @@ This scope package is meant to turn that architectural direction into a dependen
 - Review follow-up tickets:
   - `TICKET-720-queue-first-thread-delivery.md`
   - `TICKET-740-zeroclaw-durable-session-contract.md`
+  - `TICKET-760-dogfood-zeroclaw-on-this-host.md`
 
 ## Current status
 
-The contextspace and ticket queue are aligned around orchestration scoping plus the first review-driven follow-up work. The next execution step is to run the scope tickets and then pick up the imported queue-first delivery and ZeroClaw contract tickets as downstream implementation follow-ons.
+The contextspace and ticket queue are aligned around orchestration scoping plus the first review-driven follow-up work. The next execution step is to run the scope tickets, then pick up the imported queue-first delivery and ZeroClaw contract tickets, and only after the ZeroClaw contract is made truthful run the separate host-level dogfooding ticket for opt-in local usage.

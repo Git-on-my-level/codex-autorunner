@@ -79,10 +79,13 @@ class _FakeStore:
         thread_target_id: str,
         *,
         prompt: str,
+        busy_policy: str = "reject",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_request_id: Optional[str] = None,
+        queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
+        _ = busy_policy, queue_payload
         return self.execution
 
     def get_execution(
@@ -95,6 +98,22 @@ class _FakeStore:
 
     def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         return self.execution
+
+    def list_queued_executions(
+        self, thread_target_id: str, *, limit: int = 200
+    ) -> list[ExecutionRecord]:
+        _ = thread_target_id, limit
+        return []
+
+    def get_queue_depth(self, thread_target_id: str) -> int:
+        _ = thread_target_id
+        return 0
+
+    def claim_next_queued_execution(
+        self, thread_target_id: str
+    ) -> Optional[tuple[ExecutionRecord, dict[str, Any]]]:
+        _ = thread_target_id
+        return None
 
     def set_execution_backend_id(
         self, execution_id: str, backend_turn_id: Optional[str]
@@ -118,6 +137,10 @@ class _FakeStore:
         self, thread_target_id: str, execution_id: str
     ) -> ExecutionRecord:
         return self.execution
+
+    def cancel_queued_executions(self, thread_target_id: str) -> int:
+        _ = thread_target_id
+        return 0
 
     def record_thread_activity(
         self,
@@ -173,7 +196,9 @@ class _FakeHarness:
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> _FakeTurn:
+        _ = input_items
         return _FakeTurn(turn_id="turn-1")
 
     async def start_review(
@@ -320,6 +345,20 @@ class _FakeService:
 
     def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         return self.store.execution
+
+    def list_queued_executions(
+        self, thread_target_id: str, *, limit: int = 200
+    ) -> list[ExecutionRecord]:
+        _ = thread_target_id, limit
+        return []
+
+    def get_queue_depth(self, thread_target_id: str) -> int:
+        _ = thread_target_id
+        return 0
+
+    def cancel_queued_executions(self, thread_target_id: str) -> int:
+        _ = thread_target_id
+        return 0
 
     def record_execution_result(
         self,

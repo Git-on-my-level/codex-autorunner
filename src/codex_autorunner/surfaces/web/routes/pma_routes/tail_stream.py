@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from .....core.app_server_logging import AppServerEventFormatter
+from .....core.pma_thread_store import PmaThreadStore
 from .....core.redaction import redact_text
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
@@ -358,6 +359,10 @@ def build_managed_thread_tail_routes(
         turn = service.get_running_execution(
             managed_thread_id
         ) or service.get_latest_execution(managed_thread_id)
+        queue_store = PmaThreadStore(request.app.state.config.root)
+        queued_turns = queue_store.list_pending_turn_queue_items(
+            managed_thread_id, limit=min(limit, 50)
+        )
         latest_output_excerpt = ""
         if turn is not None:
             latest_output_excerpt = truncate_text(turn.output_text or "", 240)
@@ -388,6 +393,16 @@ def build_managed_thread_tail_routes(
                 "finished_at": snapshot.get("finished_at"),
                 "lifecycle_events": snapshot.get("lifecycle_events"),
             },
+            "queue_depth": service.get_queue_depth(managed_thread_id),
+            "queued_turns": [
+                {
+                    "managed_turn_id": item.get("managed_turn_id"),
+                    "state": item.get("state"),
+                    "enqueued_at": item.get("enqueued_at"),
+                    "prompt_preview": truncate_text(item.get("prompt") or "", 120),
+                }
+                for item in queued_turns
+            ],
             "recent_progress": snapshot.get("events") or [],
             "latest_output_excerpt": latest_output_excerpt,
             "stream_available": bool(snapshot.get("stream_available")),

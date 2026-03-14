@@ -205,6 +205,7 @@ class CodexHarness(AgentHarness):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
         turn_kwargs: dict[str, Any] = {}
@@ -215,6 +216,7 @@ class CodexHarness(AgentHarness):
         handle = await client.turn_start(
             conversation_id,
             prompt,
+            input_items=input_items,
             approval_policy=approval_mode,
             sandbox_policy=sandbox_policy,
             **turn_kwargs,

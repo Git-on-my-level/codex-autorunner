@@ -24,6 +24,7 @@ from .....agents.opencode.runtime import (
     opencode_missing_env,
     split_model_id,
 )
+from .....agents.registry import get_registered_agents
 from .....core.context_awareness import (
     has_file_context_signal,
     maybe_inject_car_awareness,
@@ -32,7 +33,27 @@ from .....core.context_awareness import (
 )
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
-from .....core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
+from .....core.orchestration import (
+    MessageRequest,
+    build_harness_backed_orchestration_service,
+)
+from .....core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_INTERRUPTED_ERROR,
+    RUNTIME_THREAD_TIMEOUT_ERROR,
+    RuntimeThreadExecution,
+    RuntimeThreadOutcome,
+    await_runtime_thread_outcome,
+    begin_next_queued_runtime_thread_execution,
+    begin_runtime_thread_execution,
+)
+from .....core.pma_context import (
+    build_hub_snapshot,
+    format_pma_discoverability_preamble,
+    format_pma_prompt,
+    load_pma_prompt,
+)
+from .....core.pma_thread_store import PmaThreadStore
+from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
@@ -113,6 +134,9 @@ _GENERIC_TELEGRAM_ERRORS = {
     "Telegram API returned error",
 }
 
+TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR = "Telegram PMA turn failed"
+TELEGRAM_PMA_TIMEOUT_SECONDS = 7200
+
 
 @dataclass
 class _TurnRunResult:
@@ -176,6 +200,500 @@ def _format_download_failure_response(kind: str, detail: Optional[str]) -> str:
     if detail:
         return f"{base} Reason: {detail}"
     return base
+
+
+def _sanitize_managed_thread_result_error(detail: Any) -> str:
+    sanitized = str(detail or "").strip()
+    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "Telegram PMA turn timed out"}:
+        return "Telegram PMA turn timed out"
+    if sanitized in {
+        RUNTIME_THREAD_INTERRUPTED_ERROR,
+        "Telegram PMA turn interrupted",
+    }:
+        return "Telegram PMA turn interrupted"
+    if sanitized in {
+        "Telegram PMA turn timed out",
+        "Telegram PMA turn interrupted",
+    }:
+        return sanitized
+    return TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR
+
+
+def _build_managed_thread_input_items(
+    runtime_prompt: str,
+    input_items: Optional[list[dict[str, Any]]],
+) -> Optional[list[dict[str, Any]]]:
+    if not input_items:
+        return None
+    normalized: list[dict[str, Any]] = []
+    replaced_text = False
+    for item in input_items:
+        if not isinstance(item, dict):
+            continue
+        item_copy = dict(item)
+        if not replaced_text and str(item_copy.get("type") or "").strip() == "text":
+            item_copy["text"] = runtime_prompt
+            replaced_text = True
+        normalized.append(item_copy)
+    if not replaced_text:
+        normalized.insert(0, {"type": "text", "text": runtime_prompt})
+    return normalized or None
+
+
+def _build_telegram_managed_thread_orchestration_service(handlers: Any) -> Any:
+    cached = getattr(handlers, "_telegram_managed_thread_orchestration_service", None)
+    if cached is not None:
+        return cached
+
+    descriptors = get_registered_agents()
+
+    def _make_harness(agent_id: str) -> Any:
+        descriptor = descriptors.get(agent_id)
+        if descriptor is None:
+            raise KeyError(f"Unknown agent definition '{agent_id}'")
+        return descriptor.make_harness(handlers)
+
+    created = build_harness_backed_orchestration_service(
+        descriptors=descriptors,
+        harness_factory=_make_harness,
+        pma_thread_store=PmaThreadStore(handlers._config.root),
+    )
+    handlers._telegram_managed_thread_orchestration_service = created
+    return created
+
+
+def _resolve_telegram_managed_thread(
+    handlers: Any,
+    *,
+    surface_key: str,
+    workspace_root: Path,
+    agent: str,
+    repo_id: Optional[str],
+) -> Any:
+    orchestration_service = _build_telegram_managed_thread_orchestration_service(
+        handlers
+    )
+    thread_target_id = orchestration_service.get_active_thread_for_binding(
+        surface_kind="telegram",
+        surface_key=surface_key,
+    )
+    thread = (
+        orchestration_service.get_thread_target(thread_target_id)
+        if isinstance(thread_target_id, str) and thread_target_id
+        else None
+    )
+    canonical_workspace = str(workspace_root.resolve())
+    if (
+        thread is None
+        or thread.agent_id != agent
+        or str(thread.workspace_root or "").strip() != canonical_workspace
+        or str(thread.lifecycle_status or "").strip().lower() != "active"
+    ):
+        thread = orchestration_service.create_thread_target(
+            agent,
+            workspace_root,
+            repo_id=repo_id,
+            display_name=f"telegram:{surface_key}",
+        )
+    orchestration_service.upsert_binding(
+        surface_kind="telegram",
+        surface_key=surface_key,
+        thread_target_id=thread.thread_target_id,
+        agent_id=agent,
+        repo_id=repo_id,
+        mode="pma",
+        metadata={"topic_key": surface_key, "pma_enabled": True},
+    )
+    return orchestration_service, thread
+
+
+async def _finalize_telegram_managed_thread_execution(
+    handlers: Any,
+    *,
+    orchestration_service: Any,
+    started: RuntimeThreadExecution,
+    surface_key: str,
+    chat_id: int,
+    thread_id: Optional[int],
+) -> dict[str, Any]:
+    thread_store = PmaThreadStore(handlers._config.root)
+    transcripts = PmaTranscriptStore(handlers._config.root)
+    managed_thread_id = started.thread.thread_target_id
+    managed_turn_id = started.execution.execution_id
+    current_thread_row = thread_store.get_thread(managed_thread_id) or {}
+    current_preview = _preview_from_text(
+        str(started.request.message_text or ""),
+        RESUME_PREVIEW_USER_LIMIT,
+    )
+    current_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+
+    try:
+        outcome = await await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=TELEGRAM_PMA_TIMEOUT_SECONDS,
+            execution_error_message=TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR,
+        )
+    except Exception:
+        outcome = RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error=TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR,
+            backend_thread_id=current_backend_thread_id,
+            backend_turn_id=started.execution.backend_id,
+        )
+
+    finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
+    resolved_backend_thread_id = (
+        str(getattr(finalized_thread, "backend_thread_id", None) or "").strip()
+        or outcome.backend_thread_id
+        or current_backend_thread_id
+    )
+
+    if outcome.status == "ok":
+        transcript_turn_id: Optional[str] = None
+        transcript_metadata = {
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "repo_id": current_thread_row.get("repo_id"),
+            "workspace_root": str(started.workspace_root),
+            "agent": current_thread_row.get("agent"),
+            "backend_thread_id": resolved_backend_thread_id,
+            "backend_turn_id": outcome.backend_turn_id,
+            "model": started.request.model,
+            "reasoning": started.request.reasoning,
+            "status": "ok",
+            "surface_kind": "telegram",
+            "surface_key": surface_key,
+            "chat_id": chat_id,
+            "thread_id": thread_id,
+        }
+        try:
+            transcripts.write_transcript(
+                turn_id=managed_turn_id,
+                metadata=transcript_metadata,
+                assistant_text=outcome.assistant_text,
+            )
+            transcript_turn_id = managed_turn_id
+        except Exception as exc:
+            handlers._logger.warning(
+                "Failed to persist Telegram PMA transcript (thread=%s turn=%s): %s",
+                managed_thread_id,
+                managed_turn_id,
+                exc,
+            )
+        try:
+            finalized_execution = orchestration_service.record_execution_result(
+                managed_thread_id,
+                managed_turn_id,
+                status="ok",
+                assistant_text=outcome.assistant_text,
+                error=None,
+                backend_turn_id=outcome.backend_turn_id,
+                transcript_turn_id=transcript_turn_id,
+            )
+        except KeyError:
+            finalized_execution = orchestration_service.get_execution(
+                managed_thread_id,
+                managed_turn_id,
+            )
+        finalized_status = str(
+            getattr(finalized_execution, "status", "") if finalized_execution else ""
+        ).strip()
+        if finalized_status != "ok":
+            detail = TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR
+            if finalized_status == "interrupted":
+                detail = "Telegram PMA turn interrupted"
+            elif finalized_status == "error" and finalized_execution is not None:
+                detail = _sanitize_managed_thread_result_error(
+                    finalized_execution.error
+                )
+            return {
+                "status": "error",
+                "assistant_text": "",
+                "error": detail,
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": managed_turn_id,
+                "backend_thread_id": resolved_backend_thread_id,
+            }
+        thread_store.update_thread_after_turn(
+            managed_thread_id,
+            last_turn_id=managed_turn_id,
+            last_message_preview=current_preview,
+        )
+        return {
+            "status": "ok",
+            "assistant_text": outcome.assistant_text,
+            "error": None,
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "backend_thread_id": resolved_backend_thread_id,
+        }
+
+    if outcome.status == "interrupted":
+        try:
+            orchestration_service.record_execution_interrupted(
+                managed_thread_id,
+                managed_turn_id,
+            )
+        except KeyError:
+            pass
+        return {
+            "status": "interrupted",
+            "assistant_text": "",
+            "error": "Telegram PMA turn interrupted",
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "backend_thread_id": resolved_backend_thread_id,
+        }
+
+    detail = _sanitize_managed_thread_result_error(outcome.error)
+    try:
+        orchestration_service.record_execution_result(
+            managed_thread_id,
+            managed_turn_id,
+            status="error",
+            assistant_text="",
+            error=detail,
+            backend_turn_id=outcome.backend_turn_id,
+            transcript_turn_id=None,
+        )
+    except KeyError:
+        pass
+    return {
+        "status": "error",
+        "assistant_text": "",
+        "error": detail,
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "backend_thread_id": resolved_backend_thread_id,
+    }
+
+
+def _ensure_telegram_managed_thread_queue_worker(
+    handlers: Any,
+    *,
+    orchestration_service: Any,
+    managed_thread_id: str,
+    surface_key: str,
+    record: "TelegramTopicRecord",
+    chat_id: int,
+    thread_id: Optional[int],
+) -> None:
+    task_map = getattr(handlers, "_telegram_managed_thread_queue_tasks", None)
+    if not isinstance(task_map, dict):
+        task_map = {}
+        handlers._telegram_managed_thread_queue_tasks = task_map
+    existing = task_map.get(managed_thread_id)
+    if isinstance(existing, asyncio.Task) and not existing.done():
+        return
+
+    worker_task: Optional[asyncio.Task[Any]] = None
+
+    async def _queue_worker() -> None:
+        try:
+            while True:
+                if orchestration_service.get_running_execution(managed_thread_id):
+                    await asyncio.sleep(0.1)
+                    continue
+                started = await begin_next_queued_runtime_thread_execution(
+                    orchestration_service,
+                    managed_thread_id,
+                )
+                if started is None:
+                    break
+                finalized = await _finalize_telegram_managed_thread_execution(
+                    handlers,
+                    orchestration_service=orchestration_service,
+                    started=started,
+                    surface_key=surface_key,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                )
+                if finalized["status"] == "ok":
+                    message_text = str(finalized.get("assistant_text") or "").strip()
+                    if message_text:
+                        await handlers._send_message(
+                            chat_id,
+                            message_text,
+                            thread_id=thread_id,
+                            reply_to=None,
+                        )
+                    await handlers._flush_outbox_files(
+                        record,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        reply_to=None,
+                    )
+                    continue
+                await handlers._send_message(
+                    chat_id,
+                    (
+                        "Turn failed: "
+                        f"{finalized.get('error') or TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR}"
+                    ),
+                    thread_id=thread_id,
+                    reply_to=None,
+                )
+        finally:
+            if (
+                worker_task is not None
+                and task_map.get(managed_thread_id) is worker_task
+            ):
+                task_map.pop(managed_thread_id, None)
+
+    worker_task = handlers._spawn_task(_queue_worker())
+    task_map[managed_thread_id] = worker_task
+
+
+async def _run_telegram_managed_thread_turn(
+    handlers: Any,
+    *,
+    message: TelegramMessage,
+    record: "TelegramTopicRecord",
+    topic_key: str,
+    prompt_text: str,
+    input_items: Optional[list[dict[str, Any]]],
+    send_placeholder: bool,
+    send_failure_response: bool,
+    transcript_message_id: Optional[int],
+    transcript_text: Optional[str],
+    placeholder_id: Optional[int],
+) -> _TurnRunResult | _TurnRunFailure:
+    prepared_placeholder_id = await handlers._prepare_turn_placeholder(
+        message,
+        placeholder_id=placeholder_id,
+        send_placeholder=send_placeholder,
+        queued=False,
+    )
+    workspace_root = canonicalize_path(Path(record.workspace_path or ""))
+    agent = handlers._effective_agent(record)
+    repo_id = record.repo_id.strip() if isinstance(record.repo_id, str) else None
+    orchestration_service, thread = _resolve_telegram_managed_thread(
+        handlers,
+        surface_key=topic_key,
+        workspace_root=workspace_root,
+        agent=agent,
+        repo_id=repo_id or None,
+    )
+    execution_prompt = (
+        f"{format_pma_discoverability_preamble(hub_root=handlers._config.root)}"
+        "<user_message>\n"
+        f"{prompt_text}\n"
+        "</user_message>\n"
+    )
+    execution_input_items = _build_managed_thread_input_items(
+        execution_prompt,
+        input_items,
+    )
+    try:
+        started_execution = await begin_runtime_thread_execution(
+            orchestration_service,
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text=prompt_text,
+                busy_policy="queue",
+                model=record.model,
+                reasoning=record.effort,
+                approval_mode=record.approval_mode,
+                input_items=execution_input_items,
+                metadata={
+                    "runtime_prompt": execution_prompt,
+                    "execution_error_message": TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR,
+                },
+            ),
+            client_request_id=(f"telegram:{topic_key}:{secrets.token_hex(6)}"),
+            sandbox_policy=record.sandbox_policy,
+        )
+    except Exception as exc:
+        failure_message = _sanitize_managed_thread_result_error(exc)
+        if send_failure_response:
+            await handlers._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=prepared_placeholder_id,
+                response=failure_message,
+            )
+        return _TurnRunFailure(
+            failure_message,
+            prepared_placeholder_id,
+            transcript_message_id,
+            transcript_text,
+        )
+
+    if (
+        str(getattr(started_execution.execution, "status", "") or "").strip()
+        == "queued"
+    ):
+        _ensure_telegram_managed_thread_queue_worker(
+            handlers,
+            orchestration_service=orchestration_service,
+            managed_thread_id=thread.thread_target_id,
+            surface_key=topic_key,
+            record=record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+        )
+        return _TurnRunResult(
+            record=record,
+            thread_id=thread.backend_thread_id,
+            turn_id=None,
+            response="Queued (waiting for available worker...)",
+            placeholder_id=prepared_placeholder_id,
+            elapsed_seconds=0.0,
+            token_usage=None,
+            transcript_message_id=transcript_message_id,
+            transcript_text=transcript_text,
+        )
+
+    finalized = await _finalize_telegram_managed_thread_execution(
+        handlers,
+        orchestration_service=orchestration_service,
+        started=started_execution,
+        surface_key=topic_key,
+        chat_id=message.chat_id,
+        thread_id=message.thread_id,
+    )
+    _ensure_telegram_managed_thread_queue_worker(
+        handlers,
+        orchestration_service=orchestration_service,
+        managed_thread_id=thread.thread_target_id,
+        surface_key=topic_key,
+        record=record,
+        chat_id=message.chat_id,
+        thread_id=message.thread_id,
+    )
+    if finalized["status"] != "ok":
+        failure_message = str(
+            finalized.get("error") or TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR
+        )
+        if send_failure_response:
+            await handlers._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=prepared_placeholder_id,
+                response=failure_message,
+            )
+        return _TurnRunFailure(
+            failure_message,
+            prepared_placeholder_id,
+            transcript_message_id,
+            transcript_text,
+        )
+    return _TurnRunResult(
+        record=record,
+        thread_id=str(finalized.get("backend_thread_id") or "") or None,
+        turn_id=None,
+        response=str(finalized.get("assistant_text") or ""),
+        placeholder_id=prepared_placeholder_id,
+        elapsed_seconds=None,
+        token_usage=None,
+        transcript_message_id=transcript_message_id,
+        transcript_text=transcript_text,
+    )
 
 
 class ExecutionCommands(SharedHelpers):
@@ -2413,6 +2931,26 @@ class ExecutionCommands(SharedHelpers):
         else:
             prompt_text, key = await self._prepare_turn_context(
                 message, prompt_text, record, input_items=input_items
+            )
+
+        if (
+            pma_enabled
+            and allow_new_thread
+            and getattr(self._config, "root", None) is not None
+            and callable(getattr(self, "_spawn_task", None))
+        ):
+            return await _run_telegram_managed_thread_turn(
+                self,
+                message=message,
+                record=record,
+                topic_key=key,
+                prompt_text=prompt_text,
+                input_items=input_items,
+                send_placeholder=send_placeholder,
+                send_failure_response=send_failure_response,
+                transcript_message_id=transcript_message_id,
+                transcript_text=transcript_text,
+                placeholder_id=placeholder_id,
             )
 
         turn_semaphore = self._ensure_turn_semaphore()

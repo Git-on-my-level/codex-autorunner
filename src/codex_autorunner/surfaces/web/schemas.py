@@ -640,6 +640,9 @@ class TicketBulkUpdateResponse(ResponseModel):
 
 class PmaManagedThreadMessageRequest(Payload):
     message: str
+    busy_policy: Optional[Literal["queue", "interrupt", "reject"]] = Field(
+        default=None, validation_alias=AliasChoices("busy_policy", "busyPolicy")
+    )
     model: Optional[str] = None
     reasoning: Optional[str] = None
     defer_execution: bool = Field(

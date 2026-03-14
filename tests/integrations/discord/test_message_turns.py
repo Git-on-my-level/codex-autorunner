@@ -10,10 +10,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
+import anyio
 import pytest
 
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
 import codex_autorunner.integrations.discord.service as discord_service_module
+from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.context_awareness import (
     CAR_AWARENESS_BLOCK,
@@ -4916,6 +4918,369 @@ async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
             release_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await release_task
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_message_create_routes_repeated_messages_through_managed_thread_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_pma_state(channel_id="channel-1", pma_enabled=True)
+    await store.update_agent_state(channel_id="channel-1", agent="codex")
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create("first orchestration prompt", message_id="m-1"),
+            ),
+            (
+                "MESSAGE_CREATE",
+                _message_create("second orchestration prompt", message_id="m-2"),
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        def __init__(self) -> None:
+            self.turn_prompts: list[str] = []
+            self.waited_turns: list[str] = []
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            turn_id = f"backend-turn-{len(self.turn_prompts) + 1}"
+            self.turn_prompts.append(prompt)
+            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, timeout
+            assert isinstance(turn_id, str)
+            self.waited_turns.append(turn_id)
+            if turn_id == "backend-turn-1":
+                first_started.set()
+                await release_first.wait()
+                return SimpleNamespace(
+                    status="ok",
+                    assistant_text="first orchestration reply",
+                    errors=[],
+                )
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="second orchestration reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    async def _release_later() -> None:
+        await first_started.wait()
+        await asyncio.sleep(0.05)
+        release_first.set()
+
+    release_task = asyncio.create_task(_release_later())
+    try:
+        await asyncio.wait_for(service.run_forever(), timeout=5)
+        with anyio.fail_after(2):
+            while not any(
+                "second orchestration reply" in msg["payload"].get("content", "")
+                for msg in rest.channel_messages
+            ):
+                await anyio.sleep(0.05)
+
+        contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
+        assert any(
+            "Queued (waiting for available worker...)" in content
+            for content in contents
+        )
+        assert any("first orchestration reply" in content for content in contents)
+        assert any("second orchestration reply" in content for content in contents)
+
+        thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
+        threads = thread_store.list_threads(limit=10)
+        assert len(threads) == 1
+        turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
+        assert len(turns) == 2
+        assert [turn["status"] for turn in turns] == ["ok", "ok"]
+    finally:
+        if not release_task.done():
+            release_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await release_task
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_message_create_image_attachment_routes_through_managed_thread_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_pma_state(channel_id="channel-1", pma_enabled=True)
+    await store.update_agent_state(channel_id="channel-1", agent="codex")
+
+    attachment_url = "https://cdn.discordapp.com/attachments/pma-managed-image-1"
+    rest = _FakeRest()
+    rest.attachment_data_by_url[attachment_url] = b"png-bytes"
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    content="Please review image",
+                    message_id="m-1",
+                    attachments=[
+                        {
+                            "id": "att-image-1",
+                            "filename": "screen.png",
+                            "content_type": "image/png",
+                            "size": 9,
+                            "url": attachment_url,
+                        }
+                    ],
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_input_items: list[Optional[list[dict[str, Any]]]] = []
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+            )
+            captured_input_items.append(input_items)
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="backend-turn-1",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="discord managed attachment reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_input_items and isinstance(captured_input_items[0], list)
+        items = captured_input_items[0] or []
+        assert items and items[0].get("type") == "text"
+        assert "<user_message>" in str(items[0].get("text") or "")
+        assert any(item.get("type") == "localImage" for item in items[1:])
+
+        thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
+        threads = thread_store.list_threads(limit=10)
+        assert len(threads) == 1
+        turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
+        assert len(turns) == 1
+        assert turns[0]["status"] == "ok"
+    finally:
         await store.close()
 
 

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.integrations.discord import service as discord_service_module
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
@@ -93,4 +94,54 @@ async def test_service_startup_reaps_managed_processes(
         await service.run_forever()
         assert called_roots == [tmp_path, tmp_path]
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_exposes_app_server_event_buffer_context(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    monkeypatch.setattr(
+        discord_service_module, "load_repo_config", lambda *args, **kwargs: None
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.context"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    try:
+        assert isinstance(service.app_server_events, AppServerEventBuffer)
+        assert service.app_server_supervisor is not None
+        assert service.opencode_supervisor is not None
+
+        supervisor = await service._app_server_supervisor_for_workspace(workspace)
+        handler = getattr(supervisor, "_notification_handler", None)
+        assert callable(handler)
+
+        await handler(
+            {
+                "method": "turn/error",
+                "params": {
+                    "threadId": "discord-thread-1",
+                    "turnId": "discord-turn-1",
+                    "message": "failed",
+                },
+            }
+        )
+
+        events = await service.app_server_events.list_events(
+            "discord-thread-1",
+            "discord-turn-1",
+        )
+        assert len(events) == 1
+    finally:
+        await service._close_all_app_server_supervisors()
         await store.close()

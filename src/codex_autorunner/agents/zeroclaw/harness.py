@@ -71,8 +71,9 @@ class ZeroClawHarness(AgentHarness):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
-        _ = reasoning, approval_mode, sandbox_policy
+        _ = reasoning, approval_mode, sandbox_policy, input_items
         turn_id = await self._supervisor.start_turn(
             workspace_root,
             conversation_id,

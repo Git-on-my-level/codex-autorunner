@@ -356,6 +356,22 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
     else:
         typer.echo("No recent progress events.")
     excerpt = str(data.get("latest_output_excerpt") or "").strip()
+    queue_depth = int(data.get("queue_depth") or 0)
+    if queue_depth > 0:
+        typer.echo(f"queued={queue_depth}")
+        queued_turns = data.get("queued_turns")
+        if isinstance(queued_turns, list):
+            for item in queued_turns[:5]:
+                if not isinstance(item, dict):
+                    continue
+                typer.echo(
+                    "queued_turn="
+                    + str(item.get("managed_turn_id") or "-")
+                    + " enqueued="
+                    + str(item.get("enqueued_at") or "-")
+                    + " prompt="
+                    + str(item.get("prompt_preview") or "")[:80]
+                )
     if excerpt:
         typer.echo("latest output:")
         typer.echo(excerpt)
@@ -1059,6 +1075,11 @@ def pma_thread_send(
     reasoning: Optional[str] = typer.Option(
         None, "--reasoning", help="Reasoning override"
     ),
+    if_busy: str = typer.Option(
+        "queue",
+        "--if-busy",
+        help="Busy-thread policy: queue, interrupt, or reject",
+    ),
     watch: bool = typer.Option(
         False,
         "--watch",
@@ -1083,8 +1104,12 @@ def pma_thread_send(
     """Send a message to a managed PMA thread."""
     normalized_notify_on = _normalize_notify_on(notify_on)
     should_defer = watch or normalized_notify_on == "terminal"
+    normalized_if_busy = (if_busy or "").strip().lower() or "queue"
+    if normalized_if_busy not in {"queue", "interrupt", "reject"}:
+        raise typer.BadParameter("if-busy must be queue, interrupt, or reject")
     payload: dict[str, Any] = {
         "message": message,
+        "busy_policy": normalized_if_busy,
         "defer_execution": should_defer,
     }
     if model:
@@ -1143,10 +1168,18 @@ def pma_thread_send(
         return
 
     execution_state = str(data.get("execution_state") or "").strip().lower()
-    if should_defer and execution_state == "running":
-        typer.echo(
-            f"send_state=accepted managed_turn_id={data.get('managed_turn_id') or ''}"
+    if execution_state == "queued" or (should_defer and execution_state == "running"):
+        line = (
+            f"send_state={send_state or 'accepted'} "
+            f"managed_turn_id={data.get('managed_turn_id') or ''}"
         )
+        active_turn_id = str(data.get("active_managed_turn_id") or "").strip()
+        queue_depth = data.get("queue_depth")
+        if active_turn_id:
+            line += f" active_managed_turn_id={active_turn_id}"
+        if queue_depth is not None:
+            line += f" queue_depth={queue_depth}"
+        typer.echo(line)
         if watch:
             pma_thread_tail(
                 managed_thread_id=managed_thread_id,

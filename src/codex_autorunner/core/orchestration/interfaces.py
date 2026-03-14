@@ -5,6 +5,7 @@ from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 from .models import (
     AgentDefinition,
+    BusyThreadPolicy,
     ExecutionRecord,
     FlowRunTarget,
     FlowTarget,
@@ -71,6 +72,7 @@ class RuntimeThreadHarness(Protocol):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> RuntimeTurnHandle: ...
 
     async def start_review(
@@ -146,9 +148,11 @@ class ThreadExecutionStore(Protocol):
         thread_target_id: str,
         *,
         prompt: str,
+        busy_policy: BusyThreadPolicy = "reject",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_request_id: Optional[str] = None,
+        queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord: ...
 
     def get_execution(
@@ -162,6 +166,16 @@ class ThreadExecutionStore(Protocol):
     def get_latest_execution(
         self, thread_target_id: str
     ) -> Optional[ExecutionRecord]: ...
+
+    def list_queued_executions(
+        self, thread_target_id: str, *, limit: int = 200
+    ) -> list[ExecutionRecord]: ...
+
+    def get_queue_depth(self, thread_target_id: str) -> int: ...
+
+    def claim_next_queued_execution(
+        self, thread_target_id: str
+    ) -> Optional[tuple[ExecutionRecord, dict[str, Any]]]: ...
 
     def set_execution_backend_id(
         self, execution_id: str, backend_turn_id: Optional[str]
@@ -182,6 +196,8 @@ class ThreadExecutionStore(Protocol):
     def record_execution_interrupted(
         self, thread_target_id: str, execution_id: str
     ) -> ExecutionRecord: ...
+
+    def cancel_queued_executions(self, thread_target_id: str) -> int: ...
 
     def record_thread_activity(
         self,
@@ -263,6 +279,12 @@ class OrchestrationThreadService(Protocol):
         self, thread_target_id: str
     ) -> Optional[ExecutionRecord]: ...
 
+    def list_queued_executions(
+        self, thread_target_id: str, *, limit: int = 200
+    ) -> list[ExecutionRecord]: ...
+
+    def get_queue_depth(self, thread_target_id: str) -> int: ...
+
     def record_execution_result(
         self,
         thread_target_id: str,
@@ -278,6 +300,8 @@ class OrchestrationThreadService(Protocol):
     def record_execution_interrupted(
         self, thread_target_id: str, execution_id: str
     ) -> ExecutionRecord: ...
+
+    def cancel_queued_executions(self, thread_target_id: str) -> int: ...
 
 
 @runtime_checkable

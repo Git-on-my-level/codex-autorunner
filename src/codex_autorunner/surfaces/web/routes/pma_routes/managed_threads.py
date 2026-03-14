@@ -747,6 +747,7 @@ def build_managed_thread_crud_routes(
                     "runtime_status": s.runtime_status,
                     "execution_id": s.execution_id,
                     "execution_status": s.execution_status,
+                    "queued_count": s.queued_count,
                     "message_preview": s.message_preview,
                     "binding_count": s.binding_count,
                     "surface_kinds": list(s.surface_kinds),

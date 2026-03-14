@@ -303,7 +303,9 @@ class OpenCodeHarness(AgentHarness):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
+        _ = input_items
         client = await self._supervisor.get_client(workspace_root)
         if model is None:
             model = DEFAULT_TICKET_MODEL

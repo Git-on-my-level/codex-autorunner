@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -74,6 +75,24 @@ def _coerce_text(value: Any) -> Optional[str]:
         return None
     text = value.strip()
     return text or None
+
+
+def _json_dumps(value: dict[str, Any]) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
+
+
+def _json_loads_object(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _thread_queue_lane_id(managed_thread_id: str) -> str:
+    return f"thread:{managed_thread_id}"
 
 
 def _latest_turn_for_thread(
@@ -690,16 +709,47 @@ class PmaThreadStore:
         managed_thread_id: str,
         *,
         prompt: str,
+        busy_policy: str = "reject",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_turn_id: Optional[str] = None,
+        queue_payload: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         managed_turn_id = str(uuid.uuid4())
         started_at = now_iso()
+        queue_item_id = uuid.uuid4().hex
 
         with self._write_conn() as conn:
+            status_row = conn.execute(
+                """
+                SELECT lifecycle_status
+                  FROM orch_thread_targets
+                 WHERE thread_target_id = ?
+                """,
+                (managed_thread_id,),
+            ).fetchone()
+            thread_status = (
+                str(status_row["lifecycle_status"])
+                if status_row is not None and status_row["lifecycle_status"] is not None
+                else None
+            )
+            if thread_status != "active":
+                raise ManagedThreadNotActiveError(managed_thread_id, thread_status)
+            running_exists = conn.execute(
+                """
+                SELECT 1
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND status = 'running'
+                 LIMIT 1
+                """,
+                (managed_thread_id,),
+            ).fetchone()
             with conn:
-                cursor = conn.execute(
+                execution_status = "queued" if running_exists is not None else "running"
+                if execution_status == "queued" and busy_policy != "queue":
+                    raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
+                conn.execute(
                     """
                     INSERT INTO orch_thread_executions (
                         execution_id,
@@ -717,17 +767,7 @@ class PmaThreadStore:
                         started_at,
                         finished_at,
                         created_at
-                    )
-                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                      FROM orch_thread_targets
-                     WHERE thread_target_id = ?
-                       AND lifecycle_status = 'active'
-                       AND NOT EXISTS (
-                           SELECT 1
-                             FROM orch_thread_executions
-                            WHERE thread_target_id = ?
-                              AND status = 'running'
-                       )
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         managed_turn_id,
@@ -735,7 +775,7 @@ class PmaThreadStore:
                         client_turn_id,
                         "managed_turn",
                         prompt,
-                        "running",
+                        execution_status,
                         None,
                         None,
                         None,
@@ -745,37 +785,67 @@ class PmaThreadStore:
                         started_at,
                         None,
                         started_at,
-                        managed_thread_id,
-                        managed_thread_id,
                     ),
                 )
-                if cursor.rowcount == 0:
-                    status_row = conn.execute(
+                if execution_status == "queued":
+                    conn.execute(
                         """
-                        SELECT lifecycle_status
-                          FROM orch_thread_targets
+                        INSERT INTO orch_queue_items (
+                            queue_item_id,
+                            lane_id,
+                            source_kind,
+                            source_key,
+                            dedupe_key,
+                            state,
+                            visible_at,
+                            claimed_at,
+                            completed_at,
+                            payload_json,
+                            created_at,
+                            updated_at,
+                            idempotency_key,
+                            error_text,
+                            dedupe_reason,
+                            result_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            queue_item_id,
+                            _thread_queue_lane_id(managed_thread_id),
+                            "thread_execution",
+                            managed_turn_id,
+                            client_turn_id or managed_turn_id,
+                            "queued",
+                            started_at,
+                            None,
+                            None,
+                            _json_dumps(queue_payload or {}),
+                            started_at,
+                            started_at,
+                            client_turn_id or managed_turn_id,
+                            None,
+                            None,
+                            _json_dumps({}),
+                        ),
+                    )
+            if execution_status == "running":
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE orch_thread_targets
+                           SET last_execution_id = ?,
+                               updated_at = ?
                          WHERE thread_target_id = ?
                         """,
-                        (managed_thread_id,),
-                    ).fetchone()
-                    thread_status = (
-                        str(status_row["lifecycle_status"])
-                        if status_row is not None
-                        and status_row["lifecycle_status"] is not None
-                        else None
+                        (managed_turn_id, started_at, managed_thread_id),
                     )
-                    if thread_status != "active":
-                        raise ManagedThreadNotActiveError(
-                            managed_thread_id, thread_status
-                        )
-                    raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
-            self._transition_thread_status(
-                conn,
-                managed_thread_id,
-                reason=ManagedThreadStatusReason.TURN_STARTED,
-                changed_at=started_at,
-                turn_id=managed_turn_id,
-            )
+                self._transition_thread_status(
+                    conn,
+                    managed_thread_id,
+                    reason=ManagedThreadStatusReason.TURN_STARTED,
+                    changed_at=started_at,
+                    turn_id=managed_turn_id,
+                )
             row = conn.execute(
                 """
                 SELECT *
@@ -842,6 +912,36 @@ class PmaThreadStore:
                 )
             if cursor.rowcount == 0:
                 return False
+            queue_state = "completed" if status == "ok" else "failed"
+            conn.execute(
+                """
+                UPDATE orch_queue_items
+                   SET state = ?,
+                       completed_at = ?,
+                       updated_at = ?,
+                       error_text = ?,
+                       result_json = ?
+                 WHERE source_kind = 'thread_execution'
+                   AND source_key = ?
+                   AND state = 'running'
+                """,
+                (
+                    queue_state,
+                    finished_at,
+                    finished_at,
+                    error,
+                    _json_dumps(
+                        {
+                            "status": status,
+                            "assistant_text": assistant_text or "",
+                            "backend_turn_id": backend_turn_id or "",
+                            "transcript_turn_id": transcript_turn_id or "",
+                            "error": error or "",
+                        }
+                    ),
+                    managed_turn_id,
+                ),
+            )
             self._transition_thread_status(
                 conn,
                 managed_thread_id,
@@ -892,6 +992,25 @@ class PmaThreadStore:
                 )
             if cursor.rowcount == 0:
                 return False
+            conn.execute(
+                """
+                UPDATE orch_queue_items
+                   SET state = 'failed',
+                       completed_at = ?,
+                       updated_at = ?,
+                       error_text = COALESCE(error_text, 'interrupted'),
+                       result_json = ?
+                 WHERE source_kind = 'thread_execution'
+                   AND source_key = ?
+                   AND state = 'running'
+                """,
+                (
+                    finished_at,
+                    finished_at,
+                    _json_dumps({"status": "interrupted"}),
+                    managed_turn_id,
+                ),
+            )
             self._transition_thread_status(
                 conn,
                 managed_thread_id,
@@ -967,6 +1086,253 @@ class PmaThreadStore:
         if row is None:
             return None
         return self._execution_row_to_record(row)
+
+    def list_queued_turns(
+        self, managed_thread_id: str, *, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        with self._read_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.*
+                  FROM orch_thread_executions AS e
+                  JOIN orch_queue_items AS q
+                    ON q.source_kind = 'thread_execution'
+                   AND q.source_key = e.execution_id
+                 WHERE e.thread_target_id = ?
+                   AND e.status = 'queued'
+                   AND q.lane_id = ?
+                   AND q.state IN ('pending', 'queued', 'waiting')
+                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
+                 LIMIT ?
+                """,
+                (
+                    managed_thread_id,
+                    _thread_queue_lane_id(managed_thread_id),
+                    limit,
+                ),
+            ).fetchall()
+        return [self._execution_row_to_record(row) for row in rows]
+
+    def list_pending_turn_queue_items(
+        self, managed_thread_id: str, *, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        with self._read_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    q.queue_item_id,
+                    q.state,
+                    q.visible_at,
+                    q.created_at,
+                    e.execution_id,
+                    e.prompt_text,
+                    e.model_id,
+                    e.reasoning_level,
+                    e.client_request_id
+                  FROM orch_queue_items AS q
+                  JOIN orch_thread_executions AS e
+                    ON e.execution_id = q.source_key
+                 WHERE q.source_kind = 'thread_execution'
+                   AND q.lane_id = ?
+                   AND e.thread_target_id = ?
+                   AND q.state IN ('pending', 'queued', 'waiting')
+                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
+                 LIMIT ?
+                """,
+                (
+                    _thread_queue_lane_id(managed_thread_id),
+                    managed_thread_id,
+                    limit,
+                ),
+            ).fetchall()
+        return [
+            {
+                "queue_item_id": str(row["queue_item_id"]),
+                "state": str(row["state"]),
+                "visible_at": row["visible_at"],
+                "enqueued_at": row["created_at"],
+                "managed_turn_id": str(row["execution_id"]),
+                "prompt": str(row["prompt_text"] or ""),
+                "model": row["model_id"],
+                "reasoning": row["reasoning_level"],
+                "client_turn_id": row["client_request_id"],
+            }
+            for row in rows
+        ]
+
+    def get_queue_depth(self, managed_thread_id: str) -> int:
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS queue_depth
+                  FROM orch_queue_items
+                 WHERE source_kind = 'thread_execution'
+                   AND lane_id = ?
+                   AND state IN ('pending', 'queued', 'waiting')
+                """,
+                (_thread_queue_lane_id(managed_thread_id),),
+            ).fetchone()
+        return int((row["queue_depth"] if row is not None else 0) or 0)
+
+    def cancel_queued_turns(self, managed_thread_id: str) -> int:
+        cancelled_at = now_iso()
+        with self._write_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.execution_id
+                  FROM orch_queue_items AS q
+                  JOIN orch_thread_executions AS e
+                    ON e.execution_id = q.source_key
+                 WHERE q.source_kind = 'thread_execution'
+                   AND q.lane_id = ?
+                   AND e.thread_target_id = ?
+                   AND e.status = 'queued'
+                   AND q.state IN ('pending', 'queued', 'waiting')
+                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
+                """,
+                (
+                    _thread_queue_lane_id(managed_thread_id),
+                    managed_thread_id,
+                ),
+            ).fetchall()
+            execution_ids = [str(row["execution_id"]) for row in rows]
+            if not execution_ids:
+                return 0
+            placeholders = ",".join("?" for _ in execution_ids)
+            with conn:
+                conn.execute(
+                    f"""
+                    UPDATE orch_thread_executions
+                       SET status = 'interrupted',
+                           error_text = COALESCE(error_text, 'interrupted'),
+                           finished_at = ?
+                     WHERE execution_id IN ({placeholders})
+                       AND status = 'queued'
+                    """,
+                    (cancelled_at, *execution_ids),
+                )
+                conn.execute(
+                    f"""
+                    UPDATE orch_queue_items
+                       SET state = 'failed',
+                           completed_at = ?,
+                           updated_at = ?,
+                           error_text = COALESCE(error_text, 'interrupted'),
+                           result_json = ?
+                     WHERE source_kind = 'thread_execution'
+                       AND lane_id = ?
+                       AND source_key IN ({placeholders})
+                       AND state IN ('pending', 'queued', 'waiting')
+                    """,
+                    (
+                        cancelled_at,
+                        cancelled_at,
+                        _json_dumps({"status": "interrupted"}),
+                        _thread_queue_lane_id(managed_thread_id),
+                        *execution_ids,
+                    ),
+                )
+        return len(execution_ids)
+
+    def claim_next_queued_turn(
+        self, managed_thread_id: str
+    ) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
+        claimed_at = now_iso()
+        with self._write_conn() as conn:
+            running = conn.execute(
+                """
+                SELECT 1
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND status = 'running'
+                 LIMIT 1
+                """,
+                (managed_thread_id,),
+            ).fetchone()
+            if running is not None:
+                return None
+            row = conn.execute(
+                """
+                SELECT
+                    q.queue_item_id,
+                    q.payload_json,
+                    e.execution_id
+                  FROM orch_queue_items AS q
+                  JOIN orch_thread_executions AS e
+                    ON e.execution_id = q.source_key
+                 WHERE q.source_kind = 'thread_execution'
+                   AND q.lane_id = ?
+                   AND e.thread_target_id = ?
+                   AND e.status = 'queued'
+                   AND q.state IN ('pending', 'queued', 'waiting')
+                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
+                 LIMIT 1
+                """,
+                (
+                    _thread_queue_lane_id(managed_thread_id),
+                    managed_thread_id,
+                ),
+            ).fetchone()
+            if row is None:
+                return None
+            with conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE orch_queue_items
+                       SET state = 'running',
+                           claimed_at = ?,
+                           updated_at = ?
+                     WHERE queue_item_id = ?
+                       AND state IN ('pending', 'queued', 'waiting')
+                    """,
+                    (claimed_at, claimed_at, str(row["queue_item_id"])),
+                )
+                if cursor.rowcount == 0:
+                    return None
+                conn.execute(
+                    """
+                    UPDATE orch_thread_executions
+                       SET status = 'running',
+                           started_at = ?
+                     WHERE execution_id = ?
+                       AND status = 'queued'
+                    """,
+                    (claimed_at, str(row["execution_id"])),
+                )
+                conn.execute(
+                    """
+                    UPDATE orch_thread_targets
+                       SET last_execution_id = ?,
+                           updated_at = ?
+                     WHERE thread_target_id = ?
+                    """,
+                    (str(row["execution_id"]), claimed_at, managed_thread_id),
+                )
+            self._transition_thread_status(
+                conn,
+                managed_thread_id,
+                reason=ManagedThreadStatusReason.TURN_STARTED,
+                changed_at=claimed_at,
+                turn_id=str(row["execution_id"]),
+            )
+            execution_row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (str(row["execution_id"]),),
+            ).fetchone()
+        if execution_row is None:
+            return None
+        return (
+            self._execution_row_to_record(execution_row),
+            _json_loads_object(row["payload_json"]),
+        )
 
     def append_action(
         self,

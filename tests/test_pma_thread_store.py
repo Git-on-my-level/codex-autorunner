@@ -113,6 +113,53 @@ def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
     assert second_turn["status"] == "running"
 
 
+def test_create_turn_can_queue_behind_running_turn(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second",
+        busy_policy="queue",
+        client_turn_id="client-2",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+
+    assert running_turn["status"] == "running"
+    assert queued_turn["status"] == "queued"
+    assert store.get_queue_depth(thread["managed_thread_id"]) == 1
+    queued_items = store.list_pending_turn_queue_items(thread["managed_thread_id"])
+    assert len(queued_items) == 1
+    assert queued_items[0]["managed_turn_id"] == queued_turn["managed_turn_id"]
+
+
+def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+
+    assert store.claim_next_queued_turn(thread["managed_thread_id"]) is None
+    assert (
+        store.mark_turn_finished(running_turn["managed_turn_id"], status="ok") is True
+    )
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    execution, payload = claimed
+    assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert execution["status"] == "running"
+    assert payload["request"]["message_text"] == "second"
+    assert store.get_queue_depth(thread["managed_thread_id"]) == 0
+
+
 def test_mark_turn_finished_does_not_override_interrupted_status(
     tmp_path: Path,
 ) -> None:

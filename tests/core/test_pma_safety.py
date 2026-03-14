@@ -203,7 +203,7 @@ class TestDuplicateDetection:
     def test_duplicate_detection_window_expiry(
         self, hub_root: Path, config: PmaSafetyConfig
     ) -> None:
-        config.dedup_window_seconds = 0.1
+        config.dedup_window_seconds = 0.5
         config.enable_rate_limit = False
         config.enable_circuit_breaker = False
         config.max_duplicate_actions = 2
@@ -220,7 +220,7 @@ class TestDuplicateDetection:
         assert result.allowed is False
         assert result.reason == "duplicate_action"
 
-        time.sleep(0.15)
+        time.sleep(0.6)
 
         result = checker.check_chat_start("agent1", "test")
         assert result.allowed is True

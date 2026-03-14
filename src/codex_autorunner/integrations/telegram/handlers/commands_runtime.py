@@ -466,6 +466,70 @@ class TelegramCommandHandlers(
                 reply_to=reply_to,
             )
             return
+        record = await self._router.get_topic(key)
+        if (
+            record is not None
+            and bool(getattr(record, "pma_enabled", False))
+            and getattr(self._config, "root", None) is not None
+            and callable(getattr(self, "_spawn_task", None))
+        ):
+            from .commands.execution import (
+                _build_telegram_managed_thread_orchestration_service,
+            )
+
+            orchestration_service = (
+                _build_telegram_managed_thread_orchestration_service(self)
+            )
+            managed_thread_id = orchestration_service.get_active_thread_for_binding(
+                surface_kind="telegram",
+                surface_key=key,
+            )
+            if isinstance(managed_thread_id, str) and managed_thread_id:
+                interrupted_active = False
+                cancelled_queued = 0
+                running_execution = orchestration_service.get_running_execution(
+                    managed_thread_id
+                )
+                try:
+                    cancelled_queued = orchestration_service.cancel_queued_executions(
+                        managed_thread_id
+                    )
+                    if running_execution is not None:
+                        await orchestration_service.interrupt_thread(managed_thread_id)
+                        interrupted_active = True
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.interrupt.managed_thread_failed",
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        message_id=message_id,
+                        managed_thread_id=managed_thread_id,
+                        exc=exc,
+                    )
+                    await self._send_message(
+                        chat_id,
+                        "Failed to interrupt PMA turn.",
+                        thread_id=thread_id,
+                        reply_to=reply_to,
+                    )
+                    return
+                if interrupted_active or cancelled_queued:
+                    parts = []
+                    if interrupted_active:
+                        parts.append("Interrupted active PMA turn.")
+                    if cancelled_queued:
+                        parts.append(
+                            f"Cancelled {cancelled_queued} queued PMA turn(s)."
+                        )
+                    await self._send_message(
+                        chat_id,
+                        " ".join(parts),
+                        thread_id=thread_id,
+                        reply_to=reply_to,
+                    )
+                    return
         pending_request_ids = [
             request_id
             for request_id, pending in self._pending_approvals.items()
