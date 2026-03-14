@@ -1,118 +1,226 @@
 import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.agents.types import (
+    ConversationRef,
+    RuntimeCapability,
+    TerminalTurnResult,
+    TurnRef,
+)
 from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.flows.models import FlowEventType
-from codex_autorunner.core.ports.run_event import (
-    Completed,
-    Failed,
-    OutputDelta,
-    Started,
-    TokenUsage,
-)
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 
-class _FakeOrchestrator:
-    def __init__(self, events):
-        self.events = events
-        self.calls: list[dict[str, object]] = []
-        self.closed = False
-        self.last_turn_id = "turn-fallback"
+@dataclass
+class _HarnessScript:
+    assistant_text: str
+    raw_events: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "ok"
+    errors: list[str] = field(default_factory=list)
+    release_event: Optional[asyncio.Event] = None
+    started_event: Optional[asyncio.Event] = None
 
-    async def run_turn(self, agent_id, state, prompt, **kwargs):
+
+class _FakeHarness:
+    agent_id = "fake"
+    display_name = "Fake Harness"
+    capabilities = frozenset(
+        [
+            RuntimeCapability("durable_threads"),
+            RuntimeCapability("message_turns"),
+            RuntimeCapability("event_streaming"),
+        ]
+    )
+
+    def __init__(self, scripts: list[_HarnessScript]) -> None:
+        self._scripts = list(scripts)
+        self._turns: dict[tuple[str, str], _HarnessScript] = {}
+        self.calls: list[dict[str, object]] = []
+        self.resume_calls: list[str] = []
+        self._session_counter = 0
+        self._turn_counter = 0
+
+    async def ensure_ready(self, workspace_root: Path) -> None:
+        _ = workspace_root
+
+    def supports(self, capability: str) -> bool:
+        return RuntimeCapability(capability) in self.capabilities
+
+    async def new_conversation(
+        self, workspace_root: Path, title: Optional[str] = None
+    ) -> ConversationRef:
+        _ = workspace_root, title
+        self._session_counter += 1
+        return ConversationRef(
+            agent=self.agent_id, id=f"session-{self._session_counter}"
+        )
+
+    async def resume_conversation(
+        self, workspace_root: Path, conversation_id: str
+    ) -> ConversationRef:
+        _ = workspace_root
+        self.resume_calls.append(conversation_id)
+        return ConversationRef(agent=self.agent_id, id=conversation_id)
+
+    async def start_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> TurnRef:
+        _ = workspace_root, input_items
+        self._turn_counter += 1
+        turn_id = f"turn-{self._turn_counter}"
         self.calls.append(
             {
-                "agent_id": agent_id,
+                "conversation_id": conversation_id,
                 "prompt": prompt,
-                "approval_policy": state.autorunner_approval_policy,
-                "sandbox_mode": state.autorunner_sandbox_mode,
-                **kwargs,
+                "model": model,
+                "reasoning": reasoning,
+                "approval_mode": approval_mode,
+                "sandbox_policy": sandbox_policy,
             }
         )
-        for event in self.events:
-            yield event
+        script = self._scripts.pop(0)
+        self._turns[(conversation_id, turn_id)] = script
+        return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
-    def get_context(self):
-        return SimpleNamespace(session_id="session-ctx")
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> TerminalTurnResult:
+        _ = workspace_root, timeout
+        if turn_id is None:
+            raise ValueError("turn_id is required")
+        script = self._turns[(conversation_id, turn_id)]
+        if script.started_event is not None:
+            script.started_event.set()
+        if script.release_event is not None:
+            await script.release_event.wait()
+        return TerminalTurnResult(
+            status=script.status,
+            assistant_text=script.assistant_text,
+            errors=list(script.errors),
+            raw_events=list(script.raw_events),
+        )
 
-    def get_last_turn_id(self):
-        return self.last_turn_id
+    async def interrupt(
+        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+    ) -> None:
+        _ = workspace_root, conversation_id, turn_id
 
-    async def close_all(self):
-        self.closed = True
+    async def stream_events(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        _ = workspace_root
+        script = self._turns[(conversation_id, turn_id)]
+        for payload in script.raw_events:
+            yield payload
 
 
-class _BlockingFakeOrchestrator:
+class _FakeCloser:
     def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
         self.closed = False
-        self.first_started = asyncio.Event()
-        self.release_first = asyncio.Event()
 
-    async def run_turn(self, agent_id, state, prompt, **kwargs):
-        call_index = len(self.calls)
-        self.calls.append(
-            {
-                "agent_id": agent_id,
-                "prompt": prompt,
-                "approval_policy": state.autorunner_approval_policy,
-                "sandbox_mode": state.autorunner_sandbox_mode,
-                **kwargs,
-            }
-        )
-        session_id = (
-            kwargs.get("session_id")
-            if isinstance(kwargs.get("session_id"), str) and kwargs.get("session_id")
-            else f"session-{call_index + 1}"
-        )
-        yield Started(
-            timestamp="now",
-            session_id=session_id,
-            turn_id=f"turn-{call_index + 1}",
-        )
-        if call_index == 0:
-            self.first_started.set()
-            await self.release_first.wait()
-        yield Completed(
-            timestamp="now",
-            final_message=f"done-{call_index + 1}",
-        )
-
-    def get_context(self):
-        return None
-
-    def get_last_turn_id(self):
-        return "turn-fallback"
-
-    async def close_all(self):
+    async def close_all(self) -> None:
         self.closed = True
 
 
-@pytest.mark.asyncio
-async def test_run_turn_maps_events_to_result_and_emits(tmp_path: Path):
-    events = [
-        Started(timestamp="now", session_id="session-1", turn_id="turn-1"),
-        OutputDelta(timestamp="now", content="hello", delta_type="assistant_stream"),
-        OutputDelta(timestamp="now", content="log line", delta_type="log_line"),
-        TokenUsage(timestamp="now", usage={"input": 3, "output": 5}),
-        Completed(timestamp="now", final_message=""),
-    ]
+def _build_descriptor(agent_id: str) -> AgentDescriptor:
+    return AgentDescriptor(
+        id=agent_id,
+        name=agent_id.title(),
+        capabilities=frozenset(
+            {
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
+                RuntimeCapability("event_streaming"),
+            }
+        ),
+        make_harness=lambda ctx: ctx.fake_harness,
+    )
+
+
+def _make_pool(
+    tmp_path: Path,
+    harness: _FakeHarness,
+    *,
+    approval_mode: str,
+) -> DefaultAgentPool:
     cfg = SimpleNamespace(
         root=tmp_path,
         ticket_flow=TicketFlowConfig(
-            approval_mode="yolo",
+            approval_mode=approval_mode,
             default_approval_decision="accept",
             include_previous_ticket_context=False,
         ),
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
-    fake = _FakeOrchestrator(events)
-    pool._backend_orchestrator = fake  # type: ignore[assignment]
+    pool._agent_descriptors_override = {  # type: ignore[attr-defined]
+        "codex": _build_descriptor("codex"),
+        "opencode": _build_descriptor("opencode"),
+    }
+    pool._harness_context_override = SimpleNamespace(fake_harness=harness)  # type: ignore[attr-defined]
+    return pool
+
+
+def _message(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    return {"message": {"method": method, "params": params}}
+
+
+@pytest.mark.asyncio
+async def test_run_turn_maps_runtime_events_to_result_and_emits(tmp_path: Path):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="hello",
+                raw_events=[
+                    _message(
+                        "outputDelta",
+                        {
+                            "turnId": "turn-1",
+                            "delta": "hello",
+                            "deltaType": "assistant_stream",
+                        },
+                    ),
+                    _message(
+                        "outputDelta",
+                        {
+                            "turnId": "turn-1",
+                            "delta": "log line",
+                            "deltaType": "log_line",
+                        },
+                    ),
+                    _message(
+                        "thread/tokenUsage/updated",
+                        {
+                            "turnId": "turn-1",
+                            "tokenUsage": {"input": 3, "output": 5},
+                        },
+                    ),
+                ],
+            )
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
 
     emitted = []
 
@@ -136,84 +244,74 @@ async def test_run_turn_maps_events_to_result_and_emits(tmp_path: Path):
     assert result.raw["log_lines"] == ["log line"]
     assert result.raw["token_usage"] == {"input": 3, "output": 5}
     assert isinstance(result.raw["execution_id"], str)
-    assert result.raw["backend_thread_id"] == "session-ctx"
+    assert result.raw["backend_thread_id"] == "session-1"
 
     assert [event_type for event_type, _ in emitted] == [
+        FlowEventType.APP_SERVER_EVENT,
         FlowEventType.AGENT_STREAM_DELTA,
         FlowEventType.APP_SERVER_EVENT,
         FlowEventType.APP_SERVER_EVENT,
         FlowEventType.TOKEN_USAGE,
     ]
-    first_output_event = emitted[1][1]["message"]
-    second_output_event = emitted[2][1]["message"]
-    assert first_output_event["method"] == "outputDelta"
-    assert first_output_event["params"]["deltaType"] == "assistant_stream"
-    assert second_output_event["method"] == "outputDelta"
-    assert second_output_event["params"]["deltaType"] == "log_line"
+    assert emitted[0][1]["message"]["method"] == "outputDelta"
+    assert emitted[1][1]["delta"] == "hello"
 
 
 @pytest.mark.asyncio
-async def test_run_turn_handles_failure_and_fallback_turn_id(tmp_path: Path):
-    events = [
-        Started(timestamp="now", session_id="session-1", turn_id=None),
-        Failed(timestamp="now", error_message="boom"),
-    ]
-    cfg = SimpleNamespace(
-        root=tmp_path,
-        ticket_flow=TicketFlowConfig(
-            approval_mode="review",
-            default_approval_decision="accept",
-            include_previous_ticket_context=False,
-        ),
+async def test_run_turn_handles_failure_and_returns_error(tmp_path: Path):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="",
+                status="error",
+                errors=["boom"],
+            )
+        ]
     )
-    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
-    fake = _FakeOrchestrator(events)
-    pool._backend_orchestrator = fake  # type: ignore[assignment]
+    pool = _make_pool(tmp_path, harness, approval_mode="review")
 
     result = await pool.run_turn(
         AgentTurnRequest(
             agent_id="codex",
             prompt="main",
             workspace_root=tmp_path,
-            conversation_id="session-in",
         )
     )
 
     assert result.error == "boom"
-    assert result.turn_id == "turn-fallback"
+    assert result.turn_id == "turn-1"
     assert result.raw["final_status"] == "failed"
     assert result.raw["log_lines"] == []
     assert result.raw["token_usage"] is None
     assert isinstance(result.raw["execution_id"], str)
-    assert result.raw["backend_thread_id"] == "session-ctx"
+    assert result.raw["backend_thread_id"] == "session-1"
 
 
 @pytest.mark.asyncio
-async def test_run_turn_passes_model_reasoning_session_and_merges_messages(
+async def test_run_turn_passes_model_reasoning_and_reuses_thread_target(
     tmp_path: Path,
 ):
-    events = [
-        Started(timestamp="now", session_id="session-1", turn_id="turn-1"),
-        Completed(timestamp="now", final_message="done"),
-    ]
-    cfg = SimpleNamespace(
-        root=tmp_path,
-        ticket_flow=TicketFlowConfig(
-            approval_mode="review",
-            default_approval_decision="accept",
-            include_previous_ticket_context=False,
-        ),
+    harness = _FakeHarness(
+        [
+            _HarnessScript(assistant_text="first"),
+            _HarnessScript(assistant_text="second"),
+        ]
     )
-    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
-    fake = _FakeOrchestrator(events)
-    pool._backend_orchestrator = fake  # type: ignore[assignment]
+    pool = _make_pool(tmp_path, harness, approval_mode="review")
 
-    await pool.run_turn(
+    first = await pool.run_turn(
         AgentTurnRequest(
             agent_id="opencode",
             prompt="main",
             workspace_root=tmp_path,
-            conversation_id="session-42",
+        )
+    )
+    second = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="main",
+            workspace_root=tmp_path,
+            conversation_id=first.conversation_id,
             options={
                 "model": {"providerID": "provider", "modelID": "model-x"},
                 "reasoning": "high",
@@ -226,30 +324,33 @@ async def test_run_turn_passes_model_reasoning_session_and_merges_messages(
         )
     )
 
-    call = fake.calls[0]
-    assert call["session_id"] == "session-42"
-    assert call["model"] == "provider/model-x"
-    assert call["reasoning"] == "high"
-    assert call["prompt"] == "main\n\nmore\n\nend"
-    assert call["approval_policy"] == "on-request"
-    assert call["sandbox_mode"] == "workspaceWrite"
+    assert first.conversation_id == second.conversation_id
+    assert harness.resume_calls == ["session-1"]
+    assert harness.calls[1]["conversation_id"] == "session-1"
+    assert harness.calls[1]["model"] == "provider/model-x"
+    assert harness.calls[1]["reasoning"] == "high"
+    assert harness.calls[1]["prompt"] == "main\n\nmore\n\nend"
+    assert harness.calls[1]["approval_mode"] == "on-request"
+    assert harness.calls[1]["sandbox_policy"] == "workspaceWrite"
 
 
 @pytest.mark.asyncio
-async def test_run_turn_queues_busy_delegated_thread_and_reuses_orchestration_thread_id(
+async def test_run_turn_queues_busy_delegated_thread_and_shows_active_work(
     tmp_path: Path,
 ):
-    cfg = SimpleNamespace(
-        root=tmp_path,
-        ticket_flow=TicketFlowConfig(
-            approval_mode="yolo",
-            default_approval_decision="accept",
-            include_previous_ticket_context=False,
-        ),
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="done-1",
+                started_event=first_started,
+                release_event=release_first,
+            ),
+            _HarnessScript(assistant_text="done-2"),
+        ]
     )
-    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
-    fake = _BlockingFakeOrchestrator()
-    pool._backend_orchestrator = fake  # type: ignore[assignment]
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
 
     first_task = asyncio.create_task(
         pool.run_turn(
@@ -260,7 +361,7 @@ async def test_run_turn_queues_busy_delegated_thread_and_reuses_orchestration_th
             )
         )
     )
-    await fake.first_started.wait()
+    await first_started.wait()
 
     thread = pool._thread_store.list_threads(agent="codex", limit=1)[0]
     thread_id = str(thread["managed_thread_id"])
@@ -277,11 +378,12 @@ async def test_run_turn_queues_busy_delegated_thread_and_reuses_orchestration_th
     )
     await asyncio.sleep(0)
 
-    queued = pool._thread_store.list_queued_turns(thread_id)
-    assert len(queued) == 1
-    assert len(fake.calls) == 1
+    service = pool._get_orchestration_service()  # type: ignore[attr-defined]
+    assert service.get_running_execution(thread_id) is not None
+    assert len(service.list_queued_executions(thread_id)) == 1
+    assert harness.calls[0]["conversation_id"] == "session-1"
 
-    fake.release_first.set()
+    release_first.set()
     first_result = await first_task
     second_result = await second_task
 
@@ -289,24 +391,23 @@ async def test_run_turn_queues_busy_delegated_thread_and_reuses_orchestration_th
     assert second_result.conversation_id == thread_id
     assert first_result.text == "done-1"
     assert second_result.text == "done-2"
-    assert len(fake.calls) == 2
-    assert fake.calls[1]["session_id"] == "session-1"
+    assert len(harness.calls) == 2
+    assert harness.calls[1]["conversation_id"] == "session-1"
 
 
 @pytest.mark.asyncio
-async def test_close_all_delegates_to_orchestrator(tmp_path: Path):
-    cfg = SimpleNamespace(
-        root=tmp_path,
-        ticket_flow=TicketFlowConfig(
-            approval_mode="yolo",
-            default_approval_decision="accept",
-            include_previous_ticket_context=False,
-        ),
+async def test_close_all_closes_runtime_supervisors(tmp_path: Path):
+    harness = _FakeHarness([_HarnessScript(assistant_text="done")])
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+    codex_supervisor = _FakeCloser()
+    opencode_supervisor = _FakeCloser()
+    pool._runtime_context = SimpleNamespace(  # type: ignore[attr-defined]
+        app_server_supervisor=codex_supervisor,
+        opencode_supervisor=opencode_supervisor,
+        zeroclaw_supervisor=None,
     )
-    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
-    fake = _FakeOrchestrator([])
-    pool._backend_orchestrator = fake  # type: ignore[assignment]
 
     await pool.close_all()
 
-    assert fake.closed is True
+    assert codex_supervisor.closed is True
+    assert opencode_supervisor.closed is True

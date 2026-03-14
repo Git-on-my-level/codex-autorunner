@@ -2353,7 +2353,6 @@ def test_pma_orchestration_service_integration_for_thread_operations(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
 
     class FakeService:
         def __init__(self) -> None:
@@ -2376,6 +2375,7 @@ def test_pma_orchestration_service_integration_for_thread_operations(
         "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
         lambda request: fake_service,
     )
+    app = create_hub_app(hub_env.hub_root)
 
     client = TestClient(app)
 
