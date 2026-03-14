@@ -10377,10 +10377,20 @@
             }
           },
           {
+            "description": "Maximum number of messages to return",
             "in": "query",
             "name": "limit",
             "schema": {
-              "type": "number"
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "type": "string"
             }
           }
         ],
