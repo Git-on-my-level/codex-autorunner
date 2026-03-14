@@ -31,7 +31,8 @@
         <span class="hub-version" id="hub-version">v–</span>
       </div>
       <div class="hub-hero-actions">
-        <button class="primary sm" id="hub-new-repo">+ New</button>
+        <button class="primary sm" id="hub-new-repo">+ New repo</button>
+        <button class="ghost sm" id="hub-new-agent">+ Agent</button>
         <button class="ghost sm" id="hub-refresh">Refresh</button>
         <button class="ghost sm icon-btn notification-bell" id="hub-notification-bell" title="Run Dispatches">
           <svg class="notification-bell-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -99,6 +100,17 @@
         </div>
       </div>
       <div class="hub-repo-list" id="hub-repo-list">
+        <div class="muted small">Loading…</div>
+      </div>
+    </section>
+    <section class="hub-repo-panel hub-agent-panel">
+      <div class="hub-panel-header">
+        <div class="hub-panel-title">
+          <span class="label">Agents</span>
+          <p class="muted small">Managed agent workspaces</p>
+        </div>
+      </div>
+      <div class="hub-repo-list hub-agent-list" id="hub-agent-workspace-list">
         <div class="muted small">Loading…</div>
       </div>
     </section>
@@ -1044,6 +1056,40 @@
       <div class="modal-actions">
         <button class="ghost" id="create-repo-cancel">Cancel</button>
         <button class="primary" id="create-repo-submit">Create</button>
+      </div>
+    </div>
+  </div>
+  <!-- Create Agent Workspace Modal -->
+  <div class="modal-overlay" hidden="" id="create-agent-workspace-modal">
+    <div aria-describedby="create-agent-workspace-modal-body"
+      aria-labelledby="create-agent-workspace-modal-title" aria-modal="true"
+      class="modal-dialog modal-create-repo" role="dialog" tabindex="-1">
+      <div class="modal-header">
+        <span class="label" id="create-agent-workspace-modal-title">Create Agent Workspace</span>
+      </div>
+      <div class="modal-body" id="create-agent-workspace-modal-body">
+        <div class="form-group">
+          <label for="create-agent-workspace-id">Workspace ID <span class="required">*</span></label>
+          <input autocomplete="off" id="create-agent-workspace-id" placeholder="zeroclaw-main" spellcheck="false"
+            type="text" />
+          <span class="form-hint">Used as the managed runtime path name inside CAR</span>
+        </div>
+        <div class="form-group">
+          <label for="create-agent-workspace-runtime">Runtime <span class="required">*</span></label>
+          <input autocomplete="off" id="create-agent-workspace-runtime" placeholder="zeroclaw" spellcheck="false"
+            type="text" />
+          <span class="form-hint">Runtime binary name already configured on this host</span>
+        </div>
+        <div class="form-group">
+          <label for="create-agent-workspace-name">Display name <span class="optional">(optional)</span></label>
+          <input autocomplete="off" id="create-agent-workspace-name" placeholder="ZeroClaw Main"
+            spellcheck="false" type="text" />
+          <span class="form-hint">Human-friendly label shown in CAR's agent workspace view</span>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" id="create-agent-workspace-cancel">Cancel</button>
+        <button class="primary" id="create-agent-workspace-submit">Create</button>
       </div>
     </div>
   </div>

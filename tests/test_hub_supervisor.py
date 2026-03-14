@@ -315,6 +315,159 @@ def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
     assert workspace["effective_destination"] == {"kind": "local"}
 
 
+def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    client = TestClient(create_hub_app(hub_root))
+
+    create_resp = client.post(
+        "/hub/agent-workspaces",
+        json={
+            "id": "zc-main",
+            "runtime": "zeroclaw",
+            "display_name": "ZeroClaw Main",
+        },
+    )
+    assert create_resp.status_code == 200
+    created = create_resp.json()
+    assert created["id"] == "zc-main"
+    assert created["runtime"] == "zeroclaw"
+    assert created["display_name"] == "ZeroClaw Main"
+    workspace_path = (
+        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+    )
+    assert workspace_path.exists()
+
+    list_resp = client.get("/hub/agent-workspaces")
+    assert list_resp.status_code == 200
+    list_payload = list_resp.json()
+    assert [item["id"] for item in list_payload["agent_workspaces"]] == ["zc-main"]
+
+    detail_resp = client.get("/hub/agent-workspaces/zc-main")
+    assert detail_resp.status_code == 200
+    detail_payload = detail_resp.json()
+    assert detail_payload["configured_destination"] is None
+    assert detail_payload["source"] == "default"
+    assert detail_payload["path"] == ".codex-autorunner/runtimes/zeroclaw/zc-main"
+
+    update_resp = client.patch(
+        "/hub/agent-workspaces/zc-main",
+        json={"enabled": False},
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["enabled"] is False
+
+    destination_resp = client.post(
+        "/hub/agent-workspaces/zc-main/destination",
+        json={"kind": "docker", "image": "ghcr.io/acme/zeroclaw:latest"},
+    )
+    assert destination_resp.status_code == 200
+    destination_payload = destination_resp.json()
+    assert destination_payload["effective_destination"] == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/zeroclaw:latest",
+    }
+    assert destination_payload["source"] == "configured"
+
+    remove_resp = client.post("/hub/agent-workspaces/zc-main/remove", json={})
+    assert remove_resp.status_code == 200
+    assert remove_resp.json() == {
+        "status": "ok",
+        "workspace_id": "zc-main",
+        "delete_dir": False,
+    }
+    assert workspace_path.exists()
+    assert client.get("/hub/agent-workspaces/zc-main").status_code == 404
+
+    recreate_resp = client.post(
+        "/hub/agent-workspaces",
+        json={"id": "zc-main", "runtime": "zeroclaw"},
+    )
+    assert recreate_resp.status_code == 200
+
+    delete_resp = client.post("/hub/agent-workspaces/zc-main/delete", json={})
+    assert delete_resp.status_code == 200
+    assert delete_resp.json() == {
+        "status": "ok",
+        "workspace_id": "zc-main",
+        "delete_dir": True,
+    }
+    assert not workspace_path.exists()
+
+
+def test_hub_agent_workspace_job_routes_submit_expected_kinds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    app = create_hub_app(hub_root)
+    submissions: list[dict[str, object]] = []
+
+    async def _fake_submit(kind: str, func, *, request_id: Optional[str] = None):
+        result = await func()
+        submissions.append({"kind": kind, "request_id": request_id, "result": result})
+
+        class _Job:
+            def to_dict(self) -> dict[str, object]:
+                return {
+                    "job_id": f"job-{len(submissions)}",
+                    "kind": kind,
+                    "status": "succeeded",
+                    "created_at": "2026-03-08T00:00:00Z",
+                    "started_at": "2026-03-08T00:00:00Z",
+                    "finished_at": "2026-03-08T00:00:01Z",
+                    "result": result if isinstance(result, dict) else None,
+                    "error": None,
+                }
+
+        return _Job()
+
+    monkeypatch.setattr(app.state.job_manager, "submit", _fake_submit)
+
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/hub/jobs/agent-workspaces",
+        json={"id": "zc-main", "runtime": "zeroclaw"},
+    )
+    assert create_resp.status_code == 200
+    assert create_resp.json()["kind"] == "hub.create_agent_workspace"
+    workspace_path = (
+        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+    )
+    assert workspace_path.exists()
+
+    remove_resp = client.post("/hub/jobs/agent-workspaces/zc-main/remove", json={})
+    assert remove_resp.status_code == 200
+    assert remove_resp.json()["kind"] == "hub.remove_agent_workspace"
+    assert workspace_path.exists()
+
+    recreate_resp = client.post(
+        "/hub/jobs/agent-workspaces",
+        json={"id": "zc-main", "runtime": "zeroclaw"},
+    )
+    assert recreate_resp.status_code == 200
+    assert recreate_resp.json()["kind"] == "hub.create_agent_workspace"
+
+    delete_resp = client.post("/hub/jobs/agent-workspaces/zc-main/delete", json={})
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["kind"] == "hub.delete_agent_workspace"
+    assert not workspace_path.exists()
+
+    assert [item["kind"] for item in submissions] == [
+        "hub.create_agent_workspace",
+        "hub.remove_agent_workspace",
+        "hub.create_agent_workspace",
+        "hub.delete_agent_workspace",
+    ]
+
+
 @pytest.mark.slow
 @pytest.mark.docker_managed_cleanup
 def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Path):

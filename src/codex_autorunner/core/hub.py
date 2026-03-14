@@ -634,6 +634,45 @@ class HubSupervisor:
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         self.list_repos(use_cache=False)
 
+    def get_agent_workspace_snapshot(self, workspace_id: str) -> AgentWorkspaceSnapshot:
+        return self._snapshot_for_agent_workspace(workspace_id)
+
+    def update_agent_workspace(
+        self,
+        workspace_id: str,
+        *,
+        enabled: Optional[bool] = None,
+        display_name: Optional[str] = None,
+    ) -> AgentWorkspaceSnapshot:
+        self._invalidate_list_cache()
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if not workspace:
+            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
+
+        if enabled is not None:
+            workspace.enabled = bool(enabled)
+        if display_name is not None:
+            normalized_display_name = str(display_name).strip()
+            if not normalized_display_name:
+                raise ValueError("display_name must be non-empty when provided")
+            workspace.display_name = normalized_display_name
+
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        return self._snapshot_for_agent_workspace(workspace_id)
+
+    def set_agent_workspace_destination(
+        self, workspace_id: str, destination: Optional[Dict[str, Any]]
+    ) -> AgentWorkspaceSnapshot:
+        self._invalidate_list_cache()
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if not workspace:
+            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
+        workspace.destination = normalize_manifest_destination(destination)
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        return self._snapshot_for_agent_workspace(workspace_id)
+
     def _reconcile_startup(self) -> None:
         try:
             _, records = self._manifest_records(manifest_only=True)

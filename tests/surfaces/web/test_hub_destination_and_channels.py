@@ -1082,6 +1082,9 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     ).read_text(encoding="utf-8")
     assert 'id="hub-repo-search"' in index_html
     assert 'id="hub-refresh"' in index_html
+    assert 'id="hub-new-agent"' in index_html
+    assert 'id="hub-agent-workspace-list"' in index_html
+    assert 'id="create-agent-workspace-modal"' in index_html
     assert 'id="hub-scan"' not in index_html
     assert 'id="hub-quick-scan"' not in index_html
     assert 'id="hub-channel-query"' not in index_html
@@ -1095,6 +1098,19 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     ).read_text(encoding="utf-8")
     assert "set_destination" in hub_source
     assert "/hub/repos/${encodeURIComponent(repo.id)}/destination" in hub_source
+    assert "/hub/jobs/agent-workspaces" in hub_source
+    assert (
+        "/hub/agent-workspaces/${encodeURIComponent(workspace.id)}/destination"
+        in hub_source
+    )
+    assert (
+        "/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/remove"
+        in hub_source
+    )
+    assert (
+        "/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/delete"
+        in hub_source
+    )
     assert "/hub/chat/channels" in hub_source
     assert "container_name" in hub_source
     assert "profile" in hub_source
@@ -1105,6 +1121,7 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     assert "read_only" in hub_source
     assert "hubRepoSearchInput" in hub_source
     assert "hub-chat-binding-row" in hub_source
+    assert "renderAgentWorkspaces" in hub_source
     assert 'header.textContent = "Channels"' not in hub_source
     assert "copy_channel_key" not in hub_source
     assert "Copied channel ref" not in hub_source
