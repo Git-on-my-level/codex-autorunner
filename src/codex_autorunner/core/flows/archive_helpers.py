@@ -17,6 +17,14 @@ from .models import FlowRunStatus
 from .store import FlowStore
 
 
+def flow_run_artifacts_root(repo_root: Path, run_id: str) -> Path:
+    return repo_root / ".codex-autorunner" / "flows" / run_id
+
+
+def flow_run_archive_root(repo_root: Path, run_id: str) -> Path:
+    return repo_root / ".codex-autorunner" / "archive" / "runs" / run_id
+
+
 def _get_durable_writes(repo_root: Path) -> bool:
     """Get durable_writes from repo config, defaulting to False if uninitialized."""
     try:
@@ -49,7 +57,8 @@ def _build_flow_archive_entries(
     run_dir: Path,
 ) -> tuple[list[ArchiveEntrySpec], dict[str, Any]]:
     car_root = repo_root / ".codex-autorunner"
-    archive_root = repo_root / ".codex-autorunner" / "flows" / run_id
+    archive_root = flow_run_archive_root(repo_root, run_id)
+    flow_state_root = flow_run_artifacts_root(repo_root, run_id)
     target_runs_dir = _next_archive_dir(archive_root / "archived_runs")
     ticket_paths = list(list_ticket_paths(repo_root / ".codex-autorunner" / "tickets"))
     entries = build_common_car_archive_entries(
@@ -82,9 +91,19 @@ def _build_flow_archive_entries(
             mode="move",
         )
     )
+    entries.append(
+        ArchiveEntrySpec(
+            label="flow_state",
+            source=flow_state_root,
+            dest=archive_root / "flow_state",
+            mode="move",
+            required=False,
+        )
+    )
     summary: dict[str, Any] = {
         "archive_root": str(archive_root),
         "archived_runs_dir": str(target_runs_dir),
+        "archived_flow_state_dir": str(archive_root / "flow_state"),
         "ticket_count": len(ticket_paths),
     }
     return entries, summary
@@ -141,11 +160,13 @@ def archive_flow_run_artifacts(
             "run_dir_exists": run_dir.exists() and run_dir.is_dir(),
             "archive_dir": archive_plan["archive_root"],
             "archived_runs_dir": archive_plan["archived_runs_dir"],
+            "archived_flow_state_dir": archive_plan["archived_flow_state_dir"],
             "delete_run": delete_run,
             "deleted_run": False,
             "archived_tickets": 0,
             "archived_runs": False,
             "archived_contextspace": False,
+            "archived_flow_state": False,
             "archived_paths": [],
         }
         execution = execute_archive_entries(entries, worktree_root=repo_root)
@@ -160,6 +181,7 @@ def archive_flow_run_artifacts(
         summary["archived_contextspace"] = "contextspace" in (
             copied_paths | moved_paths
         )
+        summary["archived_flow_state"] = "flow_state" in moved_paths
         summary["archived_paths"] = sorted(
             list(execution.copied_paths) + list(execution.moved_paths)
         )
@@ -173,4 +195,9 @@ def archive_flow_run_artifacts(
         return summary
 
 
-__all__ = ["archive_flow_run_artifacts", "_build_flow_archive_entries"]
+__all__ = [
+    "archive_flow_run_artifacts",
+    "flow_run_archive_root",
+    "flow_run_artifacts_root",
+    "_build_flow_archive_entries",
+]

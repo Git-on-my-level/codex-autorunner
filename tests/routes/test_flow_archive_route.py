@@ -44,6 +44,9 @@ def _seed_ticket_state(repo_root: Path, run_id: str) -> None:
     (run_dir / "DISPATCH.md").write_text(
         "---\nmode: pause\n---\n\nhello\n", encoding="utf-8"
     )
+    live_flow_dir = repo_root / ".codex-autorunner" / "flows" / run_id / "chat"
+    live_flow_dir.mkdir(parents=True, exist_ok=True)
+    (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
 
 
 def test_archive_route_deletes_run_record_by_default(
@@ -107,12 +110,23 @@ def test_archive_route_cleans_live_contextspace_after_archiving(
     archived_context = (
         repo_root
         / ".codex-autorunner"
-        / "flows"
+        / "archive"
+        / "runs"
         / run_id
         / "contextspace"
         / "active_context.md"
     )
     assert archived_context.read_text(encoding="utf-8") == "Active context\n"
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_id
+        / "flow_state"
+        / "chat"
+        / "outbound.jsonl"
+    ).read_text(encoding="utf-8") == "{}"
     assert (
         repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
     ).read_text(encoding="utf-8") == ""
@@ -120,4 +134,5 @@ def test_archive_route_cleans_live_contextspace_after_archiving(
         repo_root / ".codex-autorunner" / "contextspace" / "decisions.md"
     ).read_text(encoding="utf-8") == ""
     assert not (repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
+    assert not (repo_root / ".codex-autorunner" / "flows" / run_id).exists()
     assert not (repo_root / ".codex-autorunner" / "runs" / run_id).exists()

@@ -283,32 +283,57 @@ async def test_flow_archive_defaults_latest_paused(
     run_dir = tmp_path / ".codex-autorunner" / "runs" / run_paused
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    live_flow_dir = tmp_path / ".codex-autorunner" / "flows" / run_paused / "chat"
+    live_flow_dir.mkdir(parents=True, exist_ok=True)
+    (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
 
     handler = _FlowLifecycleHandler()
     await handler._handle_flow_archive(_message(), tmp_path, argv=[])
 
     archive_dir = (
-        tmp_path / ".codex-autorunner" / "flows" / run_paused / "archived_tickets"
+        tmp_path
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_paused
+        / "archived_tickets"
     )
     assert (archive_dir / "TICKET-001.md").exists()
     archived_runs = (
-        tmp_path / ".codex-autorunner" / "flows" / run_paused / "archived_runs"
+        tmp_path
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_paused
+        / "archived_runs"
     )
     assert archived_runs.exists()
     assert (
         tmp_path
         / ".codex-autorunner"
-        / "flows"
+        / "archive"
+        / "runs"
         / run_paused
         / "contextspace"
         / "active_context.md"
     ).read_text(encoding="utf-8") == "Active context\n"
+    assert (
+        tmp_path
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_paused
+        / "flow_state"
+        / "chat"
+        / "outbound.jsonl"
+    ).read_text(encoding="utf-8") == "{}"
     assert (
         tmp_path / ".codex-autorunner" / "contextspace" / "active_context.md"
     ).read_text(encoding="utf-8") == ""
     assert (tmp_path / ".codex-autorunner" / "contextspace" / "decisions.md").read_text(
         encoding="utf-8"
     ) == ""
+    assert not (tmp_path / ".codex-autorunner" / "flows" / run_paused).exists()
     assert handler.stopped_workers == [run_paused]
 
     store = FlowStore(tmp_path / ".codex-autorunner" / "flows.db")

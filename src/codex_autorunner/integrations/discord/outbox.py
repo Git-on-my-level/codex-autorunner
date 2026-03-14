@@ -10,6 +10,7 @@ import httpx
 
 from ...core.config import ConfigError, load_repo_config
 from ...core.flows import FlowStore
+from ...core.flows.archive_helpers import flow_run_archive_root
 from .state import DiscordStateStore, OutboxRecord
 
 OUTBOX_RETRY_INTERVAL_SECONDS = 5.0
@@ -57,12 +58,17 @@ def _terminal_run_id(record_id: str) -> Optional[str]:
 
 
 def _has_archived_run_artifacts(workspace_root: Path, run_id: str) -> bool:
-    archive_root = workspace_root / ".codex-autorunner" / "flows" / run_id
-    if not archive_root.exists():
-        return False
-    if (archive_root / "archived_tickets").exists():
+    archive_root = flow_run_archive_root(workspace_root, run_id)
+    if archive_root.exists() and (archive_root / "archived_tickets").exists():
         return True
-    return any(archive_root.glob("archived_runs*"))
+    if archive_root.exists() and any(archive_root.glob("archived_runs*")):
+        return True
+    legacy_root = workspace_root / ".codex-autorunner" / "flows" / run_id
+    if not legacy_root.exists():
+        return False
+    if (legacy_root / "archived_tickets").exists():
+        return True
+    return any(legacy_root.glob("archived_runs*"))
 
 
 class DiscordOutboxManager:

@@ -160,19 +160,21 @@ def test_local_archive_tree_reads_any_archived_run_content(tmp_path: Path) -> No
     repo_root.mkdir()
     client = _client_for_repo(repo_root)
 
-    run_root = repo_root / ".codex-autorunner" / "flows" / "run-123"
+    run_root = repo_root / ".codex-autorunner" / "archive" / "runs" / "run-123"
     (run_root / "contextspace").mkdir(parents=True, exist_ok=True)
     (run_root / "contextspace" / "active_context.md").write_text(
         "Local archived context", encoding="utf-8"
     )
-    (run_root / "chat").mkdir(parents=True, exist_ok=True)
-    (run_root / "chat" / "outbound.jsonl").write_text("{}", encoding="utf-8")
+    (run_root / "flow_state" / "chat").mkdir(parents=True, exist_ok=True)
+    (run_root / "flow_state" / "chat" / "outbound.jsonl").write_text(
+        "{}", encoding="utf-8"
+    )
 
     tree = client.get("/api/archive/local/tree", params={"run_id": "run-123"})
     assert tree.status_code == 200
     nodes = {node["path"]: node for node in tree.json()["nodes"]}
     assert "contextspace" in nodes
-    assert "chat" in nodes
+    assert "flow_state" in nodes
 
     read = client.get(
         "/api/archive/local/file",

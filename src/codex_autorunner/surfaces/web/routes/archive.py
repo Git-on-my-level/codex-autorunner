@@ -12,6 +12,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
+from ....core.flows.archive_helpers import flow_run_archive_root
 from ..schemas import (
     ArchiveSnapshotDetailResponse,
     ArchiveSnapshotsResponse,
@@ -31,7 +32,11 @@ def _archive_worktrees_root(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "archive" / "worktrees"
 
 
-def _local_flows_root(repo_root: Path) -> Path:
+def _local_run_archives_root(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / "archive" / "runs"
+
+
+def _legacy_local_flows_root(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows"
 
 
@@ -133,11 +138,13 @@ def _resolve_snapshot_root(
 
 def _resolve_local_run_root(repo_root: Path, run_id: str) -> Path:
     run_id = _normalize_component(run_id, "run_id")
-    flows_root = _local_flows_root(repo_root)
-    run_root = flows_root / run_id
-    if not run_root.exists() or not run_root.is_dir():
-        raise FileNotFoundError("run archive not found")
-    return run_root
+    primary = flow_run_archive_root(repo_root, run_id)
+    if primary.exists() and primary.is_dir():
+        return primary
+    legacy = _legacy_local_flows_root(repo_root) / run_id
+    if legacy.exists() and legacy.is_dir():
+        return legacy
+    raise FileNotFoundError("run archive not found")
 
 
 def _safe_mtime(path: Path) -> Optional[float]:
@@ -233,38 +240,49 @@ def _format_mtime(ts: Optional[float]) -> Optional[str]:
 
 
 def _iter_local_run_archives(repo_root: Path) -> list[LocalRunArchiveSummary]:
-    flows_root = _local_flows_root(repo_root)
-    if not flows_root.exists() or not flows_root.is_dir():
-        return []
+    roots = [
+        (_local_run_archives_root(repo_root), True),
+        (_legacy_local_flows_root(repo_root), False),
+    ]
     entries: list[tuple[float, LocalRunArchiveSummary]] = []
-    for run_dir in sorted(flows_root.iterdir(), key=lambda p: p.name):
-        if not run_dir.is_dir():
+    seen_run_ids: set[str] = set()
+    for root, treat_any_child_as_archive in roots:
+        if not root.exists() or not root.is_dir():
             continue
-        tickets_dir = run_dir / "archived_tickets"
-        runs_dir = run_dir / "archived_runs"
-        has_tickets = tickets_dir.exists() and tickets_dir.is_dir()
-        has_runs = runs_dir.exists() and runs_dir.is_dir()
-        other_children = [
-            child
-            for child in run_dir.iterdir()
-            if child.name
-            in (_LOCAL_ARCHIVE_MARKERS - {"archived_tickets", "archived_runs"})
-        ]
-        if not has_tickets and not has_runs and not other_children:
-            continue
-        mtime_candidates = [
-            _safe_mtime(tickets_dir) if has_tickets else None,
-            _safe_mtime(runs_dir) if has_runs else None,
-            *[_safe_mtime(child) for child in other_children],
-        ]
-        mtime = max([ts for ts in mtime_candidates if ts is not None], default=0.0)
-        summary = LocalRunArchiveSummary(
-            run_id=run_dir.name,
-            archived_at=_format_mtime(mtime) if mtime else None,
-            has_tickets=has_tickets,
-            has_runs=has_runs,
-        )
-        entries.append((mtime, summary))
+        for run_dir in sorted(root.iterdir(), key=lambda p: p.name):
+            if not run_dir.is_dir() or run_dir.name in seen_run_ids:
+                continue
+            tickets_dir = run_dir / "archived_tickets"
+            runs_dir = run_dir / "archived_runs"
+            has_tickets = tickets_dir.exists() and tickets_dir.is_dir()
+            has_runs = runs_dir.exists() and runs_dir.is_dir()
+            if treat_any_child_as_archive:
+                other_children = [
+                    child for child in run_dir.iterdir() if child.name != "META.json"
+                ]
+            else:
+                other_children = [
+                    child
+                    for child in run_dir.iterdir()
+                    if child.name
+                    in (_LOCAL_ARCHIVE_MARKERS - {"archived_tickets", "archived_runs"})
+                ]
+            if not has_tickets and not has_runs and not other_children:
+                continue
+            mtime_candidates = [
+                _safe_mtime(tickets_dir) if has_tickets else None,
+                _safe_mtime(runs_dir) if has_runs else None,
+                *[_safe_mtime(child) for child in other_children],
+            ]
+            mtime = max([ts for ts in mtime_candidates if ts is not None], default=0.0)
+            summary = LocalRunArchiveSummary(
+                run_id=run_dir.name,
+                archived_at=_format_mtime(mtime) if mtime else None,
+                has_tickets=has_tickets,
+                has_runs=has_runs,
+            )
+            entries.append((mtime, summary))
+            seen_run_ids.add(run_dir.name)
     entries.sort(key=lambda item: (item[0], item[1].run_id), reverse=True)
     return [entry[1] for entry in entries]
 

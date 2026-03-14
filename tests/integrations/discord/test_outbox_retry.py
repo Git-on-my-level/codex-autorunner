@@ -310,9 +310,9 @@ async def test_flush_drops_terminal_notice_for_archived_run(tmp_path: Path) -> N
     workspace = _workspace(tmp_path)
     run_id = "run-archived"
     _create_terminal_run(workspace, run_id)
-    (workspace / ".codex-autorunner" / "flows" / run_id / "archived_runs").mkdir(
-        parents=True, exist_ok=True
-    )
+    (
+        workspace / ".codex-autorunner" / "archive" / "runs" / run_id / "archived_runs"
+    ).mkdir(parents=True, exist_ok=True)
 
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     clock = _Clock()

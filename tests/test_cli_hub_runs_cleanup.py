@@ -62,7 +62,12 @@ def test_hub_runs_cleanup_archives_and_deletes_terminal_runs(hub_env) -> None:
     assert entry["deleted_run"] is True
 
     archived_root = (
-        hub_env.repo_root / ".codex-autorunner" / "flows" / run_id / "archived_runs"
+        hub_env.repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_id
+        / "archived_runs"
     )
     assert archived_root.exists()
 

@@ -135,10 +135,13 @@ async def test_flow_archive_command_deletes_run_record_by_default(
     rest = _FakeRest()
     service = _service(tmp_path, rest)
     captured: list[dict[str, Any]] = []
-    mirrored_run_exists: list[bool] = []
 
     def _archive_flow_run_artifacts(repo_root: Path, **kwargs: Any) -> dict[str, Any]:
         captured.append({"repo_root": str(repo_root), **kwargs})
+        if kwargs.get("delete_run"):
+            with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
+                store.initialize()
+                store.delete_flow_run(run_id)
         return {
             "run_id": kwargs["run_id"],
             "archived_tickets": 0,
@@ -151,18 +154,6 @@ async def test_flow_archive_command_deletes_run_record_by_default(
         "archive_flow_run_artifacts",
         _archive_flow_run_artifacts,
     )
-
-    class _Mirror:
-        def mirror_inbound(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def mirror_outbound(self, **kwargs: Any) -> None:
-            _ = kwargs
-            with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
-                store.initialize()
-                mirrored_run_exists.append(store.get_flow_run(run_id) is not None)
-
-    monkeypatch.setattr(service, "_flow_run_mirror", lambda _workspace_root: _Mirror())
 
     try:
         await service._handle_flow_archive(
@@ -181,10 +172,9 @@ async def test_flow_archive_command_deletes_run_record_by_default(
             "repo_root": str(workspace),
             "run_id": run_id,
             "force": False,
-            "delete_run": False,
+            "delete_run": True,
         }
     ]
-    assert mirrored_run_exists == [True]
     with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
         store.initialize()
         assert store.get_flow_run(run_id) is None
@@ -260,6 +250,9 @@ async def test_flow_archive_command_cleans_live_contextspace(
     run_dir = workspace / ".codex-autorunner" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    live_flow_dir = workspace / ".codex-autorunner" / "flows" / run_id / "chat"
+    live_flow_dir.mkdir(parents=True, exist_ok=True)
+    (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
 
     rest = _FakeRest()
     service = _service(tmp_path, rest)
@@ -279,11 +272,22 @@ async def test_flow_archive_command_cleans_live_contextspace(
     assert (
         workspace
         / ".codex-autorunner"
-        / "flows"
+        / "archive"
+        / "runs"
         / run_id
         / "contextspace"
         / "active_context.md"
     ).read_text(encoding="utf-8") == "Active context\n"
+    assert (
+        workspace
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_id
+        / "flow_state"
+        / "chat"
+        / "outbound.jsonl"
+    ).read_text(encoding="utf-8") == "{}"
     assert (
         workspace / ".codex-autorunner" / "contextspace" / "active_context.md"
     ).read_text(encoding="utf-8") == ""
@@ -291,4 +295,5 @@ async def test_flow_archive_command_cleans_live_contextspace(
         workspace / ".codex-autorunner" / "contextspace" / "decisions.md"
     ).read_text(encoding="utf-8") == ""
     assert not (workspace / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
+    assert not (workspace / ".codex-autorunner" / "flows" / run_id).exists()
     assert not (workspace / ".codex-autorunner" / "runs" / run_id).exists()

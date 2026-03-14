@@ -86,6 +86,9 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     (run_dir / "DISPATCH.md").write_text(
         "---\nmode: pause\n---\n\nhello\n", encoding="utf-8"
     )
+    live_flow_dir = repo_root / ".codex-autorunner" / "flows" / run_id / "chat"
+    live_flow_dir.mkdir(parents=True, exist_ok=True)
+    (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
 
     result = runner.invoke(
         app,
@@ -109,12 +112,15 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     assert payload["archived_contextspace"] is True
     assert payload["deleted_run"] is True
 
-    archived_root = repo_root / ".codex-autorunner" / "flows" / run_id / "archived_runs"
+    archived_root = (
+        repo_root / ".codex-autorunner" / "archive" / "runs" / run_id / "archived_runs"
+    )
     assert archived_root.exists()
     assert (
         repo_root
         / ".codex-autorunner"
-        / "flows"
+        / "archive"
+        / "runs"
         / run_id
         / "archived_tickets"
         / "TICKET-001.md"
@@ -122,7 +128,8 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     assert (
         repo_root
         / ".codex-autorunner"
-        / "flows"
+        / "archive"
+        / "runs"
         / run_id
         / "contextspace"
         / "active_context.md"
@@ -130,14 +137,32 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     assert (
         repo_root
         / ".codex-autorunner"
-        / "flows"
+        / "archive"
+        / "runs"
         / run_id
         / "contextspace"
         / "decisions.md"
     ).read_text(encoding="utf-8") == "Decision log\n"
     assert (
-        repo_root / ".codex-autorunner" / "flows" / run_id / "contextspace" / "notes.md"
+        repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_id
+        / "contextspace"
+        / "notes.md"
     ).read_text(encoding="utf-8") == "Scratch note\n"
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_id
+        / "flow_state"
+        / "chat"
+        / "outbound.jsonl"
+    ).read_text(encoding="utf-8") == "{}"
+    assert not (repo_root / ".codex-autorunner" / "flows" / run_id).exists()
     assert not (repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
     assert (
         repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"

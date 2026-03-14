@@ -7292,7 +7292,7 @@ class DiscordBotService:
                 workspace_root,
                 run_id=target.id,
                 force=False,
-                delete_run=False,
+                delete_run=True,
             )
         except ValueError as exc:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
@@ -7304,22 +7304,6 @@ class DiscordBotService:
             f"runs_archived={summary['archived_runs']}, "
             f"contextspace={summary['archived_contextspace']})."
         )
-        run_mirror.mirror_outbound(
-            run_id=target.id,
-            platform="discord",
-            event_type="flow_archive_notice",
-            kind="notice",
-            actor="car",
-            text=outbound_text,
-            chat_id=channel_id,
-            thread_id=guild_id,
-            meta={
-                "archived_runs": summary.get("archived_runs"),
-                "archived_tickets": summary.get("archived_tickets"),
-                "archived_contextspace": summary.get("archived_contextspace"),
-            },
-        )
-        self._delete_flow_run_record(workspace_root, target.id)
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
