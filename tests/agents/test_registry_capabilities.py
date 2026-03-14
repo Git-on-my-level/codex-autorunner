@@ -88,9 +88,16 @@ def test_build_agent_definition_merges_static_and_runtime_capabilities() -> None
     )
 
 
-def test_zeroclaw_descriptor_advertises_only_supported_wrapper_capabilities() -> None:
+def test_zeroclaw_descriptor_advertises_only_supported_durable_capabilities() -> None:
     from codex_autorunner.agents.registry import get_registered_agents
 
     descriptor = get_registered_agents()["zeroclaw"]
 
-    assert descriptor.capabilities == frozenset()
+    assert descriptor.capabilities == frozenset(
+        [
+            "durable_threads",
+            "message_turns",
+            "active_thread_discovery",
+            "event_streaming",
+        ]
+    )

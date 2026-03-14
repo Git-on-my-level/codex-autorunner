@@ -233,13 +233,31 @@ def test_service_supports_agent_workspace_thread_targets(tmp_path: Path) -> None
     assert [thread.thread_target_id for thread in listed] == [created.thread_target_id]
 
 
-def test_create_thread_target_rejects_non_durable_agent(tmp_path: Path) -> None:
-    harness = _FakeHarness(capabilities=frozenset())
+def test_create_thread_target_supports_durable_zeroclaw_agent_workspace(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(
+        capabilities=frozenset(
+            [
+                "durable_threads",
+                "message_turns",
+                "active_thread_discovery",
+                "event_streaming",
+            ]
+        )
+    )
     descriptors = {
         "zeroclaw": _make_descriptor(
             "zeroclaw",
             name="ZeroClaw",
-            capabilities=frozenset(),
+            capabilities=frozenset(
+                [
+                    "durable_threads",
+                    "message_turns",
+                    "active_thread_discovery",
+                    "event_streaming",
+                ]
+            ),
         )
     }
     catalog = MappingAgentDefinitionCatalog(descriptors)
@@ -251,9 +269,10 @@ def test_create_thread_target_rejects_non_durable_agent(tmp_path: Path) -> None:
     )
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
+    created = service.create_thread_target("zeroclaw", workspace_root)
 
-    with pytest.raises(ValueError, match="does not support durable_threads"):
-        service.create_thread_target("zeroclaw", workspace_root)
+    assert created.agent_id == "zeroclaw"
+    assert created.workspace_root == str(workspace_root)
 
 
 async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -> None:

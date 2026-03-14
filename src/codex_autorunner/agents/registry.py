@@ -12,7 +12,7 @@ from .base import AgentHarness
 from .codex.harness import CodexHarness
 from .opencode.harness import OpenCodeHarness
 from .types import RuntimeCapability, normalize_runtime_capabilities
-from .zeroclaw.harness import ZeroClawHarness
+from .zeroclaw.harness import ZEROCLAW_CAPABILITIES, ZeroClawHarness
 from .zeroclaw.supervisor import (
     build_zeroclaw_supervisor_from_config,
     zeroclaw_binary_available,
@@ -147,7 +147,7 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
     "zeroclaw": AgentDescriptor(
         id="zeroclaw",
         name="ZeroClaw",
-        capabilities=frozenset(),
+        capabilities=ZEROCLAW_CAPABILITIES,
         make_harness=_make_zeroclaw_harness,
         healthcheck=_check_zeroclaw_health,
     ),

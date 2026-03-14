@@ -1087,6 +1087,80 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     return checks
 
 
+def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
+    """Report ZeroClaw binary availability when managed ZeroClaw usage exists."""
+    checks: list[DoctorCheck] = []
+    try:
+        manifest = load_manifest(hub_config.manifest_path, hub_config.root)
+    except Exception:
+        manifest = None
+
+    enabled_workspaces: list[str] = []
+    if manifest is not None:
+        enabled_workspaces = sorted(
+            workspace.id
+            for workspace in manifest.agent_workspaces
+            if workspace.enabled and workspace.runtime.strip().lower() == "zeroclaw"
+        )
+
+    try:
+        configured_binary = hub_config.agent_binary("zeroclaw").strip()
+    except Exception:
+        configured_binary = ""
+
+    explicit_binary_override = bool(
+        configured_binary and configured_binary != "zeroclaw"
+    )
+    if not enabled_workspaces and not explicit_binary_override:
+        return checks
+
+    resolved_binary = (
+        resolve_executable(configured_binary) if configured_binary else None
+    )
+    workspace_suffix = ""
+    if enabled_workspaces:
+        workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
+
+    if resolved_binary:
+        checks.append(
+            DoctorCheck(
+                name="ZeroClaw runtime availability",
+                passed=True,
+                message=(
+                    f"ZeroClaw binary available at {resolved_binary}{workspace_suffix}."
+                ),
+                severity="info",
+                check_id="hub.zeroclaw.binary",
+            )
+        )
+        return checks
+
+    if not configured_binary:
+        message = "ZeroClaw binary is not configured."
+        fix = "Set agents.zeroclaw.binary in the hub config."
+    else:
+        message = (
+            f"ZeroClaw binary '{configured_binary}' is not available on PATH"
+            f"{workspace_suffix}."
+        )
+        fix = (
+            "Install ZeroClaw on the host or update agents.zeroclaw.binary "
+            "to a working executable path."
+        )
+
+    checks.append(
+        DoctorCheck(
+            name="ZeroClaw runtime availability",
+            passed=False,
+            message=message,
+            severity="error" if enabled_workspaces else "warning",
+            check_id="hub.zeroclaw.binary",
+            fix=fix,
+        )
+    )
+    return checks
+
+
 def _check_pma_state_file(checks: list[DoctorCheck], repo_root: Path) -> None:
     """Check PMA state file."""
     state_path = repo_root / PMA_STATE_FILE
@@ -1457,4 +1531,5 @@ __all__ = [
     "hub_destination_doctor_checks",
     "hub_worktree_doctor_checks",
     "pma_doctor_checks",
+    "zeroclaw_doctor_checks",
 ]
