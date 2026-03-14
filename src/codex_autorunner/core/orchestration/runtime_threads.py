@@ -10,6 +10,7 @@ from .models import ExecutionRecord, MessageRequest, ThreadTarget
 from .service import HarnessBackedOrchestrationService
 
 RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
+_INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,7 @@ async def await_runtime_thread_outcome(
     )
     timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
     interrupt_task = (
-        asyncio.create_task(interrupt_event.wait())
+        asyncio.create_task(_wait_for_interrupt(interrupt_event))
         if interrupt_event is not None
         else None
     )
@@ -201,6 +202,11 @@ async def await_runtime_thread_outcome(
         backend_thread_id=backend_thread_id,
         backend_turn_id=backend_turn_id,
     )
+
+
+async def _wait_for_interrupt(interrupt_event: asyncio.Event) -> None:
+    while not interrupt_event.is_set():
+        await asyncio.sleep(_INTERRUPT_POLL_INTERVAL_SECONDS)
 
 
 __all__ = [

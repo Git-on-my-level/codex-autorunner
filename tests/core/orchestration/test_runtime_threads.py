@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -412,6 +413,78 @@ async def test_runtime_thread_timeout_cancels_wait_collector(
 
     assert outcome.status == "error"
     assert outcome.error == "PMA chat timed out"
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-thread-1", "backend-turn-1")
+    ]
+    assert harness.wait_cancelled.is_set()
+
+
+async def test_runtime_thread_interrupt_event_can_be_bound_to_foreign_loop(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithBlockingWait()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+
+    ready = threading.Event()
+    foreign_state: dict[str, Any] = {}
+
+    def _run_foreign_loop() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        interrupt_event = asyncio.Event()
+
+        async def _bind_event() -> None:
+            waiter = asyncio.create_task(interrupt_event.wait())
+            await asyncio.sleep(0)
+            waiter.cancel()
+            try:
+                await waiter
+            except asyncio.CancelledError:
+                pass
+
+        loop.run_until_complete(_bind_event())
+        foreign_state["loop"] = loop
+        foreign_state["interrupt_event"] = interrupt_event
+        ready.set()
+        loop.run_forever()
+        loop.close()
+
+    foreign_thread = threading.Thread(target=_run_foreign_loop, daemon=True)
+    foreign_thread.start()
+    assert ready.wait(timeout=1)
+    foreign_loop = foreign_state["loop"]
+    interrupt_event = foreign_state["interrupt_event"]
+
+    try:
+        outcome_task = asyncio.create_task(
+            await_runtime_thread_outcome(
+                started,
+                interrupt_event=interrupt_event,
+                timeout_seconds=5,
+                execution_error_message="Managed thread execution failed",
+            )
+        )
+        await harness.wait_started.wait()
+        foreign_loop.call_soon_threadsafe(interrupt_event.set)
+        outcome = await asyncio.wait_for(outcome_task, timeout=1)
+    finally:
+        foreign_loop.call_soon_threadsafe(foreign_loop.stop)
+        foreign_thread.join(timeout=1)
+
+    assert outcome.status == "interrupted"
+    assert outcome.error == "PMA chat interrupted"
     assert harness.interrupt_calls == [
         (workspace_root, "backend-thread-1", "backend-turn-1")
     ]
