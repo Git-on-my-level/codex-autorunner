@@ -38,6 +38,7 @@ from codex_autorunner.core.ports.run_event import (
     TokenUsage,
     ToolCall,
 )
+from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -4918,6 +4919,184 @@ async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
             release_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await release_task
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_message_create_streams_progress_before_terminal_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_pma_state(channel_id="channel-1", pma_enabled=True)
+    await store.update_agent_state(channel_id="channel-1", agent="codex")
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create("stream this prompt", message_id="m-1"),
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    stream_finished = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="backend-turn-1",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            await stream_finished.wait()
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="discord managed thread final reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "item/reasoning/summaryTextDelta",
+                        "params": {
+                            "itemId": "reason-1",
+                            "delta": "thinking through the repo",
+                        },
+                    }
+                },
+            )
+            await asyncio.sleep(1.05)
+            yield format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "item/agentMessage/delta",
+                        "params": {"delta": "partial discord managed reply"},
+                    }
+                },
+            )
+            stream_finished.set()
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    try:
+        await asyncio.wait_for(service.run_forever(), timeout=5)
+        assert rest.edited_channel_messages
+        assert any(
+            "partial discord managed reply" in msg["payload"].get("content", "")
+            for msg in rest.edited_channel_messages
+        )
+        assert any(
+            msg["payload"].get("components") for msg in rest.edited_channel_messages
+        )
+        assert any(
+            "discord managed thread final reply" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
         await store.close()
 
 

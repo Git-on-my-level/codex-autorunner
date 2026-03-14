@@ -1,0 +1,479 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from ..ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    ApprovalRequested,
+    Completed,
+    Failed,
+    OutputDelta,
+    RunEvent,
+    RunNotice,
+    TokenUsage,
+    ToolCall,
+)
+from ..sse import SSEEvent, parse_sse_lines
+from ..time_utils import now_iso
+from .runtime_threads import RuntimeThreadOutcome
+
+_APPROVAL_METHODS = {
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+}
+
+
+def _merge_assistant_stream(current: str, incoming: str) -> str:
+    if not incoming:
+        return current
+    if not current:
+        return incoming
+    if len(incoming) > len(current) and incoming.startswith(current):
+        return incoming
+    max_overlap = min(len(current), max(len(incoming) - 1, 0))
+    for overlap in range(max_overlap, 0, -1):
+        if current[-overlap:] == incoming[:overlap]:
+            return f"{current}{incoming[overlap:]}"
+    return f"{current}{incoming}"
+
+
+@dataclass
+class RuntimeThreadRunEventState:
+    reasoning_buffers: dict[str, str] = field(default_factory=dict)
+    assistant_stream_text: str = ""
+    assistant_message_text: str = ""
+    token_usage: Optional[dict[str, Any]] = None
+
+    def note_stream_text(self, text: str) -> None:
+        if isinstance(text, str) and text:
+            self.assistant_stream_text = _merge_assistant_stream(
+                self.assistant_stream_text,
+                text,
+            )
+
+    def note_message_text(self, text: str) -> None:
+        if isinstance(text, str) and text.strip():
+            self.assistant_message_text = text
+
+    def best_assistant_text(self) -> str:
+        if self.assistant_message_text.strip():
+            return self.assistant_message_text
+        return self.assistant_stream_text
+
+
+async def normalize_runtime_thread_raw_event(
+    raw_event: str,
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    events: list[RunEvent] = []
+    async for sse_event in _parse_runtime_thread_sse(raw_event):
+        events.extend(_normalize_sse_event(sse_event, state))
+    return events
+
+
+def terminal_run_event_from_outcome(
+    outcome: RuntimeThreadOutcome,
+    state: RuntimeThreadRunEventState,
+) -> Completed | Failed:
+    if outcome.status == "ok":
+        return Completed(
+            timestamp=now_iso(),
+            final_message=outcome.assistant_text or state.best_assistant_text(),
+        )
+    return Failed(
+        timestamp=now_iso(),
+        error_message=str(outcome.error or "").strip() or "Runtime thread failed",
+    )
+
+
+async def _parse_runtime_thread_sse(raw_event: str):
+    async def _iter_lines() -> Any:
+        for line in str(raw_event).splitlines():
+            yield line
+        yield ""
+
+    async for sse_event in parse_sse_lines(_iter_lines()):
+        yield sse_event
+
+
+def _normalize_sse_event(
+    sse_event: SSEEvent,
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    payload = _load_json_object(sse_event.data)
+    if sse_event.event in {"app-server", "event"}:
+        message = payload.get("message")
+        if isinstance(message, dict):
+            return _normalize_message_event(
+                str(message.get("method") or ""),
+                _coerce_dict(message.get("params")),
+                state,
+            )
+    return _normalize_message_event(
+        sse_event.event,
+        payload,
+        state,
+    )
+
+
+def _normalize_message_event(
+    method: str,
+    params: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    method_lower = method.lower()
+    if not method:
+        return []
+
+    if method == "item/reasoning/summaryTextDelta":
+        delta = params.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return []
+        key = _reasoning_buffer_key(params)
+        if key:
+            delta = f"{state.reasoning_buffers.get(key, '')}{delta}"
+            state.reasoning_buffers[key] = delta
+        return [RunNotice(timestamp=now_iso(), kind="thinking", message=delta)]
+
+    if method == "item/completed":
+        item = params.get("item")
+        if not isinstance(item, dict):
+            return []
+        item_type = str(item.get("type") or "").strip()
+        if item_type == "reasoning":
+            key = _reasoning_buffer_key(params, item=item)
+            if key:
+                state.reasoning_buffers.pop(key, None)
+            return []
+        if item_type == "agentMessage":
+            content = _extract_agent_message_text(item)
+            if not content:
+                return []
+            state.note_message_text(content)
+            return [
+                OutputDelta(
+                    timestamp=now_iso(),
+                    content=content,
+                    delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+                )
+            ]
+        tool_name, tool_input = _normalize_tool_name(params, item=item)
+        if tool_name:
+            return [
+                ToolCall(
+                    timestamp=now_iso(),
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )
+            ]
+        return []
+
+    if method == "item/agentMessage/delta":
+        return _assistant_stream_events(params, state)
+
+    if method in _APPROVAL_METHODS:
+        request_id = _request_id_for_event(method, params)
+        summary = _approval_summary(method, params)
+        return [
+            ApprovalRequested(
+                timestamp=now_iso(),
+                request_id=request_id,
+                description=summary,
+                context=dict(params),
+            )
+        ]
+
+    if method == "item/toolCall/start":
+        tool_name, tool_input = _normalize_tool_name(params)
+        return [
+            ToolCall(
+                timestamp=now_iso(),
+                tool_name=tool_name or "toolCall",
+                tool_input=tool_input,
+            )
+        ]
+
+    if method == "item/toolCall/end":
+        return []
+
+    if method == "usage":
+        usage = _extract_usage(params)
+        if usage is None:
+            return []
+        state.token_usage = dict(usage)
+        return [TokenUsage(timestamp=now_iso(), usage=dict(usage))]
+
+    if method == "permission":
+        request_id = _request_id_for_event(method, params)
+        description = str(
+            params.get("reason") or params.get("message") or "Approval requested"
+        ).strip()
+        return [
+            ApprovalRequested(
+                timestamp=now_iso(),
+                request_id=request_id,
+                description=description or "Approval requested",
+                context=dict(params),
+            )
+        ]
+
+    if method == "question":
+        request_id = _request_id_for_event(method, params)
+        question = str(params.get("question") or "").strip()
+        return [
+            ApprovalRequested(
+                timestamp=now_iso(),
+                request_id=request_id,
+                description=question or "Question pending",
+                context=dict(params),
+            )
+        ]
+
+    if method in {"message.updated", "message.completed"}:
+        content = _extract_message_text(params)
+        if not content:
+            return []
+        state.note_message_text(content)
+        return [
+            OutputDelta(
+                timestamp=now_iso(),
+                content=content,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+            )
+        ]
+
+    if method == "message.delta":
+        return _assistant_stream_events(params, state)
+
+    if method == "turn/streamDelta" or "outputdelta" in method_lower:
+        return _output_delta_events(method, params, state)
+
+    if method in {
+        "turn/tokenUsage",
+        "turn/usage",
+        "thread/tokenUsage/updated",
+    }:
+        usage = _extract_usage(params)
+        if usage is None:
+            return []
+        state.token_usage = dict(usage)
+        return [TokenUsage(timestamp=now_iso(), usage=dict(usage))]
+
+    if method in {"turn/completed", "turn/error", "error", "session.idle"}:
+        return []
+
+    if method == "session.status":
+        status = _coerce_dict(params.get("status"))
+        status_type = str(status.get("type") or status.get("status") or "").strip()
+        if status_type.lower() == "idle":
+            return []
+        return []
+
+    return []
+
+
+def _assistant_stream_events(
+    params: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    content = _extract_output_delta(params)
+    if not content:
+        return []
+    state.note_stream_text(content)
+    return [
+        OutputDelta(
+            timestamp=now_iso(),
+            content=content,
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        )
+    ]
+
+
+def _output_delta_events(
+    method: str,
+    params: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    content = _extract_output_delta(params)
+    if not content:
+        return []
+    delta_type = _output_delta_type_for_method(method)
+    if delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
+        state.note_stream_text(content)
+    return [
+        OutputDelta(
+            timestamp=now_iso(),
+            content=content,
+            delta_type=delta_type,
+        )
+    ]
+
+
+def _load_json_object(raw: str) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return _coerce_dict(loaded)
+
+
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _extract_output_delta(params: dict[str, Any]) -> str:
+    for key in ("content", "delta", "text", "output"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _output_delta_type_for_method(method: str) -> str:
+    normalized = method.strip().lower()
+    if normalized in {
+        "item/commandexecution/outputdelta",
+        "item/filechange/outputdelta",
+    }:
+        return RUN_EVENT_DELTA_TYPE_LOG_LINE
+    return RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
+
+
+def _normalize_tool_name(
+    params: dict[str, Any],
+    *,
+    item: Optional[dict[str, Any]] = None,
+) -> tuple[str, dict[str, Any]]:
+    item_dict = item if isinstance(item, dict) else _coerce_dict(params.get("item"))
+    item_type = item_dict.get("type")
+
+    if item_type == "commandExecution":
+        command = item_dict.get("command")
+        if not command:
+            command = params.get("command")
+        if isinstance(command, list):
+            command = " ".join(str(part) for part in command).strip()
+        if isinstance(command, str) and command:
+            return command, {"command": command}
+        return "commandExecution", {}
+
+    if item_type == "fileChange":
+        files = item_dict.get("files")
+        if isinstance(files, list):
+            paths = [str(entry) for entry in files if isinstance(entry, str)]
+            if paths:
+                return "fileChange", {"files": paths}
+        return "fileChange", {}
+
+    if item_type == "tool":
+        name = item_dict.get("name") or item_dict.get("tool") or item_dict.get("id")
+        if isinstance(name, str) and name:
+            return name, {}
+        return "tool", {}
+
+    tool_call = _coerce_dict(item_dict.get("toolCall") or item_dict.get("tool_call"))
+    name = tool_call.get("name") or params.get("toolName") or params.get("tool_name")
+    if isinstance(name, str) and name:
+        input_payload = tool_call.get("input")
+        if isinstance(input_payload, dict):
+            return name, input_payload
+        input_payload = params.get("toolInput") or params.get("input")
+        if isinstance(input_payload, dict):
+            return name, input_payload
+        return name, {}
+    return "", {}
+
+
+def _reasoning_buffer_key(
+    params: dict[str, Any],
+    *,
+    item: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    for key in ("itemId", "item_id", "turnId", "turn_id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(item, dict):
+        for key in ("id", "itemId", "turnId", "turn_id"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _extract_agent_message_text(item: dict[str, Any]) -> str:
+    text = item.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+    content = item.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for entry in content:
+            if not isinstance(entry, dict):
+                continue
+            entry_type = entry.get("type")
+            if entry_type not in (None, "output_text", "text", "message"):
+                continue
+            candidate = entry.get("text")
+            if isinstance(candidate, str) and candidate.strip():
+                parts.append(candidate)
+        if parts:
+            return "".join(parts)
+    return ""
+
+
+def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
+    usage = params.get("usage") or params.get("tokenUsage")
+    if isinstance(usage, dict):
+        return usage
+    return None
+
+
+def _request_id_for_event(method: str, params: dict[str, Any]) -> str:
+    for key in ("id", "requestId", "request_id", "itemId", "item_id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    turn_id = params.get("turnId") or params.get("turn_id")
+    if isinstance(turn_id, str) and turn_id:
+        return turn_id
+    return method
+
+
+def _approval_summary(method: str, params: dict[str, Any]) -> str:
+    if method == "item/commandExecution/requestApproval":
+        command = params.get("command")
+        if isinstance(command, list):
+            command = " ".join(str(part) for part in command).strip()
+        if isinstance(command, str) and command.strip():
+            return command
+        return "Command approval requested"
+    if method == "item/fileChange/requestApproval":
+        files = params.get("files")
+        if isinstance(files, list):
+            paths = [str(entry) for entry in files if isinstance(entry, str)]
+            if paths:
+                return ", ".join(paths)
+        return "File approval requested"
+    return "Approval requested"
+
+
+def _extract_message_text(params: dict[str, Any]) -> str:
+    for key in ("text", "message", "content"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+__all__ = [
+    "RuntimeThreadRunEventState",
+    "normalize_runtime_thread_raw_event",
+    "terminal_run_event_from_outcome",
+]

@@ -9,7 +9,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import httpx
 
@@ -36,6 +36,11 @@ from .....core.logging_utils import log_event
 from .....core.orchestration import (
     MessageRequest,
     build_harness_backed_orchestration_service,
+)
+from .....core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_raw_event,
+    terminal_run_event_from_outcome,
 )
 from .....core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
@@ -315,6 +320,8 @@ async def _finalize_telegram_managed_thread_execution(
     surface_key: str,
     chat_id: int,
     thread_id: Optional[int],
+    runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
+    on_progress_event: Optional[Any] = None,
 ) -> dict[str, Any]:
     thread_store = PmaThreadStore(handlers._config.root)
     transcripts = PmaTranscriptStore(handlers._config.root)
@@ -326,6 +333,44 @@ async def _finalize_telegram_managed_thread_execution(
         RESUME_PREVIEW_USER_LIMIT,
     )
     current_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+    event_state = runtime_event_state or RuntimeThreadRunEventState()
+    stream_task: Optional[asyncio.Task[None]] = None
+
+    stream_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+    if not stream_backend_thread_id:
+        stream_backend_thread_id = str(started.thread.thread_target_id or "").strip()
+    stream_backend_turn_id = str(started.execution.backend_id or "").strip()
+    if not stream_backend_turn_id:
+        stream_backend_turn_id = str(started.execution.execution_id or "").strip()
+
+    if (
+        started.harness.supports("event_streaming")
+        and stream_backend_thread_id
+        and stream_backend_turn_id
+    ):
+
+        async def _pump_runtime_events() -> None:
+            try:
+                async for raw_event in started.harness.stream_events(
+                    started.workspace_root,
+                    stream_backend_thread_id,
+                    stream_backend_turn_id,
+                ):
+                    run_events = await normalize_runtime_thread_raw_event(
+                        raw_event,
+                        event_state,
+                    )
+                    if on_progress_event is None:
+                        continue
+                    for run_event in run_events:
+                        try:
+                            await on_progress_event(run_event)
+                        except Exception:
+                            continue
+            except Exception:
+                return
+
+        stream_task = asyncio.create_task(_pump_runtime_events())
 
     try:
         outcome = await await_runtime_thread_outcome(
@@ -342,6 +387,21 @@ async def _finalize_telegram_managed_thread_execution(
             backend_thread_id=current_backend_thread_id,
             backend_turn_id=started.execution.backend_id,
         )
+    finally:
+        if stream_task is not None:
+            stream_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await stream_task
+
+    if on_progress_event is not None:
+        with suppress(Exception):
+            await on_progress_event(
+                terminal_run_event_from_outcome(outcome, event_state)
+            )
+
+    resolved_assistant_text = (
+        outcome.assistant_text or event_state.best_assistant_text()
+    )
 
     finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
     resolved_backend_thread_id = (
@@ -372,7 +432,7 @@ async def _finalize_telegram_managed_thread_execution(
             transcripts.write_transcript(
                 turn_id=managed_turn_id,
                 metadata=transcript_metadata,
-                assistant_text=outcome.assistant_text,
+                assistant_text=resolved_assistant_text,
             )
             transcript_turn_id = managed_turn_id
         except Exception as exc:
@@ -387,7 +447,7 @@ async def _finalize_telegram_managed_thread_execution(
                 managed_thread_id,
                 managed_turn_id,
                 status="ok",
-                assistant_text=outcome.assistant_text,
+                assistant_text=resolved_assistant_text,
                 error=None,
                 backend_turn_id=outcome.backend_turn_id,
                 transcript_turn_id=transcript_turn_id,
@@ -415,6 +475,7 @@ async def _finalize_telegram_managed_thread_execution(
                 "managed_thread_id": managed_thread_id,
                 "managed_turn_id": managed_turn_id,
                 "backend_thread_id": resolved_backend_thread_id,
+                "token_usage": event_state.token_usage,
             }
         thread_store.update_thread_after_turn(
             managed_thread_id,
@@ -423,11 +484,12 @@ async def _finalize_telegram_managed_thread_execution(
         )
         return {
             "status": "ok",
-            "assistant_text": outcome.assistant_text,
+            "assistant_text": resolved_assistant_text,
             "error": None,
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": managed_turn_id,
             "backend_thread_id": resolved_backend_thread_id,
+            "token_usage": event_state.token_usage,
         }
 
     if outcome.status == "interrupted":
@@ -445,6 +507,7 @@ async def _finalize_telegram_managed_thread_execution(
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": managed_turn_id,
             "backend_thread_id": resolved_backend_thread_id,
+            "token_usage": event_state.token_usage,
         }
 
     detail = _sanitize_managed_thread_result_error(outcome.error)
@@ -467,6 +530,7 @@ async def _finalize_telegram_managed_thread_execution(
         "managed_thread_id": managed_thread_id,
         "managed_turn_id": managed_turn_id,
         "backend_thread_id": resolved_backend_thread_id,
+        "token_usage": event_state.token_usage,
     }
 
 
@@ -648,14 +712,65 @@ async def _run_telegram_managed_thread_turn(
             transcript_text=transcript_text,
         )
 
-    finalized = await _finalize_telegram_managed_thread_execution(
-        handlers,
-        orchestration_service=orchestration_service,
-        started=started_execution,
-        surface_key=topic_key,
-        chat_id=message.chat_id,
-        thread_id=message.thread_id,
+    backend_thread_id = str(started_execution.thread.backend_thread_id or "").strip()
+    if not backend_thread_id:
+        backend_thread_id = str(started_execution.thread.thread_target_id or "").strip()
+    backend_turn_id = str(started_execution.execution.backend_id or "").strip()
+    if not backend_turn_id:
+        backend_turn_id = str(started_execution.execution.execution_id or "").strip()
+    turn_key = (
+        handlers._turn_key(backend_thread_id, backend_turn_id)
+        if backend_thread_id and backend_turn_id
+        else None
     )
+    registered_turn_key: Optional[tuple[str, str]] = None
+    if turn_key is not None:
+        from ...types import TurnContext
+
+        ctx = TurnContext(
+            topic_key=topic_key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=backend_thread_id,
+            reply_to_message_id=message.message_id,
+            placeholder_message_id=prepared_placeholder_id,
+        )
+        if handlers._register_turn_context(turn_key, backend_turn_id, ctx):
+            registered_turn_key = turn_key
+            await handlers._start_turn_progress(
+                turn_key,
+                ctx=ctx,
+                agent=handlers._effective_agent(record),
+                model=record.model,
+                label="working",
+            )
+
+    try:
+        finalized = await _finalize_telegram_managed_thread_execution(
+            handlers,
+            orchestration_service=orchestration_service,
+            started=started_execution,
+            surface_key=topic_key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            runtime_event_state=RuntimeThreadRunEventState(),
+            on_progress_event=(
+                (
+                    lambda run_event: handlers._apply_run_event_to_progress(
+                        registered_turn_key,
+                        run_event,
+                    )
+                )
+                if registered_turn_key is not None
+                else None
+            ),
+        )
+    finally:
+        if registered_turn_key is not None:
+            handlers._turn_contexts.pop(registered_turn_key, None)
+            handlers._clear_thinking_preview(registered_turn_key)
+            handlers._clear_turn_progress(registered_turn_key)
+
     _ensure_telegram_managed_thread_queue_worker(
         handlers,
         orchestration_service=orchestration_service,
@@ -690,7 +805,7 @@ async def _run_telegram_managed_thread_turn(
         response=str(finalized.get("assistant_text") or ""),
         placeholder_id=prepared_placeholder_id,
         elapsed_seconds=None,
-        token_usage=None,
+        token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
         transcript_message_id=transcript_message_id,
         transcript_text=transcript_text,
     )

@@ -22,6 +22,11 @@ from ...core.orchestration import (
     build_harness_backed_orchestration_service,
     build_surface_orchestration_ingress,
 )
+from ...core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_raw_event,
+    terminal_run_event_from_outcome,
+)
 from ...core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
@@ -72,6 +77,9 @@ from .rendering import (
 
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_PMA_TIMEOUT_SECONDS = 7200
+DISCORD_PMA_PROGRESS_MAX_ACTIONS = 12
+DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
+DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -80,6 +88,138 @@ class DiscordMessageTurnResult:
     preview_message_id: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     elapsed_seconds: Optional[float] = None
+
+
+@dataclass
+class _DiscordProgressRuntimeState:
+    final_message: str = ""
+    error_message: Optional[str] = None
+
+
+def _progress_item_id_for_log_line(content: str) -> Optional[str]:
+    normalized = " ".join(content.split()).strip().lower()
+    if normalized.startswith("tokens used"):
+        return "opencode:token-usage"
+    if normalized.startswith("context window:"):
+        return "opencode:context-window"
+    return None
+
+
+async def _apply_discord_progress_run_event(
+    tracker: TurnProgressTracker,
+    run_event: Any,
+    *,
+    runtime_state: _DiscordProgressRuntimeState,
+    edit_progress: Any,
+) -> None:
+    if isinstance(run_event, OutputDelta):
+        if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
+            return
+        if isinstance(run_event.content, str) and run_event.content.strip():
+            if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:
+                latest_output = tracker.latest_output_text().strip()
+                incoming_output = run_event.content.strip()
+                if latest_output and (
+                    incoming_output == latest_output
+                    or incoming_output.startswith(latest_output)
+                ):
+                    tracker.note_output(run_event.content)
+                else:
+                    tracker.note_output(run_event.content, new_segment=True)
+                tracker.end_output_segment()
+            elif run_event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
+                item_id = _progress_item_id_for_log_line(run_event.content)
+                if item_id:
+                    if not tracker.update_action_by_item_id(
+                        item_id,
+                        run_event.content,
+                        "update",
+                        label="output",
+                    ):
+                        tracker.add_action(
+                            "output",
+                            run_event.content,
+                            "update",
+                            item_id=item_id,
+                            normalize_text=False,
+                        )
+                else:
+                    tracker.note_output(run_event.content, new_segment=True)
+                    tracker.end_output_segment()
+            else:
+                tracker.note_output(run_event.content)
+            await edit_progress()
+        return
+
+    if isinstance(run_event, ToolCall):
+        tool_name = run_event.tool_name.strip() if run_event.tool_name else ""
+        tracker.note_tool(tool_name or "Tool call")
+        await edit_progress()
+        return
+
+    if isinstance(run_event, ApprovalRequested):
+        summary = run_event.description.strip() if run_event.description else ""
+        tracker.note_approval(summary or "Approval requested")
+        await edit_progress()
+        return
+
+    if isinstance(run_event, RunNotice):
+        notice = run_event.message.strip() if run_event.message else ""
+        if not notice:
+            notice = run_event.kind.strip() if run_event.kind else "notice"
+        if run_event.kind in {"thinking", "reasoning"}:
+            tracker.note_thinking(notice)
+        elif run_event.kind == "interrupted":
+            runtime_state.error_message = notice or "Turn interrupted"
+            tracker.note_error(runtime_state.error_message)
+            tracker.clear_transient_action()
+            tracker.set_label("cancelled")
+            await edit_progress(force=True, remove_components=True)
+            return
+        elif run_event.kind == "failed":
+            runtime_state.error_message = notice or "Turn failed"
+            tracker.note_error(runtime_state.error_message)
+            tracker.clear_transient_action()
+            tracker.set_label("failed")
+            await edit_progress(force=True, remove_components=True)
+            return
+        else:
+            tracker.add_action("notice", notice, "update")
+        await edit_progress()
+        return
+
+    if isinstance(run_event, TokenUsage):
+        usage_payload = run_event.usage
+        if isinstance(usage_payload, dict):
+            tracker.context_usage_percent = _extract_context_usage_percent(
+                usage_payload
+            )
+        return
+
+    if isinstance(run_event, Completed):
+        runtime_state.final_message = (
+            run_event.final_message or runtime_state.final_message
+        )
+        if runtime_state.final_message.strip():
+            tracker.drop_terminal_output_if_duplicate(runtime_state.final_message)
+        tracker.clear_transient_action()
+        tracker.set_label("done")
+        await edit_progress(
+            force=True,
+            remove_components=True,
+            render_mode="final",
+        )
+        return
+
+    if isinstance(run_event, Failed):
+        runtime_state.error_message = run_event.error_message or "Turn failed"
+        tracker.note_error(runtime_state.error_message)
+        tracker.clear_transient_action()
+        if "interrupt" in runtime_state.error_message.lower():
+            tracker.set_label("cancelled")
+        else:
+            tracker.set_label("failed")
+        await edit_progress(force=True, remove_components=True)
 
 
 async def resolve_bound_workspace_root(
@@ -965,6 +1105,8 @@ async def _finalize_discord_managed_thread_execution(
     orchestration_service: Any,
     started: RuntimeThreadExecution,
     channel_id: str,
+    runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
+    on_progress_event: Optional[Any] = None,
 ) -> dict[str, Any]:
     thread_store = PmaThreadStore(service._config.root)
     transcripts = PmaTranscriptStore(service._config.root)
@@ -976,6 +1118,44 @@ async def _finalize_discord_managed_thread_execution(
         max_len=120,
     )
     current_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+    event_state = runtime_event_state or RuntimeThreadRunEventState()
+    stream_task: Optional[asyncio.Task[None]] = None
+
+    stream_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+    if not stream_backend_thread_id:
+        stream_backend_thread_id = str(started.thread.thread_target_id or "").strip()
+    stream_backend_turn_id = str(started.execution.backend_id or "").strip()
+    if not stream_backend_turn_id:
+        stream_backend_turn_id = str(started.execution.execution_id or "").strip()
+
+    if (
+        started.harness.supports("event_streaming")
+        and stream_backend_thread_id
+        and stream_backend_turn_id
+    ):
+
+        async def _pump_runtime_events() -> None:
+            try:
+                async for raw_event in started.harness.stream_events(
+                    started.workspace_root,
+                    stream_backend_thread_id,
+                    stream_backend_turn_id,
+                ):
+                    run_events = await normalize_runtime_thread_raw_event(
+                        raw_event,
+                        event_state,
+                    )
+                    if on_progress_event is None:
+                        continue
+                    for run_event in run_events:
+                        try:
+                            await on_progress_event(run_event)
+                        except Exception:
+                            continue
+            except Exception:
+                return
+
+        stream_task = asyncio.create_task(_pump_runtime_events())
 
     try:
         outcome = await await_runtime_thread_outcome(
@@ -992,6 +1172,21 @@ async def _finalize_discord_managed_thread_execution(
             backend_thread_id=current_backend_thread_id,
             backend_turn_id=started.execution.backend_id,
         )
+    finally:
+        if stream_task is not None:
+            stream_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stream_task
+
+    if on_progress_event is not None:
+        with contextlib.suppress(Exception):
+            await on_progress_event(
+                terminal_run_event_from_outcome(outcome, event_state)
+            )
+
+    resolved_assistant_text = (
+        outcome.assistant_text or event_state.best_assistant_text()
+    )
 
     finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
     resolved_backend_thread_id = (
@@ -1020,7 +1215,7 @@ async def _finalize_discord_managed_thread_execution(
             transcripts.write_transcript(
                 turn_id=managed_turn_id,
                 metadata=transcript_metadata,
-                assistant_text=outcome.assistant_text,
+                assistant_text=resolved_assistant_text,
             )
             transcript_turn_id = managed_turn_id
         except Exception as exc:
@@ -1035,7 +1230,7 @@ async def _finalize_discord_managed_thread_execution(
                 managed_thread_id,
                 managed_turn_id,
                 status="ok",
-                assistant_text=outcome.assistant_text,
+                assistant_text=resolved_assistant_text,
                 error=None,
                 backend_turn_id=outcome.backend_turn_id,
                 transcript_turn_id=transcript_turn_id,
@@ -1062,6 +1257,7 @@ async def _finalize_discord_managed_thread_execution(
                 "managed_thread_id": managed_thread_id,
                 "managed_turn_id": managed_turn_id,
                 "backend_thread_id": resolved_backend_thread_id,
+                "token_usage": event_state.token_usage,
             }
         thread_store.update_thread_after_turn(
             managed_thread_id,
@@ -1070,11 +1266,12 @@ async def _finalize_discord_managed_thread_execution(
         )
         return {
             "status": "ok",
-            "assistant_text": outcome.assistant_text,
+            "assistant_text": resolved_assistant_text,
             "error": None,
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": managed_turn_id,
             "backend_thread_id": resolved_backend_thread_id,
+            "token_usage": event_state.token_usage,
         }
 
     if outcome.status == "interrupted":
@@ -1091,6 +1288,7 @@ async def _finalize_discord_managed_thread_execution(
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": managed_turn_id,
             "backend_thread_id": resolved_backend_thread_id,
+            "token_usage": event_state.token_usage,
         }
 
     detail = _sanitize_managed_thread_result_error(outcome.error)
@@ -1113,6 +1311,7 @@ async def _finalize_discord_managed_thread_execution(
         "managed_thread_id": managed_thread_id,
         "managed_turn_id": managed_turn_id,
         "backend_thread_id": resolved_backend_thread_id,
+        "token_usage": event_state.token_usage,
     }
 
 
@@ -1253,12 +1452,118 @@ async def run_managed_thread_turn_for_message(
             final_message="Queued (waiting for available worker...)"
         )
 
-    finalized = await _finalize_discord_managed_thread_execution(
-        service,
-        orchestration_service=orchestration_service,
-        started=started_execution,
-        channel_id=channel_id,
+    max_progress_len = max(int(service._config.max_message_length), 32)
+    tracker = TurnProgressTracker(
+        started_at=time.monotonic(),
+        agent=agent,
+        model=model_override or "default",
+        label="working",
+        max_actions=DISCORD_PMA_PROGRESS_MAX_ACTIONS,
+        max_output_chars=max_progress_len,
     )
+    progress_message_id: Optional[str] = None
+    progress_rendered: Optional[str] = None
+    progress_last_updated = 0.0
+    progress_heartbeat_task: Optional[asyncio.Task[None]] = None
+    runtime_state = _DiscordProgressRuntimeState()
+    active_progress_labels = {"working", "queued", "running", "review"}
+
+    async def _edit_progress(
+        *,
+        force: bool = False,
+        remove_components: bool = False,
+        render_mode: str = "live",
+    ) -> None:
+        nonlocal progress_rendered
+        nonlocal progress_last_updated
+        if not progress_message_id:
+            return
+        now = time.monotonic()
+        if (
+            not force
+            and (now - progress_last_updated)
+            < DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS
+        ):
+            return
+        rendered = render_progress_text(
+            tracker,
+            max_length=max_progress_len,
+            now=now,
+            render_mode=render_mode,
+        )
+        content = truncate_for_discord(rendered, max_len=max_progress_len)
+        if not force and content == progress_rendered:
+            return
+        payload: dict[str, Any] = {"content": content}
+        if remove_components:
+            payload["components"] = []
+        elif tracker.label in active_progress_labels:
+            payload["components"] = [build_cancel_turn_button()]
+        else:
+            payload["components"] = []
+        try:
+            await service._rest.edit_channel_message(
+                channel_id=channel_id,
+                message_id=progress_message_id,
+                payload=payload,
+            )
+        except Exception:
+            progress_last_updated = now
+            return
+        progress_rendered = content
+        progress_last_updated = now
+
+    async def _progress_heartbeat() -> None:
+        while True:
+            await asyncio.sleep(DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
+            await _edit_progress()
+
+    try:
+        initial_rendered = render_progress_text(
+            tracker,
+            max_length=max_progress_len,
+            now=time.monotonic(),
+        )
+        initial_content = truncate_for_discord(
+            initial_rendered,
+            max_len=max_progress_len,
+        )
+        response = await service._send_channel_message(
+            channel_id,
+            {
+                "content": initial_content,
+                "components": [build_cancel_turn_button()],
+            },
+        )
+        message_id = response.get("id")
+        if isinstance(message_id, str) and message_id:
+            progress_message_id = message_id
+            progress_rendered = initial_content
+            progress_last_updated = time.monotonic()
+            progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
+    except Exception:
+        progress_message_id = None
+
+    try:
+        finalized = await _finalize_discord_managed_thread_execution(
+            service,
+            orchestration_service=orchestration_service,
+            started=started_execution,
+            channel_id=channel_id,
+            runtime_event_state=RuntimeThreadRunEventState(),
+            on_progress_event=lambda run_event: _apply_discord_progress_run_event(
+                tracker,
+                run_event,
+                runtime_state=runtime_state,
+                edit_progress=_edit_progress,
+            ),
+        )
+    finally:
+        if progress_heartbeat_task is not None:
+            progress_heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await progress_heartbeat_task
+
     _ensure_discord_managed_thread_queue_worker(
         service,
         orchestration_service=orchestration_service,
@@ -1270,5 +1575,8 @@ async def run_managed_thread_turn_for_message(
             str(finalized.get("error") or DISCORD_PMA_PUBLIC_EXECUTION_ERROR)
         )
     return DiscordMessageTurnResult(
-        final_message=str(finalized.get("assistant_text") or "")
+        final_message=str(finalized.get("assistant_text") or ""),
+        preview_message_id=progress_message_id,
+        token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
+        elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
     )

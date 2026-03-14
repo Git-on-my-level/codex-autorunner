@@ -16,6 +16,7 @@ from codex_autorunner.core.app_server_threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
+from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
 )
@@ -53,6 +54,9 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
 )
 from codex_autorunner.integrations.telegram.handlers.selections import SelectionState
 from codex_autorunner.integrations.telegram.helpers import _format_help_text
+from codex_autorunner.integrations.telegram.notifications import (
+    TelegramNotificationHandlers,
+)
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
     ThreadSummary,
@@ -1159,9 +1163,28 @@ class _ManagedThreadPMAHandler(_PMAHandler):
             concurrency=SimpleNamespace(max_parallel_turns=1, per_topic_queue=False),
             agent_turn_timeout_seconds={"codex": None, "opencode": None},
             metrics_mode="separate",
+            progress_stream=SimpleNamespace(
+                enabled=True,
+                max_actions=10,
+                max_output_chars=120,
+                min_edit_interval_seconds=0.0,
+            ),
         )
         self._sent: list[str] = []
+        self._edited: list[dict[str, Any]] = []
+        self._deleted: list[dict[str, Any]] = []
+        self._placeholders: list[dict[str, Any]] = []
+        self._next_placeholder_id = 900
         self._spawned_tasks: set[asyncio.Task[object]] = set()
+        self._turn_progress_trackers: dict[tuple[str, str], object] = {}
+        self._turn_progress_rendered: dict[tuple[str, str], str] = {}
+        self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_progress_tasks: dict[tuple[str, str], asyncio.Task[object]] = {}
+        self._turn_progress_heartbeat_tasks: dict[
+            tuple[str, str], asyncio.Task[object]
+        ] = {}
+        self._turn_progress_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._pending_context_usage: dict[tuple[str, str], int] = {}
 
     async def _send_message(
         self,
@@ -1173,6 +1196,57 @@ class _ManagedThreadPMAHandler(_PMAHandler):
     ) -> None:
         _ = thread_id, reply_to
         self._sent.append(text)
+
+    async def _prepare_turn_placeholder(
+        self,
+        _message: TelegramMessage,
+        *,
+        placeholder_id: Optional[int],
+        send_placeholder: bool,
+        queued: bool,
+    ) -> Optional[int]:
+        if placeholder_id is None and send_placeholder:
+            placeholder_id = self._next_placeholder_id
+            self._next_placeholder_id += 1
+            self._placeholders.append({"message_id": placeholder_id, "queued": queued})
+        return placeholder_id
+
+    async def _edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int] = None,
+        reply_markup: Optional[object] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: bool = False,
+    ) -> None:
+        _ = parse_mode, disable_web_page_preview
+        self._edited.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "thread_id": thread_id,
+                "reply_markup": reply_markup,
+            }
+        )
+
+    async def _delete_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        *,
+        thread_id: Optional[int] = None,
+    ) -> None:
+        self._deleted.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "thread_id": thread_id,
+            }
+        )
 
     async def _deliver_turn_response(
         self,
@@ -1193,6 +1267,9 @@ class _ManagedThreadPMAHandler(_PMAHandler):
         )
         self._sent.append(response)
         return True
+
+    def _touch_cache_timestamp(self, _cache_name: str, _key: object) -> None:
+        return None
 
     async def _flush_outbox_files(
         self,
@@ -1216,11 +1293,252 @@ class _ManagedThreadPMAHandler(_PMAHandler):
     def _metrics_mode(self) -> str:
         return "separate"
 
+    async def _start_turn_progress(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: object,
+        agent: Optional[str],
+        model: Optional[str],
+        label: str,
+    ) -> None:
+        await TelegramNotificationHandlers._start_turn_progress(
+            self,
+            turn_key,
+            ctx=ctx,
+            agent=agent,
+            model=model,
+            label=label,
+        )
+
+    def _clear_turn_progress(self, turn_key: tuple[str, str]) -> None:
+        TelegramNotificationHandlers._clear_turn_progress(self, turn_key)
+
+    def _clear_thinking_preview(self, turn_key: tuple[str, str]) -> None:
+        self._turn_preview_text.pop(turn_key, None)
+        self._turn_preview_updated_at.pop(turn_key, None)
+        self._clear_turn_progress(turn_key)
+
+    async def _emit_progress_edit(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: Optional[object] = None,
+        now: Optional[float] = None,
+        force: bool = False,
+        render_mode: str = "live",
+    ) -> None:
+        await TelegramNotificationHandlers._emit_progress_edit(
+            self,
+            turn_key,
+            ctx=ctx,
+            now=now,
+            force=force,
+            render_mode=render_mode,
+        )
+
+    async def _schedule_progress_edit(self, turn_key: tuple[str, str]) -> None:
+        await TelegramNotificationHandlers._schedule_progress_edit(self, turn_key)
+
+    async def _ensure_turn_progress_lock(
+        self, turn_key: tuple[str, str]
+    ) -> asyncio.Lock:
+        return await TelegramNotificationHandlers._ensure_turn_progress_lock(
+            self,
+            turn_key,
+        )
+
+    async def _delayed_progress_edit(
+        self, turn_key: tuple[str, str], delay: float
+    ) -> None:
+        await TelegramNotificationHandlers._delayed_progress_edit(
+            self,
+            turn_key,
+            delay,
+        )
+
+    async def _turn_progress_heartbeat(self, turn_key: tuple[str, str]) -> None:
+        await TelegramNotificationHandlers._turn_progress_heartbeat(self, turn_key)
+
+    async def _apply_run_event_to_progress(
+        self,
+        turn_key: tuple[str, str],
+        run_event: object,
+    ) -> None:
+        await TelegramNotificationHandlers._apply_run_event_to_progress(
+            self,
+            turn_key,
+            run_event,
+        )
+
     def _spawn_task(self, coro):  # type: ignore[no-untyped-def]
         task = asyncio.create_task(coro)
         self._spawned_tasks.add(task)
         task.add_done_callback(self._spawned_tasks.discard)
         return task
+
+
+@pytest.mark.anyio
+async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    stream_finished = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="telegram-backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="telegram-backend-turn-1",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            await stream_finished.wait()
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="telegram managed final reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "item/reasoning/summaryTextDelta",
+                        "params": {
+                            "itemId": "reason-1",
+                            "delta": "thinking through telegram pma",
+                        },
+                    }
+                },
+            )
+            yield format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "item/agentMessage/delta",
+                        "params": {"delta": "partial telegram managed reply"},
+                    }
+                },
+            )
+            stream_finished.set()
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="stream this telegram prompt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    assert handler._placeholders
+    assert handler._edited
+    edited_texts = [str(edit["text"]) for edit in handler._edited]
+    assert len(edited_texts) >= 2
+    assert len(set(edited_texts)) >= 2
+    assert "telegram managed final reply" in handler._sent
+
+    remaining_tasks = list(handler._spawned_tasks)
+    for task in remaining_tasks:
+        if not task.done():
+            task.cancel()
+    for task in remaining_tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 @pytest.mark.anyio
