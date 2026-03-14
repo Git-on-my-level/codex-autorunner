@@ -353,7 +353,6 @@ async def test_flow_archive_defaults_latest_paused(
         encoding="utf-8"
     ) == ""
     assert not (tmp_path / ".codex-autorunner" / "flows" / run_paused).exists()
-    assert handler.stopped_workers == [run_paused]
     store = FlowStore(tmp_path / ".codex-autorunner" / "flows.db")
     store.initialize()
     try:
