@@ -96,6 +96,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         repo_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
         created = self._store.create_thread(
             agent_id,
@@ -103,6 +104,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             repo_id=repo_id,
             name=display_name,
             backend_thread_id=backend_thread_id,
+            metadata=metadata,
         )
         return _thread_target_from_store_row(created)
 
@@ -420,6 +422,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         repo_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
         definition = self.get_agent_definition(agent_id)
         if definition is None:
@@ -434,6 +437,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             repo_id=repo_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
+            metadata=metadata,
         )
 
     def resolve_thread_target(
@@ -445,6 +449,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         repo_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
         if thread_target_id:
             thread = self.get_thread_target(thread_target_id)
@@ -457,6 +462,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             repo_id=repo_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
+            metadata=metadata,
         )
 
     def resume_thread_target(

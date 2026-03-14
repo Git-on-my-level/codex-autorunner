@@ -674,6 +674,7 @@ class DefaultAgentPool:
 
         state = self._ticket_flow_runner_state()
         service = self._get_orchestration_service()
+        ticket_flow_run_id = _normalize_optional_text(options.get("ticket_flow_run_id"))
         thread = service.resolve_thread_target(
             thread_target_id=_normalize_optional_text(req.conversation_id),
             agent_id=req.agent_id,
@@ -681,6 +682,11 @@ class DefaultAgentPool:
             repo_id=self._repo_id,
             display_name=f"ticket-flow:{req.agent_id}",
             backend_thread_id=None,
+            metadata={
+                "thread_kind": "ticket_flow",
+                "flow_type": "ticket_flow",
+                "run_id": ticket_flow_run_id,
+            },
         )
         harness = service.harness_factory(thread.agent_id)
         request = MessageRequest(

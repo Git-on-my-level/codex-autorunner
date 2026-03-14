@@ -107,6 +107,8 @@ interface HubChannelEntry {
     agent?: string | null;
     status?: string | null;
     status_reason_code?: string | null;
+    thread_kind?: string | null;
+    run_id?: string | null;
   } | null;
   repo_id?: string | null;
   workspace_path?: string | null;
@@ -1462,6 +1464,21 @@ function channelPmaDetails(channel: HubChannelEntry): string {
   return parts.join(" · ");
 }
 
+function channelThreadKind(channel: HubChannelEntry): string {
+  return String(
+    channel.provenance?.thread_kind || channel.meta?.thread_kind || ""
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function isTicketFlowPmaChannel(channel: HubChannelEntry): boolean {
+  if (channelSource(channel) !== "pma_thread") return false;
+  if (channelThreadKind(channel) === "ticket_flow") return true;
+  const label = channelDisplayLabel(channel).toLowerCase();
+  return label.startsWith("ticket-flow:");
+}
+
 function channelDisplayLabel(channel: HubChannelEntry): string {
   if (typeof channel.display === "string" && channel.display.trim()) {
     return channel.display.trim();
@@ -1532,6 +1549,34 @@ function channelSummarySubline(
     ${additionalMarkup}
     ${activityMarkup}
   </div>`;
+}
+
+function ticketFlowPmaSummaryMarkup(
+  channels: HubChannelEntry[],
+  { lastActivity = "" }: { lastActivity?: string } = {}
+): string {
+  if (!channels.length) return "";
+  const count = channels.length;
+  const latestSeenAt =
+    typeof channels[0]?.seen_at === "string" && channels[0].seen_at
+      ? formatTimeCompact(channels[0].seen_at)
+      : "";
+  const metaParts = [`${count} thread${count === 1 ? "" : "s"}`];
+  if (latestSeenAt) {
+    metaParts.push(`seen ${latestSeenAt}`);
+  }
+  if (lastActivity) {
+    metaParts.push(lastActivity);
+  }
+  return `
+    <div class="hub-chat-binding-row hub-chat-binding-row-compact">
+      <div class="hub-chat-binding-main">
+        ${channelSourceBadgeMarkup(channels[0])}
+        <span class="hub-chat-binding-label">Ticket flow threads</span>
+      </div>
+      <div class="hub-chat-binding-meta muted small">${escapeHtml(metaParts.join(" · "))}</div>
+    </div>
+  `;
 }
 
 function channelSeenAtMs(channel: HubChannelEntry): number {
@@ -1817,7 +1862,13 @@ function renderRepos(repos: HubRepo[]): void {
     const lastActivity = formatLastActivity(repo);
     const runDuration =
       repo.last_run_finished_at ? formatRunDuration(repo.last_run_duration_seconds) : "";
-    const primaryChannel = inlineChannels[0] || null;
+    const ticketFlowPmaChannels = inlineChannels.filter((channel) =>
+      isTicketFlowPmaChannel(channel)
+    );
+    const visibleChannels = inlineChannels.filter(
+      (channel) => !isTicketFlowPmaChannel(channel)
+    );
+    const primaryChannel = visibleChannels[0] || null;
     const infoItems: string[] = [];
     if (!primaryChannel) {
       if (
@@ -1841,14 +1892,16 @@ function renderRepos(repos: HubRepo[]): void {
     const infoSubline = primaryChannel
       ? channelSummarySubline(primaryChannel, {
           lastActivity,
-          additionalCount: Math.max(0, inlineChannels.length - 1),
+          additionalCount: Math.max(0, visibleChannels.length - 1),
         })
+      : ticketFlowPmaChannels.length > 0
+      ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels, { lastActivity })
       : infoItems.length > 0
       ? `<div class="hub-repo-subline"><span class="hub-repo-info-line">${escapeHtml(
           infoItems.join(" · ")
         )}</span></div>`
       : "";
-    const overflowChannelRows = inlineChannels
+    const overflowChannelRows = visibleChannels
       .slice(1)
       .map((channel) => {
         const label = channelDisplayLabel(channel);
@@ -1866,8 +1919,11 @@ function renderRepos(repos: HubRepo[]): void {
         `;
       })
       .join("");
-    const inlineChannelBlock = overflowChannelRows
-      ? `<div class="hub-chat-binding-block">${overflowChannelRows}</div>`
+    const ticketFlowPmaBlock = primaryChannel && ticketFlowPmaChannels.length > 0
+      ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels)
+      : "";
+    const inlineChannelBlock = overflowChannelRows || ticketFlowPmaBlock
+      ? `<div class="hub-chat-binding-block">${ticketFlowPmaBlock}${overflowChannelRows}</div>`
       : "";
 
     const setupBadge =

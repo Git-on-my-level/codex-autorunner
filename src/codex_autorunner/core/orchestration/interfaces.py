@@ -118,6 +118,7 @@ class ThreadExecutionStore(Protocol):
         repo_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
     def get_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]: ...
@@ -240,6 +241,7 @@ class OrchestrationThreadService(Protocol):
         repo_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
     def resolve_thread_target(
@@ -251,6 +253,7 @@ class OrchestrationThreadService(Protocol):
         repo_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
     def resume_thread_target(

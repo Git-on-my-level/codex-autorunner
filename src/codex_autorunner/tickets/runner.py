@@ -421,6 +421,7 @@ class TicketRunner:
             turn_options["model"] = ticket_doc.frontmatter.model
         if ticket_doc.frontmatter.reasoning:
             turn_options["reasoning"] = ticket_doc.frontmatter.reasoning
+        turn_options["ticket_flow_run_id"] = self._run_id
 
         total_turns += 1
         ticket_turns += 1

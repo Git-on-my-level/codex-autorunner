@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from ...bootstrap import seed_repo_files
+from ...manifest import ManifestError, load_manifest
+from ..pma_thread_store import PmaThreadStore
 from ...tickets.files import list_ticket_paths
 from ...tickets.outbox import resolve_outbox_paths
 from ..archive import (
@@ -48,6 +50,91 @@ def _contextspace_source(car_root: Path) -> Path:
     if legacy_workspace.exists() or legacy_workspace.is_symlink():
         return legacy_workspace
     return contextspace
+
+
+def _find_hub_root(repo_root: Path) -> Path:
+    current = repo_root.resolve()
+    for _ in range(5):
+        manifest_path = current / ".codex-autorunner" / "manifest.yml"
+        if manifest_path.exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return repo_root.resolve()
+
+
+def _has_hub_manifest(hub_root: Path) -> bool:
+    return (hub_root / ".codex-autorunner" / "manifest.yml").exists()
+
+
+def _resolve_repo_id(repo_root: Path, hub_root: Path) -> Optional[str]:
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    try:
+        manifest = load_manifest(manifest_path, hub_root)
+    except ManifestError:
+        return None
+    entry = manifest.get_by_path(hub_root, repo_root)
+    if entry is None or not isinstance(entry.id, str) or not entry.id.strip():
+        return None
+    return entry.id.strip()
+
+
+def _archive_ticket_flow_pma_threads(repo_root: Path, run_id: str) -> dict[str, Any]:
+    hub_root = _find_hub_root(repo_root)
+    if not _has_hub_manifest(hub_root):
+        return {
+            "archived_pma_threads": 0,
+            "archived_pma_thread_ids": [],
+            "archived_pma_threads_skipped": "hub_manifest_missing",
+        }
+    store = PmaThreadStore(hub_root)
+    repo_id = _resolve_repo_id(repo_root, hub_root)
+    archived_thread_ids: list[str] = []
+
+    for thread in store.list_threads(status="active", limit=2000):
+        managed_thread_id = thread.get("managed_thread_id")
+        if not isinstance(managed_thread_id, str) or not managed_thread_id.strip():
+            continue
+        workspace_root = thread.get("workspace_root")
+        if (
+            not isinstance(workspace_root, str)
+            or Path(workspace_root).resolve() != repo_root
+        ):
+            continue
+        thread_repo_id = thread.get("repo_id")
+        if (
+            repo_id
+            and isinstance(thread_repo_id, str)
+            and thread_repo_id.strip()
+            and thread_repo_id.strip() != repo_id
+        ):
+            continue
+        metadata = thread.get("metadata")
+        thread_kind = (
+            metadata.get("thread_kind") if isinstance(metadata, dict) else None
+        )
+        thread_run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+        display_name = str(thread.get("name") or "").strip().lower()
+        is_ticket_flow_thread = thread_kind == "ticket_flow" or display_name.startswith(
+            "ticket-flow:"
+        )
+        if not is_ticket_flow_thread:
+            continue
+        if (
+            isinstance(thread_run_id, str)
+            and thread_run_id.strip()
+            and thread_run_id != run_id
+        ):
+            continue
+        store.archive_thread(managed_thread_id.strip())
+        archived_thread_ids.append(managed_thread_id.strip())
+
+    return {
+        "archived_pma_threads": len(archived_thread_ids),
+        "archived_pma_thread_ids": archived_thread_ids,
+    }
 
 
 def _build_flow_archive_entries(
@@ -167,6 +254,10 @@ def archive_flow_run_artifacts(
             "archived_runs": False,
             "archived_contextspace": False,
             "archived_flow_state": False,
+            "archived_pma_threads": 0,
+            "archived_pma_thread_ids": [],
+            "archived_pma_threads_skipped": None,
+            "archived_pma_threads_error": None,
             "archived_paths": [],
         }
         execution = execute_archive_entries(entries, worktree_root=repo_root)
@@ -188,6 +279,12 @@ def archive_flow_run_artifacts(
         summary["missing_paths"] = list(execution.missing_paths)
 
         seed_repo_files(repo_root, force=False, git_required=False)
+        try:
+            summary.update(_archive_ticket_flow_pma_threads(repo_root, record.id))
+        except Exception as exc:
+            summary["archived_pma_threads_error"] = (
+                str(exc).strip() or exc.__class__.__name__
+            )
 
         if delete_run:
             summary["deleted_run"] = bool(store.delete_flow_run(record.id))

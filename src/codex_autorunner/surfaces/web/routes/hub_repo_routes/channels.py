@@ -477,6 +477,7 @@ class HubChannelService:
                 "status",
                 "normalized_status",
                 "status_reason_code",
+                "metadata_json",
                 "updated_at",
             ]
             select_exprs = [col for col in select_cols if col in columns]
@@ -561,6 +562,17 @@ class HubChannelService:
                 has_running_turn = bool(
                     row["has_running_turn"] if has_turns_table else False
                 )
+                metadata_json = (
+                    row["metadata_json"] if "metadata_json" in columns else None
+                )
+                metadata: dict[str, Any] = {}
+                if isinstance(metadata_json, str) and metadata_json.strip():
+                    try:
+                        parsed_metadata = json.loads(metadata_json)
+                    except json.JSONDecodeError:
+                        parsed_metadata = {}
+                    if isinstance(parsed_metadata, dict):
+                        metadata = parsed_metadata
                 threads.append(
                     {
                         "managed_thread_id": managed_thread_id.strip(),
@@ -573,6 +585,7 @@ class HubChannelService:
                         "normalized_status": normalized_status,
                         "status_reason_code": status_reason_code,
                         "has_running_turn": has_running_turn,
+                        "metadata": metadata,
                     }
                 )
             return threads
@@ -1148,6 +1161,11 @@ class HubChannelService:
             if not normalized_status:
                 normalized_status = "running" if has_running_turn else "idle"
             status_reason_code = str(thread.get("status_reason_code") or "").strip()
+            metadata = (
+                thread.get("metadata")
+                if isinstance(thread.get("metadata"), dict)
+                else {}
+            )
             display_name = thread.get("name")
             short_id = managed_thread_id[:8]
             if not isinstance(display_name, str) or not display_name.strip():
@@ -1163,6 +1181,8 @@ class HubChannelService:
                     "managed_thread_id": managed_thread_id,
                     "status": normalized_status,
                     "status_reason_code": status_reason_code,
+                    "thread_kind": metadata.get("thread_kind"),
+                    "run_id": metadata.get("run_id"),
                 },
                 "entry": {
                     "platform": "pma_thread",
@@ -1177,6 +1197,8 @@ class HubChannelService:
                     "agent": agent,
                     "status": normalized_status,
                     "status_reason_code": status_reason_code,
+                    "thread_kind": metadata.get("thread_kind"),
+                    "run_id": metadata.get("run_id"),
                 },
                 "active_thread_id": managed_thread_id,
                 "channel_status": normalized_status,
