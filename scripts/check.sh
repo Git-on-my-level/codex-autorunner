@@ -45,6 +45,9 @@ need_cmd make
 need_cmd node
 need_cmd pnpm
 
+echo "Checking staged .codex-autorunner paths..."
+"$PYTHON_BIN" scripts/check_no_codex_autorunner_staged.py
+
 if [ -x "./node_modules/.bin/eslint" ]; then
   ESLINT_BIN="./node_modules/.bin/eslint"
 elif command -v eslint >/dev/null 2>&1; then
