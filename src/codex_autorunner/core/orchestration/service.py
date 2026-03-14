@@ -94,6 +94,8 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget:
@@ -101,6 +103,8 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             agent_id,
             workspace_root,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             name=display_name,
             backend_thread_id=backend_thread_id,
         )
@@ -119,6 +123,8 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         lifecycle_status: Optional[str] = None,
         runtime_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ThreadTarget]:
         return [
@@ -128,6 +134,8 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
                 status=lifecycle_status,
                 normalized_status=runtime_status,
                 repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
                 limit=limit,
             )
         ]
@@ -314,6 +322,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         lifecycle_status: Optional[str] = None,
         runtime_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ThreadTarget]:
         return self.thread_store.list_thread_targets(
@@ -321,6 +331,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             lifecycle_status=lifecycle_status,
             runtime_status=runtime_status,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             limit=limit,
         )
 
@@ -338,6 +350,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         thread_target_id: str,
         agent_id: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         mode: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ):
@@ -349,6 +363,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             thread_target_id=thread_target_id,
             agent_id=agent_id,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             mode=mode,
             metadata=metadata,
         )
@@ -372,6 +388,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         self,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         surface_kind: Optional[str] = None,
         include_disabled: bool = False,
@@ -381,6 +399,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             return []
         return self.binding_store.list_bindings(
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             agent_id=agent_id,
             surface_kind=surface_kind,
             include_disabled=include_disabled,
@@ -401,6 +421,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         self,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ActiveWorkSummary]:
@@ -408,6 +430,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             return []
         return self.binding_store.list_active_work_summaries(
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             agent_id=agent_id,
             limit=limit,
         )
@@ -418,6 +442,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget:
@@ -432,6 +458,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             agent_id,
             workspace_root,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
         )
@@ -443,6 +471,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         agent_id: str,
         workspace_root: Path,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget:
@@ -455,6 +485,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             agent_id,
             workspace_root,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
         )

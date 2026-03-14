@@ -51,6 +51,8 @@ def test_thread_target_normalizes_managed_thread_mapping() -> None:
     assert target.thread_target_id == "mt-1"
     assert target.agent_id == AgentId("codex")
     assert target.backend_thread_id == "backend-1"
+    assert target.resource_kind == "repo"
+    assert target.resource_id == "repo-1"
     assert target.status == "running"
 
 
@@ -69,7 +71,26 @@ def test_binding_normalizes_surface_mapping() -> None:
 
     assert binding.thread_target_id == "thread-1"
     assert binding.agent_id == AgentId("opencode")
+    assert binding.resource_kind == "repo"
+    assert binding.resource_id == "repo-1"
     assert binding.to_dict()["surface_kind"] == "telegram"
+
+
+def test_thread_target_preserves_agent_workspace_owner() -> None:
+    target = ThreadTarget.from_mapping(
+        {
+            "managed_thread_id": "mt-zc-1",
+            "agent": "codex",
+            "resource_kind": "agent_workspace",
+            "resource_id": "zc-main",
+            "workspace_root": "/tmp/runtimes/zeroclaw/zc-main",
+            "normalized_status": "idle",
+        }
+    )
+
+    assert target.resource_kind == "agent_workspace"
+    assert target.resource_id == "zc-main"
+    assert target.repo_id is None
 
 
 def test_binding_requires_thread_target_id() -> None:

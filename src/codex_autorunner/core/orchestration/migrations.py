@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 5
+ORCHESTRATION_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -382,6 +382,41 @@ def _ensure_column(
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
 
 
+def _ensure_resource_owner_columns(
+    conn: sqlite3.Connection,
+    table_name: str,
+    *,
+    repo_column: str = "repo_id",
+) -> None:
+    if not _table_exists(conn, table_name):
+        return
+    _ensure_column(conn, table_name, "resource_kind", "resource_kind TEXT")
+    _ensure_column(conn, table_name, "resource_id", "resource_id TEXT")
+    columns = _table_columns(conn, table_name)
+    if repo_column not in columns:
+        return
+    conn.execute(
+        f"""
+        UPDATE {table_name}
+           SET resource_kind = CASE
+                   WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') IS NOT NULL
+                       THEN resource_kind
+                   WHEN NULLIF(TRIM(COALESCE({repo_column}, '')), '') IS NOT NULL
+                       THEN 'repo'
+                   ELSE resource_kind
+               END,
+               resource_id = CASE
+                   WHEN NULLIF(TRIM(COALESCE(resource_id, '')), '') IS NOT NULL
+                       THEN resource_id
+                   WHEN NULLIF(TRIM(COALESCE({repo_column}, '')), '') IS NOT NULL
+                       THEN {repo_column}
+                   ELSE resource_id
+               END
+         WHERE NULLIF(TRIM(COALESCE({repo_column}, '')), '') IS NOT NULL
+        """
+    )
+
+
 def _apply_v3(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn,
@@ -612,12 +647,45 @@ def _apply_v5(conn: sqlite3.Connection) -> None:
         )
 
 
+def _apply_v6(conn: sqlite3.Connection) -> None:
+    for table_name in (
+        "orch_thread_targets",
+        "orch_bindings",
+        "orch_automation_subscriptions",
+        "orch_automation_timers",
+        "orch_automation_wakeups",
+        "orch_reactive_debounce_state",
+        "orch_transcript_mirrors",
+        "orch_event_projections",
+        "orch_audit_entries",
+        "orch_flow_run_projections",
+    ):
+        _ensure_resource_owner_columns(conn, table_name)
+    if _table_exists(conn, "orch_bindings"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_bindings_resource_active
+                ON orch_bindings(resource_kind, resource_id, updated_at)
+             WHERE disabled_at IS NULL
+            """
+        )
+    thread_target_columns = _table_columns(conn, "orch_thread_targets")
+    if {"resource_kind", "resource_id", "updated_at"}.issubset(thread_target_columns):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_resource_updated
+                ON orch_thread_targets(resource_kind, resource_id, updated_at)
+            """
+        )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
     _MigrationStep(3, "expand_pma_cutover_columns", _apply_v3),
     _MigrationStep(4, "add_transcript_metadata_and_projection_processing", _apply_v4),
     _MigrationStep(5, "enforce_active_binding_uniqueness", _apply_v5),
+    _MigrationStep(6, "generalize_resource_ownership", _apply_v6),
 )
 
 

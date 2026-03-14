@@ -37,6 +37,8 @@ def test_create_managed_thread_with_repo_id(hub_env) -> None:
     thread = resp.json()["thread"]
     assert thread["agent"] == "codex"
     assert thread["repo_id"] == hub_env.repo_id
+    assert thread["resource_kind"] == "repo"
+    assert thread["resource_id"] == hub_env.repo_id
     assert thread["workspace_root"] == str(hub_env.repo_root.resolve())
     assert thread["name"] == "Primary thread"
     assert thread["backend_thread_id"] == "thread-backend-1"
@@ -65,8 +67,37 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     thread = resp.json()["thread"]
     assert thread["agent"] == "opencode"
     assert thread["repo_id"] is None
+    assert thread["resource_kind"] is None
+    assert thread["resource_id"] is None
     assert thread["workspace_root"] == str((hub_env.hub_root / rel_workspace).resolve())
     assert thread["name"] == "Workspace thread"
+
+
+def test_create_managed_thread_with_agent_workspace_owner(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+                "name": "Workspace-owned thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["repo_id"] is None
+    assert thread["resource_kind"] == "agent_workspace"
+    assert thread["resource_id"] == workspace.id
+    assert thread["workspace_root"] == str(workspace.path.resolve())
 
 
 def test_create_managed_thread_rejects_agent_without_durable_threads(hub_env) -> None:
@@ -129,11 +160,11 @@ def test_create_managed_thread_rejects_missing_or_both_inputs(hub_env) -> None:
         )
 
     assert missing.status_code == 400
-    assert "Exactly one of repo_id or workspace_root is required" in (
+    assert "Exactly one of resource owner or workspace_root is required" in (
         missing.json().get("detail") or ""
     )
     assert both.status_code == 400
-    assert "Exactly one of repo_id or workspace_root is required" in (
+    assert "Exactly one of resource owner or workspace_root is required" in (
         both.json().get("detail") or ""
     )
 
@@ -206,6 +237,8 @@ def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     fetched = get_resp.json()["thread"]
     assert fetched["managed_thread_id"] == created["managed_thread_id"]
     assert fetched["repo_id"] == hub_env.repo_id
+    assert fetched["resource_kind"] == "repo"
+    assert fetched["resource_id"] == hub_env.repo_id
 
 
 def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) -> None:
@@ -376,6 +409,8 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             workspace_root,
             *,
             repo_id=None,
+            resource_kind=None,
+            resource_id=None,
             display_name=None,
             backend_thread_id=None,
         ):
@@ -386,6 +421,8 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                         "agent_id": agent_id,
                         "workspace_root": str(workspace_root),
                         "repo_id": repo_id,
+                        "resource_kind": resource_kind,
+                        "resource_id": resource_id,
                         "display_name": display_name,
                         "backend_thread_id": backend_thread_id,
                     },
@@ -396,6 +433,8 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 agent_id=agent_id,
                 backend_thread_id=backend_thread_id,
                 repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
                 workspace_root=str(workspace_root),
                 display_name=display_name,
                 status="idle",
@@ -413,6 +452,8 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             lifecycle_status=None,
             runtime_status=None,
             repo_id=None,
+            resource_kind=None,
+            resource_id=None,
             limit=200,
         ):
             self.calls.append(
@@ -423,6 +464,8 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                         "lifecycle_status": lifecycle_status,
                         "runtime_status": runtime_status,
                         "repo_id": repo_id,
+                        "resource_kind": resource_kind,
+                        "resource_id": resource_id,
                         "limit": limit,
                     },
                 )
@@ -526,6 +569,8 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "agent_id": "codex",
                 "workspace_root": str(hub_env.repo_root.resolve()),
                 "repo_id": hub_env.repo_id,
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
                 "display_name": "Orchestrated thread",
                 "backend_thread_id": "backend-thread-1",
             },
@@ -537,6 +582,8 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "lifecycle_status": None,
                 "runtime_status": "idle",
                 "repo_id": hub_env.repo_id,
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
                 "limit": 200,
             },
         ),
@@ -566,6 +613,8 @@ def test_list_bindings_work_route_returns_busy_work_summaries(
             *,
             agent_id=None,
             repo_id=None,
+            resource_kind=None,
+            resource_id=None,
             limit=200,
         ):
             self.calls.append(
@@ -574,6 +623,8 @@ def test_list_bindings_work_route_returns_busy_work_summaries(
                     {
                         "agent_id": agent_id,
                         "repo_id": repo_id,
+                        "resource_kind": resource_kind,
+                        "resource_id": resource_id,
                         "limit": limit,
                     },
                 )
@@ -583,6 +634,8 @@ def test_list_bindings_work_route_returns_busy_work_summaries(
                     thread_target_id="thread-orch-1",
                     agent_id="codex",
                     repo_id=hub_env.repo_id,
+                    resource_kind="repo",
+                    resource_id=hub_env.repo_id,
                     workspace_root=str(hub_env.repo_root.resolve()),
                     display_name="Busy thread",
                     lifecycle_status="active",
@@ -617,6 +670,8 @@ def test_list_bindings_work_route_returns_busy_work_summaries(
                 "thread_target_id": "thread-orch-1",
                 "agent_id": "codex",
                 "repo_id": hub_env.repo_id,
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
                 "workspace_root": str(hub_env.repo_root.resolve()),
                 "display_name": "Busy thread",
                 "lifecycle_status": "active",
@@ -633,6 +688,12 @@ def test_list_bindings_work_route_returns_busy_work_summaries(
     assert fake_service.calls == [
         (
             "list_active_work_summaries",
-            {"agent_id": "codex", "repo_id": hub_env.repo_id, "limit": 25},
+            {
+                "agent_id": "codex",
+                "repo_id": hub_env.repo_id,
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+                "limit": 25,
+            },
         )
     ]

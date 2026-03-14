@@ -116,6 +116,8 @@ class ThreadExecutionStore(Protocol):
         workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget: ...
@@ -129,6 +131,8 @@ class ThreadExecutionStore(Protocol):
         lifecycle_status: Optional[str] = None,
         runtime_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ThreadTarget]: ...
 
@@ -227,6 +231,8 @@ class OrchestrationThreadService(Protocol):
         lifecycle_status: Optional[str] = None,
         runtime_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ThreadTarget]: ...
 
@@ -238,6 +244,8 @@ class OrchestrationThreadService(Protocol):
         workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget: ...
@@ -249,6 +257,8 @@ class OrchestrationThreadService(Protocol):
         agent_id: str,
         workspace_root: Path,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget: ...

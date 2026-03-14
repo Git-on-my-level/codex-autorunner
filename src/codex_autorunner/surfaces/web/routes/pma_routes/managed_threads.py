@@ -68,6 +68,33 @@ def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
     raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
 
 
+def _resolve_workspace_from_resource_owner(
+    request: Request,
+    *,
+    resource_kind: str,
+    resource_id: str,
+) -> tuple[Path, Optional[str]]:
+    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    if supervisor is None:
+        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
+    if resource_kind == "repo":
+        return _resolve_workspace_from_repo_id(request, resource_id), resource_id
+    if resource_kind == "agent_workspace":
+        for snapshot in supervisor.list_agent_workspaces():
+            if getattr(snapshot, "id", None) != resource_id:
+                continue
+            workspace_path = getattr(snapshot, "path", None)
+            if isinstance(workspace_path, str):
+                workspace_path = Path(workspace_path)
+            if isinstance(workspace_path, Path):
+                return workspace_path.absolute(), None
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent workspace not found: {resource_id}",
+        )
+    raise HTTPException(status_code=400, detail="resource_kind is invalid")
+
+
 def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
     normalized = _normalize_workspace_root_input(workspace_root)
     hub_root_resolved = hub_root.absolute()
@@ -111,6 +138,8 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
     payload["status_terminal"] = bool(thread.get("status_terminal"))
     payload["status_turn_id"] = normalize_optional_text(thread.get("status_turn_id"))
     payload["accepts_messages"] = lifecycle_status == "active"
+    payload["resource_kind"] = normalize_optional_text(thread.get("resource_kind"))
+    payload["resource_id"] = normalize_optional_text(thread.get("resource_id"))
     return payload
 
 
@@ -119,6 +148,8 @@ def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
         "repo_id": thread.repo_id,
+        "resource_kind": thread.resource_kind,
+        "resource_id": thread.resource_id,
         "workspace_root": thread.workspace_root,
         "name": thread.display_name,
         "backend_thread_id": thread.backend_thread_id,
@@ -411,6 +442,8 @@ def build_managed_thread_crud_routes(
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
         repo_id = normalize_optional_text(payload.repo_id)
+        resource_kind = normalize_optional_text(payload.resource_kind)
+        resource_id = normalize_optional_text(payload.resource_id)
         workspace_root = normalize_optional_text(payload.workspace_root)
         raw_payload: dict[str, Any] = {}
         try:
@@ -430,25 +463,52 @@ def build_managed_thread_crud_routes(
             raw_notify_once = raw_payload.get("notifyOnce")
         notify_once = bool(raw_notify_once) if raw_notify_once is not None else True
 
-        if bool(repo_id) == bool(workspace_root):
+        if resource_id and resource_kind is None:
             raise HTTPException(
                 status_code=400,
-                detail="Exactly one of repo_id or workspace_root is required",
+                detail="resource_kind is required when resource_id is provided",
+            )
+        if resource_kind and resource_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_id is required when resource_kind is provided",
+            )
+        if repo_id and resource_kind not in {None, "repo"}:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id cannot be combined with a non-repo resource_kind",
+            )
+        if repo_id and resource_id and resource_id != repo_id:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id must match resource_id for repo-backed requests",
+            )
+
+        owner_present = resource_kind is not None and resource_id is not None
+        if owner_present == bool(workspace_root):
+            raise HTTPException(
+                status_code=400,
+                detail="Exactly one of resource owner or workspace_root is required",
             )
 
         resolved_repo_id: Optional[str] = None
-        if repo_id:
-            resolved_workspace = _resolve_workspace_from_repo_id(request, repo_id)
-            resolved_repo_id = repo_id
+        if owner_present:
+            resolved_workspace, resolved_repo_id = (
+                _resolve_workspace_from_resource_owner(
+                    request,
+                    resource_kind=resource_kind,
+                    resource_id=resource_id,
+                )
+            )
             if not _is_within_root(resolved_workspace, hub_root):
                 raise HTTPException(
-                    status_code=400, detail="Resolved repo path is invalid"
+                    status_code=400, detail="Resolved resource path is invalid"
                 )
         else:
             if workspace_root is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="workspace_root is required when repo_id is omitted",
+                    detail="workspace_root is required when resource owner is omitted",
                 )
             resolved_workspace = _resolve_workspace_from_input(hub_root, workspace_root)
 
@@ -458,6 +518,8 @@ def build_managed_thread_crud_routes(
                 payload.agent,
                 resolved_workspace,
                 repo_id=resolved_repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
                 display_name=normalize_optional_text(payload.name),
                 backend_thread_id=normalize_optional_text(payload.backend_thread_id),
             )
@@ -489,6 +551,8 @@ def build_managed_thread_crud_routes(
         status: Optional[str] = None,
         lifecycle_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
         if limit <= 0:
@@ -501,12 +565,35 @@ def build_managed_thread_crud_routes(
         ):
             normalized_lifecycle_status = normalized_status
             normalized_status = None
+        normalized_repo_id = normalize_optional_text(repo_id)
+        normalized_resource_kind = normalize_optional_text(resource_kind)
+        normalized_resource_id = normalize_optional_text(resource_id)
+        if normalized_resource_id and normalized_resource_kind is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_kind is required when resource_id is provided",
+            )
+        if normalized_resource_kind and normalized_resource_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_id is required when resource_kind is provided",
+            )
+        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id cannot be combined with a non-repo resource_kind",
+            )
+        if normalized_repo_id and normalized_resource_kind is None:
+            normalized_resource_kind = "repo"
+            normalized_resource_id = normalized_repo_id
         service = build_managed_thread_orchestration_service(request)
         threads = service.list_thread_targets(
             agent_id=normalize_optional_text(agent),
             lifecycle_status=normalized_lifecycle_status,
             runtime_status=normalized_status,
-            repo_id=normalize_optional_text(repo_id),
+            repo_id=normalized_repo_id,
+            resource_kind=normalized_resource_kind,
+            resource_id=normalized_resource_id,
             limit=limit,
         )
         return {"threads": [_serialize_thread_target(thread) for thread in threads]}
@@ -676,16 +763,41 @@ def build_managed_thread_crud_routes(
         request: Request,
         agent: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         surface_kind: Optional[str] = None,
         include_disabled: bool = False,
         limit: int = 200,
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        normalized_repo_id = normalize_optional_text(repo_id)
+        normalized_resource_kind = normalize_optional_text(resource_kind)
+        normalized_resource_id = normalize_optional_text(resource_id)
+        if normalized_resource_id and normalized_resource_kind is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_kind is required when resource_id is provided",
+            )
+        if normalized_resource_kind and normalized_resource_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_id is required when resource_kind is provided",
+            )
+        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id cannot be combined with a non-repo resource_kind",
+            )
+        if normalized_repo_id and normalized_resource_kind is None:
+            normalized_resource_kind = "repo"
+            normalized_resource_id = normalized_repo_id
         service = build_managed_thread_orchestration_service(request)
         bindings = service.list_bindings(
             agent_id=normalize_optional_text(agent),
-            repo_id=normalize_optional_text(repo_id),
+            repo_id=normalized_repo_id,
+            resource_kind=normalized_resource_kind,
+            resource_id=normalized_resource_id,
             surface_kind=normalize_optional_text(surface_kind),
             include_disabled=include_disabled,
             limit=limit,
@@ -699,6 +811,8 @@ def build_managed_thread_crud_routes(
                     "thread_target_id": b.thread_target_id,
                     "agent_id": b.agent_id,
                     "repo_id": b.repo_id,
+                    "resource_kind": b.resource_kind,
+                    "resource_id": b.resource_id,
                     "mode": b.mode,
                     "created_at": b.created_at,
                     "updated_at": b.updated_at,
@@ -730,15 +844,40 @@ def build_managed_thread_crud_routes(
         request: Request,
         agent: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
         """List busy thread summaries for running or queued work only."""
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        normalized_repo_id = normalize_optional_text(repo_id)
+        normalized_resource_kind = normalize_optional_text(resource_kind)
+        normalized_resource_id = normalize_optional_text(resource_id)
+        if normalized_resource_id and normalized_resource_kind is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_kind is required when resource_id is provided",
+            )
+        if normalized_resource_kind and normalized_resource_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_id is required when resource_kind is provided",
+            )
+        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id cannot be combined with a non-repo resource_kind",
+            )
+        if normalized_repo_id and normalized_resource_kind is None:
+            normalized_resource_kind = "repo"
+            normalized_resource_id = normalized_repo_id
         service = build_managed_thread_orchestration_service(request)
         summaries = service.list_active_work_summaries(
             agent_id=normalize_optional_text(agent),
-            repo_id=normalize_optional_text(repo_id),
+            repo_id=normalized_repo_id,
+            resource_kind=normalized_resource_kind,
+            resource_id=normalized_resource_id,
             limit=limit,
         )
         return {
@@ -747,6 +886,8 @@ def build_managed_thread_crud_routes(
                     "thread_target_id": s.thread_target_id,
                     "agent_id": s.agent_id,
                     "repo_id": s.repo_id,
+                    "resource_kind": s.resource_kind,
+                    "resource_id": s.resource_id,
                     "workspace_root": s.workspace_root,
                     "display_name": s.display_name,
                     "lifecycle_status": s.lifecycle_status,

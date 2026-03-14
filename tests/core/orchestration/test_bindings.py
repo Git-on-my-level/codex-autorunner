@@ -438,3 +438,50 @@ def test_binding_store_list_bindings_by_surface_kind(tmp_path: Path) -> None:
 
     assert len(telegram_bindings) == 2
     assert {b.surface_key for b in telegram_bindings} == {"123:root", "123:chat"}
+
+
+def test_binding_store_supports_agent_workspace_owners(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root)
+    bindings = OrchestrationBindingStore(hub_root)
+    workspace_root = hub_root / "runtimes" / "zeroclaw" / "zc-main"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        "codex",
+        workspace_root,
+        resource_kind="agent_workspace",
+        resource_id="zc-main",
+        name="Workspace thread",
+    )
+    thread_id = str(created["managed_thread_id"])
+
+    binding = bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-zc",
+        thread_target_id=thread_id,
+        agent_id="codex",
+        resource_kind="agent_workspace",
+        resource_id="zc-main",
+    )
+    store.create_turn(thread_id, prompt="busy")
+
+    listed = bindings.list_bindings(
+        resource_kind="agent_workspace",
+        resource_id="zc-main",
+    )
+    active = bindings.list_active_work_summaries(
+        resource_kind="agent_workspace",
+        resource_id="zc-main",
+    )
+
+    assert binding.resource_kind == "agent_workspace"
+    assert binding.resource_id == "zc-main"
+    assert binding.repo_id is None
+    assert len(listed) == 1
+    assert listed[0].resource_kind == "agent_workspace"
+    assert listed[0].resource_id == "zc-main"
+    assert len(active) == 1
+    assert active[0].resource_kind == "agent_workspace"
+    assert active[0].resource_id == "zc-main"
+    assert active[0].repo_id is None

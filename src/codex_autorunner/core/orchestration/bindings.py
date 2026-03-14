@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..time_utils import now_iso
-from .models import Binding
+from .models import Binding, normalize_resource_owner_fields
 from .sqlite import open_orchestration_sqlite
 
 
@@ -42,6 +42,8 @@ class ActiveWorkSummary:
     thread_target_id: str
     agent_id: Optional[str]
     repo_id: Optional[str]
+    resource_kind: Optional[str]
+    resource_id: Optional[str]
     workspace_root: Optional[str]
     display_name: Optional[str]
     lifecycle_status: Optional[str]
@@ -68,6 +70,8 @@ class OrchestrationBindingStore:
         thread_target_id: str,
         agent_id: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         mode: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> Binding:
@@ -78,6 +82,13 @@ class OrchestrationBindingStore:
             raise ValueError("surface_kind and surface_key are required")
         if normalized_thread_target_id is None:
             raise ValueError("thread_target_id is required")
+        normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
+            normalize_resource_owner_fields(
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                repo_id=repo_id,
+            )
+        )
 
         timestamp = now_iso()
         payload = json.dumps(metadata or {}, sort_keys=True, ensure_ascii=True)
@@ -96,13 +107,21 @@ class OrchestrationBindingStore:
             if row is not None:
                 existing_target_id = _normalize_text(row["target_id"])
                 existing_agent_id = _normalize_text(row["agent_id"])
-                existing_repo_id = _normalize_text(row["repo_id"])
+                existing_resource_kind, existing_resource_id, existing_repo_id = (
+                    normalize_resource_owner_fields(
+                        resource_kind=row["resource_kind"],
+                        resource_id=row["resource_id"],
+                        repo_id=row["repo_id"],
+                    )
+                )
                 existing_mode = _normalize_text(row["mode"])
                 existing_metadata = _decode_metadata(row["metadata_json"])
                 if (
                     existing_target_id == normalized_thread_target_id
                     and existing_agent_id == _normalize_text(agent_id)
-                    and existing_repo_id == _normalize_text(repo_id)
+                    and existing_resource_kind == normalized_resource_kind
+                    and existing_resource_id == normalized_resource_id
+                    and existing_repo_id == normalized_repo_id
                     and existing_mode == _normalize_text(mode)
                     and existing_metadata == (metadata or {})
                 ):
@@ -134,25 +153,31 @@ class OrchestrationBindingStore:
                             target_id,
                             agent_id,
                             repo_id,
+                            resource_kind,
+                            resource_id,
                             mode,
                             metadata_json,
                             created_at,
                             updated_at,
                             disabled_at
                         )
-                        VALUES (?, ?, ?, 'thread', ?, ?, ?, ?, ?, ?, ?, NULL)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             uuid.uuid4().hex,
                             normalized_surface_kind,
                             normalized_surface_key,
+                            "thread",
                             normalized_thread_target_id,
                             _normalize_text(agent_id),
-                            _normalize_text(repo_id),
+                            normalized_repo_id,
+                            normalized_resource_kind,
+                            normalized_resource_id,
                             _normalize_text(mode),
                             payload,
                             timestamp,
                             timestamp,
+                            None,
                         ),
                     )
             else:
@@ -166,25 +191,31 @@ class OrchestrationBindingStore:
                         target_id,
                         agent_id,
                         repo_id,
+                        resource_kind,
+                        resource_id,
                         mode,
                         metadata_json,
                         created_at,
                         updated_at,
                         disabled_at
                     )
-                    VALUES (?, ?, ?, 'thread', ?, ?, ?, ?, ?, ?, ?, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         uuid.uuid4().hex,
                         normalized_surface_kind,
                         normalized_surface_key,
+                        "thread",
                         normalized_thread_target_id,
                         _normalize_text(agent_id),
-                        _normalize_text(repo_id),
+                        normalized_repo_id,
+                        normalized_resource_kind,
+                        normalized_resource_id,
                         _normalize_text(mode),
                         payload,
                         timestamp,
                         timestamp,
+                        None,
                     ),
                 )
             refreshed = conn.execute(
@@ -266,6 +297,8 @@ class OrchestrationBindingStore:
         self,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         surface_kind: Optional[str] = None,
         include_disabled: bool = False,
@@ -275,8 +308,20 @@ class OrchestrationBindingStore:
         params: list[Any] = []
         if not include_disabled:
             filters.append("b.disabled_at IS NULL")
-        normalized_repo_id = _normalize_text(repo_id)
-        if normalized_repo_id is not None:
+        normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
+            normalize_resource_owner_fields(
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                repo_id=repo_id,
+            )
+        )
+        if normalized_resource_kind is not None:
+            filters.append("COALESCE(b.resource_kind, t.resource_kind) = ?")
+            params.append(normalized_resource_kind)
+        if normalized_resource_id is not None:
+            filters.append("COALESCE(b.resource_id, t.resource_id) = ?")
+            params.append(normalized_resource_id)
+        if normalized_repo_id is not None and normalized_resource_kind is None:
             filters.append("COALESCE(b.repo_id, t.repo_id) = ?")
             params.append(normalized_repo_id)
         normalized_agent_id = _normalize_text(agent_id)
@@ -298,6 +343,8 @@ class OrchestrationBindingStore:
                     b.target_id AS thread_target_id,
                     COALESCE(b.agent_id, t.agent_id) AS agent_id,
                     COALESCE(b.repo_id, t.repo_id) AS repo_id,
+                    COALESCE(b.resource_kind, t.resource_kind) AS resource_kind,
+                    COALESCE(b.resource_id, t.resource_id) AS resource_id,
                     b.mode,
                     b.created_at,
                     b.updated_at,
@@ -325,6 +372,8 @@ class OrchestrationBindingStore:
         self,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ActiveWorkSummary]:
@@ -341,8 +390,20 @@ class OrchestrationBindingStore:
             "(r.execution_id IS NOT NULL OR COALESCE(q.queued_count, 0) > 0)",
         ]
         params: list[Any] = []
-        normalized_repo_id = _normalize_text(repo_id)
-        if normalized_repo_id is not None:
+        normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
+            normalize_resource_owner_fields(
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                repo_id=repo_id,
+            )
+        )
+        if normalized_resource_kind is not None:
+            filters.append("t.resource_kind = ?")
+            params.append(normalized_resource_kind)
+        if normalized_resource_id is not None:
+            filters.append("t.resource_id = ?")
+            params.append(normalized_resource_id)
+        if normalized_repo_id is not None and normalized_resource_kind is None:
             filters.append("t.repo_id = ?")
             params.append(normalized_repo_id)
         normalized_agent_id = _normalize_text(agent_id)
@@ -414,6 +475,8 @@ class OrchestrationBindingStore:
                     t.thread_target_id,
                     t.agent_id,
                     t.repo_id,
+                    t.resource_kind,
+                    t.resource_id,
                     t.workspace_root,
                     t.display_name,
                     t.lifecycle_status,
@@ -465,6 +528,8 @@ class OrchestrationBindingStore:
                     thread_target_id=str(row["thread_target_id"]),
                     agent_id=_normalize_text(row["agent_id"]),
                     repo_id=_normalize_text(row["repo_id"]),
+                    resource_kind=_normalize_text(row["resource_kind"]),
+                    resource_id=_normalize_text(row["resource_id"]),
                     workspace_root=_normalize_text(row["workspace_root"]),
                     display_name=_normalize_text(row["display_name"]),
                     lifecycle_status=_normalize_text(row["lifecycle_status"]),

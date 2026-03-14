@@ -29,6 +29,31 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def normalize_resource_owner_fields(
+    *,
+    resource_kind: Any = None,
+    resource_id: Any = None,
+    repo_id: Any = None,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    normalized_resource_kind = _normalize_optional_text(resource_kind)
+    normalized_resource_id = _normalize_optional_text(resource_id)
+    normalized_repo_id = _normalize_optional_text(repo_id)
+
+    if normalized_resource_kind is None and normalized_resource_id is None:
+        if normalized_repo_id is not None:
+            normalized_resource_kind = "repo"
+            normalized_resource_id = normalized_repo_id
+        return normalized_resource_kind, normalized_resource_id, normalized_repo_id
+
+    if normalized_resource_kind == "repo":
+        if normalized_resource_id is None:
+            normalized_resource_id = normalized_repo_id
+        normalized_repo_id = normalized_resource_id or normalized_repo_id
+    else:
+        normalized_repo_id = None
+    return normalized_resource_kind, normalized_resource_id, normalized_repo_id
+
+
 @dataclass(frozen=True)
 class AgentDefinition:
     """Orchestration-visible logical agent identity."""
@@ -80,6 +105,8 @@ class ThreadTarget:
     agent_id: str
     backend_thread_id: Optional[str] = None
     repo_id: Optional[str] = None
+    resource_kind: Optional[str] = None
+    resource_id: Optional[str] = None
     workspace_root: Optional[str] = None
     display_name: Optional[str] = None
     status: Optional[str] = None
@@ -100,11 +127,18 @@ class ThreadTarget:
         if thread_target_id is None:
             raise ValueError("ThreadTarget requires an orchestration-owned thread id")
         agent = _normalize_optional_text(data.get("agent")) or "unknown"
+        resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
+            resource_kind=data.get("resource_kind"),
+            resource_id=data.get("resource_id"),
+            repo_id=data.get("repo_id"),
+        )
         return cls(
             thread_target_id=thread_target_id,
             agent_id=agent,
             backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
-            repo_id=_normalize_optional_text(data.get("repo_id")),
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             workspace_root=_normalize_optional_text(data.get("workspace_root")),
             display_name=_normalize_optional_text(data.get("name")),
             status=_normalize_optional_text(
@@ -231,6 +265,8 @@ class Binding:
     thread_target_id: str
     agent_id: Optional[str] = None
     repo_id: Optional[str] = None
+    resource_kind: Optional[str] = None
+    resource_id: Optional[str] = None
     mode: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -253,13 +289,20 @@ class Binding:
         if thread_target_id is None:
             raise ValueError("Binding requires a thread target id")
         agent = _normalize_optional_text(data.get("agent_id") or data.get("agent"))
+        resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
+            resource_kind=data.get("resource_kind"),
+            resource_id=data.get("resource_id"),
+            repo_id=data.get("repo_id"),
+        )
         return cls(
             binding_id=binding_id,
             surface_kind=surface_kind,
             surface_key=surface_key,
             thread_target_id=thread_target_id,
             agent_id=agent,
-            repo_id=_normalize_optional_text(data.get("repo_id")),
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             mode=_normalize_optional_text(data.get("mode")),
             created_at=_normalize_optional_text(data.get("created_at")),
             updated_at=_normalize_optional_text(data.get("updated_at")),

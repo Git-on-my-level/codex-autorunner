@@ -70,6 +70,12 @@ def _table_exists(conn: Any, table_name: str) -> bool:
     return row is not None
 
 
+def _legacy_resource_owner(repo_id: Any) -> tuple[str | None, Any]:
+    if isinstance(repo_id, str) and repo_id.strip():
+        return "repo", repo_id
+    return None, None
+
+
 def backfill_legacy_thread_state(hub_root: Path, conn: Any) -> dict[str, int]:
     legacy_path = hub_root / LEGACY_PMA_THREADS_DB_PATH
     if not legacy_path.exists():
@@ -80,6 +86,19 @@ def backfill_legacy_thread_state(hub_root: Path, conn: Any) -> dict[str, int]:
         if _table_exists(legacy_conn, "pma_managed_threads"):
             rows = legacy_conn.execute("SELECT * FROM pma_managed_threads").fetchall()
             for row in rows:
+                resource_kind, resource_id = _legacy_resource_owner(row["repo_id"])
+                if (
+                    "resource_kind" in row.keys()
+                    and isinstance(row["resource_kind"], str)
+                    and row["resource_kind"].strip()
+                ):
+                    resource_kind = row["resource_kind"]
+                if (
+                    "resource_id" in row.keys()
+                    and isinstance(row["resource_id"], str)
+                    and row["resource_id"].strip()
+                ):
+                    resource_id = row["resource_id"]
                 conn.execute(
                     """
                     INSERT INTO orch_thread_targets (
@@ -87,6 +106,8 @@ def backfill_legacy_thread_state(hub_root: Path, conn: Any) -> dict[str, int]:
                         agent_id,
                         backend_thread_id,
                         repo_id,
+                        resource_kind,
+                        resource_id,
                         workspace_root,
                         display_name,
                         lifecycle_status,
@@ -100,11 +121,13 @@ def backfill_legacy_thread_state(hub_root: Path, conn: Any) -> dict[str, int]:
                         updated_at,
                         status_updated_at,
                         status_terminal
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(thread_target_id) DO UPDATE SET
                         agent_id = excluded.agent_id,
                         backend_thread_id = excluded.backend_thread_id,
                         repo_id = excluded.repo_id,
+                        resource_kind = excluded.resource_kind,
+                        resource_id = excluded.resource_id,
                         workspace_root = excluded.workspace_root,
                         display_name = excluded.display_name,
                         lifecycle_status = excluded.lifecycle_status,
@@ -124,6 +147,8 @@ def backfill_legacy_thread_state(hub_root: Path, conn: Any) -> dict[str, int]:
                         row["agent"],
                         row["backend_thread_id"],
                         row["repo_id"],
+                        resource_kind,
+                        resource_id,
                         row["workspace_root"],
                         row["name"],
                         row["status"],
@@ -254,12 +279,15 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
         if not isinstance(entry, dict):
             continue
         metadata = entry.get("metadata")
+        resource_kind, resource_id = _legacy_resource_owner(entry.get("repo_id"))
         conn.execute(
             """
             INSERT INTO orch_automation_subscriptions (
                 subscription_id,
                 event_types_json,
                 repo_id,
+                resource_kind,
+                resource_id,
                 run_id,
                 thread_target_id,
                 binding_id,
@@ -276,10 +304,12 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
                 reason_text,
                 idempotency_key,
                 max_matches
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(subscription_id) DO UPDATE SET
                 event_types_json = excluded.event_types_json,
                 repo_id = excluded.repo_id,
+                resource_kind = excluded.resource_kind,
+                resource_id = excluded.resource_id,
                 run_id = excluded.run_id,
                 thread_target_id = excluded.thread_target_id,
                 binding_id = excluded.binding_id,
@@ -301,6 +331,8 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
                 entry.get("subscription_id"),
                 _json_dumps(entry.get("event_types") or []),
                 entry.get("repo_id"),
+                resource_kind,
+                resource_id,
                 entry.get("run_id"),
                 entry.get("thread_id"),
                 None,
@@ -334,12 +366,15 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
             "from_state": entry.get("from_state"),
             "to_state": entry.get("to_state"),
         }
+        resource_kind, resource_id = _legacy_resource_owner(entry.get("repo_id"))
         conn.execute(
             """
             INSERT INTO orch_automation_timers (
                 timer_id,
                 subscription_id,
                 repo_id,
+                resource_kind,
+                resource_id,
                 run_id,
                 thread_target_id,
                 timer_kind,
@@ -353,10 +388,12 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
                 reason_text,
                 idempotency_key,
                 idle_seconds
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(timer_id) DO UPDATE SET
                 subscription_id = excluded.subscription_id,
                 repo_id = excluded.repo_id,
+                resource_kind = excluded.resource_kind,
+                resource_id = excluded.resource_id,
                 run_id = excluded.run_id,
                 thread_target_id = excluded.thread_target_id,
                 timer_kind = excluded.timer_kind,
@@ -375,6 +412,8 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
                 entry.get("timer_id"),
                 entry.get("subscription_id"),
                 entry.get("repo_id"),
+                resource_kind,
+                resource_id,
                 entry.get("run_id"),
                 entry.get("thread_id"),
                 entry.get("timer_type") or "one_shot",
@@ -407,12 +446,15 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
             "from_state": entry.get("from_state"),
             "to_state": entry.get("to_state"),
         }
+        resource_kind, resource_id = _legacy_resource_owner(entry.get("repo_id"))
         conn.execute(
             """
             INSERT INTO orch_automation_wakeups (
                 wakeup_id,
                 subscription_id,
                 repo_id,
+                resource_kind,
+                resource_id,
                 run_id,
                 thread_target_id,
                 lane_id,
@@ -431,10 +473,12 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
                 timer_id,
                 event_id,
                 event_type
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(wakeup_id) DO UPDATE SET
                 subscription_id = excluded.subscription_id,
                 repo_id = excluded.repo_id,
+                resource_kind = excluded.resource_kind,
+                resource_id = excluded.resource_id,
                 run_id = excluded.run_id,
                 thread_target_id = excluded.thread_target_id,
                 lane_id = excluded.lane_id,
@@ -458,6 +502,8 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
                 entry.get("wakeup_id"),
                 entry.get("subscription_id"),
                 entry.get("repo_id"),
+                resource_kind,
+                resource_id,
                 entry.get("run_id"),
                 entry.get("thread_id"),
                 entry.get("lane_id"),
@@ -595,6 +641,8 @@ def backfill_legacy_reactive_state(hub_root: Path, conn: Any) -> dict[str, int]:
             INSERT INTO orch_reactive_debounce_state (
                 debounce_key,
                 repo_id,
+                resource_kind,
+                resource_id,
                 thread_target_id,
                 fingerprint,
                 available_at,
@@ -603,7 +651,7 @@ def backfill_legacy_reactive_state(hub_root: Path, conn: Any) -> dict[str, int]:
                 created_at,
                 updated_at,
                 last_enqueued_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(debounce_key) DO UPDATE SET
                 available_at = excluded.available_at,
                 metadata_json = excluded.metadata_json,
@@ -612,6 +660,8 @@ def backfill_legacy_reactive_state(hub_root: Path, conn: Any) -> dict[str, int]:
             """,
             (
                 key,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -678,6 +728,7 @@ def backfill_legacy_transcript_mirrors(hub_root: Path, conn: Any) -> dict[str, i
             or metadata.get("turn_id")
             or transcript_mirror_id
         ).strip()
+        resource_kind, resource_id = _legacy_resource_owner(metadata.get("repo_id"))
         conn.execute(
             """
             INSERT INTO orch_transcript_mirrors (
@@ -689,12 +740,14 @@ def backfill_legacy_transcript_mirrors(hub_root: Path, conn: Any) -> dict[str, i
                 text_content,
                 text_preview,
                 repo_id,
+                resource_kind,
+                resource_id,
                 agent_id,
                 model_id,
                 created_at,
                 updated_at,
                 metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(transcript_mirror_id) DO UPDATE SET
                 target_kind = excluded.target_kind,
                 target_id = excluded.target_id,
@@ -703,6 +756,8 @@ def backfill_legacy_transcript_mirrors(hub_root: Path, conn: Any) -> dict[str, i
                 text_content = excluded.text_content,
                 text_preview = excluded.text_preview,
                 repo_id = excluded.repo_id,
+                resource_kind = excluded.resource_kind,
+                resource_id = excluded.resource_id,
                 agent_id = excluded.agent_id,
                 model_id = excluded.model_id,
                 created_at = excluded.created_at,
@@ -718,6 +773,8 @@ def backfill_legacy_transcript_mirrors(hub_root: Path, conn: Any) -> dict[str, i
                 content,
                 preview,
                 metadata.get("repo_id"),
+                resource_kind,
+                resource_id,
                 metadata.get("agent"),
                 metadata.get("model"),
                 created_at,
@@ -749,6 +806,7 @@ def backfill_legacy_audit_entries(hub_root: Path, conn: Any) -> dict[str, int]:
             "error": entry.get("error"),
             "agent": entry.get("agent"),
         }
+        resource_kind, resource_id = _legacy_resource_owner(entry.get("repo_id"))
         conn.execute(
             """
             INSERT INTO orch_audit_entries (
@@ -759,10 +817,12 @@ def backfill_legacy_audit_entries(hub_root: Path, conn: Any) -> dict[str, int]:
                 target_kind,
                 target_id,
                 repo_id,
+                resource_kind,
+                resource_id,
                 payload_json,
                 created_at,
                 fingerprint
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(audit_id) DO UPDATE SET
                 action_type = excluded.action_type,
                 actor_kind = excluded.actor_kind,
@@ -770,6 +830,8 @@ def backfill_legacy_audit_entries(hub_root: Path, conn: Any) -> dict[str, int]:
                 target_kind = excluded.target_kind,
                 target_id = excluded.target_id,
                 repo_id = excluded.repo_id,
+                resource_kind = excluded.resource_kind,
+                resource_id = excluded.resource_id,
                 payload_json = excluded.payload_json,
                 created_at = excluded.created_at,
                 fingerprint = excluded.fingerprint
@@ -782,6 +844,8 @@ def backfill_legacy_audit_entries(hub_root: Path, conn: Any) -> dict[str, int]:
                 "thread_target" if entry.get("thread_id") else None,
                 entry.get("thread_id"),
                 None,
+                resource_kind,
+                resource_id,
                 _json_dumps(payload),
                 entry.get("timestamp") or now_iso(),
                 entry.get("fingerprint"),
@@ -807,6 +871,7 @@ def backfill_legacy_pma_lifecycle_events(hub_root: Path, conn: Any) -> dict[str,
             target_kind = "lane"
         elif entry.get("agent"):
             target_kind = "agent_definition"
+        resource_kind, resource_id = _legacy_resource_owner(entry.get("repo_id"))
         conn.execute(
             """
             INSERT INTO orch_event_projections (
@@ -817,12 +882,14 @@ def backfill_legacy_pma_lifecycle_events(hub_root: Path, conn: Any) -> dict[str,
                 target_id,
                 execution_id,
                 repo_id,
+                resource_kind,
+                resource_id,
                 run_id,
                 timestamp,
                 status,
                 payload_json,
                 processed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(event_id) DO UPDATE SET
                 event_family = excluded.event_family,
                 event_type = excluded.event_type,
@@ -830,6 +897,8 @@ def backfill_legacy_pma_lifecycle_events(hub_root: Path, conn: Any) -> dict[str,
                 target_id = excluded.target_id,
                 execution_id = excluded.execution_id,
                 repo_id = excluded.repo_id,
+                resource_kind = excluded.resource_kind,
+                resource_id = excluded.resource_id,
                 run_id = excluded.run_id,
                 timestamp = excluded.timestamp,
                 status = excluded.status,
@@ -844,6 +913,8 @@ def backfill_legacy_pma_lifecycle_events(hub_root: Path, conn: Any) -> dict[str,
                 target_id or None,
                 None,
                 entry.get("repo_id"),
+                resource_kind,
+                resource_id,
                 entry.get("run_id"),
                 entry.get("timestamp") or now_iso(),
                 "recorded",

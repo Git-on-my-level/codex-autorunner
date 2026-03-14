@@ -209,6 +209,30 @@ def test_service_lists_definitions_and_resolves_thread_targets(tmp_path: Path) -
     assert service.get_thread_status(created.thread_target_id) is not None
 
 
+def test_service_supports_agent_workspace_thread_targets(tmp_path: Path) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "runtimes" / "zeroclaw" / "zc-main"
+    workspace_root.mkdir(parents=True)
+
+    created = service.create_thread_target(
+        "codex",
+        workspace_root,
+        resource_kind="agent_workspace",
+        resource_id="zc-main",
+        display_name="Workspace Backlog",
+    )
+    listed = service.list_thread_targets(
+        resource_kind="agent_workspace",
+        resource_id="zc-main",
+    )
+
+    assert created.resource_kind == "agent_workspace"
+    assert created.resource_id == "zc-main"
+    assert created.repo_id is None
+    assert [thread.thread_target_id for thread in listed] == [created.thread_target_id]
+
+
 def test_create_thread_target_rejects_non_durable_agent(tmp_path: Path) -> None:
     harness = _FakeHarness(capabilities=frozenset())
     descriptors = {
