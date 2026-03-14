@@ -4,6 +4,8 @@ build/
 .venv/
 src/codex_autorunner.egg-info/
 codex-autorunner.override.yml
+.codex-autorunner/*
+!.codex-autorunner/.gitignore
 
 # Python cache
 __pycache__/
