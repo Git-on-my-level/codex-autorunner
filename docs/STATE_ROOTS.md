@@ -45,11 +45,12 @@ All durable artifacts must live under one of these roots:
 **Purpose**: Hub-level state for multi-repo management, orchestration metadata, and cross-repo coordination.
 
 **Contents**:
-- `manifest.yml` - Managed repositories list (including repo/worktree `destination` config)
+- `manifest.yml` - Managed hub resources list (`repos:` plus `agent_workspaces:` and their `destination` config)
 - `hub_state.json` - Hub state
 - `config.yml` - Hub config
 - `codex-autorunner-hub.log` - Hub logs
 - `templates/` - Hub-scoped templates
+- `runtimes/` - CAR-managed runtime workspace roots under `<runtime>/<workspace_id>/`
 - `chat/channel_directory.json` - Cross-platform channel directory used for lightweight routing context
 - **`orchestration.sqlite3`** - Hub SQLite store for orchestration metadata, bindings, executions, transcript mirrors, and event projections
 
@@ -71,6 +72,21 @@ The `orchestration.sqlite3` database is the canonical store for:
 - **Reasoning traces/tool payloads**: Kept in runtime-native stores
 
 **Resolution**: `resolve_hub_orchestration_db_path(hub_root)` in `core/state_roots.py`
+
+#### Managed Agent Workspace Roots
+
+CAR-managed agent workspaces live under:
+
+- `<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`
+
+This root is reserved for first-class `agent_workspace` hub resources. In v1,
+CAR allocates these paths itself and does not accept arbitrary external runtime
+paths for managed agent workspaces.
+
+**Resolution**:
+- `resolve_hub_runtimes_root(hub_root)`
+- `resolve_hub_runtime_root(hub_root, runtime=...)`
+- `resolve_hub_agent_workspace_root(hub_root, runtime=..., workspace_id=...)`
 
 ### 3. Global Root
 
@@ -188,6 +204,17 @@ def resolve_hub_orchestration_db_path(hub_root: Path) -> Path:
 
 def resolve_hub_templates_root(hub_root: Path) -> Path:
     """Return the hub-scoped templates root."""
+
+def resolve_hub_runtimes_root(hub_root: Path) -> Path:
+    """Return the hub-scoped root for CAR-managed runtime workspaces."""
+
+def resolve_hub_runtime_root(hub_root: Path, *, runtime: str) -> Path:
+    """Return the managed root for one runtime under the hub."""
+
+def resolve_hub_agent_workspace_root(
+    hub_root: Path, *, runtime: str, workspace_id: str
+) -> Path:
+    """Return the canonical root for a managed agent workspace."""
 ```
 
 ### Usage Pattern

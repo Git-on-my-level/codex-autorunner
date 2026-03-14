@@ -247,6 +247,72 @@ def test_hub_api_lists_repos(tmp_path: Path):
     data = resp.json()
     assert data["repos"][0]["id"] == "demo"
     assert data["repos"][0]["effective_destination"] == {"kind": "local"}
+    assert data["agent_workspaces"] == []
+
+
+def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    workspace = supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+    assert workspace.runtime == "zeroclaw"
+    assert workspace.display_name == "ZeroClaw Main"
+    assert workspace.path == (
+        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+    )
+    assert workspace.path.exists()
+    assert workspace.resource_kind == "agent_workspace"
+
+    listed = supervisor.list_agent_workspaces(use_cache=False)
+    assert [item.id for item in listed] == ["zc-main"]
+    assert listed[0].path == workspace.path
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    manifest_workspace = manifest.get_agent_workspace("zc-main")
+    assert manifest_workspace is not None
+    assert manifest_workspace.path == Path(
+        ".codex-autorunner/runtimes/zeroclaw/zc-main"
+    )
+
+    state_path = hub_root / ".codex-autorunner" / "hub_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["agent_workspaces"][0]["id"] == "zc-main"
+    assert payload["agent_workspaces"][0]["resource_kind"] == "agent_workspace"
+
+    supervisor.remove_agent_workspace("zc-main")
+    assert workspace.path.exists() is False
+    assert supervisor.list_agent_workspaces(use_cache=False) == []
+
+
+def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/repos")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repos"] == []
+    workspace = payload["agent_workspaces"][0]
+    assert workspace["id"] == "zc-main"
+    assert workspace["runtime"] == "zeroclaw"
+    assert workspace["path"] == ".codex-autorunner/runtimes/zeroclaw/zc-main"
+    assert workspace["resource_kind"] == "agent_workspace"
+    assert workspace["effective_destination"] == {"kind": "local"}
 
 
 @pytest.mark.slow

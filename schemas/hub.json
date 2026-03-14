@@ -49,6 +49,7 @@
       "non_pma_chat_bound_thread_count": {"type": "integer"},
       "cleanup_blocked_by_chat_binding": {"type": "boolean"},
       "has_car_state": {"type": "boolean"},
+      "resource_kind": {"type": "string", "enum": ["repo"]},
       "mounted": {"type": "boolean"},
       "mount_error": {"type": ["null", "string"]},
       "ticket_flow": {
@@ -96,15 +97,47 @@
       "last_exit_code",
       "runner_pid",
       "effective_destination",
+      "resource_kind",
       "mounted"
+    ]
+  },
+  "AgentWorkspaceSnapshot": {
+    "properties": {
+      "id": {"type": "string"},
+      "runtime": {"type": "string"},
+      "path": {"type": "string"},
+      "display_name": {"type": "string"},
+      "enabled": {"type": "boolean"},
+      "exists_on_disk": {"type": "boolean"},
+      "effective_destination": {"type": "object"},
+      "resource_kind": {"type": "string", "enum": ["agent_workspace"]}
+    },
+    "required": [
+      "id",
+      "runtime",
+      "path",
+      "display_name",
+      "enabled",
+      "exists_on_disk",
+      "effective_destination",
+      "resource_kind"
     ]
   },
   "HubState": {
     "properties": {
       "last_scan_at": {"type": ["null", "string"]},
       "repos": {"type": "array", "items": {"$ref": "RepoSnapshot"}},
+      "agent_workspaces": {
+        "type": "array",
+        "items": {"$ref": "AgentWorkspaceSnapshot"}
+      },
       "pinned_parent_repo_ids": {"type": "array", "items": {"type": "string"}}
     },
-    "required": ["last_scan_at", "repos", "pinned_parent_repo_ids"]
+    "required": [
+      "last_scan_at",
+      "repos",
+      "agent_workspaces",
+      "pinned_parent_repo_ids"
+    ]
   }
 }

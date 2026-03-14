@@ -29,6 +29,7 @@ const HUB_DEFAULT_VIEW_PREFS = {
 };
 let hubData = {
     repos: [],
+    agent_workspaces: [],
     last_scan_at: null,
     pinned_parent_repo_ids: [],
 };
@@ -1610,6 +1611,9 @@ function renderReposWithScroll(repos) {
 function applyHubData(data) {
     hubData = {
         repos: Array.isArray(data?.repos) ? data.repos : [],
+        agent_workspaces: Array.isArray(data?.agent_workspaces)
+            ? data.agent_workspaces
+            : [],
         last_scan_at: data?.last_scan_at || null,
         pinned_parent_repo_ids: normalizePinnedParentRepoIds(data?.pinned_parent_repo_ids),
     };

@@ -13,7 +13,10 @@ from codex_autorunner.core.state_roots import (
     is_within_allowed_root,
     resolve_cache_root,
     resolve_global_state_root,
+    resolve_hub_agent_workspace_root,
     resolve_hub_orchestration_db_path,
+    resolve_hub_runtime_root,
+    resolve_hub_runtimes_root,
     resolve_hub_state_root,
     resolve_hub_templates_root,
     resolve_repo_state_root,
@@ -58,6 +61,24 @@ class TestResolveHubStateRoot:
     def test_hub_state_includes_templates(self, tmp_path):
         templates = resolve_hub_templates_root(Path(tmp_path))
         assert templates == Path(tmp_path) / REPO_STATE_DIR / "templates"
+
+    def test_hub_state_includes_runtime_roots(self, tmp_path):
+        runtimes = resolve_hub_runtimes_root(Path(tmp_path))
+        runtime = resolve_hub_runtime_root(Path(tmp_path), runtime="zeroclaw")
+        workspace = resolve_hub_agent_workspace_root(
+            Path(tmp_path), runtime="zeroclaw", workspace_id="main"
+        )
+        assert runtimes == Path(tmp_path) / REPO_STATE_DIR / "runtimes"
+        assert runtime == runtimes / "zeroclaw"
+        assert workspace == runtimes / "zeroclaw" / "main"
+
+    def test_agent_workspace_root_rejects_unsafe_segments(self, tmp_path):
+        with pytest.raises(StateRootError):
+            resolve_hub_runtime_root(Path(tmp_path), runtime="../escape")
+        with pytest.raises(StateRootError):
+            resolve_hub_agent_workspace_root(
+                Path(tmp_path), runtime="zeroclaw", workspace_id="../escape"
+            )
 
 
 class TestResolveHubOrchestrationDbPath:
@@ -219,6 +240,14 @@ class TestStateRootContract:
         hub_state = resolve_hub_state_root(hub_root)
         orchestration_db = resolve_hub_orchestration_db_path(hub_root)
         assert is_within_allowed_root(orchestration_db, allowed_roots=[hub_state])
+
+    def test_hub_runtime_paths_are_within_hub_state_root(self, tmp_path):
+        hub_root = Path(tmp_path)
+        hub_state = resolve_hub_state_root(hub_root)
+        workspace_root = resolve_hub_agent_workspace_root(
+            hub_root, runtime="zeroclaw", workspace_id="main"
+        )
+        assert is_within_allowed_root(workspace_root, allowed_roots=[hub_state])
 
     def test_global_state_paths_are_within_global_root(self, tmp_path, monkeypatch):
         global_root = tmp_path / "global_state"

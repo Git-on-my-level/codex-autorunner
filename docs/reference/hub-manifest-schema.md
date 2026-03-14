@@ -1,9 +1,39 @@
-# Hub Manifest Destination Schema
+# Hub Manifest Schema
 
-Canonical reference for `repos[].destination` in hub manifests.
+Canonical reference for hub manifests at:
 
 - Manifest path: `<hub_root>/.codex-autorunner/manifest.yml`
-- Entry path: `repos[].destination`
+- Current manifest version: `3`
+
+Top-level collections:
+
+- `repos[]`
+- `agent_workspaces[]`
+
+## Agent Workspace Shape
+
+`agent_workspaces[]` entries are first-class hub resources with:
+
+- `id`: required string identifier
+- `runtime`: required string runtime id
+- `path`: required managed relative path
+- `enabled`: optional boolean, defaults to `true`
+- `display_name`: optional string
+- `destination`: optional destination object
+
+In v1, `path` must point at the CAR-managed runtime root:
+
+- `.codex-autorunner/runtimes/<runtime>/<workspace_id>`
+
+CAR creates and removes managed agent workspaces under that root instead of
+accepting arbitrary external runtime paths.
+
+## Destination Schema
+
+Canonical reference for:
+
+- `repos[].destination`
+- `agent_workspaces[].destination`
 
 ## Destination Shape
 

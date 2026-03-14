@@ -16,6 +16,7 @@ Non-canonical (caches):
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, Sequence
 
@@ -25,6 +26,7 @@ GLOBAL_STATE_ROOT_ENV = "CAR_GLOBAL_STATE_ROOT"
 
 REPO_STATE_DIR = ".codex-autorunner"
 ORCHESTRATION_DB_FILENAME = "orchestration.sqlite3"
+_SAFE_HUB_RESOURCE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class StateRootError(Exception):
@@ -109,6 +111,45 @@ def resolve_hub_orchestration_db_path(hub_root: Path) -> Path:
 def resolve_hub_templates_root(hub_root: Path) -> Path:
     """Return the hub-scoped templates root."""
     return resolve_hub_state_root(hub_root) / "templates"
+
+
+def _validate_hub_resource_segment(value: str, *, label: str) -> str:
+    normalized = (value or "").strip()
+    if not normalized or not _SAFE_HUB_RESOURCE_SEGMENT.match(normalized):
+        raise StateRootError(
+            f"{label} must be a non-empty path-safe identifier",
+        )
+    return normalized
+
+
+def resolve_hub_runtimes_root(hub_root: Path) -> Path:
+    """Return the hub-scoped root for CAR-managed runtime workspaces."""
+    return resolve_hub_state_root(hub_root) / "runtimes"
+
+
+def resolve_hub_runtime_root(hub_root: Path, *, runtime: str) -> Path:
+    """Return the managed root for a specific runtime under the hub."""
+    runtime_id = _validate_hub_resource_segment(runtime, label="runtime")
+    root = resolve_hub_runtimes_root(hub_root)
+    path = root / runtime_id
+    validate_path_within_roots(path, allowed_roots=[root], resolve=False)
+    return path
+
+
+def resolve_hub_agent_workspace_root(
+    hub_root: Path,
+    *,
+    runtime: str,
+    workspace_id: str,
+) -> Path:
+    """Return the canonical root for a managed agent workspace."""
+    runtime_root = resolve_hub_runtime_root(hub_root, runtime=runtime)
+    workspace_segment = _validate_hub_resource_segment(
+        workspace_id, label="workspace_id"
+    )
+    path = runtime_root / workspace_segment
+    validate_path_within_roots(path, allowed_roots=[runtime_root], resolve=False)
+    return path
 
 
 def resolve_cache_root() -> Path:
@@ -213,6 +254,9 @@ __all__ = [
     "StateRootError",
     "resolve_global_state_root",
     "resolve_hub_orchestration_db_path",
+    "resolve_hub_agent_workspace_root",
+    "resolve_hub_runtime_root",
+    "resolve_hub_runtimes_root",
     "resolve_repo_state_root",
     "resolve_hub_state_root",
     "resolve_hub_templates_root",

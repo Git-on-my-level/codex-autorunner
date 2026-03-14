@@ -75,12 +75,25 @@ interface HubRepo {
   non_pma_chat_bound_thread_count?: number | null;
   cleanup_blocked_by_chat_binding?: boolean;
   has_car_state?: boolean;
+  resource_kind: "repo";
   ticket_flow?: HubTicketFlow | null;
   ticket_flow_display?: HubTicketFlowDisplay | null;
 }
 
+interface HubAgentWorkspace {
+  id: string;
+  runtime: string;
+  path: string;
+  display_name: string;
+  enabled: boolean;
+  exists_on_disk: boolean;
+  effective_destination: Record<string, unknown>;
+  resource_kind: "agent_workspace";
+}
+
 interface HubData {
   repos: HubRepo[];
+  agent_workspaces: HubAgentWorkspace[];
   last_scan_at: string | null;
   pinned_parent_repo_ids?: string[];
 }
@@ -238,6 +251,7 @@ const HUB_DEFAULT_VIEW_PREFS: HubViewPrefs = {
 
 let hubData: HubData = {
   repos: [],
+  agent_workspaces: [],
   last_scan_at: null,
   pinned_parent_repo_ids: [],
 };
@@ -2059,6 +2073,9 @@ function renderReposWithScroll(repos: HubRepo[]): void {
 function applyHubData(data: HubData): void {
   hubData = {
     repos: Array.isArray(data?.repos) ? data.repos : [],
+    agent_workspaces: Array.isArray(data?.agent_workspaces)
+      ? data.agent_workspaces
+      : [],
     last_scan_at: data?.last_scan_at || null,
     pinned_parent_repo_ids: normalizePinnedParentRepoIds(
       data?.pinned_parent_repo_ids

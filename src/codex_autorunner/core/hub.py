@@ -15,6 +15,7 @@ from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
 from ..manifest import (
     Manifest,
+    ManifestAgentWorkspace,
     ManifestRepo,
     ensure_unique_repo_id,
     load_manifest,
@@ -34,6 +35,7 @@ from .destinations import (
     DockerDestination,
     default_car_docker_container_name,
     default_local_destination,
+    parse_destination_config,
     resolve_effective_repo_destination,
 )
 from .force_attestation import enforce_force_attestation
@@ -70,6 +72,7 @@ from .ports.backend_orchestrator import (
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
 from .state import RunnerState, load_state, now_iso
+from .state_roots import resolve_hub_agent_workspace_root
 from .types import AppServerSupervisorFactory, BackendFactory
 from .utils import atomic_write, is_within, subprocess_env
 
@@ -148,6 +151,7 @@ class RepoSnapshot:
     non_pma_chat_bound_thread_count: int = 0
     cleanup_blocked_by_chat_binding: bool = False
     has_car_state: bool = False
+    resource_kind: str = "repo"
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         try:
@@ -185,6 +189,37 @@ class RepoSnapshot:
             "non_pma_chat_bound_thread_count": self.non_pma_chat_bound_thread_count,
             "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
             "has_car_state": self.has_car_state,
+            "resource_kind": self.resource_kind,
+        }
+
+
+@dataclasses.dataclass
+class AgentWorkspaceSnapshot:
+    id: str
+    runtime: str
+    path: Path
+    display_name: str
+    enabled: bool
+    exists_on_disk: bool
+    effective_destination: Dict[str, Any] = dataclasses.field(
+        default_factory=default_local_destination
+    )
+    resource_kind: str = "agent_workspace"
+
+    def to_dict(self, hub_root: Path) -> Dict[str, object]:
+        try:
+            rel_path = self.path.relative_to(hub_root)
+        except Exception:
+            rel_path = self.path
+        return {
+            "id": self.id,
+            "runtime": self.runtime,
+            "path": str(rel_path),
+            "display_name": self.display_name,
+            "enabled": self.enabled,
+            "exists_on_disk": self.exists_on_disk,
+            "effective_destination": self.effective_destination,
+            "resource_kind": self.resource_kind,
         }
 
 
@@ -192,12 +227,18 @@ class RepoSnapshot:
 class HubState:
     last_scan_at: Optional[str]
     repos: List[RepoSnapshot]
+    agent_workspaces: List[AgentWorkspaceSnapshot] = dataclasses.field(
+        default_factory=list
+    )
     pinned_parent_repo_ids: List[str] = dataclasses.field(default_factory=list)
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         return {
             "last_scan_at": self.last_scan_at,
             "repos": [repo.to_dict(hub_root) for repo in self.repos],
+            "agent_workspaces": [
+                workspace.to_dict(hub_root) for workspace in self.agent_workspaces
+            ],
             "pinned_parent_repo_ids": list(self.pinned_parent_repo_ids or []),
         }
 
@@ -216,7 +257,12 @@ def read_lock_status(lock_path: Path) -> LockStatus:
 
 def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
     if not state_path.exists():
-        return HubState(last_scan_at=None, repos=[], pinned_parent_repo_ids=[])
+        return HubState(
+            last_scan_at=None,
+            repos=[],
+            agent_workspaces=[],
+            pinned_parent_repo_ids=[],
+        )
     data = state_path.read_text(encoding="utf-8")
     try:
         import json
@@ -224,13 +270,20 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         payload = json.loads(data)
     except Exception as exc:
         logger.warning("Failed to parse hub state from %s: %s", state_path, exc)
-        return HubState(last_scan_at=None, repos=[], pinned_parent_repo_ids=[])
+        return HubState(
+            last_scan_at=None,
+            repos=[],
+            agent_workspaces=[],
+            pinned_parent_repo_ids=[],
+        )
     last_scan_at = payload.get("last_scan_at")
     pinned_parent_repo_ids = _normalize_pinned_parent_repo_ids(
         payload.get("pinned_parent_repo_ids")
     )
     repos_payload = payload.get("repos") or []
+    agent_workspaces_payload = payload.get("agent_workspaces") or []
     repos: List[RepoSnapshot] = []
+    agent_workspaces: List[AgentWorkspaceSnapshot] = []
     for entry in repos_payload:
         try:
             repo = RepoSnapshot(
@@ -278,9 +331,33 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 exc,
             )
             continue
+    for entry in agent_workspaces_payload:
+        try:
+            workspace = AgentWorkspaceSnapshot(
+                id=str(entry.get("id")),
+                runtime=str(entry.get("runtime", "")),
+                path=hub_root / entry.get("path", ""),
+                display_name=str(entry.get("display_name", "")),
+                enabled=bool(entry.get("enabled", True)),
+                exists_on_disk=bool(entry.get("exists_on_disk", False)),
+                effective_destination=(
+                    normalize_manifest_destination(entry.get("effective_destination"))
+                    or default_local_destination()
+                ),
+            )
+            agent_workspaces.append(workspace)
+        except Exception as exc:
+            workspace_id = entry.get("id", "unknown")
+            logger.warning(
+                "Failed to load agent workspace snapshot for id=%s from hub state: %s",
+                workspace_id,
+                exc,
+            )
+            continue
     return HubState(
         last_scan_at=last_scan_at,
         repos=repos,
+        agent_workspaces=agent_workspaces,
         pinned_parent_repo_ids=pinned_parent_repo_ids,
     )
 
@@ -429,10 +506,14 @@ class HubSupervisor:
         self._invalidate_list_cache()
         manifest, records = discover_and_init(self.hub_config)
         snapshots = self._build_snapshots(records)
+        agent_workspaces = self._build_agent_workspace_snapshots(
+            manifest.agent_workspaces
+        )
         pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
         self.state = HubState(
             last_scan_at=now_iso(),
             repos=snapshots,
+            agent_workspaces=agent_workspaces,
             pinned_parent_repo_ids=pinned_parent_repo_ids,
         )
         save_hub_state(self.state_path, self.state, self.hub_config.root)
@@ -445,16 +526,26 @@ class HubSupervisor:
                     return self._list_cache
             manifest, records = self._manifest_records(manifest_only=True)
             snapshots = self._build_snapshots(records)
+            agent_workspaces = self._build_agent_workspace_snapshots(
+                manifest.agent_workspaces
+            )
             pinned_parent_repo_ids = self._prune_pinned_parent_repo_ids(snapshots)
             self.state = HubState(
                 last_scan_at=self.state.last_scan_at,
                 repos=snapshots,
+                agent_workspaces=agent_workspaces,
                 pinned_parent_repo_ids=pinned_parent_repo_ids,
             )
             save_hub_state(self.state_path, self.state, self.hub_config.root)
             self._list_cache = snapshots
             self._list_cache_at = time.monotonic()
             return snapshots
+
+    def list_agent_workspaces(
+        self, *, use_cache: bool = True
+    ) -> List[AgentWorkspaceSnapshot]:
+        self.list_repos(use_cache=use_cache)
+        return list(self.state.agent_workspaces)
 
     def set_parent_repo_pinned(self, repo_id: str, pinned: bool) -> List[str]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
@@ -474,10 +565,74 @@ class HubSupervisor:
             self.state = HubState(
                 last_scan_at=self.state.last_scan_at,
                 repos=self.state.repos,
+                agent_workspaces=self.state.agent_workspaces,
                 pinned_parent_repo_ids=_normalize_pinned_parent_repo_ids(current),
             )
             save_hub_state(self.state_path, self.state, self.hub_config.root)
             return list(self.state.pinned_parent_repo_ids)
+
+    def create_agent_workspace(
+        self,
+        *,
+        workspace_id: str,
+        runtime: str,
+        display_name: Optional[str] = None,
+    ) -> AgentWorkspaceSnapshot:
+        self._invalidate_list_cache()
+        raw_workspace_id = (workspace_id or "").strip()
+        raw_runtime = (runtime or "").strip()
+        if not raw_workspace_id:
+            raise ValueError("workspace_id is required")
+        if not raw_runtime:
+            raise ValueError("runtime is required")
+        normalized_workspace_id = sanitize_repo_id(raw_workspace_id)
+        normalized_runtime = sanitize_repo_id(raw_runtime)
+
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        existing = manifest.get_agent_workspace(normalized_workspace_id)
+        target = resolve_hub_agent_workspace_root(
+            self.hub_config.root,
+            runtime=normalized_runtime,
+            workspace_id=normalized_workspace_id,
+        )
+        if existing:
+            existing_path = (self.hub_config.root / existing.path).resolve()
+            if existing.runtime != normalized_runtime or existing_path != target:
+                raise ValueError(
+                    "Agent workspace id %s already exists for runtime %s at %s"
+                    % (normalized_workspace_id, existing.runtime, existing.path)
+                )
+        target.mkdir(parents=True, exist_ok=True)
+        manifest.ensure_agent_workspace(
+            self.hub_config.root,
+            workspace_id=normalized_workspace_id,
+            runtime=normalized_runtime,
+            display_name=display_name or workspace_id,
+        )
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        return self._snapshot_for_agent_workspace(normalized_workspace_id)
+
+    def remove_agent_workspace(
+        self,
+        workspace_id: str,
+        *,
+        delete_dir: bool = True,
+    ) -> None:
+        self._invalidate_list_cache()
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if not workspace:
+            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
+
+        workspace_root = (self.hub_config.root / workspace.path).resolve()
+        if delete_dir and workspace_root.exists():
+            shutil.rmtree(workspace_root)
+
+        manifest.agent_workspaces = [
+            entry for entry in manifest.agent_workspaces if entry.id != workspace_id
+        ]
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self.list_repos(use_cache=False)
 
     def _reconcile_startup(self) -> None:
         try:
@@ -1644,6 +1799,11 @@ class HubSupervisor:
             snapshots.append(self._snapshot_from_record(record, repos_by_id))
         return snapshots
 
+    def _build_agent_workspace_snapshots(
+        self, workspaces: List[ManifestAgentWorkspace]
+    ) -> List[AgentWorkspaceSnapshot]:
+        return [self._snapshot_from_agent_workspace(entry) for entry in workspaces]
+
     def _prune_pinned_parent_repo_ids(self, snapshots: List[RepoSnapshot]) -> List[str]:
         base_repo_ids = {snap.id for snap in snapshots if snap.kind == "base"}
         pinned = _normalize_pinned_parent_repo_ids(self.state.pinned_parent_repo_ids)
@@ -1656,6 +1816,17 @@ class HubSupervisor:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         repos_by_id = {entry.repo.id: entry.repo for entry in records}
         snapshot = self._snapshot_from_record(record, repos_by_id)
+        self.list_repos(use_cache=False)
+        return snapshot
+
+    def _snapshot_for_agent_workspace(
+        self, workspace_id: str
+    ) -> AgentWorkspaceSnapshot:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if not workspace:
+            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
+        snapshot = self._snapshot_from_agent_workspace(workspace)
         self.list_repos(use_cache=False)
         return snapshot
 
@@ -2511,6 +2682,29 @@ class HubSupervisor:
             last_run_duration_seconds=None,
             last_exit_code=runner_state.last_exit_code if runner_state else None,
             runner_pid=runner_state.runner_pid if runner_state else None,
+            effective_destination=effective_destination,
+        )
+
+    def _snapshot_from_agent_workspace(
+        self, workspace: ManifestAgentWorkspace
+    ) -> AgentWorkspaceSnapshot:
+        workspace_path = (self.hub_config.root / workspace.path).resolve()
+        parsed_destination = parse_destination_config(
+            workspace.destination,
+            context=f"agent workspace '{workspace.id}' destination",
+        )
+        effective_destination = (
+            parsed_destination.destination.to_dict()
+            if parsed_destination.valid
+            else default_local_destination()
+        )
+        return AgentWorkspaceSnapshot(
+            id=workspace.id,
+            runtime=workspace.runtime,
+            path=workspace_path,
+            display_name=workspace.display_name or workspace_path.name or workspace.id,
+            enabled=workspace.enabled,
+            exists_on_disk=workspace_path.exists(),
             effective_destination=effective_destination,
         )
 
