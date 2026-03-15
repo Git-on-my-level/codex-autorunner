@@ -19,6 +19,7 @@ def _enable_pma(hub_root: Path) -> None:
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
+@pytest.mark.slow
 def test_interrupt_managed_thread_codex_marks_turn_interrupted(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -76,6 +77,7 @@ def test_interrupt_managed_thread_codex_marks_turn_interrupted(hub_env) -> None:
     assert updated_turn["finished_at"] is not None
 
 
+@pytest.mark.slow
 def test_interrupt_managed_thread_opencode_marks_turn_interrupted(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -128,6 +130,7 @@ def test_interrupt_managed_thread_opencode_marks_turn_interrupted(hub_env) -> No
     assert updated_turn["finished_at"] is not None
 
 
+@pytest.mark.slow
 def test_interrupt_managed_thread_rejects_without_running_turn(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -148,6 +151,7 @@ def test_interrupt_managed_thread_rejects_without_running_turn(hub_env) -> None:
     assert "running turn" in (interrupt_resp.json().get("detail") or "").lower()
 
 
+@pytest.mark.slow
 def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -203,6 +207,7 @@ def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
     assert transition["reason"] == "managed_turn_interrupted"
 
 
+@pytest.mark.slow
 def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_finished(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:

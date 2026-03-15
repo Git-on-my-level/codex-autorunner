@@ -11,12 +11,15 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.managed_processes import reaper as reaper_module
 from codex_autorunner.core.managed_processes import registry
 from codex_autorunner.core.managed_processes.reaper import reap_managed_processes
 
+pytestmark = pytest.mark.slow
+
 
 def _assert_process_gone(pid: int) -> None:
-    for _ in range(40):
+    for _ in range(60):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -36,7 +39,7 @@ def _assert_process_gone(pid: int) -> None:
                 return
         except (OSError, subprocess.SubprocessError):
             return
-        time.sleep(0.1)
+        time.sleep(0.05)
     pytest.fail(f"process {pid} still running after reaper termination")
 
 
@@ -72,6 +75,8 @@ def test_reaper_kills_process_group_and_pid_when_owner_is_dead(
 ) -> None:
     rec = _record(workspace_id="ws-dead", pid=2111, pgid=2999, owner_pid=4321)
     registry.write_process_record(tmp_path, rec)
+    monkeypatch.setattr(reaper_module, "REAPER_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(reaper_module, "REAPER_KILL_SECONDS", 0.0)
 
     killpg_calls: list[tuple[int, int]] = []
     kill_calls: list[tuple[int, int]] = []
@@ -114,6 +119,8 @@ def test_reaper_kills_processes_for_pid_keyed_record(
         started_at=_started_at(hours_ago=48),
     )
     registry.write_process_record(tmp_path, rec)
+    monkeypatch.setattr(reaper_module, "REAPER_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(reaper_module, "REAPER_KILL_SECONDS", 0.0)
 
     killpg_calls: list[tuple[int, int]] = []
     kill_calls: list[tuple[int, int]] = []
@@ -264,6 +271,8 @@ def test_reaper_reaps_old_records_even_if_owner_running(
         started_at=_started_at(hours_ago=48),
     )
     registry.write_process_record(tmp_path, rec)
+    monkeypatch.setattr(reaper_module, "REAPER_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(reaper_module, "REAPER_KILL_SECONDS", 0.0)
 
     killpg_calls: list[tuple[int, int]] = []
     kill_calls: list[tuple[int, int]] = []
@@ -327,12 +336,16 @@ def test_reaper_reaps_sigterm_ignoring_process_group(tmp_path: Path) -> None:
         text=True,
         start_new_session=True,
     )
+    original_grace = reaper_module.REAPER_GRACE_SECONDS
+    original_kill = reaper_module.REAPER_KILL_SECONDS
     try:
         line = process.stdout.readline()
         parent_pid_text, child_pid_text, pgid_text = line.strip().split()
         parent_pid = int(parent_pid_text)
         child_pid = int(child_pid_text)
         pgid = int(pgid_text)
+        reaper_module.REAPER_GRACE_SECONDS = 0.05
+        reaper_module.REAPER_KILL_SECONDS = 0.05
 
         registry.write_process_record(
             tmp_path,
@@ -355,6 +368,8 @@ def test_reaper_reaps_sigterm_ignoring_process_group(tmp_path: Path) -> None:
         _assert_process_gone(parent_pid)
         _assert_process_gone(child_pid)
     finally:
+        reaper_module.REAPER_GRACE_SECONDS = original_grace
+        reaper_module.REAPER_KILL_SECONDS = original_kill
         if process.poll() is None:
             process.kill()
         process.wait(timeout=2)

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
+import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
@@ -13,6 +14,8 @@ from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOut
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
+
+pytestmark = pytest.mark.slow
 
 
 def _enable_pma(hub_root: Path) -> None:

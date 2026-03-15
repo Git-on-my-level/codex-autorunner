@@ -18,6 +18,8 @@ from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
+pytestmark = pytest.mark.slow
+
 
 def _enable_pma(
     hub_root: Path,

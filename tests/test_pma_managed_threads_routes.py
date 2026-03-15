@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
@@ -10,6 +11,8 @@ from codex_autorunner.core.orchestration import ActiveWorkSummary, ThreadTarget
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_threads
 from tests.conftest import write_test_config
+
+pytestmark = pytest.mark.slow
 
 
 def _disable_pma(hub_root: Path) -> None:

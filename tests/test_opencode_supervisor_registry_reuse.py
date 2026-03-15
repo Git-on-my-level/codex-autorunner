@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import signal
 from pathlib import Path
 from typing import Any
 
@@ -579,8 +578,7 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         metadata={},
     )
     delete_calls: list[tuple[Path, str, str]] = []
-    killpg_calls: list[tuple[int, int]] = []
-    kill_calls: list[tuple[int, int]] = []
+    terminate_calls: list[tuple[int | None, int | None]] = []
     start_calls: list[str] = []
 
     async def _fake_attach(_handle: OpenCodeHandle, _base_url: str) -> None:
@@ -607,32 +605,16 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         or True,
     )
 
-    def _fake_killpg(_pgid: int, _sig: int) -> None:
-        if _sig == 0:
-            raise OSError("process group ended")
-        killpg_calls.append((_pgid, _sig))
+    async def _fake_terminate(record: ProcessRecord) -> bool:
+        terminate_calls.append((record.pid, record.pgid))
         pid_state["running"] = False
+        return True
 
-    def _fake_kill(_pid: int, _sig: int) -> None:
-        kill_calls.append((_pid, _sig))
-        pid_state["running"] = False
-
-    monkeypatch.setattr(
-        "codex_autorunner.core.process_termination.os.killpg",
-        _fake_killpg,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.process_termination.os.kill",
-        _fake_kill,
-    )
+    monkeypatch.setattr(supervisor, "_terminate_record_process", _fake_terminate)
 
     await supervisor._ensure_started(handle)
 
-    assert killpg_calls == [
-        (9992, signal.SIGTERM),
-        (9992, signal.SIGKILL),
-    ]
-    assert kill_calls == [(9992, signal.SIGTERM), (9992, signal.SIGKILL)]
+    assert terminate_calls == [(9992, 9992)]
     assert delete_calls == [
         (tmp_path, "opencode", "ws-1"),
         (tmp_path, "opencode", "9992"),
@@ -845,6 +827,11 @@ async def test_close_handle_deletes_registry_record_when_process_owned(
 
     handle.process = _FakeProcess()
     delete_calls: list[tuple[Path, str, str]] = []
+    terminate_calls: list[tuple[int | None, int | None]] = []
+
+    async def _fake_terminate(record: ProcessRecord) -> bool:
+        terminate_calls.append((record.pid, record.pgid))
+        return True
 
     monkeypatch.setattr(
         supervisor_module,
@@ -852,9 +839,11 @@ async def test_close_handle_deletes_registry_record_when_process_owned(
         lambda repo_root, kind, key: delete_calls.append((repo_root, kind, key))
         or True,
     )
+    monkeypatch.setattr(supervisor, "_terminate_record_process", _fake_terminate)
 
     await supervisor._close_handle(handle, reason="close_all")
 
+    assert terminate_calls == [(123, None)]
     assert sorted((call[1], call[2]) for call in delete_calls) == [
         ("opencode", "123"),
         ("opencode", "ws-1"),

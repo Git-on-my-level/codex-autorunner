@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
@@ -20,6 +21,7 @@ def _enable_pma(hub_root: Path, *, max_text_chars: int | None = None) -> None:
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
+@pytest.mark.slow
 def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -168,6 +170,7 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert "message after resume" in third_prompt
 
 
+@pytest.mark.slow
 def test_create_managed_thread_validates_workspace_root_boundaries(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -202,6 +205,7 @@ def test_create_managed_thread_validates_workspace_root_boundaries(hub_env) -> N
     assert windows_drive_resp.json().get("detail") == "workspace_root is invalid"
 
 
+@pytest.mark.slow
 def test_compact_rejects_oversize_summary(hub_env) -> None:
     _enable_pma(hub_env.hub_root, max_text_chars=5)
     app = create_hub_app(hub_env.hub_root)
@@ -227,6 +231,7 @@ def test_compact_rejects_oversize_summary(hub_env) -> None:
     assert thread["compact_seed"] is None
 
 
+@pytest.mark.slow
 def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

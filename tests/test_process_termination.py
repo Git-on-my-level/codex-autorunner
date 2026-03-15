@@ -12,14 +12,14 @@ from codex_autorunner.core.process_termination import terminate_record
 
 
 def _assert_process_gone(pid: int) -> None:
-    for _ in range(40):
+    for _ in range(60):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
         except PermissionError:
             return
-        time.sleep(0.1)
+        time.sleep(0.05)
     pytest.fail(f"process {pid} still running after termination")
 
 
@@ -69,8 +69,8 @@ def test_terminate_record_kills_sigterm_ignoring_process_group() -> None:
         assert terminate_record(
             parent_pid,
             pgid,
-            grace_seconds=0.4,
-            kill_seconds=0.2,
+            grace_seconds=0.05,
+            kill_seconds=0.05,
         )
 
         process.wait(timeout=6)
@@ -83,8 +83,8 @@ def test_terminate_record_kills_sigterm_ignoring_process_group() -> None:
             terminate_record(
                 leader_pid,
                 leader_pid,
-                grace_seconds=0.1,
-                kill_seconds=0.1,
+                grace_seconds=0.05,
+                kill_seconds=0.05,
             )
         process.wait(timeout=2)
         process.stdout.close()

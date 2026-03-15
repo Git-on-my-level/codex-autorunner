@@ -69,7 +69,7 @@ def test_watchdog_timer_refires_until_touched(tmp_path) -> None:
     created = store.create_timer(
         {
             "timer_type": "watchdog",
-            "idle_seconds": 1,
+            "idle_seconds": 60,
             "thread_id": "thread-abc",
             "reason": "watchdog_stalled",
             "idempotency_key": "watchdog-1",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
@@ -73,6 +74,7 @@ def _seed_standalone_repo(tmp_path: Path) -> Path:
     return repo_root
 
 
+@pytest.mark.slow
 def test_issue_828_filebox_parity_matrix_characterization(tmp_path: Path) -> None:
     hub_root, _repo_root = _seed_hub_with_registered_repo(tmp_path, repo_id="repo")
     matrix = ISSUE_828_PARITY_MATRIX["filebox"]
@@ -104,6 +106,7 @@ def test_issue_828_filebox_parity_matrix_characterization(tmp_path: Path) -> Non
         assert matrix["invalid_upload_filename"]["parity"] == "aligned"
 
 
+@pytest.mark.slow
 def test_issue_828_flow_start_parity_matrix_characterization(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -145,6 +148,7 @@ def test_issue_828_flow_start_parity_matrix_characterization(
     assert matrix["parity"] == "aligned"
 
 
+@pytest.mark.slow
 def test_issue_828_destination_parity_matrix_characterization(tmp_path: Path) -> None:
     hub_root, _repo_root = _seed_hub_with_registered_repo(tmp_path, repo_id="base")
     matrix = ISSUE_828_PARITY_MATRIX["destination"]["invalid_docker_profile"]

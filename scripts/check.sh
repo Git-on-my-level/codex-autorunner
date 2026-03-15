@@ -124,11 +124,12 @@ if [ -z "${CI:-}" ]; then
   }
   trap cleanup_fast_test_artifacts EXIT
   "$PYTHON_BIN" -m pytest -m "not integration and not slow" --collect-only -q > "$FAST_TEST_SELECTED"
-  "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto --junitxml "$FAST_TEST_JUNIT"
+  "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
   "$PYTHON_BIN" scripts/report_fast_test_budget.py \
     "$FAST_TEST_JUNIT" \
     --selected-nodeids "$FAST_TEST_SELECTED" \
     --repo-root "$REPO_ROOT" \
+    --verify-nodeids \
     --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-1.0}" \
     --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
 else
@@ -136,7 +137,7 @@ else
 fi
 
 echo "Dead-code check (heuristic)..."
-"$PYTHON_BIN" scripts/deadcode.py --check
+"$PYTHON_BIN" "$REPO_ROOT/scripts/deadcode.py" --check
 
 echo "Optional extended checks: make test-chat-platform-contract"
 

@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
+
+pytestmark = pytest.mark.slow
 
 
 def _enable_pma(hub_root: Path) -> None:

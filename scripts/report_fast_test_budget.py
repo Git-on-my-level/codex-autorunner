@@ -221,14 +221,15 @@ def main(argv: list[str] | None = None) -> int:
         description="Report over-budget tests from a pytest JUnit XML report."
     )
     parser.add_argument("report_path", type=Path)
-    parser.add_argument("--max-duration", default="0.5")
+    parser.add_argument("--max-duration", default="1.0")
     parser.add_argument("--max-report", default="20")
     parser.add_argument("--selected-nodeids", type=Path)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--fail-on-violation", action="store_true")
+    parser.add_argument("--verify-nodeids", action="store_true")
     args = parser.parse_args(argv)
 
-    threshold_seconds = _parse_positive_float(args.max_duration, default=0.5)
+    threshold_seconds = _parse_positive_float(args.max_duration, default=1.0)
     report_limit = _parse_positive_int(args.max_report, default=20)
     selected_nodeids = _load_selected_nodeids(args.selected_nodeids)
     offenders = collect_fast_test_budget_offenders(
