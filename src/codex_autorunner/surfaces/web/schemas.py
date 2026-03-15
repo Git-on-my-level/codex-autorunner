@@ -159,6 +159,7 @@ class HubCreateAgentWorkspaceRequest(Payload):
         validation_alias=AliasChoices("workspace_id", "workspaceId", "id"),
     )
     runtime: str
+    enabled: bool = True
     display_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("display_name", "displayName", "name"),

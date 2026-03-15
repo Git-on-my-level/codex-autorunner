@@ -4,6 +4,7 @@ Provides RuntimeContext as a minimal runtime helper for ticket flows.
 This replaces Engine as the runtime authority while preserving utility functions.
 """
 
+import importlib
 import json
 import logging
 import os
@@ -111,6 +112,15 @@ class DoctorReport:
         for check in self.checks:
             if check.passed and check.severity != "info":
                 print(check)
+
+
+def _zeroclaw_runtime_preflight(hub_config: HubConfig):
+    module = importlib.import_module("codex_autorunner.agents.zeroclaw.supervisor")
+    return module.zeroclaw_runtime_preflight(hub_config)
+
+
+def zeroclaw_runtime_preflight(hub_config: HubConfig):
+    return _zeroclaw_runtime_preflight(hub_config)
 
 
 def doctor(
@@ -1130,7 +1140,7 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
 
 
 def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
-    """Report ZeroClaw binary availability when managed ZeroClaw usage exists."""
+    """Report ZeroClaw runtime compatibility when managed ZeroClaw usage exists."""
     checks: list[DoctorCheck] = []
     try:
         manifest = load_manifest(hub_config.manifest_path, hub_config.root)
@@ -1156,46 +1166,43 @@ def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     if not enabled_workspaces and not explicit_binary_override:
         return checks
 
-    resolved_binary = (
-        resolve_executable(configured_binary) if configured_binary else None
-    )
     workspace_suffix = ""
     if enabled_workspaces:
         workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
-
-    if resolved_binary:
+    result = zeroclaw_runtime_preflight(hub_config)
+    severity = (
+        "info"
+        if result.status == "ready"
+        else ("error" if enabled_workspaces else "warning")
+    )
+    fix = result.fix
+    message = result.message
+    if workspace_suffix:
+        message = f"{message.rstrip('.')}{workspace_suffix}."
+    if result.status == "ready":
+        detail_parts = []
+        if result.version:
+            detail_parts.append(result.version)
+        if result.launch_mode:
+            detail_parts.append(f"launch_mode={result.launch_mode}")
+        suffix = f" ({', '.join(detail_parts)})" if detail_parts else ""
         checks.append(
             DoctorCheck(
                 name="ZeroClaw runtime availability",
                 passed=True,
-                message=(
-                    f"ZeroClaw binary available at {resolved_binary}{workspace_suffix}."
-                ),
+                message=f"{message.rstrip('.')}{suffix}.",
                 severity="info",
                 check_id="hub.zeroclaw.binary",
             )
         )
         return checks
 
-    if not configured_binary:
-        message = "ZeroClaw binary is not configured."
-        fix = "Set agents.zeroclaw.binary in the hub config."
-    else:
-        message = (
-            f"ZeroClaw binary '{configured_binary}' is not available on PATH"
-            f"{workspace_suffix}."
-        )
-        fix = (
-            "Install ZeroClaw on the host or update agents.zeroclaw.binary "
-            "to a working executable path."
-        )
-
     checks.append(
         DoctorCheck(
             name="ZeroClaw runtime availability",
             passed=False,
             message=message,
-            severity="error" if enabled_workspaces else "warning",
+            severity=severity,
             check_id="hub.zeroclaw.binary",
             fix=fix,
         )

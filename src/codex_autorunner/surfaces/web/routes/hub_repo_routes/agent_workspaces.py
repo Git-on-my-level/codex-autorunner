@@ -148,6 +148,7 @@ class HubAgentWorkspaceService:
                 workspace_id=workspace_id,
                 runtime=runtime,
                 display_name=display_name,
+                enabled=payload.enabled,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -172,6 +173,7 @@ class HubAgentWorkspaceService:
                 workspace_id=workspace_id,
                 runtime=runtime,
                 display_name=display_name,
+                enabled=payload.enabled,
             )
             return snapshot.to_dict(self._context.config.root)
 

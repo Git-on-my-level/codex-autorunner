@@ -76,8 +76,17 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     assert thread["name"] == "Workspace thread"
 
 
-def test_create_managed_thread_with_agent_workspace_owner(hub_env) -> None:
+def test_create_managed_thread_with_agent_workspace_owner(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "ready",
+            "message": "ZeroClaw runtime is ready",
+        },
+    )
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -105,8 +114,16 @@ def test_create_managed_thread_with_agent_workspace_owner(hub_env) -> None:
 
 def test_create_managed_thread_rejects_mismatched_agent_workspace_runtime(
     hub_env,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "ready",
+            "message": "ZeroClaw runtime is ready",
+        },
+    )
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -125,6 +142,66 @@ def test_create_managed_thread_rejects_mismatched_agent_workspace_runtime(
 
     assert resp.status_code == 400
     assert "agent workspace runtime" in (resp.json().get("detail") or "").lower()
+
+
+def test_create_managed_thread_rejects_incompatible_agent_workspace_runtime(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "ready",
+            "message": "ZeroClaw runtime is ready",
+        },
+    )
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+    monkeypatch.setattr(
+        app.state.hub_supervisor,
+        "get_agent_workspace_runtime_readiness",
+        lambda _workspace_id: {
+            "status": "incompatible",
+            "message": "ZeroClaw CLI is incompatible",
+        },
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "incompatible" in (resp.json().get("detail") or "").lower()
+
+
+def test_create_managed_thread_rejects_disabled_agent_workspace(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+        enabled=False,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "disabled" in (resp.json().get("detail") or "").lower()
 
 
 def test_create_managed_thread_rejects_unknown_agent(hub_env) -> None:

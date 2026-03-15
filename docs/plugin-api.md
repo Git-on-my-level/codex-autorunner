@@ -98,9 +98,11 @@ If your runtime does not expose a documented public thread/session API, do not
 advertise the durable-thread contract unless CAR can prove equivalent
 relaunch/resume semantics with a first-class CAR-managed `agent_workspace`.
 ZeroClaw is the reference example for this narrower path: CAR proves
-`durable_threads` and `message_turns` only for CAR-managed agent workspaces,
-with shared workspace memory, per-session state files, and explicit capability
-limits.
+`durable_threads` and `message_turns` only for CAR-managed agent workspaces
+when the installed runtime build advertises the exact launch contract CAR uses.
+Current public `zeroclaw 0.2.0` does not advertise
+`zeroclaw agent --session-state-file`, so CAR now reports it as incompatible
+instead of inferring durability from workspace selection alone.
 
 ## Capability Model
 

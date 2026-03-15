@@ -26,9 +26,11 @@ If an external runtime does not expose a documented public thread/session API,
 do not claim that it satisfies CAR's durable-thread contract unless CAR can
 prove equivalent semantics with a first-class CAR-managed `agent_workspace`.
 The current ZeroClaw adapter is the reference example for this narrower path:
-CAR-managed workspaces can honestly advertise durable threads, but only with
-explicit caveats around shared workspace memory, one active turn per session,
-and the absence of optional capabilities such as `interrupt` and `review`.
+CAR-managed workspaces can only honestly advertise durable threads when the
+installed ZeroClaw build advertises CAR's required launch contract. Current
+`zeroclaw 0.2.0` does not advertise `zeroclaw agent --session-state-file`, so
+CAR now fails fast instead of inferring durability from workspace selection
+alone.
 
 ## Prerequisites
 

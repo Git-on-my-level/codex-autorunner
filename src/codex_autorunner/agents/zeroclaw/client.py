@@ -5,11 +5,10 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import AsyncIterator, Mapping, Optional, Sequence
+from typing import AsyncIterator, Optional
 
 from ...core.sse import format_sse
-from ...core.utils import subprocess_env
+from ..managed_runtime import RuntimeLaunchSpec
 from ..types import TerminalTurnResult
 
 _STARTUP_TIMEOUT_SECONDS = 30.0
@@ -73,22 +72,20 @@ class ZeroClawClient:
 
     def __init__(
         self,
-        command: Sequence[str],
+        launch_spec: RuntimeLaunchSpec,
         *,
-        runtime_workspace_root: Path,
-        session_state_file: Path,
         logger: Optional[logging.Logger] = None,
-        base_env: Optional[Mapping[str, str]] = None,
         launch_provider: Optional[str] = None,
         launch_model: Optional[str] = None,
     ) -> None:
-        if not command:
+        if not launch_spec.command:
             raise ValueError("ZeroClaw command must not be empty")
-        self._command = [str(part) for part in command]
-        self._runtime_workspace_root = runtime_workspace_root
-        self._session_state_file = session_state_file
+        self._command = [str(part) for part in launch_spec.command]
+        self._cwd = launch_spec.cwd
+        self._env = dict(launch_spec.env)
+        self._runtime_workspace_root = launch_spec.runtime_workspace_root
+        self._session_state_file = launch_spec.session_state_file
         self._logger = logger or logging.getLogger(__name__)
-        self._base_env = base_env
         self._process: Optional[asyncio.subprocess.Process] = None
         self._stdout_task: Optional[asyncio.Task[None]] = None
         self._stderr_task: Optional[asyncio.Task[None]] = None
@@ -210,24 +207,20 @@ class ZeroClawClient:
         provider: Optional[str],
         model: Optional[str],
     ) -> None:
-        self._runtime_workspace_root.mkdir(parents=True, exist_ok=True)
-        self._session_state_file.parent.mkdir(parents=True, exist_ok=True)
-        launch_command = [
-            *self._command,
-            "agent",
-            "--session-state-file",
-            str(self._session_state_file),
-        ]
+        if self._runtime_workspace_root is not None:
+            self._runtime_workspace_root.mkdir(parents=True, exist_ok=True)
+        self._cwd.mkdir(parents=True, exist_ok=True)
+        if self._session_state_file is not None:
+            self._session_state_file.parent.mkdir(parents=True, exist_ok=True)
+        launch_command = list(self._command)
         if provider:
             launch_command.extend(["--provider", provider])
         if model:
             launch_command.extend(["--model", model])
-        env = subprocess_env(base_env=self._base_env)
-        env["ZEROCLAW_WORKSPACE"] = str(self._runtime_workspace_root)
         self._process = await asyncio.create_subprocess_exec(
             *launch_command,
-            cwd=str(self._runtime_workspace_root),
-            env=env,
+            cwd=str(self._cwd),
+            env=self._env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

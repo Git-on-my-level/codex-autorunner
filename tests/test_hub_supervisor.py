@@ -262,6 +262,7 @@ def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Pa
         workspace_id="zc-main",
         runtime="zeroclaw",
         display_name="ZeroClaw Main",
+        enabled=False,
     )
     assert workspace.runtime == "zeroclaw"
     assert workspace.display_name == "ZeroClaw Main"
@@ -292,6 +293,75 @@ def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Pa
     assert supervisor.list_agent_workspaces(use_cache=False) == []
 
 
+def test_hub_supervisor_rejects_unknown_agent_workspace_runtime(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+
+    with pytest.raises(ValueError, match="Unknown agent workspace runtime"):
+        supervisor.create_agent_workspace(
+            workspace_id="unknown-main",
+            runtime="bogus",
+        )
+
+
+def test_hub_supervisor_blocks_agent_workspace_create_on_failed_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    monkeypatch.setattr(
+        hub_module,
+        "probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "incompatible",
+            "message": "ZeroClaw CLI is incompatible",
+            "fix": "Install a compatible ZeroClaw build.",
+        },
+    )
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="ZeroClaw CLI is incompatible"):
+        supervisor.create_agent_workspace(
+            workspace_id="zc-main",
+            runtime="zeroclaw",
+        )
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    assert manifest.agent_workspaces == []
+
+
+def test_hub_supervisor_blocks_enabling_agent_workspace_on_failed_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        enabled=False,
+    )
+
+    monkeypatch.setattr(
+        hub_module,
+        "probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "incompatible",
+            "message": "ZeroClaw CLI is incompatible",
+        },
+    )
+
+    with pytest.raises(ValueError, match="ZeroClaw CLI is incompatible"):
+        supervisor.update_agent_workspace("zc-main", enabled=True)
+
+
 def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -302,6 +372,7 @@ def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
         workspace_id="zc-main",
         runtime="zeroclaw",
         display_name="ZeroClaw Main",
+        enabled=False,
     )
 
     client = TestClient(create_hub_app(hub_root))
@@ -332,6 +403,7 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
             "id": "zc-main",
             "runtime": "zeroclaw",
             "display_name": "ZeroClaw Main",
+            "enabled": False,
         },
     )
     assert create_resp.status_code == 200
@@ -387,7 +459,7 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
 
     recreate_resp = client.post(
         "/hub/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
+        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
     )
     assert recreate_resp.status_code == 200
 
@@ -436,7 +508,7 @@ def test_hub_agent_workspace_job_routes_submit_expected_kinds(
 
     create_resp = client.post(
         "/hub/jobs/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
+        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
     )
     assert create_resp.status_code == 200
     assert create_resp.json()["kind"] == "hub.create_agent_workspace"
@@ -452,7 +524,7 @@ def test_hub_agent_workspace_job_routes_submit_expected_kinds(
 
     recreate_resp = client.post(
         "/hub/jobs/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
+        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
     )
     assert recreate_resp.status_code == 200
     assert recreate_resp.json()["kind"] == "hub.create_agent_workspace"
