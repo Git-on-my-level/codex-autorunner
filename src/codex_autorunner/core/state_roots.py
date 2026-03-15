@@ -224,7 +224,7 @@ def get_canonical_roots(
     """Get the list of canonical state roots for validation.
 
     Args:
-        repo_root: Repository root (uses cwd if None)
+        repo_root: Repository root to include when validating repo-local state
         hub_root: Hub root (optional)
         global_root: Global root (uses default if None)
 

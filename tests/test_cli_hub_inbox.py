@@ -141,6 +141,7 @@ def test_hub_inbox_clear_targeted_apply(hub_root_only) -> None:
             )
         if method == "POST" and url.endswith("/hub/messages/resolve"):
             payload = kwargs.get("json") or {}
+            assert "actor" not in payload
             return _json_response(
                 method,
                 url,

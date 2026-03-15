@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 
 if TYPE_CHECKING:
+    from .....core.flows.ux_helpers import BootstrapCheckResult, IssueSeedResult
     from . import FlowRouteDependencies, FlowRoutesState
 
 _logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def start_flow_worker(
 def bootstrap_check(
     repo_root: Path,
     state: "FlowRoutesState",
-) -> Dict[str, Any]:
+) -> "BootstrapCheckResult":
     from .....core.flows.ux_helpers import bootstrap_check as ux_bootstrap_check
 
     return ux_bootstrap_check(
@@ -80,7 +81,7 @@ def seed_issue(
     repo_root: Path,
     state: "FlowRoutesState",
     body: Dict[str, Any],
-) -> Dict[str, Any]:
+) -> "IssueSeedResult | str":
     from fastapi import HTTPException
 
     from .....core.flows.ux_helpers import seed_issue_from_github, seed_issue_from_text
@@ -104,10 +105,18 @@ def seed_issue(
     title = (body.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
-    body_text = body.get("body") or ""
+    body_text = str(body.get("body") or "").strip()
     labels = body.get("labels") or []
     assignees = body.get("assignees") or []
-    return seed_issue_from_text(repo_root, title, body_text, labels, assignees)
+    plan_lines = [f"Title: {title}"]
+    if body_text:
+        plan_lines.extend(["", body_text])
+    if labels:
+        plan_lines.append("")
+        plan_lines.append("Labels: " + ", ".join(str(label) for label in labels))
+    if assignees:
+        plan_lines.append("Assignees: " + ", ".join(str(name) for name in assignees))
+    return seed_issue_from_text("\n".join(plan_lines).strip())
 
 
 def run_bootstrap(

@@ -193,7 +193,6 @@ def register_inbox_commands(
                     "item_type": item.get("item_type"),
                     "action": "dismiss",
                     "reason": "cleared via car hub inbox clear",
-                    "actor": "cli:hub_inbox_clear",
                 }
                 if item.get("seq") is not None:
                     payload["seq"] = item.get("seq")

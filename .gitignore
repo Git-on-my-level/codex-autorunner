@@ -2,6 +2,7 @@ node_modules/
 build/
 .env
 .venv/
+.desloppify/
 src/codex_autorunner.egg-info/
 codex-autorunner.override.yml
 .codex-autorunner/*

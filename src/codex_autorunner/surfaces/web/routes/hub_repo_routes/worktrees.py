@@ -76,7 +76,7 @@ class HubWorktreeService:
         )
         return job.to_dict()
 
-    def _get_request_id(self) -> str:
+    def _get_request_id(self) -> Optional[str]:
         from .....core.request_context import get_request_id
 
         return get_request_id()

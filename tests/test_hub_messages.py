@@ -523,6 +523,7 @@ def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env, monkeypatch) 
                 "item_type": "run_failed",
                 "action": "dismiss",
                 "reason": "cleanup",
+                "actor": "user-supplied-spoof",
             },
         )
         assert resolved.status_code == 200
@@ -532,6 +533,14 @@ def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env, monkeypatch) 
         assert payload["resolved"]["item_type"] == "run_failed"
         assert payload["resolved"]["action"] == "dismiss"
         assert payload["resolved"]["reason"] == "cleanup"
+        assert payload["resolved"]["resolved_by"] == "hub_messages_resolve"
 
         after = client.get("/hub/messages").json()["items"]
         assert after == []
+
+    dismissals_path = (
+        hub_env.repo_root / ".codex-autorunner" / "hub_inbox_dismissals.json"
+    )
+    data = json.loads(dismissals_path.read_text(encoding="utf-8"))
+    stored = data["items"][f"{run_id}:run_failed"]
+    assert stored["resolved_by"] == "hub_messages_resolve"

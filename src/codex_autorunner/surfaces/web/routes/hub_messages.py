@@ -119,9 +119,7 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
         item_type = str(payload.get("item_type") or "").strip()
         action = str(payload.get("action") or "dismiss").strip() or "dismiss"
         reason_raw = payload.get("reason")
-        actor_raw = payload.get("actor")
         reason = str(reason_raw).strip() if isinstance(reason_raw, str) else ""
-        actor = str(actor_raw).strip() if isinstance(actor_raw, str) else ""
         seq_raw = payload.get("seq")
         seq: Optional[int] = None
         if seq_raw is not None and seq_raw != "":
@@ -183,7 +181,7 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                 seq=seq,
                 action=action,
                 reason=reason or None,
-                actor=actor or "hub_messages_resolve",
+                actor="hub_messages_resolve",
             )
         return {"status": "ok", "resolved": resolved}
 
