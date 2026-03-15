@@ -5076,7 +5076,7 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        deferred = await self._defer_ephemeral(
+        deferred = await self._defer_public(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
@@ -5085,7 +5085,7 @@ class DiscordBotService:
             text = format_discord_message(
                 "This channel is not bound. Run `/car bind path:<...>` first."
             )
-            await self._send_or_respond_ephemeral(
+            await self._send_or_respond_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -5107,7 +5107,7 @@ class DiscordBotService:
                 text = format_discord_message(
                     "Binding is invalid. Run `/car bind path:<workspace>`."
                 )
-                await self._send_or_respond_ephemeral(
+                await self._send_or_respond_public(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
@@ -5143,7 +5143,7 @@ class DiscordBotService:
                 exc=exc,
             )
             text = format_discord_message("Failed to start a fresh session.")
-            await self._send_or_respond_ephemeral(
+            await self._send_or_respond_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -5157,7 +5157,7 @@ class DiscordBotService:
         text = format_discord_message(
             f"Started a fresh {mode_label} session for `{agent}` ({state_label})."
         )
-        await self._send_or_respond_ephemeral(
+        await self._send_or_respond_public(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -5172,7 +5172,7 @@ class DiscordBotService:
         channel_id: str,
         guild_id: Optional[str],
     ) -> None:
-        deferred = await self._defer_ephemeral(
+        deferred = await self._defer_public(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
@@ -5181,7 +5181,7 @@ class DiscordBotService:
             text = format_discord_message(
                 "This channel is not bound. Run `/car bind path:<...>` first."
             )
-            await self._send_or_respond_ephemeral(
+            await self._send_or_respond_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -5194,7 +5194,7 @@ class DiscordBotService:
             text = format_discord_message(
                 "/car newt is not available in PMA mode. Use `/car new` instead."
             )
-            await self._send_or_respond_ephemeral(
+            await self._send_or_respond_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -5212,7 +5212,7 @@ class DiscordBotService:
             text = format_discord_message(
                 "Binding is invalid. Run `/car bind path:<workspace>`."
             )
-            await self._send_or_respond_ephemeral(
+            await self._send_or_respond_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -5246,7 +5246,7 @@ class DiscordBotService:
             text = format_discord_message(
                 f"Failed to reset branch `{branch_name}` from origin default branch: {exc}"
             )
-            await self._send_or_respond_ephemeral(
+            await self._send_or_respond_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -5281,7 +5281,7 @@ class DiscordBotService:
                 text = format_discord_message(
                     f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}"
                 )
-                await self._send_or_respond_ephemeral(
+                await self._send_or_respond_public(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
@@ -5319,7 +5319,7 @@ class DiscordBotService:
             text = format_discord_message(
                 "Branch reset succeeded, but starting a fresh session failed."
             )
-            await self._send_or_respond_ephemeral(
+            await self._send_or_respond_public(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
@@ -5338,7 +5338,7 @@ class DiscordBotService:
         text = format_discord_message(
             f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{agent}` ({state_label}).{setup_note}"
         )
-        await self._send_or_respond_ephemeral(
+        await self._send_or_respond_public(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
@@ -6683,6 +6683,7 @@ class DiscordBotService:
             message_id=interaction_id,
             meta={"interaction_token": interaction_token},
         )
+        response_type = "component_update" if update_message else "channel"
         run_mirror.mirror_outbound(
             run_id=record.id,
             platform="discord",
@@ -6692,7 +6693,7 @@ class DiscordBotService:
             text=response_text,
             chat_id=channel_id,
             thread_id=guild_id,
-            meta={"response_type": "ephemeral"},
+            meta={"response_type": response_type},
         )
 
         status_buttons = self._build_flow_status_components(record, runs)
@@ -6705,7 +6706,7 @@ class DiscordBotService:
                     components=status_buttons,
                 )
             else:
-                await self._respond_with_components(
+                await self._respond_with_components_public(
                     interaction_id,
                     interaction_token,
                     response_text,
@@ -6720,7 +6721,7 @@ class DiscordBotService:
                     components=[],
                 )
             else:
-                await self._respond_ephemeral(
+                await self._respond_public(
                     interaction_id, interaction_token, response_text
                 )
 
@@ -8260,6 +8261,135 @@ class DiscordBotService:
         payload: dict[str, Any] = {
             "content": content,
             "flags": DISCORD_EPHEMERAL_FLAG,
+        }
+        if components:
+            payload["components"] = components
+        try:
+            await self._rest.create_followup_message(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                payload=payload,
+            )
+        except Exception:
+            return False
+        return True
+
+    async def _respond_public(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+    ) -> None:
+        max_len = max(int(self._config.max_message_length), 32)
+        content = truncate_for_discord(text, max_len=max_len)
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={
+                    "type": 4,
+                    "data": {
+                        "content": content,
+                    },
+                },
+            )
+        except DiscordAPIError as exc:
+            sent_followup = await self._send_followup_public(
+                interaction_token=interaction_token,
+                content=content,
+            )
+            if not sent_followup:
+                self._logger.error(
+                    "Failed to send public response: %s (interaction_id=%s)",
+                    exc,
+                    interaction_id,
+                )
+
+    async def _defer_public(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={"type": 5},
+            )
+        except DiscordAPIError as exc:
+            self._logger.warning(
+                "Failed to defer public response: %s (interaction_id=%s)",
+                exc,
+                interaction_id,
+            )
+            return False
+        return True
+
+    async def _send_or_respond_public(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+    ) -> None:
+        if deferred:
+            max_len = max(int(self._config.max_message_length), 32)
+            sent = await self._send_followup_public(
+                interaction_token=interaction_token,
+                content=truncate_for_discord(text, max_len=max_len),
+            )
+            if sent:
+                return
+        await self._respond_public(interaction_id, interaction_token, text)
+
+    async def _respond_with_components_public(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        max_len = max(int(self._config.max_message_length), 32)
+        content = truncate_for_discord(text, max_len=max_len)
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={
+                    "type": 4,
+                    "data": {
+                        "content": content,
+                        "components": components,
+                    },
+                },
+            )
+        except DiscordAPIError as exc:
+            sent_followup = await self._send_followup_public(
+                interaction_token=interaction_token,
+                content=content,
+                components=components,
+            )
+            if not sent_followup:
+                self._logger.error(
+                    "Failed to send public component response: %s (interaction_id=%s)",
+                    exc,
+                    interaction_id,
+                )
+
+    async def _send_followup_public(
+        self,
+        *,
+        interaction_token: str,
+        content: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        application_id = (self._config.application_id or "").strip()
+        if not application_id:
+            return False
+        payload: dict[str, Any] = {
+            "content": content,
         }
         if components:
             payload["components"] = components
