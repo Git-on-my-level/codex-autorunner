@@ -14,8 +14,10 @@ from .models import (
 )
 from .pause_dispatch import (
     PauseDispatchSnapshot,
+    TicketFlowDispatchSnapshot,
     format_pause_reason,
     latest_dispatch_seq,
+    list_unseen_ticket_flow_dispatches,
     load_latest_paused_ticket_flow_dispatch,
 )
 from .runtime import FlowRuntime
@@ -36,10 +38,12 @@ __all__ = [
     "format_flow_duration",
     "parse_flow_timestamp",
     "PauseDispatchSnapshot",
+    "TicketFlowDispatchSnapshot",
     "FlowRuntime",
     "FlowStore",
     "archive_flow_run_artifacts",
     "format_pause_reason",
     "latest_dispatch_seq",
+    "list_unseen_ticket_flow_dispatches",
     "load_latest_paused_ticket_flow_dispatch",
 ]

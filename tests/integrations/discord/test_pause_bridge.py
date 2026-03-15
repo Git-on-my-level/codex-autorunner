@@ -125,6 +125,27 @@ def _create_paused_run_with_dispatch(
     (history_dir / "DISPATCH.md").write_text(dispatch_text, encoding="utf-8")
 
 
+def _create_run_with_dispatch(
+    workspace: Path,
+    run_id: str,
+    seq: str,
+    *,
+    status: FlowRunStatus,
+    dispatch_text: str,
+) -> None:
+    db_path = workspace / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        if store.get_flow_run(run_id) is None:
+            store.create_flow_run(run_id, "ticket_flow", input_data={}, state={})
+        store.update_flow_run_status(run_id, status)
+
+    history_dir = (
+        workspace / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / seq
+    )
+    history_dir.mkdir(parents=True, exist_ok=True)
+    (history_dir / "DISPATCH.md").write_text(dispatch_text, encoding="utf-8")
+
+
 @pytest.mark.anyio
 async def test_pause_bridge_dedupes_by_run_and_dispatch_seq(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
@@ -292,6 +313,98 @@ async def test_pause_bridge_prefers_pause_dispatch_over_turn_summary(
         assert "Use `/car flow resume` to continue." in content
         assert "turn_summary" not in content
         assert "This summary should not be mirrored to Discord." not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_bridge_sends_notify_then_incremental_pause(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run_with_dispatch(
+        workspace,
+        run_id,
+        "0001",
+        status=FlowRunStatus.RUNNING,
+        dispatch_text=(
+            "---\nmode: notify\ntitle: Progress update\n---\n\n"
+            "Finished the repo scan and moving to implementation.\n"
+        ),
+    )
+    _create_run_with_dispatch(
+        workspace,
+        run_id,
+        "0002",
+        status=FlowRunStatus.RUNNING,
+        dispatch_text=(
+            "---\nmode: turn_summary\n---\n\n"
+            "This final turn summary should stay out of Discord.\n"
+        ),
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) == 1
+        content = str(queued[0].payload_json.get("content", ""))
+        assert f"Ticket flow dispatch (run {run_id}). Dispatch #0001:" in content
+        assert f"Source: {workspace}" in content
+        assert "Progress update" in content
+        assert "Finished the repo scan and moving to implementation." in content
+        assert "Use `/car flow resume` to continue." not in content
+        assert "turn_summary" not in content
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["last_dispatch_run_id"] == run_id
+        assert binding["last_dispatch_seq"] == "0001"
+
+        _create_run_with_dispatch(
+            workspace,
+            run_id,
+            "0003",
+            status=FlowRunStatus.PAUSED,
+            dispatch_text=(
+                "---\nmode: pause\ntitle: Need guidance\n---\n\n"
+                "Please confirm the migration target before I continue.\n"
+            ),
+        )
+
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) == 2
+        content = str(queued[-1].payload_json.get("content", ""))
+        assert f"Ticket flow paused (run {run_id}). Latest dispatch #0003:" in content
+        assert "Need guidance" in content
+        assert "Please confirm the migration target before I continue." in content
+        assert "Use `/car flow resume` to continue." in content
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["last_dispatch_run_id"] == run_id
+        assert binding["last_dispatch_seq"] == "0003"
+        assert binding["last_pause_run_id"] == run_id
+        assert binding["last_pause_dispatch_seq"] == "0003"
     finally:
         await store.close()
 

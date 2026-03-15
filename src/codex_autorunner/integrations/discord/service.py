@@ -41,7 +41,7 @@ from ...core.flows import (
     FlowStore,
     flow_run_duration_seconds,
     format_flow_duration,
-    load_latest_paused_ticket_flow_dispatch,
+    list_unseen_ticket_flow_dispatches,
 )
 from ...core.flows.hub_overview import build_hub_flow_overview_entries
 from ...core.flows.reconciler import reconcile_flow_run
@@ -2833,96 +2833,111 @@ class DiscordBotService:
             if preferred_source == "telegram":
                 continue
             run_mirror = self._flow_run_mirror(workspace_root)
-            snapshot = await asyncio.to_thread(
-                load_latest_paused_ticket_flow_dispatch, workspace_root
+            snapshots = await asyncio.to_thread(
+                list_unseen_ticket_flow_dispatches,
+                workspace_root,
+                last_run_id=binding.get("last_dispatch_run_id"),
+                last_dispatch_seq=binding.get("last_dispatch_seq"),
             )
-            if snapshot is None:
+            if not snapshots:
                 continue
 
-            if (
-                binding.get("last_pause_run_id") == snapshot.run_id
-                and binding.get("last_pause_dispatch_seq") == snapshot.dispatch_seq
-            ):
-                continue
+            for snapshot in snapshots:
+                content = self._format_ticket_flow_dispatch_notification(
+                    run_id=snapshot.run_id,
+                    dispatch_seq=snapshot.dispatch_seq,
+                    content=snapshot.dispatch_markdown,
+                    source=self._format_pause_notification_source(
+                        workspace_root=workspace_root,
+                        repo_id=binding.get("repo_id"),
+                    ),
+                    allow_resume_hint=snapshot.allow_resume_hint,
+                    is_handoff=snapshot.is_handoff,
+                )
+                chunks = chunk_discord_message(
+                    content,
+                    max_len=self._config.max_message_length,
+                    with_numbering=False,
+                )
+                if not chunks:
+                    chunks = ["(dispatch notification had no content)"]
 
-            content = format_pause_notification_text(
-                run_id=snapshot.run_id,
-                dispatch_seq=snapshot.dispatch_seq,
-                content=snapshot.dispatch_markdown,
-                source=self._format_pause_notification_source(
-                    workspace_root=workspace_root,
-                    repo_id=binding.get("repo_id"),
-                ),
-                resume_hint=(
-                    "`/car flow resume`" if snapshot.allow_resume_hint else ""
-                ),
-            )
-            chunks = chunk_discord_message(
-                content,
-                max_len=self._config.max_message_length,
-                with_numbering=False,
-            )
-            if not chunks:
-                chunks = ["(pause notification had no content)"]
-
-            enqueued = True
-            for index, chunk in enumerate(chunks, start=1):
-                record_id = f"pause:{channel_id}:{snapshot.run_id}:{snapshot.dispatch_seq}:{index}"
-                try:
-                    await self._store.enqueue_outbox(
-                        OutboxRecord(
-                            record_id=record_id,
-                            channel_id=channel_id,
-                            message_id=None,
-                            operation="send",
-                            payload_json={"content": chunk},
+                record_prefix = "pause" if snapshot.is_handoff else "dispatch"
+                event_type = (
+                    "flow_pause_dispatch_notice"
+                    if snapshot.is_handoff
+                    else "flow_dispatch_notice"
+                )
+                enqueued = True
+                for index, chunk in enumerate(chunks, start=1):
+                    record_id = (
+                        f"{record_prefix}:{channel_id}:{snapshot.run_id}:"
+                        f"{snapshot.dispatch_seq}:{index}"
+                    )
+                    try:
+                        await self._store.enqueue_outbox(
+                            OutboxRecord(
+                                record_id=record_id,
+                                channel_id=channel_id,
+                                message_id=None,
+                                operation="send",
+                                payload_json={"content": chunk},
+                            )
                         )
-                    )
-                    run_mirror.mirror_outbound(
-                        run_id=snapshot.run_id,
-                        platform="discord",
-                        event_type="flow_pause_dispatch_notice",
-                        kind="dispatch",
-                        actor="car",
-                        text=chunk,
-                        chat_id=channel_id,
-                        thread_id=binding.get("guild_id"),
-                        message_id=record_id,
-                        meta={
-                            "dispatch_seq": snapshot.dispatch_seq,
-                            "chunk_index": index,
-                        },
-                    )
-                except Exception as exc:
-                    enqueued = False
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.pause_watch.enqueue_failed",
-                        exc=exc,
+                        run_mirror.mirror_outbound(
+                            run_id=snapshot.run_id,
+                            platform="discord",
+                            event_type=event_type,
+                            kind="dispatch",
+                            actor="car",
+                            text=chunk,
+                            chat_id=channel_id,
+                            thread_id=binding.get("guild_id"),
+                            message_id=record_id,
+                            meta={
+                                "dispatch_seq": snapshot.dispatch_seq,
+                                "chunk_index": index,
+                                "mode": snapshot.mode,
+                            },
+                        )
+                    except Exception as exc:
+                        enqueued = False
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.dispatch_watch.enqueue_failed",
+                            exc=exc,
+                            channel_id=channel_id,
+                            run_id=snapshot.run_id,
+                            dispatch_seq=snapshot.dispatch_seq,
+                            mode=snapshot.mode,
+                        )
+                        break
+
+                if not enqueued:
+                    break
+
+                await self._store.mark_dispatch_seen(
+                    channel_id=channel_id,
+                    run_id=snapshot.run_id,
+                    dispatch_seq=snapshot.dispatch_seq,
+                )
+                if snapshot.is_handoff:
+                    await self._store.mark_pause_dispatch_seen(
                         channel_id=channel_id,
                         run_id=snapshot.run_id,
                         dispatch_seq=snapshot.dispatch_seq,
                     )
-                    break
-
-            if not enqueued:
-                continue
-
-            await self._store.mark_pause_dispatch_seen(
-                channel_id=channel_id,
-                run_id=snapshot.run_id,
-                dispatch_seq=snapshot.dispatch_seq,
-            )
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.pause_watch.notified",
-                channel_id=channel_id,
-                run_id=snapshot.run_id,
-                dispatch_seq=snapshot.dispatch_seq,
-                chunk_count=len(chunks),
-            )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.dispatch_watch.notified",
+                    channel_id=channel_id,
+                    run_id=snapshot.run_id,
+                    dispatch_seq=snapshot.dispatch_seq,
+                    mode=snapshot.mode,
+                    chunk_count=len(chunks),
+                )
 
     def _format_pause_notification_source(
         self, *, workspace_root: Optional[Path], repo_id: Optional[str]
@@ -2935,6 +2950,32 @@ class DiscordBotService:
             logger=self._logger,
             debug_label="discord.pause_watch.manifest_label_failed",
         )
+
+    def _format_ticket_flow_dispatch_notification(
+        self,
+        *,
+        run_id: str,
+        dispatch_seq: str,
+        content: str,
+        source: Optional[str],
+        allow_resume_hint: bool,
+        is_handoff: bool,
+    ) -> str:
+        if is_handoff:
+            return format_pause_notification_text(
+                run_id=run_id,
+                dispatch_seq=dispatch_seq,
+                content=content,
+                source=source,
+                resume_hint="`/car flow resume`" if allow_resume_hint else "",
+            )
+        body = content.strip() or "(no dispatch message)"
+        header_lines = [
+            f"Ticket flow dispatch (run {run_id}). Dispatch #{dispatch_seq}:"
+        ]
+        if isinstance(source, str) and source.strip():
+            header_lines.append(f"Source: {source.strip()}")
+        return "\n\n".join(("\n".join(header_lines), body))
 
     def _preferred_bound_source_for_workspace(self, workspace_root: Path) -> str | None:
         raw_config = self._hub_raw_config_cache

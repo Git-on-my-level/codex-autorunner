@@ -6,6 +6,7 @@ from typing import Optional
 
 from ..config import ConfigError, load_repo_config
 from ..redaction import redact_text
+from ..ticket_flow_projection import select_authoritative_run_record
 from .models import FlowRunRecord, FlowRunStatus
 from .store import FlowStore
 
@@ -25,6 +26,17 @@ class PauseDispatchSnapshot:
     dispatch_markdown: str
     dispatch_dir: Optional[Path]
     allow_resume_hint: bool = True
+
+
+@dataclass(frozen=True)
+class TicketFlowDispatchSnapshot:
+    run_id: str
+    dispatch_seq: str
+    dispatch_markdown: str
+    dispatch_dir: Optional[Path]
+    mode: str
+    is_handoff: bool
+    allow_resume_hint: bool = False
 
 
 def latest_dispatch_seq(history_dir: Path) -> Optional[str]:
@@ -96,6 +108,113 @@ def _format_dispatch_parse_failure(*, seq: str, errors: list[str]) -> str:
     lines.append("")
     lines.append("Fix DISPATCH.md for that paused turn before resuming.")
     return "\n".join(lines)
+
+
+def _format_live_dispatch_parse_failure(*, seq: str, errors: list[str]) -> str:
+    lines = [f"Dispatch #{seq} is unreadable or invalid."]
+    if errors:
+        lines.append("")
+        lines.append("Errors:")
+        for error in errors[:5]:
+            lines.append(f"- {_format_public_error(error, limit=300)}")
+        if len(errors) > 5:
+            lines.append(f"- ...and {len(errors) - 5} more")
+    lines.append("")
+    lines.append("Fix DISPATCH.md for that turn before continuing.")
+    return "\n".join(lines)
+
+
+def list_unseen_ticket_flow_dispatches(
+    workspace_root: Path,
+    *,
+    last_run_id: Optional[str] = None,
+    last_dispatch_seq: Optional[str] = None,
+    bootstrap_latest_only: bool = True,
+) -> list[TicketFlowDispatchSnapshot]:
+    db_path = workspace_root / ".codex-autorunner" / "flows.db"
+    if not db_path.exists():
+        return []
+
+    with FlowStore(db_path, durable=_get_durable_writes(workspace_root)) as store:
+        runs = store.list_flow_runs(flow_type="ticket_flow")
+        latest = select_authoritative_run_record(runs)
+        if latest is None:
+            return []
+
+    runs_dir_raw = latest.input_data.get("runs_dir")
+    runs_dir = (
+        Path(runs_dir_raw)
+        if isinstance(runs_dir_raw, str) and runs_dir_raw
+        else Path(".codex-autorunner/runs")
+    )
+
+    from ...tickets.outbox import parse_dispatch, resolve_outbox_paths
+
+    paths = resolve_outbox_paths(
+        workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
+    )
+    seq_dirs = list(reversed(_iter_dispatch_history_dirs(paths.dispatch_history_dir)))
+    if not seq_dirs:
+        return []
+
+    last_seen_seq: Optional[int] = None
+    if last_run_id == latest.id and isinstance(last_dispatch_seq, str):
+        raw_seq = last_dispatch_seq.strip()
+        if raw_seq.isdigit():
+            last_seen_seq = int(raw_seq)
+
+    snapshots: list[TicketFlowDispatchSnapshot] = []
+    run_is_paused = latest.status == FlowRunStatus.PAUSED
+    for dispatch_dir in seq_dirs:
+        seq = dispatch_dir.name
+        if last_seen_seq is not None and int(seq) <= last_seen_seq:
+            continue
+        dispatch_path = dispatch_dir / "DISPATCH.md"
+        dispatch, errors = parse_dispatch(dispatch_path)
+        if errors or dispatch is None:
+            snapshots.append(
+                TicketFlowDispatchSnapshot(
+                    run_id=latest.id,
+                    dispatch_seq=seq,
+                    dispatch_markdown=(
+                        _format_dispatch_parse_failure(seq=seq, errors=errors)
+                        if run_is_paused
+                        else _format_live_dispatch_parse_failure(
+                            seq=seq,
+                            errors=errors,
+                        )
+                    ),
+                    dispatch_dir=dispatch_dir,
+                    mode="pause" if run_is_paused else "notify",
+                    is_handoff=run_is_paused,
+                    allow_resume_hint=False,
+                )
+            )
+            continue
+        if dispatch.mode == "turn_summary":
+            continue
+        snapshots.append(
+            TicketFlowDispatchSnapshot(
+                run_id=latest.id,
+                dispatch_seq=seq,
+                dispatch_markdown=_render_dispatch_for_chat(
+                    title=dispatch.title,
+                    body=dispatch.body,
+                ),
+                dispatch_dir=dispatch_dir,
+                mode=dispatch.mode,
+                is_handoff=dispatch.is_handoff or run_is_paused,
+                allow_resume_hint=dispatch.is_handoff or run_is_paused,
+            )
+        )
+
+    if last_seen_seq is not None:
+        return snapshots
+    if not snapshots:
+        return []
+    if bootstrap_latest_only:
+        return [snapshots[-1]]
+    return snapshots
 
 
 def load_latest_paused_ticket_flow_dispatch(
