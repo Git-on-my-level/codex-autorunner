@@ -27,6 +27,8 @@ from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from codex_autorunner.surfaces.web.routes.pma_routes import chat_runtime, tail_stream
 from tests.conftest import write_test_config
 
+pytestmark = pytest.mark.slow
+
 
 def _enable_pma(
     hub_root: Path,

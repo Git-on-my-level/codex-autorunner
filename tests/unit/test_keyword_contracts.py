@@ -75,6 +75,7 @@ class TestKeywordContractChecker:
         )
         assert script_path.exists()
 
+    @pytest.mark.slow
     def test_checker_finds_no_violations(self):
         script_path = (
             Path(__file__).parent.parent.parent

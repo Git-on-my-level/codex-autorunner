@@ -35,7 +35,10 @@ from codex_autorunner.integrations.telegram.state import topic_key as telegram_t
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
 
-pytestmark = pytest.mark.docker_managed_cleanup
+pytestmark = [
+    pytest.mark.docker_managed_cleanup,
+    pytest.mark.slow,
+]
 
 
 def _init_git_repo(path: Path) -> None:

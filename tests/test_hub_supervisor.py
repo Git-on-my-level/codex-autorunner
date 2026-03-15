@@ -36,6 +36,8 @@ from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_mani
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
+pytestmark = pytest.mark.slow
+
 
 def _init_git_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)

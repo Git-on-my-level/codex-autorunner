@@ -6,6 +6,7 @@ from scripts.report_fast_test_budget import (
     FastTestBudgetOffender,
     build_report_lines,
     collect_fast_test_budget_offenders,
+    summarize_durations,
 )
 
 
@@ -41,7 +42,6 @@ def test_collect_fast_test_budget_offenders_filters_and_sorts(tmp_path: Path) ->
         (item.nodeid, item.duration_seconds, item.outcome) for item in offenders
     ] == [
         ("tests/test_beta.py::test_slow", 1.75, "failed"),
-        ("tests.test_gamma::test_medium", 0.75, "skipped"),
     ]
 
 
@@ -62,3 +62,45 @@ def test_build_report_lines_caps_output_and_reports_remaining() -> None:
     assert "a::test_one" in lines[2]
     assert "b::test_two" in lines[3]
     assert lines[4] == "  ... 1 more over-budget fast tests not shown"
+
+
+def test_collect_fast_test_budget_offenders_filters_by_selected_nodeids(
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.xml"
+    _write_junit_report(
+        report_path,
+        """<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" tests="2">
+    <testcase classname="tests.pkg.test_alpha.TestSuite" name="test_kept" time="1.25" />
+    <testcase classname="tests.pkg.test_alpha.TestSuite" name="test_filtered" time="2.50" />
+  </testsuite>
+</testsuites>
+""",
+    )
+    pkg_dir = tmp_path / "tests" / "pkg"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "test_alpha.py").write_text(
+        "class TestSuite:\n    pass\n", encoding="utf-8"
+    )
+
+    offenders = collect_fast_test_budget_offenders(
+        report_path,
+        threshold_seconds=0.5,
+        selected_nodeids={"tests/pkg/test_alpha.py::TestSuite::test_kept"},
+        repo_root=tmp_path,
+    )
+
+    assert [(item.nodeid, item.duration_seconds) for item in offenders] == [
+        ("tests/pkg/test_alpha.py::TestSuite::test_kept", 1.25),
+    ]
+
+
+def test_summarize_durations_reports_percentiles() -> None:
+    summary = summarize_durations([0.1, 0.2, 0.3, 1.0, 2.0])
+
+    assert summary["count"] == 5
+    assert float(summary["p80"]) > 1.0
+    assert float(summary["p99"]) > float(summary["p95"])
+    assert summary["max"] == 2.0

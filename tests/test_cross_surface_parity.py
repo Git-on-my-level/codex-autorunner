@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
@@ -88,6 +89,7 @@ def _write_parity_report(*, repo_root: Path, checks: list[ParityCheck]) -> Path:
     return report_path
 
 
+@pytest.mark.slow
 def test_cross_surface_parity_report(hub_env) -> None:
     repo_root = hub_env.repo_root
     checks: list[ParityCheck] = []

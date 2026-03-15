@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.integrations.chat import parity_checker
 from codex_autorunner.integrations.chat.command_contract import (
     COMMAND_CONTRACT,
@@ -10,6 +12,7 @@ from codex_autorunner.integrations.chat.command_contract import (
 from codex_autorunner.integrations.chat.parity_checker import run_parity_checks
 
 
+@pytest.mark.slow
 def test_parity_checker_passes_on_current_repo_layout() -> None:
     results = run_parity_checks()
     failures = [result for result in results if not result.passed]
@@ -17,6 +20,7 @@ def test_parity_checker_passes_on_current_repo_layout() -> None:
     assert failures == []
 
 
+@pytest.mark.slow
 def test_parity_checker_fails_when_registry_command_is_uncataloged() -> None:
     contract = tuple(entry for entry in COMMAND_CONTRACT if entry.id != "car.bind")
     results_by_id = {

@@ -116,16 +116,24 @@ if [ -f src/codex_autorunner/static/assets.json ]; then
 fi
 
 echo "Running tests (pytest)..."
-FAST_TEST_JUNIT="$(mktemp)"
-cleanup_fast_test_junit() {
-  rm -f "$FAST_TEST_JUNIT"
-}
-trap cleanup_fast_test_junit EXIT
-"$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto --junitxml "$FAST_TEST_JUNIT"
-"$PYTHON_BIN" scripts/report_fast_test_budget.py \
-  "$FAST_TEST_JUNIT" \
-  --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-0.5}" \
-  --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
+if [ -z "${CI:-}" ]; then
+  FAST_TEST_JUNIT="$(mktemp)"
+  FAST_TEST_SELECTED="$(mktemp)"
+  cleanup_fast_test_artifacts() {
+    rm -f "$FAST_TEST_JUNIT" "$FAST_TEST_SELECTED"
+  }
+  trap cleanup_fast_test_artifacts EXIT
+  "$PYTHON_BIN" -m pytest -m "not integration and not slow" --collect-only -q > "$FAST_TEST_SELECTED"
+  "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto --junitxml "$FAST_TEST_JUNIT"
+  "$PYTHON_BIN" scripts/report_fast_test_budget.py \
+    "$FAST_TEST_JUNIT" \
+    --selected-nodeids "$FAST_TEST_SELECTED" \
+    --repo-root "$REPO_ROOT" \
+    --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-2.5}" \
+    --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
+else
+  "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
+fi
 
 echo "Dead-code check (heuristic)..."
 "$PYTHON_BIN" scripts/deadcode.py --check

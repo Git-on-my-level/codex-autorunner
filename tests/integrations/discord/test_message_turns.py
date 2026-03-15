@@ -62,6 +62,8 @@ from codex_autorunner.integrations.discord.service import (
 )
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
+pytestmark = pytest.mark.slow
+
 
 class _FakeRest:
     def __init__(self) -> None:
