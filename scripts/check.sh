@@ -129,7 +129,7 @@ if [ -z "${CI:-}" ]; then
     "$FAST_TEST_JUNIT" \
     --selected-nodeids "$FAST_TEST_SELECTED" \
     --repo-root "$REPO_ROOT" \
-    --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-2.5}" \
+    --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-1.0}" \
     --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
 else
   "$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
