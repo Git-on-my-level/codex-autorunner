@@ -8,6 +8,7 @@ import uvicorn
 
 from ....core.config import HubConfig
 from ....core.destinations import (
+    resolve_effective_agent_workspace_destination,
     resolve_effective_repo_destination,
     validate_destination_write_payload,
 )
@@ -33,6 +34,18 @@ def register_hub_commands(
         add_completion=False, help="Inspect and set per-repo runtime destinations."
     )
     hub_app.add_typer(destination_app, name="destination")
+
+    agent_workspace_app = typer.Typer(
+        add_completion=False,
+        help="Create, inspect, and manage first-class hub agent workspaces.",
+    )
+    hub_app.add_typer(agent_workspace_app, name="agent-workspace")
+
+    agent_workspace_destination_app = typer.Typer(
+        add_completion=False,
+        help="Inspect and set per-agent-workspace runtime destinations.",
+    )
+    agent_workspace_app.add_typer(agent_workspace_destination_app, name="destination")
 
     orchestration_app = typer.Typer(
         add_completion=False, help="Orchestration state migration and verification."
@@ -60,6 +73,95 @@ def register_hub_commands(
                 continue
             deduped.append(message)
         return deduped
+
+    def _resolve_agent_workspace_entry(config: HubConfig, workspace_id: str):
+        manifest = load_manifest(config.manifest_path, config.root)
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if workspace is None:
+            raise_exit(f"Agent workspace id not found in hub manifest: {workspace_id}")
+        return manifest, workspace
+
+    def _agent_workspace_payload(
+        config: HubConfig,
+        supervisor: HubSupervisor,
+        workspace_id: str,
+    ) -> dict[str, Any]:
+        manifest, workspace = _resolve_agent_workspace_entry(config, workspace_id)
+        snapshot = supervisor.get_agent_workspace_snapshot(workspace_id)
+        resolution = resolve_effective_agent_workspace_destination(workspace)
+        payload: dict[str, Any] = {
+            **snapshot.to_dict(config.root),
+            "configured_destination": workspace.destination,
+            "effective_destination": resolution.to_dict(),
+            "source": "configured" if workspace.destination else "default",
+            "issues": [
+                *manifest.issues_for_repo(workspace.id),
+                *list(resolution.issues or ()),
+            ],
+        }
+        readiness = supervisor.get_agent_workspace_runtime_readiness(workspace_id)
+        if readiness is not None:
+            payload["readiness"] = readiness
+        return payload
+
+    def _normalize_destination_payload(
+        *,
+        kind: str,
+        image: Optional[str],
+        name: Optional[str],
+        env: Optional[list[str]],
+        env_map: Optional[list[str]],
+        mount: Optional[list[str]],
+        mount_ro: Optional[list[str]],
+        profile: Optional[str],
+        workdir: Optional[str],
+    ) -> dict[str, Any]:
+        normalized_kind = kind.strip().lower()
+        destination: dict[str, Any]
+        if normalized_kind == "local":
+            destination = {"kind": "local"}
+        elif normalized_kind == "docker":
+            if not isinstance(image, str) or not image.strip():
+                raise_exit("image is required for docker destination")
+            destination = {"kind": "docker", "image": image.strip()}
+            if isinstance(name, str) and name.strip():
+                destination["container_name"] = name.strip()
+            env_passthrough = [item.strip() for item in (env or []) if item.strip()]
+            if env_passthrough:
+                destination["env_passthrough"] = env_passthrough
+            explicit_env: dict[str, str] = {}
+            for entry in env_map or []:
+                env_key, env_value = _parse_env_map_ref(entry)
+                explicit_env[env_key] = env_value
+            if explicit_env:
+                destination["env"] = explicit_env
+            mounts: list[dict[str, Any]] = [
+                _parse_mount_ref(item) for item in (mount or [])
+            ]
+            mounts.extend(
+                {
+                    **_parse_mount_ref(item),
+                    "read_only": True,
+                }
+                for item in (mount_ro or [])
+            )
+            if mounts:
+                destination["mounts"] = mounts
+            if isinstance(profile, str) and profile.strip():
+                destination["profile"] = profile.strip()
+            if isinstance(workdir, str) and workdir.strip():
+                destination["workdir"] = workdir.strip()
+        else:
+            raise_exit(
+                f"Unsupported destination kind: {kind!r}. Use 'local' or 'docker'."
+            )
+
+        validated = validate_destination_write_payload(
+            destination, context="destination"
+        )
+        if not validated.valid or validated.normalized_destination is None:
+            raise_exit("; ".join(validated.errors) or "Invalid destination payload")
+        return validated.normalized_destination
 
     def _parse_mount_ref(value: str) -> dict[str, str]:
         source, sep, target = value.partition(":")
@@ -197,53 +299,17 @@ def register_hub_commands(
         """
         config = require_hub_config(path)
         manifest, repos_by_id, repo = _resolve_repo_entry(config, repo_id)
-
-        normalized_kind = kind.strip().lower()
-        destination: dict[str, Any]
-        if normalized_kind == "local":
-            destination = {"kind": "local"}
-        elif normalized_kind == "docker":
-            if not isinstance(image, str) or not image.strip():
-                raise_exit("image is required for docker destination")
-            destination = {"kind": "docker", "image": image.strip()}
-            if isinstance(name, str) and name.strip():
-                destination["container_name"] = name.strip()
-            env_passthrough = [item.strip() for item in (env or []) if item.strip()]
-            if env_passthrough:
-                destination["env_passthrough"] = env_passthrough
-            explicit_env: dict[str, str] = {}
-            for entry in env_map or []:
-                env_key, env_value = _parse_env_map_ref(entry)
-                explicit_env[env_key] = env_value
-            if explicit_env:
-                destination["env"] = explicit_env
-            mounts: list[dict[str, Any]] = [
-                _parse_mount_ref(item) for item in (mount or [])
-            ]
-            mounts.extend(
-                {
-                    **_parse_mount_ref(item),
-                    "read_only": True,
-                }
-                for item in (mount_ro or [])
-            )
-            if mounts:
-                destination["mounts"] = mounts
-            if isinstance(profile, str) and profile.strip():
-                destination["profile"] = profile.strip()
-            if isinstance(workdir, str) and workdir.strip():
-                destination["workdir"] = workdir.strip()
-        else:
-            raise_exit(
-                f"Unsupported destination kind: {kind!r}. Use 'local' or 'docker'."
-            )
-
-        validated = validate_destination_write_payload(
-            destination, context="destination"
+        normalized_destination = _normalize_destination_payload(
+            kind=kind,
+            image=image,
+            name=name,
+            env=env,
+            env_map=env_map,
+            mount=mount,
+            mount_ro=mount_ro,
+            profile=profile,
+            workdir=workdir,
         )
-        if not validated.valid or validated.normalized_destination is None:
-            raise_exit("; ".join(validated.errors) or "Invalid destination payload")
-        normalized_destination = validated.normalized_destination
         repo.destination = normalized_destination
         save_manifest(config.manifest_path, manifest, config.root)
 
@@ -268,6 +334,269 @@ def register_hub_commands(
         typer.echo(
             f"Updated destination for {repo.id} to "
             f"{resolution.destination.kind} (source={resolution.source})"
+        )
+
+    @agent_workspace_app.command("list")
+    def hub_agent_workspace_list(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
+    ):
+        """List managed agent workspaces."""
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        snapshots = supervisor.list_agent_workspaces(use_cache=False)
+        payload = [
+            _agent_workspace_payload(config, supervisor, snapshot.id)
+            for snapshot in snapshots
+        ]
+        if output_json:
+            typer.echo(json.dumps({"agent_workspaces": payload}, indent=2))
+            return
+        if not payload:
+            typer.echo("No agent workspaces found.")
+            return
+        typer.echo(f"Agent workspaces ({len(payload)}):")
+        for item in payload:
+            typer.echo(
+                "  - {id} (runtime={runtime}, enabled={enabled}, exists={exists_on_disk}, path={path})".format(
+                    **item
+                )
+            )
+
+    @agent_workspace_app.command("show")
+    def hub_agent_workspace_show(
+        workspace_id: str = typer.Argument(..., help="Agent workspace id"),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
+    ):
+        """Show effective destination and readiness for one agent workspace."""
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        payload = _agent_workspace_payload(config, supervisor, workspace_id)
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(f"Agent workspace: {payload['id']}")
+        typer.echo(f"Runtime: {payload['runtime']}")
+        typer.echo(f"Display name: {payload['display_name']}")
+        typer.echo(f"Enabled: {payload['enabled']}")
+        typer.echo(f"Path: {payload['path']}")
+        typer.echo(f"Effective destination (source={payload['source']}):")
+        typer.echo(
+            json.dumps(payload["effective_destination"], indent=2, sort_keys=True)
+        )
+        readiness = payload.get("readiness")
+        if isinstance(readiness, dict):
+            typer.echo(
+                "Readiness: {status}{version}".format(
+                    status=str(readiness.get("status") or "unknown"),
+                    version=(
+                        f" (version={readiness['version']})"
+                        if readiness.get("version")
+                        else ""
+                    ),
+                )
+            )
+            message = str(readiness.get("message") or "").strip()
+            if message:
+                typer.echo(f"Readiness detail: {message}")
+        if payload["issues"]:
+            typer.echo("Validation issues:")
+            for issue in payload["issues"]:
+                typer.echo(f"- {issue}")
+
+    @agent_workspace_app.command("create")
+    def hub_agent_workspace_create(
+        workspace_id: str = typer.Argument(..., help="Agent workspace id"),
+        runtime: str = typer.Option(..., "--runtime", help="Runtime id"),
+        display_name: Optional[str] = typer.Option(
+            None, "--name", help="Display name override"
+        ),
+        enabled: bool = typer.Option(
+            True,
+            "--enabled/--disabled",
+            help="Enable the workspace immediately (preflight runs when enabled).",
+        ),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
+    ):
+        """Create a first-class managed agent workspace."""
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        try:
+            snapshot = supervisor.create_agent_workspace(
+                workspace_id=workspace_id,
+                runtime=runtime,
+                display_name=display_name,
+                enabled=enabled,
+            )
+        except Exception as exc:
+            raise_exit(str(exc), cause=exc)
+        payload = _agent_workspace_payload(config, supervisor, snapshot.id)
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(
+            f"Created agent workspace {snapshot.id} (runtime={snapshot.runtime}, enabled={snapshot.enabled}) at {snapshot.path}"
+        )
+
+    @agent_workspace_app.command("update")
+    def hub_agent_workspace_update(
+        workspace_id: str = typer.Argument(..., help="Agent workspace id"),
+        display_name: Optional[str] = typer.Option(
+            None, "--name", help="Display name override"
+        ),
+        enabled: Optional[bool] = typer.Option(
+            None,
+            "--enabled/--disabled",
+            help="Enable or disable the workspace",
+        ),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
+    ):
+        """Update non-destination agent workspace settings."""
+        if enabled is None and display_name is None:
+            raise_exit("Provide at least one of --name or --enabled/--disabled.")
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        try:
+            supervisor.update_agent_workspace(
+                workspace_id,
+                enabled=enabled,
+                display_name=display_name,
+            )
+        except Exception as exc:
+            raise_exit(str(exc), cause=exc)
+        payload = _agent_workspace_payload(config, supervisor, workspace_id)
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(
+            f"Updated agent workspace {workspace_id} (enabled={payload['enabled']}, display_name={payload['display_name']})"
+        )
+
+    @agent_workspace_app.command("remove")
+    def hub_agent_workspace_remove(
+        workspace_id: str = typer.Argument(..., help="Agent workspace id"),
+        delete_files: bool = typer.Option(
+            False,
+            "--delete-files",
+            help="Also delete the workspace directory from disk.",
+        ),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
+    ):
+        """Remove an agent workspace from the manifest.
+
+        By default this keeps the workspace files on disk.
+        """
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        try:
+            supervisor.remove_agent_workspace(workspace_id, delete_dir=delete_files)
+        except Exception as exc:
+            raise_exit(str(exc), cause=exc)
+        payload = {
+            "status": "ok",
+            "workspace_id": workspace_id,
+            "delete_dir": delete_files,
+        }
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        action = "Removed and deleted files for" if delete_files else "Removed"
+        typer.echo(f"{action} agent workspace {workspace_id}")
+
+    @agent_workspace_destination_app.command("show")
+    def hub_agent_workspace_destination_show(
+        workspace_id: str = typer.Argument(..., help="Agent workspace id"),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
+    ):
+        """Show effective execution destination for an agent workspace."""
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        payload = _agent_workspace_payload(config, supervisor, workspace_id)
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(f"Agent workspace: {workspace_id}")
+        configured = (
+            json.dumps(payload["configured_destination"], sort_keys=True)
+            if isinstance(payload["configured_destination"], dict)
+            else "<none>"
+        )
+        typer.echo(f"Configured destination: {configured}")
+        typer.echo(f"Effective destination (source={payload['source']}):")
+        typer.echo(
+            json.dumps(payload["effective_destination"], indent=2, sort_keys=True)
+        )
+
+    @agent_workspace_destination_app.command("set")
+    def hub_agent_workspace_destination_set(
+        workspace_id: str = typer.Argument(..., help="Agent workspace id"),
+        kind: str = typer.Argument(..., help="Destination kind (local|docker)"),
+        image: Optional[str] = typer.Option(
+            None, "--image", help="Docker image ref for docker destinations"
+        ),
+        name: Optional[str] = typer.Option(
+            None, "--name", help="Docker container name override"
+        ),
+        env: Optional[list[str]] = typer.Option(
+            None,
+            "--env",
+            help="Repeat to add env passthrough patterns (example: CAR_*)",
+        ),
+        env_map: Optional[list[str]] = typer.Option(
+            None,
+            "--env-map",
+            help="Repeat explicit docker env entries using KEY=VALUE format",
+        ),
+        mount: Optional[list[str]] = typer.Option(
+            None,
+            "--mount",
+            help="Repeat bind mount entries using source:target format",
+        ),
+        mount_ro: Optional[list[str]] = typer.Option(
+            None,
+            "--mount-ro",
+            help="Repeat read-only bind mount entries using source:target format",
+        ),
+        profile: Optional[str] = typer.Option(
+            None, "--profile", help="Docker runtime profile"
+        ),
+        workdir: Optional[str] = typer.Option(
+            None, "--workdir", help="Docker workdir override inside the container"
+        ),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON payload"),
+    ):
+        """Set execution destination for an agent workspace."""
+        config = require_hub_config(path)
+        supervisor = build_supervisor(config)
+        normalized_destination = _normalize_destination_payload(
+            kind=kind,
+            image=image,
+            name=name,
+            env=env,
+            env_map=env_map,
+            mount=mount,
+            mount_ro=mount_ro,
+            profile=profile,
+            workdir=workdir,
+        )
+        try:
+            supervisor.set_agent_workspace_destination(
+                workspace_id, normalized_destination
+            )
+        except Exception as exc:
+            raise_exit(str(exc), cause=exc)
+        payload = _agent_workspace_payload(config, supervisor, workspace_id)
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(
+            f"Updated destination for {workspace_id} to {payload['effective_destination']['kind']} (source={payload['source']})"
         )
 
     @orchestration_app.command("verify")

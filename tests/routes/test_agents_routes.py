@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
@@ -14,6 +15,9 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.app_server_supervisor = MagicMock()
         app.state.opencode_supervisor = MagicMock()
         app.state.app_server_events = MagicMock()
+        app.state.config = SimpleNamespace(
+            agent_binary=lambda _agent_id: "zeroclaw",
+        )
     app.include_router(build_agents_routes())
     return TestClient(app)
 
@@ -87,3 +91,29 @@ def test_list_agents_includes_expected_capabilities() -> None:
         assert "message_turns" in zeroclaw_caps
         assert "active_thread_discovery" in zeroclaw_caps
         assert "event_streaming" in zeroclaw_caps
+
+
+def test_list_agents_omits_zeroclaw_when_runtime_is_incompatible(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "incompatible",
+                "version": "zeroclaw 0.2.0",
+                "launch_mode": None,
+                "message": "incompatible",
+                "fix": "Install a compatible ZeroClaw build.",
+            },
+        )(),
+    )
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "zeroclaw" not in {agent["id"] for agent in data["agents"]}

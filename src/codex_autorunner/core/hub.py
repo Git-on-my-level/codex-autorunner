@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import enum
+import importlib
 import json
 import logging
 import re
@@ -98,6 +99,89 @@ def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
     if not sha:
         raise ValueError(f"Unable to resolve ref {ref}: empty output")
     return sha
+
+
+def _load_managed_runtime_module() -> Any:
+    try:
+        return importlib.import_module("codex_autorunner.agents.managed_runtime")
+    except Exception:
+        return None
+
+
+def _coerce_runtime_preflight_payload(result: Any) -> Optional[dict[str, Any]]:
+    if result is None:
+        return None
+    if isinstance(result, dict):
+        return dict(result)
+    payload: dict[str, Any] = {}
+    for field in ("runtime_id", "status", "version", "launch_mode", "message", "fix"):
+        value = getattr(result, field, None)
+        if value is not None:
+            payload[field] = value
+    return payload or None
+
+
+def known_agent_workspace_runtime_ids() -> tuple[str, ...]:
+    module = _load_managed_runtime_module()
+    if module is not None:
+        for attr in (
+            "managed_agent_workspace_runtime_ids",
+            "list_managed_agent_workspace_runtime_ids",
+            "known_agent_workspace_runtime_ids",
+        ):
+            func = getattr(module, attr, None)
+            if not callable(func):
+                continue
+            try:
+                raw_ids = func()
+            except Exception:
+                continue
+            normalized = tuple(
+                sorted(
+                    {
+                        str(item).strip().lower()
+                        for item in (raw_ids or ())
+                        if str(item).strip()
+                    }
+                )
+            )
+            if normalized:
+                return normalized
+    return ("zeroclaw",)
+
+
+def probe_agent_workspace_runtime(
+    hub_config: HubConfig,
+    workspace: ManifestAgentWorkspace,
+) -> Optional[dict[str, Any]]:
+    module = _load_managed_runtime_module()
+    if module is None:
+        return None
+    for attr in (
+        "probe_agent_workspace_runtime",
+        "preflight_agent_workspace_runtime",
+    ):
+        func = getattr(module, attr, None)
+        if not callable(func):
+            continue
+        for kwargs in (
+            {"hub_config": hub_config, "workspace": workspace},
+            {"config": hub_config, "workspace": workspace},
+        ):
+            try:
+                return _coerce_runtime_preflight_payload(func(**kwargs))
+            except TypeError:
+                continue
+    return None
+
+
+def _runtime_preflight_blocks_enable(
+    preflight: Optional[Mapping[str, Any]],
+) -> bool:
+    if not preflight:
+        return False
+    status = str(preflight.get("status") or "").strip().lower()
+    return bool(status and status not in {"ready", "deferred"})
 
 
 class RepoStatus(str, enum.Enum):
@@ -577,6 +661,7 @@ class HubSupervisor:
         workspace_id: str,
         runtime: str,
         display_name: Optional[str] = None,
+        enabled: bool = True,
     ) -> AgentWorkspaceSnapshot:
         self._invalidate_list_cache()
         raw_workspace_id = (workspace_id or "").strip()
@@ -587,6 +672,13 @@ class HubSupervisor:
             raise ValueError("runtime is required")
         normalized_workspace_id = sanitize_repo_id(raw_workspace_id)
         normalized_runtime = sanitize_repo_id(raw_runtime)
+        known_runtimes = set(known_agent_workspace_runtime_ids())
+        if normalized_runtime not in known_runtimes:
+            supported = ", ".join(sorted(known_runtimes))
+            raise ValueError(
+                f"Unknown agent workspace runtime '{normalized_runtime}'. "
+                f"Supported runtimes: {supported}"
+            )
 
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         existing = manifest.get_agent_workspace(normalized_workspace_id)
@@ -602,13 +694,27 @@ class HubSupervisor:
                     "Agent workspace id %s already exists for runtime %s at %s"
                     % (normalized_workspace_id, existing.runtime, existing.path)
                 )
-        target.mkdir(parents=True, exist_ok=True)
-        manifest.ensure_agent_workspace(
+        workspace = manifest.ensure_agent_workspace(
             self.hub_config.root,
             workspace_id=normalized_workspace_id,
             runtime=normalized_runtime,
             display_name=display_name or workspace_id,
         )
+        workspace.enabled = bool(enabled)
+        preflight = (
+            probe_agent_workspace_runtime(self.hub_config, workspace)
+            if workspace.enabled
+            else None
+        )
+        if _runtime_preflight_blocks_enable(preflight):
+            assert preflight is not None
+            message = str(preflight.get("message") or "").strip()
+            fix = str(preflight.get("fix") or "").strip()
+            detail = message or "runtime preflight failed"
+            if fix:
+                detail = f"{detail} Fix: {fix}"
+            raise ValueError(detail)
+        target.mkdir(parents=True, exist_ok=True)
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_agent_workspace(normalized_workspace_id)
 
@@ -637,6 +743,15 @@ class HubSupervisor:
     def get_agent_workspace_snapshot(self, workspace_id: str) -> AgentWorkspaceSnapshot:
         return self._snapshot_for_agent_workspace(workspace_id)
 
+    def get_agent_workspace_runtime_readiness(
+        self, workspace_id: str
+    ) -> Optional[dict[str, Any]]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if workspace is None:
+            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
+        return probe_agent_workspace_runtime(self.hub_config, workspace)
+
     def update_agent_workspace(
         self,
         workspace_id: str,
@@ -652,6 +767,19 @@ class HubSupervisor:
 
         if enabled is not None:
             workspace.enabled = bool(enabled)
+            preflight = (
+                probe_agent_workspace_runtime(self.hub_config, workspace)
+                if workspace.enabled
+                else None
+            )
+            if _runtime_preflight_blocks_enable(preflight):
+                assert preflight is not None
+                message = str(preflight.get("message") or "").strip()
+                fix = str(preflight.get("fix") or "").strip()
+                detail = message or "runtime preflight failed"
+                if fix:
+                    detail = f"{detail} Fix: {fix}"
+                raise ValueError(detail)
         if display_name is not None:
             normalized_display_name = str(display_name).strip()
             if not normalized_display_name:

@@ -867,6 +867,7 @@ def test_build_hub_snapshot_includes_agent_workspaces_section(hub_env) -> None:
             workspace_id="zc-main",
             runtime="zeroclaw",
             display_name="ZeroClaw Main",
+            enabled=False,
         )
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)

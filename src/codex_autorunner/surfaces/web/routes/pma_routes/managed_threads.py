@@ -173,6 +173,32 @@ def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
     }
 
 
+def _raise_agent_workspace_runtime_not_ready(
+    request: Request, resource_id: str
+) -> None:
+    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    if supervisor is None:
+        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
+    snapshot = supervisor.get_agent_workspace_snapshot(resource_id)
+    if not snapshot.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent workspace '{resource_id}' is disabled",
+        )
+    readiness = supervisor.get_agent_workspace_runtime_readiness(resource_id)
+    if not isinstance(readiness, dict):
+        return
+    status = str(readiness.get("status") or "").strip().lower()
+    if status in {"", "ready", "deferred"}:
+        return
+    message = str(readiness.get("message") or "").strip()
+    fix = str(readiness.get("fix") or "").strip()
+    detail = message or f"Agent workspace runtime '{snapshot.runtime}' is not ready"
+    if fix:
+        detail = f"{detail} Fix: {fix}"
+    raise HTTPException(status_code=400, detail=detail)
+
+
 def build_managed_thread_orchestration_service(request: Request):
     descriptors = get_registered_agents()
 
@@ -538,6 +564,8 @@ def build_managed_thread_crud_routes(
                         f"('{resolved_runtime}')"
                     ),
                 )
+            assert resource_id is not None
+            _raise_agent_workspace_runtime_not_ready(request, resource_id)
 
         if agent_id is None:
             raise HTTPException(
