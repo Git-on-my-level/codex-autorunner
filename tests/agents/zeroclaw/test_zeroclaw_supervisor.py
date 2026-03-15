@@ -7,6 +7,9 @@ import pytest
 
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.agents.zeroclaw.supervisor import ZeroClawSupervisor
+from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.destinations import DockerDestination
 
 
 class _FakeZeroClawClient:
@@ -179,3 +182,109 @@ async def test_supervisor_rejects_cross_workspace_attach(
 
     with pytest.raises(Exception, match="different workspace"):
         await supervisor.attach_session(other_workspace_root, session_id)
+
+
+@pytest.mark.asyncio
+async def test_supervisor_wraps_workspace_launch_for_docker_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _FakeZeroClawClient.instances.clear()
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
+        _FakeZeroClawClient,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_wrap_command_for_destination(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return type(
+            "Wrapped", (), {"command": ["docker", "exec", "zc-main", "zeroclaw"]}
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor._wrap_command_for_destination",
+        _fake_wrap_command_for_destination,
+    )
+
+    workspace_root = tmp_path / "runtimes" / "zeroclaw" / "zc-main"
+    supervisor = ZeroClawSupervisor(
+        ["zeroclaw"],
+        destination_resolver=lambda _root: DockerDestination(
+            image="ghcr.io/acme/zeroclaw:latest"
+        ),
+    )
+
+    session_id = await supervisor.create_session(workspace_root)
+    await supervisor.start_turn(workspace_root, session_id, "hello")
+
+    runtime_workspace_root = workspace_root / "workspace"
+    assert captured["repo_root"] == workspace_root
+    assert captured["command_workdir"] == runtime_workspace_root
+    assert captured["extra_env"] == {"ZEROCLAW_WORKSPACE": str(runtime_workspace_root)}
+
+    client = _FakeZeroClawClient.instances[0]
+    assert client.command[:4] == ["docker", "exec", "zc-main", "zeroclaw"]
+
+
+@pytest.mark.asyncio
+async def test_build_supervisor_from_hub_config_uses_agent_workspace_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _FakeZeroClawClient.instances.clear()
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
+        _FakeZeroClawClient,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_wrap_command_for_destination(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return type(
+            "Wrapped", (), {"command": ["docker", "exec", "zc-main", "zeroclaw"]}
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor._wrap_command_for_destination",
+        _fake_wrap_command_for_destination,
+    )
+
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos: []",
+                "agent_workspaces:",
+                "  - id: zc-main",
+                "    runtime: zeroclaw",
+                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
+                "    enabled: true",
+                "    destination:",
+                "      kind: docker",
+                "      image: ghcr.io/acme/zeroclaw:latest",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hub_config = load_hub_config(hub_root)
+
+    from codex_autorunner.agents.zeroclaw.supervisor import (
+        build_zeroclaw_supervisor_from_config,
+    )
+
+    supervisor = build_zeroclaw_supervisor_from_config(hub_config)
+    assert supervisor is not None
+
+    workspace_root = (
+        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+    )
+    session_id = await supervisor.create_session(workspace_root)
+    await supervisor.start_turn(workspace_root, session_id, "hello")
+
+    assert isinstance(captured["destination"], DockerDestination)

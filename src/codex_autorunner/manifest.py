@@ -171,6 +171,15 @@ class Manifest:
                 return workspace
         return None
 
+    def get_agent_workspace_by_path(
+        self, hub_root: Path, workspace_path: Path
+    ) -> Optional[ManifestAgentWorkspace]:
+        normalized_path = _relative_to_hub_root(hub_root, workspace_path)
+        for workspace in self.agent_workspaces:
+            if workspace.path == normalized_path:
+                return workspace
+        return None
+
     def issues_for_repo(self, repo_id: str) -> List[str]:
         return [
             issue.message

@@ -63,6 +63,18 @@ Optional overrides:
 - `ZEROCLAW_TEST_PROMPT`
 - `ZEROCLAW_EXPECTED_SUBSTRING`
 
+## Docker-backed Agent Workspaces
+
+For CAR-managed `agent_workspaces[]` with `destination.kind: docker`:
+
+- CAR still treats the managed workspace root as the durable identity.
+- CAR bind-mounts that workspace root into the container.
+- ZeroClaw runs with `ZEROCLAW_WORKSPACE=<workspace_root>/workspace`.
+- Durable session state remains under `<workspace_root>/threads/<session_id>/session-state.json`.
+
+This keeps the Docker path aligned with the local managed-workspace contract instead
+of introducing a separate container-only layout.
+
 ## Current Host Status
 
 On this host, `brew install zeroclaw` succeeds, the Homebrew service is running,

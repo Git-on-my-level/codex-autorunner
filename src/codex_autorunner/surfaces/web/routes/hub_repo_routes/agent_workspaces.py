@@ -38,20 +38,19 @@ class HubAgentWorkspaceService:
         return manifest, workspace
 
     def _workspace_payload(self, workspace_id: str) -> dict[str, Any]:
-        from .....core.destinations import parse_destination_config
+        from .....core.destinations import (
+            resolve_effective_agent_workspace_destination,
+        )
 
         manifest, workspace = self._load_workspace(workspace_id)
         snapshot = self._context.supervisor.get_agent_workspace_snapshot(workspace_id)
         payload = snapshot.to_dict(self._context.config.root)
-        parsed_destination = parse_destination_config(
-            workspace.destination,
-            context=f"agent workspace '{workspace.id}' destination",
-        )
+        resolution = resolve_effective_agent_workspace_destination(workspace)
         payload["configured_destination"] = workspace.destination
         payload["source"] = "configured" if workspace.destination else "default"
         payload["issues"] = [
             *manifest.issues_for_repo(workspace.id),
-            *list(parsed_destination.errors or ()),
+            *list(resolution.issues or ()),
         ]
         return payload
 

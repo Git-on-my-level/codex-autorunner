@@ -8,10 +8,17 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Mapping, Optional, Sequence
+from typing import AsyncIterator, Callable, Mapping, Optional, Sequence
 
-from ...core.config import Config
+from ...core.config import HubConfig, RepoConfig
+from ...core.destinations import (
+    Destination,
+    DockerDestination,
+    LocalDestination,
+    resolve_effective_agent_workspace_destination,
+)
 from ...core.utils import atomic_write, resolve_executable
+from ...manifest import load_manifest
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..types import TerminalTurnResult
 from .client import ZeroClawClient, split_zeroclaw_model
@@ -25,6 +32,14 @@ _SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 class ZeroClawSupervisorError(RuntimeError):
     """Raised when the ZeroClaw supervisor cannot satisfy a session request."""
+
+
+def _wrap_command_for_destination(**kwargs):
+    from ...integrations.agents.destination_wrapping import (
+        wrap_command_for_destination,
+    )
+
+    return wrap_command_for_destination(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -130,12 +145,14 @@ class ZeroClawSupervisor:
         *,
         logger: Optional[logging.Logger] = None,
         base_env: Optional[Mapping[str, str]] = None,
+        destination_resolver: Optional[Callable[[Path], Destination]] = None,
     ) -> None:
         if not command:
             raise ValueError("ZeroClaw command must not be empty")
         self._command = [str(part) for part in command]
         self._logger = logger or logging.getLogger(__name__)
         self._base_env = base_env
+        self._destination_resolver = destination_resolver
         self._handles: dict[str, ZeroClawSessionHandle] = {}
         self._lock = asyncio.Lock()
 
@@ -267,8 +284,19 @@ class ZeroClawSupervisor:
     ) -> ZeroClawSessionHandle:
         session_root = self._session_root(workspace_root, metadata.session_id)
         runtime_workspace_root = self._runtime_workspace_root(workspace_root)
+        client_command = list(self._command)
+        destination = self._resolve_destination(workspace_root)
+        if isinstance(destination, DockerDestination):
+            wrapped = _wrap_command_for_destination(
+                command=self._command,
+                destination=destination,
+                repo_root=workspace_root,
+                command_workdir=runtime_workspace_root,
+                extra_env={"ZEROCLAW_WORKSPACE": str(runtime_workspace_root)},
+            )
+            client_command = wrapped.command
         client = ZeroClawClient(
-            self._command,
+            client_command,
             runtime_workspace_root=runtime_workspace_root,
             session_state_file=self._session_state_file(
                 workspace_root, metadata.session_id
@@ -294,6 +322,19 @@ class ZeroClawSupervisor:
             launch_provider=metadata.launch_provider,
             launch_model=metadata.launch_model,
         )
+
+    def _resolve_destination(self, workspace_root: Path) -> Destination:
+        if self._destination_resolver is None:
+            return LocalDestination()
+        try:
+            return self._destination_resolver(workspace_root)
+        except Exception as exc:
+            self._logger.warning(
+                "Falling back to local ZeroClaw launch for %s after destination resolution failure: %s",
+                workspace_root,
+                exc,
+            )
+            return LocalDestination()
 
     def _persist_metadata(self, handle: ZeroClawSessionHandle) -> None:
         handle.runtime_workspace_root.mkdir(parents=True, exist_ok=True)
@@ -368,7 +409,7 @@ class ZeroClawSupervisor:
 
 
 def build_zeroclaw_supervisor_from_config(
-    config: Config,
+    config: RepoConfig | HubConfig,
     *,
     logger: Optional[logging.Logger] = None,
 ) -> Optional[ZeroClawSupervisor]:
@@ -376,10 +417,35 @@ def build_zeroclaw_supervisor_from_config(
         binary = config.agent_binary("zeroclaw")
     except Exception:
         return None
-    return ZeroClawSupervisor([binary], logger=logger)
+    destination_resolver: Optional[Callable[[Path], Destination]] = None
+    if isinstance(config, HubConfig):
+        resolved_logger = logger or logging.getLogger(__name__)
+
+        def _resolve_workspace_destination(workspace_root: Path) -> Destination:
+            manifest = load_manifest(config.manifest_path, config.root)
+            workspace = manifest.get_agent_workspace_by_path(
+                config.root, workspace_root
+            )
+            if workspace is None:
+                return LocalDestination()
+            resolution = resolve_effective_agent_workspace_destination(workspace)
+            for issue in resolution.issues:
+                resolved_logger.warning(
+                    "Invalid agent workspace destination for %s; using local: %s",
+                    workspace.id,
+                    issue,
+                )
+            return resolution.destination
+
+        destination_resolver = _resolve_workspace_destination
+    return ZeroClawSupervisor(
+        [binary],
+        logger=logger,
+        destination_resolver=destination_resolver,
+    )
 
 
-def zeroclaw_binary_available(config: Optional[Config]) -> bool:
+def zeroclaw_binary_available(config: Optional[RepoConfig | HubConfig]) -> bool:
     if config is None:
         return False
     try:

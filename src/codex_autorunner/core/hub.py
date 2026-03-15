@@ -35,7 +35,7 @@ from .destinations import (
     DockerDestination,
     default_car_docker_container_name,
     default_local_destination,
-    parse_destination_config,
+    resolve_effective_agent_workspace_destination,
     resolve_effective_repo_destination,
 )
 from .force_attestation import enforce_force_attestation
@@ -2728,15 +2728,9 @@ class HubSupervisor:
         self, workspace: ManifestAgentWorkspace
     ) -> AgentWorkspaceSnapshot:
         workspace_path = (self.hub_config.root / workspace.path).resolve()
-        parsed_destination = parse_destination_config(
-            workspace.destination,
-            context=f"agent workspace '{workspace.id}' destination",
-        )
-        effective_destination = (
-            parsed_destination.destination.to_dict()
-            if parsed_destination.valid
-            else default_local_destination()
-        )
+        effective_destination = resolve_effective_agent_workspace_destination(
+            workspace
+        ).to_dict()
         return AgentWorkspaceSnapshot(
             id=workspace.id,
             runtime=workspace.runtime,

@@ -21,6 +21,7 @@ from ..voice.provider_catalog import (
 from .config import HubConfig, RepoConfig, load_repo_config
 from .destinations import (
     probe_docker_readiness,
+    resolve_effective_agent_workspace_destination,
     resolve_effective_repo_destination,
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_command_matches
@@ -946,7 +947,7 @@ def hub_worktree_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
 
 
 def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
-    """Report effective destination status and validation issues for hub repos."""
+    """Report effective destination status and validation issues for hub resources."""
     checks: list[DoctorCheck] = []
 
     try:
@@ -972,26 +973,26 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     for issue in manifest_issues:
         issues_by_repo.setdefault(issue.repo_id, []).append(issue.message)
 
-    if not manifest.repos:
+    if not manifest.repos and not manifest.agent_workspaces:
         checks.append(
             DoctorCheck(
                 name="Hub destination configuration",
                 passed=True,
-                message="No repos in hub manifest.",
+                message="No managed resources in hub manifest.",
                 severity="info",
                 check_id="hub.destination",
             )
         )
         return checks
 
-    docker_repo_ids: list[str] = []
+    docker_targets: list[str] = []
 
     for repo in manifest.repos:
         resolution = resolve_effective_repo_destination(repo, repos_by_id)
         kind = resolution.destination.kind
         source = resolution.source
         if kind == "docker":
-            docker_repo_ids.append(repo.id)
+            docker_targets.append(f"repo:{repo.id}")
         checks.append(
             DoctorCheck(
                 name=f"Hub destination ({repo.id})",
@@ -1022,8 +1023,49 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 )
             )
 
+    for workspace in manifest.agent_workspaces:
+        resolution = resolve_effective_agent_workspace_destination(workspace)
+        kind = resolution.destination.kind
+        source = resolution.source
+        if kind == "docker":
+            docker_targets.append(f"agent_workspace:{workspace.id}")
+        checks.append(
+            DoctorCheck(
+                name=f"Hub destination ({workspace.id})",
+                passed=True,
+                message=(
+                    f"{workspace.id}: effective destination '{kind}' "
+                    f"(source={source})"
+                ),
+                severity="info",
+                check_id="hub.destination",
+            )
+        )
+
+        workspace_issue_messages: list[str] = []
+        workspace_issue_messages.extend(list(resolution.issues))
+        workspace_issue_messages.extend(issues_by_repo.get(workspace.id, []))
+        deduped_messages = list(dict.fromkeys(workspace_issue_messages))
+        for message in deduped_messages:
+            checks.append(
+                DoctorCheck(
+                    name=f"Hub destination ({workspace.id})",
+                    passed=False,
+                    message=f"{workspace.id}: {message}",
+                    severity="warning",
+                    check_id="hub.destination",
+                    fix=(
+                        "Update destination config for this agent workspace in "
+                        f"{hub_config.manifest_path}"
+                    ),
+                )
+            )
+
     for repo_id, messages in sorted(issues_by_repo.items()):
-        if repo_id in known_repo_ids:
+        if (
+            repo_id in known_repo_ids
+            or manifest.get_agent_workspace(repo_id) is not None
+        ):
             continue
         for message in list(dict.fromkeys(messages)):
             checks.append(
@@ -1037,9 +1079,9 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 )
             )
 
-    if docker_repo_ids:
+    if docker_targets:
         readiness = probe_docker_readiness()
-        repo_targets = ", ".join(sorted(docker_repo_ids))
+        resource_targets = ", ".join(sorted(docker_targets))
         checks.append(
             DoctorCheck(
                 name="Hub destination (docker binary)",
@@ -1063,12 +1105,12 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 name="Hub destination (docker daemon)",
                 passed=readiness.daemon_reachable,
                 message=(
-                    f"Docker daemon reachable for repos: {repo_targets}. "
+                    f"Docker daemon reachable for resources: {resource_targets}. "
                     f"{readiness.detail}"
                     if readiness.daemon_reachable
                     else (
-                        "Docker daemon unreachable for repos: "
-                        f"{repo_targets}. {readiness.detail or 'Run `docker info` for details.'}"
+                        "Docker daemon unreachable for resources: "
+                        f"{resource_targets}. {readiness.detail or 'Run `docker info` for details.'}"
                     )
                 ),
                 severity="info" if readiness.daemon_reachable else "warning",
