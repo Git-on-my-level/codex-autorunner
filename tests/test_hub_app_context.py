@@ -17,7 +17,16 @@ from codex_autorunner.surfaces.web import app_state as web_app_state_module
 from tests.conftest import write_test_config
 
 
-def test_hub_app_state_includes_pma_context(hub_env) -> None:
+def _stub_opencode_supervisor(monkeypatch) -> None:
+    monkeypatch.setattr(
+        web_app_state_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda *args, **kwargs: object(),
+    )
+
+
+def test_hub_app_state_includes_pma_context(hub_env, monkeypatch) -> None:
+    _stub_opencode_supervisor(monkeypatch)
     app = create_hub_app(hub_env.hub_root)
 
     assert hasattr(app.state, "app_server_threads")
@@ -51,6 +60,7 @@ def test_hub_dev_mode_includes_root_repo_for_source_checkout(
     )
 
     monkeypatch.setenv("CAR_DEV_INCLUDE_ROOT_REPO", "1")
+    _stub_opencode_supervisor(monkeypatch)
     app = create_hub_app(hub_root)
 
     manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
@@ -67,6 +77,7 @@ def test_hub_lifespan_reaper_uses_config_root(hub_env, monkeypatch) -> None:
         return SimpleNamespace(killed=0, removed=0, skipped=0)
 
     monkeypatch.setattr(web_app_module, "reap_managed_processes", _fake_reap)
+    _stub_opencode_supervisor(monkeypatch)
     app = create_hub_app(hub_env.hub_root)
     with TestClient(app):
         pass

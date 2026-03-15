@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
+import os
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -14,6 +17,9 @@ class FastTestBudgetOffender:
     nodeid: str
     duration_seconds: float
     outcome: str
+
+
+DurationCollector = Callable[[list[str], Path], dict[str, float]]
 
 
 def _parse_positive_float(raw: str, *, default: float) -> float:
@@ -216,6 +222,82 @@ def build_report_lines(
     return lines
 
 
+def _collect_call_durations_from_pytest(
+    nodeids: list[str],
+    repo_root: Path,
+) -> dict[str, float]:
+    if not nodeids:
+        return {}
+
+    import pytest
+
+    class _DurationCollector:
+        def __init__(self) -> None:
+            self.durations: dict[str, float] = {}
+
+        def pytest_runtest_logreport(self, report) -> None:
+            if report.when != "call":
+                return
+            self.durations[report.nodeid] = float(report.duration)
+
+    collector = _DurationCollector()
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo_root)
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
+            stderr_buffer
+        ):
+            pytest.main(
+                [
+                    "-q",
+                    "-p",
+                    "no:xdist",
+                    "--rootdir",
+                    str(repo_root),
+                    *nodeids,
+                ],
+                plugins=[collector],
+            )
+    finally:
+        os.chdir(old_cwd)
+    return collector.durations
+
+
+def verify_fast_test_budget_offenders(
+    offenders: list[FastTestBudgetOffender],
+    *,
+    threshold_seconds: float,
+    repo_root: Path,
+    duration_collector: DurationCollector = _collect_call_durations_from_pytest,
+) -> list[FastTestBudgetOffender]:
+    if not offenders:
+        return []
+
+    verified_durations = duration_collector(
+        [offender.nodeid for offender in offenders],
+        repo_root.resolve(),
+    )
+    verified: list[FastTestBudgetOffender] = []
+    for offender in offenders:
+        duration_seconds = verified_durations.get(
+            offender.nodeid,
+            offender.duration_seconds,
+        )
+        if duration_seconds <= threshold_seconds:
+            continue
+        verified.append(
+            FastTestBudgetOffender(
+                nodeid=offender.nodeid,
+                duration_seconds=duration_seconds,
+                outcome=offender.outcome,
+            )
+        )
+    verified.sort(key=lambda item: item.duration_seconds, reverse=True)
+    return verified
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Report over-budget tests from a pytest JUnit XML report."
@@ -238,6 +320,12 @@ def main(argv: list[str] | None = None) -> int:
         selected_nodeids=selected_nodeids,
         repo_root=args.repo_root,
     )
+    if args.verify_nodeids and offenders:
+        offenders = verify_fast_test_budget_offenders(
+            offenders,
+            threshold_seconds=threshold_seconds,
+            repo_root=args.repo_root,
+        )
     all_durations: list[float] = []
     tree = ET.parse(args.report_path)
     for testcase in tree.iterfind(".//testcase"):

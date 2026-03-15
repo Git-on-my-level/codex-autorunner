@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +10,8 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web import app as web_app_module
+from codex_autorunner.surfaces.web import app_state as web_app_state_module
 
 
 def _seed_paused_run(repo_root: Path, run_id: str) -> None:
@@ -135,6 +138,20 @@ def _write_dead_worker_artifacts(repo_root: Path, run_id: str) -> None:
     )
 
 
+def _build_hub_messages_app(hub_root: Path, monkeypatch) -> object:
+    monkeypatch.setattr(
+        web_app_module,
+        "reap_managed_processes",
+        lambda _root: SimpleNamespace(killed=0, signaled=0, removed=0, skipped=0),
+    )
+    monkeypatch.setattr(
+        web_app_state_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda *args, **kwargs: object(),
+    )
+    return create_hub_app(hub_root)
+
+
 def _assert_canonical_state_v1(
     item: dict,
     *,
@@ -164,13 +181,13 @@ def _assert_canonical_state_v1(
     assert isinstance(freshness.get("is_stale"), bool)
 
 
-def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
+def test_hub_messages_reconciles_replied_dispatches(hub_env, monkeypatch) -> None:
     run_id = "11111111-1111-1111-1111-111111111111"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
     _write_reply_history(hub_env.repo_root, run_id, seq=1)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -195,12 +212,14 @@ def test_hub_messages_reconciles_replied_dispatches(hub_env) -> None:
         )
 
 
-def test_hub_messages_response_includes_top_level_freshness(hub_env) -> None:
+def test_hub_messages_response_includes_top_level_freshness(
+    hub_env, monkeypatch
+) -> None:
     run_id = "90909090-1111-2222-3333-444444444444"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -213,13 +232,13 @@ def test_hub_messages_response_includes_top_level_freshness(hub_env) -> None:
         assert inbox_section.get("fresh_count") >= 1
 
 
-def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
+def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env, monkeypatch) -> None:
     run_id = "22222222-2222-2222-2222-222222222222"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=2)
     _write_reply_history(hub_env.repo_root, run_id, seq=1)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -247,6 +266,7 @@ def test_hub_messages_keeps_unreplied_newer_dispatches(hub_env) -> None:
 
 def test_hub_messages_hide_obsolete_failed_run_when_newer_completed_exists(
     hub_env,
+    monkeypatch,
 ) -> None:
     _seed_failed_run(hub_env.repo_root, "older-failed")
     _seed_completed_run(hub_env.repo_root, "newer-completed")
@@ -261,18 +281,20 @@ def test_hub_messages_hide_obsolete_failed_run_when_newer_completed_exists(
         ),
     )
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
         assert res.json()["items"] == []
 
 
-def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> None:
+def test_hub_messages_paused_without_dispatch_emits_attention_item(
+    hub_env, monkeypatch
+) -> None:
     run_id = "44444444-4444-4444-4444-444444444444"
     _seed_paused_run(hub_env.repo_root, run_id)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -294,12 +316,14 @@ def test_hub_messages_paused_without_dispatch_emits_attention_item(hub_env) -> N
         assert run_state.get("attention_required") is True
 
 
-def test_hub_messages_dead_worker_includes_crash_summary_and_open_url(hub_env) -> None:
+def test_hub_messages_dead_worker_includes_crash_summary_and_open_url(
+    hub_env, monkeypatch
+) -> None:
     run_id = "99999999-9999-9999-9999-999999999999"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dead_worker_artifacts(hub_env.repo_root, run_id)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -315,7 +339,7 @@ def test_hub_messages_dead_worker_includes_crash_summary_and_open_url(hub_env) -
         assert crash.get("path") == f".codex-autorunner/flows/{run_id}/crash.json"
 
 
-def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env) -> None:
+def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env, monkeypatch) -> None:
     run_id = "55555555-5555-5555-5555-555555555555"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
@@ -326,7 +350,7 @@ def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env) -> None:
         content="---\nmode: invalid_mode\ntitle: Corrupt latest\n---\n\nbad dispatch\n",
     )
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -343,12 +367,14 @@ def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env) -> None:
         assert run_state.get("state") == "blocked"
 
 
-def test_hub_messages_treats_turn_summary_as_non_actionable(hub_env) -> None:
+def test_hub_messages_treats_turn_summary_as_non_actionable(
+    hub_env, monkeypatch
+) -> None:
     run_id = "12121212-1212-1212-1212-121212121212"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1, mode="turn_summary")
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -362,26 +388,28 @@ def test_hub_messages_treats_turn_summary_as_non_actionable(hub_env) -> None:
         assert "informational" in (item.get("reason") or "").lower()
 
 
-def test_hub_messages_hides_older_paused_run_when_newer_run_exists(hub_env) -> None:
+def test_hub_messages_hides_older_paused_run_when_newer_run_exists(
+    hub_env, monkeypatch
+) -> None:
     older_run_id = "13131313-1313-1313-1313-131313131313"
     newer_run_id = "14141414-1414-1414-1414-141414141414"
     _seed_paused_run(hub_env.repo_root, older_run_id)
     _write_dispatch_history(hub_env.repo_root, older_run_id, seq=1)
     _seed_completed_run(hub_env.repo_root, newer_run_id)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
         assert res.json()["items"] == []
 
 
-def test_hub_messages_dismiss_filters_and_persists(hub_env) -> None:
+def test_hub_messages_dismiss_filters_and_persists(hub_env, monkeypatch) -> None:
     run_id = "33333333-3333-3333-3333-333333333333"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         before = client.get("/hub/messages").json()["items"]
         assert len(before) == 1
@@ -411,11 +439,11 @@ def test_hub_messages_dismiss_filters_and_persists(hub_env) -> None:
     assert data["items"][f"{run_id}:1"]["reason"] == "resolved elsewhere"
 
 
-def test_hub_messages_failed_run_appears_in_inbox(hub_env) -> None:
+def test_hub_messages_failed_run_appears_in_inbox(hub_env, monkeypatch) -> None:
     run_id = "66666666-6666-6666-6666-666666666666"
     _seed_failed_run(hub_env.repo_root, run_id)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -434,14 +462,16 @@ def test_hub_messages_failed_run_appears_in_inbox(hub_env) -> None:
         assert "dismiss" in (item.get("resolvable_actions") or [])
 
 
-def test_hub_messages_multi_run_items_keep_canonical_run_identity(hub_env) -> None:
+def test_hub_messages_multi_run_items_keep_canonical_run_identity(
+    hub_env, monkeypatch
+) -> None:
     older_failed_run_id = "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaa1"
     newer_paused_run_id = "bbbbbbb2-bbbb-bbbb-bbbb-bbbbbbbbbbb2"
     _seed_failed_run(hub_env.repo_root, older_failed_run_id)
     _seed_paused_run(hub_env.repo_root, newer_paused_run_id)
     _write_dispatch_history(hub_env.repo_root, newer_paused_run_id, seq=1)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -455,12 +485,14 @@ def test_hub_messages_multi_run_items_keep_canonical_run_identity(hub_env) -> No
         assert paused_canonical.get("latest_run_id") == newer_paused_run_id
 
 
-def test_hub_messages_dispatch_includes_lifecycle_metadata(hub_env) -> None:
+def test_hub_messages_dispatch_includes_lifecycle_metadata(
+    hub_env, monkeypatch
+) -> None:
     run_id = "77777777-7777-7777-7777-777777777777"
     _seed_paused_run(hub_env.repo_root, run_id)
     _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
@@ -473,11 +505,11 @@ def test_hub_messages_dispatch_includes_lifecycle_metadata(hub_env) -> None:
         assert "dismiss" in (item.get("resolvable_actions") or [])
 
 
-def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env) -> None:
+def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env, monkeypatch) -> None:
     run_id = "88888888-8888-8888-8888-888888888888"
     _seed_failed_run(hub_env.repo_root, run_id)
 
-    app = create_hub_app(hub_env.hub_root)
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
         before = client.get("/hub/messages").json()["items"]
         assert len(before) == 1

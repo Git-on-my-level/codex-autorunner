@@ -7,6 +7,7 @@ from scripts.report_fast_test_budget import (
     build_report_lines,
     collect_fast_test_budget_offenders,
     summarize_durations,
+    verify_fast_test_budget_offenders,
 )
 
 
@@ -104,3 +105,26 @@ def test_summarize_durations_reports_percentiles() -> None:
     assert float(summary["p80"]) > 1.0
     assert float(summary["p99"]) > float(summary["p95"])
     assert summary["max"] == 2.0
+
+
+def test_verify_fast_test_budget_offenders_filters_by_verified_call_duration() -> None:
+    offenders = [
+        FastTestBudgetOffender("a::test_fast_now", 2.0, "passed"),
+        FastTestBudgetOffender("b::test_still_slow", 1.5, "failed"),
+        FastTestBudgetOffender("c::test_fallback", 1.25, "passed"),
+    ]
+
+    verified = verify_fast_test_budget_offenders(
+        offenders,
+        threshold_seconds=1.0,
+        repo_root=Path.cwd(),
+        duration_collector=lambda nodeids, repo_root: {
+            "a::test_fast_now": 0.4,
+            "b::test_still_slow": 1.1,
+        },
+    )
+
+    assert verified == [
+        FastTestBudgetOffender("c::test_fallback", 1.25, "passed"),
+        FastTestBudgetOffender("b::test_still_slow", 1.1, "failed"),
+    ]
