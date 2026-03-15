@@ -188,7 +188,9 @@ The Telegram integration guarantees the following invariants:
 ### State Persistence
 
 - All per-topic state is persisted to `telegram_state.sqlite3`
-- State includes: workspace binding, active thread, thread summaries, approvals, outbox records
+- State includes transport-local delivery/cache state, approvals, and outbox
+  records; authoritative binding and durable-thread metadata live in hub
+  `orchestration.sqlite3`
 - State survives bot restarts and process crashes
 
 ### Topic Keys Are Unique
@@ -266,7 +268,8 @@ Shell commands (`!<cmd>`) are gated by:
 
 1. **Enablement**: `telegram_bot.shell.enabled` must be `true` (default `false`)
 2. **Allowlist**: User must pass allowlist check (same as normal messages)
-3. **Workspace binding**: The topic must be bound to a workspace
+3. **Execution target**: The topic must either be in PMA mode or be bound to a
+   repo workspace/resource root so CAR can route to a consistent durable thread
 4. **Approval/sandbox policy**: The Codex app-server enforces configured approval/sandbox settings
 
 ### Shell Command Flow

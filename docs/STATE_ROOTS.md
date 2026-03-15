@@ -42,7 +42,8 @@ All durable artifacts must live under one of these roots:
 
 **Location**: `<hub_root>/.codex-autorunner/`
 
-**Purpose**: Hub-level state for multi-repo management, orchestration metadata, and cross-repo coordination.
+**Purpose**: Hub-level state for typed managed resources (`repo` plus
+`agent_workspace`), orchestration metadata, and cross-resource coordination.
 
 **Contents**:
 - `manifest.yml` - Managed hub resources list (`repos:` plus `agent_workspaces:` and their `destination` config)
@@ -60,7 +61,9 @@ All durable artifacts must live under one of these roots:
 
 The `orchestration.sqlite3` database is the canonical store for:
 
-- **Thread/binding metadata**: Agent thread registrations, external channel bindings (Discord channel IDs, Telegram chat IDs)
+- **Thread/binding metadata**: Durable CAR thread registrations plus external
+  channel bindings (Discord channel IDs, Telegram chat IDs) to consistent thread
+  targets under repos or agent workspaces
 - **Execution state**: Active/running/queued orchestration work items
 - **Transcript mirrors**: Plain-text user/assistant message copies for search, previews, and debugging
 - **Event projections**: Aggregated views of automation events, flow executions
@@ -82,6 +85,13 @@ CAR-managed agent workspaces live under:
 This root is reserved for first-class `agent_workspace` hub resources. In v1,
 CAR allocates these paths itself and does not accept arbitrary external runtime
 paths for managed agent workspaces.
+
+The durable identity hierarchy is:
+
+- `runtime binary -> agent workspace -> CAR thread -> live process`
+
+The runtime binary is detected/configured separately. CAR does not install the
+runtime as part of the state-root contract.
 
 **Resolution**:
 - `resolve_hub_runtimes_root(hub_root)`

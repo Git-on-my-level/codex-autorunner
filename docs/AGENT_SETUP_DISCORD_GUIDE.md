@@ -237,7 +237,8 @@ For macOS launchd-managed installs (`scripts/install-local-mac-hub.sh` / `script
 In an allowed Discord channel:
 
 1. Run `/car status`.
-2. Bind workspace with `/car bind path:<workspace-path>`.
+2. Bind the channel to the repo workspace root with
+   `/car bind path:<workspace-path>`.
 3. Run flow commands:
    - `/car flow status [run_id]`
    - `/car flow runs [limit]`
@@ -280,7 +281,8 @@ Discord supports PMA mode for routing PMA output to a channel, managing PMA stat
 In any allowlisted Discord channel:
 
 1. Run `/pma on` to enable PMA mode for the channel.
-2. If the channel was previously bound to a workspace, that binding is saved and restored when PMA is disabled.
+2. If the channel was previously bound to a repo workspace and durable thread,
+   that binding is saved and restored when PMA is disabled.
 3. PMA output from the agent will be delivered to the channel.
 
 ### How to Actually Chat With an Agent Today
@@ -289,18 +291,20 @@ Telegram-style back-and-forth is now supported in Discord.
 
 For repo/workspace mode:
 
-1. Run `/car bind path:<workspace-path>`.
+1. Run `/car bind path:<workspace-path>` to select the repo workspace root CAR
+   should use for this channel.
 2. Optional: set agent/model with `/car agent ...` and `/car model ...`.
 3. Confirm the effective collaboration policy with `/car status` or `/car ids`.
 4. Send a normal channel message (do not start with `/`) only in a destination whose collaboration mode is `active`.
-4. The bot runs a turn and replies in-channel (non-ephemeral).
+5. The bot routes the message to this channel's current durable CAR thread under
+   that resource and replies in-channel (non-ephemeral).
 
 For PMA mode:
 
 1. Run `/pma on`.
 2. Send a normal channel message (do not start with `/`).
 3. The bot runs a PMA turn and replies in-channel.
-4. Run `/pma off` to return to the previous workspace binding.
+4. Run `/pma off` to return to the previous repo/workspace-thread binding.
 
 Notes:
 - Slash command responses remain ephemeral.
@@ -354,7 +358,7 @@ If PMA is disabled globally in hub config, `/pma` commands will return an action
 ### Bot running but no useful flow output
 
 1. Ensure the channel is bound:
-   - `/car bind path:<workspace-path>`
+   - `/car bind path:<workspace-path>` to restore/select the repo workspace root
 2. Confirm workspace path exists on the CAR host.
 3. Run `car doctor` and check Discord check results for missing deps/env/state file issues.
 

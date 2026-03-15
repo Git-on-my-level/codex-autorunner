@@ -32,7 +32,8 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 
 ## Verify
 
-- In the target topic, send `/status` and confirm the workspace and active thread.
+- In the target topic, send `/status` and confirm the selected resource/workspace
+  root and active durable thread.
 - Confirm `/status` also reports the expected collaboration mode and plain-text trigger for the current root chat or topic.
 - Send `/help` to confirm command handling.
 - Send `/ids` and confirm the chat/user/thread ids plus the generated collaboration snippet match the intended topic.
@@ -42,7 +43,9 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 
 ## Common Commands
 
-- `/bind <repo_id|path>`: bind topic to a workspace.
+- `/bind <repo_id|path>`: bind the topic to a repo workspace root; CAR then
+  keeps routing messages to that topic's durable thread under the bound
+  resource.
 - `/new`: start a new Codex thread for the bound workspace.
 - `/resume`: list recent threads and resume one.
 - `/interrupt`: stop the active turn.

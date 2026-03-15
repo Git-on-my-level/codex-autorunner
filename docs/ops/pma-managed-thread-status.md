@@ -46,6 +46,19 @@ status/tail reads go through the shared orchestration service seam. PMA keeps
 its operator-facing response shape, but the web and CLI surfaces no longer
 treat direct PMA store access as the primary runtime-thread query/control path.
 
+## Resource Ownership And Bindings
+
+Every PMA managed thread is a durable CAR thread target owned by a typed
+resource:
+
+- `resource_kind: repo` for repo-backed threads
+- `resource_kind: agent_workspace` for first-class runtime workspaces
+
+Chat-surface bindings resolve to that durable thread target. For agent
+workspaces, this distinction matters: CAR binds Discord/Telegram/web chat to a
+consistent durable CAR thread under the workspace, while the workspace root
+continues to provide shared memory across multiple threads.
+
 ## Busy-Thread Delivery
 
 Managed-thread delivery is queue-first by default.

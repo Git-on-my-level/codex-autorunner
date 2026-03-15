@@ -1,7 +1,14 @@
 # ZeroClaw Host Dogfood
 
-This is the opt-in local-host path for validating the CAR-managed ZeroClaw
-workspace contract.
+This is the opt-in local-host path for validating the supported CAR-managed
+ZeroClaw contract.
+
+ZeroClaw support in CAR is detect-only:
+
+- CAR expects a usable `zeroclaw` binary to already be installed on the host.
+- CAR does not install or bootstrap ZeroClaw for you.
+- The supported v1 path is a first-class CAR-managed `agent_workspace`, not a
+  volatile wrapper around ad hoc user state.
 
 ## Contract
 
@@ -11,6 +18,8 @@ contract:
 - CAR resolves the configured `zeroclaw` binary and launches it under
   `ZEROCLAW_WORKSPACE=<workspace_root>/workspace`.
 - One agent workspace can back multiple durable CAR threads.
+- Chat surfaces bind to a consistent durable CAR thread under that workspace;
+  the workspace itself remains shared memory, not the conversation identity.
 - Workspace memory is shared at the workspace root.
 - Session state stays isolated per thread under
   `<workspace_root>/threads/<session_id>/session-state.json`.
@@ -23,6 +32,12 @@ Current caveats:
 - `interrupt`, `review`, and model-catalog features are not advertised.
 - The prove-out assumes CAR-managed workspace roots, not ambient
   `~/.zeroclaw` state.
+
+Unsupported in v1:
+
+- Treating ambient `~/.zeroclaw` state as the managed CAR workspace root
+- Claiming first-class support for volatile wrapper-only launches outside the
+  managed `agent_workspace` path
 
 ## Install
 

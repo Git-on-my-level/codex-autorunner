@@ -55,7 +55,8 @@ tradeoffs involved.
 
 ## Workspace binding
 
-- `/bind <repo_id|path>` lets an allowed user bind a topic to a workspace.
+- `/bind <repo_id|path>` lets an allowed user bind a topic to a repo workspace
+  root and lets CAR keep a consistent durable thread for that topic.
 - Paths can be absolute or relative to the configured root. If the path exists,
   it can be bound even if it is not a Git repo.
 - Once bound, the bot can read files (e.g., `/mention`) and run commands in that
@@ -73,8 +74,9 @@ tradeoffs involved.
 
 ## Data at rest and logs
 
-- Per-topic state is stored in `.codex-autorunner/telegram_state.sqlite3`, including
-  workspace paths, thread IDs, and preview snippets.
+- Per-topic transport state is stored in `.codex-autorunner/telegram_state.sqlite3`.
+  Authoritative binding and durable-thread metadata live in hub
+  `.codex-autorunner/orchestration.sqlite3`.
 - Logs include chat IDs, user IDs, and event metadata; review your log retention
   and access controls accordingly.
 

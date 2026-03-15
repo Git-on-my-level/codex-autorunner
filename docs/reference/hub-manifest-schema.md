@@ -10,6 +10,19 @@ Top-level collections:
 - `repos[]`
 - `agent_workspaces[]`
 
+## Hub Resource Model
+
+Manifest version `3` is a typed hub resource catalog, not a repo-only list.
+
+- `repos[]` model Git-backed code/worktree resources.
+- `agent_workspaces[]` model CAR-managed durable runtime state that is not a
+  repo.
+
+Use an `agent_workspace` when the durable thing CAR manages is runtime memory,
+instructions, and session state rather than project code. CAR chat surfaces bind
+to a durable CAR thread under that resource; they do not bind directly to shared
+workspace memory.
+
 ## Agent Workspace Shape
 
 `agent_workspaces[]` entries are first-class hub resources with:
@@ -20,6 +33,13 @@ Top-level collections:
 - `enabled`: optional boolean, defaults to `true`
 - `display_name`: optional string
 - `destination`: optional destination object
+
+Notes:
+
+- Agent workspaces are explicitly created hub resources; CAR does not lazily
+  invent them from first message ingress.
+- `runtime` identifies a configured runtime/binary CAR knows how to detect and
+  launch. The manifest does not install that runtime for you.
 
 In v1, `path` must point at the CAR-managed runtime root:
 
