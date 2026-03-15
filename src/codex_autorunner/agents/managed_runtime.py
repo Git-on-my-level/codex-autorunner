@@ -13,6 +13,9 @@ RuntimeLaunchMode = Literal["session_state_file", "workspace_only"]
 ZEROCLAW_RUNTIME_ID = "zeroclaw"
 ZEROCLAW_SESSION_STATE_FILE_MODE: RuntimeLaunchMode = "session_state_file"
 _PROBE_TIMEOUT_SECONDS = 10
+_ZEROCLAW_WORKSPACE_ENV = "ZEROCLAW_WORKSPACE"
+_ZEROCLAW_CONFIG_DIR_ENV = "ZEROCLAW_CONFIG_DIR"
+_ZEROCLAW_CONFIG_DIRNAME = ".zeroclaw"
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,30 @@ def _first_nonempty_line(text: str) -> Optional[str]:
     return None
 
 
+def _default_zeroclaw_config_dir(
+    *, base_env: Optional[Mapping[str, str]] = None
+) -> str:
+    env = subprocess_env(base_env=base_env)
+    configured = str(env.get(_ZEROCLAW_CONFIG_DIR_ENV) or "").strip()
+    if configured:
+        return configured
+    home_dir = str(env.get("HOME") or "").strip()
+    if home_dir:
+        return str(Path(home_dir).expanduser() / _ZEROCLAW_CONFIG_DIRNAME)
+    return str(Path.home() / _ZEROCLAW_CONFIG_DIRNAME)
+
+
+def zeroclaw_managed_workspace_env(
+    runtime_workspace_root: Path,
+    *,
+    base_env: Optional[Mapping[str, str]] = None,
+) -> dict[str, str]:
+    return {
+        _ZEROCLAW_WORKSPACE_ENV: str(runtime_workspace_root),
+        _ZEROCLAW_CONFIG_DIR_ENV: _default_zeroclaw_config_dir(base_env=base_env),
+    }
+
+
 class _ZeroClawManagedWorkspaceRuntime:
     runtime_id = ZEROCLAW_RUNTIME_ID
 
@@ -207,7 +234,12 @@ class _ZeroClawManagedWorkspaceRuntime:
             raise ManagedWorkspaceRuntimeError(preflight)
         env = subprocess_env(base_env=base_env)
         if embed_workspace_env:
-            env["ZEROCLAW_WORKSPACE"] = str(runtime_workspace_root)
+            env.update(
+                zeroclaw_managed_workspace_env(
+                    runtime_workspace_root,
+                    base_env=env,
+                )
+            )
         return RuntimeLaunchSpec(
             runtime_id=self.runtime_id,
             command=tuple(
@@ -345,4 +377,5 @@ __all__ = [
     "preflight_agent_workspace_runtime",
     "preflight_managed_workspace_runtime",
     "probe_agent_workspace_runtime",
+    "zeroclaw_managed_workspace_env",
 ]

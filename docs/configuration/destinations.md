@@ -66,7 +66,13 @@ Notes:
 ZeroClaw under Docker:
 - CAR mounts the managed agent-workspace root, not just the nested runtime workspace.
 - ZeroClaw still runs with `ZEROCLAW_WORKSPACE=<workspace_root>/workspace`.
+- CAR also sets `ZEROCLAW_CONFIG_DIR=${HOME}/.zeroclaw` so ZeroClaw keeps using
+  the canonical host-style config directory instead of treating the managed
+  workspace as its config root.
 - The ZeroClaw process executes with its working directory set to that managed `workspace/` directory inside the container so session-state files under `<workspace_root>/threads/` and shared workspace memory stay on the same durable mount.
+- If you use a Docker destination for ZeroClaw, mount `${HOME}/.zeroclaw` into
+  the container at the same path or point `ZEROCLAW_CONFIG_DIR` at another
+  mounted config directory.
 
 ## `full-dev` Profile Contract
 
