@@ -86,6 +86,34 @@ async def test_send_long_message_uses_markdown_document(parse_mode: str) -> None
     assert payload["document"] == long_text.encode("utf-8")
 
 
+@pytest.mark.parametrize("parse_mode", ["Markdown", "MarkdownV2"])
+def test_telegram_markdown_collapses_local_file_links(parse_mode: str) -> None:
+    rendered = _format_telegram_markdown(
+        "See [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
+        "and [docs](https://example.com/docs).",
+        parse_mode,
+    )
+
+    assert "archive" in rendered
+    assert "helpers" in rendered
+    assert "/Users/dazheng/worktree/src/archive_helpers.py" not in rendered
+    assert "docs" in rendered
+    assert "example" in rendered
+    assert "docs" in rendered
+
+
+def test_telegram_html_collapses_local_file_links() -> None:
+    rendered = _format_telegram_html(
+        "See [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
+        "and [docs](https://example.com/docs)."
+    )
+
+    assert "archive_helpers.py" in rendered
+    assert "/Users/dazheng/worktree/src/archive_helpers.py" not in rendered
+    assert "docs" in rendered
+    assert "https://example.com/docs" in rendered
+
+
 @pytest.mark.anyio
 async def test_append_metrics_to_placeholder_preserves_metrics_when_text_is_long() -> (
     None

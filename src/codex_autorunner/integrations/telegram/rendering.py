@@ -3,6 +3,8 @@ from __future__ import annotations
 import html
 import re
 
+from ..chat.text_sanitization import collapse_local_markdown_links
+
 _CODE_BLOCK_RE = re.compile(r"```(?:[^\n`]*)\n(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
@@ -13,6 +15,7 @@ _MARKDOWN_V2_ESCAPE_RE = re.compile(r"([_*\[\]\(\)~`>#+\-=|{}.!\\])")
 def _format_telegram_html(text: str) -> str:
     if not text:
         return ""
+    text = collapse_local_markdown_links(text)
     parts: list[str] = []
     last = 0
     for match in _CODE_BLOCK_RE.finditer(text):
@@ -63,6 +66,7 @@ def _escape_markdown_code(text: str, *, version: str) -> str:
 def _format_telegram_markdown(text: str, version: str) -> str:
     if not text:
         return ""
+    text = collapse_local_markdown_links(text)
     parts: list[str] = []
     last = 0
     for match in _CODE_BLOCK_RE.finditer(text):

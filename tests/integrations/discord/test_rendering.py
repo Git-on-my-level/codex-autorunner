@@ -109,6 +109,20 @@ class TestFormatDiscordMessage:
     def test_handles_empty_text(self) -> None:
         assert format_discord_message("") == ""
 
+    def test_collapses_local_file_markdown_links_to_labels(self) -> None:
+        text = (
+            "Updated [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
+            "and kept [docs](https://example.com/docs)."
+        )
+
+        result = format_discord_message(text)
+
+        assert "archive" in result
+        assert "helpers" in result
+        assert "/Users/dazheng/worktree/src/archive_helpers.py" not in result
+        assert "docs" in result
+        assert "https://example.com/docs" in result
+
 
 class TestTruncateForDiscord:
     def test_keeps_short_text(self) -> None:
