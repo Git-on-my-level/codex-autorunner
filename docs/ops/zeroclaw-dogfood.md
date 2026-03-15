@@ -1,19 +1,28 @@
 # ZeroClaw Host Dogfood
 
-This is the opt-in local-host path for validating ZeroClaw after `TICKET-740`.
+This is the opt-in local-host path for validating the CAR-managed ZeroClaw
+workspace contract.
 
 ## Contract
 
-ZeroClaw is **not** a CAR v1 durable-thread orchestration target. The current
-host validation path is limited to the experimental wrapper-managed flow:
+For CAR-managed `agent_workspace` resources, ZeroClaw currently proves this
+contract:
 
-- CAR resolves the configured `zeroclaw` binary
-- CAR instantiates `ZeroClawSupervisor` and `ZeroClawHarness`
-- a local wrapper session is created
-- one prompt is sent and its terminal output is observed
+- CAR resolves the configured `zeroclaw` binary and launches it under
+  `ZEROCLAW_WORKSPACE=<workspace_root>/workspace`.
+- One agent workspace can back multiple durable CAR threads.
+- Workspace memory is shared at the workspace root.
+- Session state stays isolated per thread under
+  `<workspace_root>/threads/<session_id>/session-state.json`.
+- Queueing remains per managed thread. CAR does not serialize unrelated threads
+  just because they share one ZeroClaw workspace.
 
-Do not treat this as restart-resumable or orchestration-managed durable-thread
-proof.
+Current caveats:
+
+- One ZeroClaw session still allows only one active turn at a time.
+- `interrupt`, `review`, and model-catalog features are not advertised.
+- The prove-out assumes CAR-managed workspace roots, not ambient
+  `~/.zeroclaw` state.
 
 ## Install
 
@@ -32,8 +41,8 @@ Run ZeroClaw's own one-time provider setup on the host if it is not already
 initialized. This setup is host-local and intentionally outside CAR's default
 CI path.
 
-On this host, the validated runtime is already initialized and
-`zeroclaw config show` reports:
+Before running the live checks, confirm `zeroclaw config show` reports the
+provider/model you expect. A known-good example is:
 
 - `default_provider: zai`
 - `default_model: glm-5`
@@ -63,6 +72,37 @@ Optional overrides:
 - `ZEROCLAW_TEST_PROMPT`
 - `ZEROCLAW_EXPECTED_SUBSTRING`
 
+Focused local proof of the CAR-managed contract:
+
+```bash
+PYTHONPATH=src \
+.venv/bin/pytest -q \
+  tests/agents/zeroclaw/test_zeroclaw_supervisor.py \
+  tests/test_pma_managed_threads_messages.py
+```
+
+## Manual Shared-Memory Checklist
+
+Use this when you want host evidence beyond the automated test suite.
+
+1. Create one CAR-managed ZeroClaw workspace and two CAR threads under it.
+2. In thread A, ask ZeroClaw to create `shared-memory.txt` inside the managed
+   workspace with a unique token.
+3. In thread B, ask ZeroClaw to read that same file and echo the token.
+4. Confirm both threads have distinct
+   `threads/<session_id>/session-state.json` files and that each file only
+   contains its own conversation state.
+5. Send work to both threads while one turn is still running. Confirm the
+   second thread starts immediately instead of being queued behind the first.
+
+## Manual Multi-Workspace Checklist
+
+1. Create two CAR-managed ZeroClaw workspaces on the same host.
+2. In workspace A, write a unique token into `shared-memory.txt`.
+3. In workspace B, ask ZeroClaw to read `shared-memory.txt` and confirm it does
+   not see workspace A's token.
+4. Confirm both workspaces are served by the same configured `zeroclaw` binary.
+
 ## Docker-backed Agent Workspaces
 
 For CAR-managed `agent_workspaces[]` with `destination.kind: docker`:
@@ -74,18 +114,3 @@ For CAR-managed `agent_workspaces[]` with `destination.kind: docker`:
 
 This keeps the Docker path aligned with the local managed-workspace contract instead
 of introducing a separate container-only layout.
-
-## Current Host Status
-
-On this host, `brew install zeroclaw` succeeds, the Homebrew service is running,
-and `zeroclaw config show` reports a working `zai/glm-5` local configuration.
-CAR can instantiate the real ZeroClaw supervisor/harness through its normal
-binary resolution path.
-
-The validated host-local smoke checks now pass:
-
-- raw CLI: returns `ZC-OK`
-- CAR harness integration: `1 passed`
-
-This proves the supported post-`TICKET-740` limited wrapper path on this host.
-It does not change ZeroClaw's non-durable contract in CAR core.

@@ -979,6 +979,191 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
     assert metadata["backend_thread_id"] == "zeroclaw-session-1"
 
 
+@pytest.mark.anyio
+async def test_agent_workspace_threads_run_in_parallel_without_workspace_wide_queueing(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    class FakeZeroClawSupervisor:
+        def __init__(self) -> None:
+            self.create_calls: list[tuple[Path, str | None]] = []
+            self.turn_calls: list[dict[str, object]] = []
+            self.wait_started: list[str] = []
+            self._session_seq = 0
+            self._session_events: dict[str, asyncio.Event] = {}
+
+        async def create_session(
+            self, workspace_root: Path, title: str | None = None
+        ) -> str:
+            self.create_calls.append((workspace_root, title))
+            self._session_seq += 1
+            session_id = f"zeroclaw-session-{self._session_seq}"
+            self._session_events[session_id] = asyncio.Event()
+            return session_id
+
+        async def attach_session(self, workspace_root: Path, session_id: str) -> str:
+            _ = workspace_root
+            return session_id
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            *,
+            model: str | None = None,
+        ) -> str:
+            self.turn_calls.append(
+                {
+                    "workspace_root": workspace_root,
+                    "conversation_id": conversation_id,
+                    "prompt": prompt,
+                    "model": model,
+                }
+            )
+            return f"{conversation_id}-turn-{len(self.turn_calls)}"
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+            *,
+            timeout: float | None = None,
+        ):
+            _ = workspace_root, turn_id, timeout
+            self.wait_started.append(conversation_id)
+            await self._session_events[conversation_id].wait()
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "ok",
+                    "assistant_text": f"zeroclaw-output:{conversation_id}",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def stream_turn_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield None
+
+    fake_supervisor = FakeZeroClawSupervisor()
+    app.state.zeroclaw_supervisor = fake_supervisor
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        create_a = await client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+                "name": "ZeroClaw thread A",
+            },
+        )
+        create_b = await client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+                "name": "ZeroClaw thread B",
+            },
+        )
+        assert create_a.status_code == 200
+        assert create_b.status_code == 200
+        thread_a = create_a.json()["thread"]["managed_thread_id"]
+        thread_b = create_b.json()["thread"]["managed_thread_id"]
+
+        first_resp = await client.post(
+            f"/hub/pma/threads/{thread_a}/messages",
+            json={"message": "first zeroclaw thread", "defer_execution": True},
+        )
+        second_resp = await client.post(
+            f"/hub/pma/threads/{thread_b}/messages",
+            json={"message": "second zeroclaw thread", "defer_execution": True},
+        )
+        assert first_resp.status_code == 200
+        assert second_resp.status_code == 200
+
+        first_payload = first_resp.json()
+        second_payload = second_resp.json()
+        assert first_payload["send_state"] == "accepted"
+        assert second_payload["send_state"] == "accepted"
+        assert first_payload["execution_state"] == "running"
+        assert second_payload["execution_state"] == "running"
+        assert first_payload["backend_thread_id"] != second_payload["backend_thread_id"]
+
+        store = PmaThreadStore(hub_env.hub_root)
+        with anyio.fail_after(2):
+            while len(fake_supervisor.wait_started) < 2:
+                await anyio.sleep(0.05)
+
+        first_turn = store.get_turn(thread_a, first_payload["managed_turn_id"])
+        second_turn = store.get_turn(thread_b, second_payload["managed_turn_id"])
+        assert first_turn is not None
+        assert second_turn is not None
+        assert first_turn["status"] == "running"
+        assert second_turn["status"] == "running"
+        assert store.get_queue_depth(thread_a) == 0
+        assert store.get_queue_depth(thread_b) == 0
+        assert fake_supervisor.create_calls == [
+            (workspace.path.resolve(), "ZeroClaw thread A"),
+            (workspace.path.resolve(), "ZeroClaw thread B"),
+        ]
+
+        fake_supervisor._session_events[first_payload["backend_thread_id"]].set()
+        fake_supervisor._session_events[second_payload["backend_thread_id"]].set()
+
+        with anyio.fail_after(2):
+            while True:
+                first_turn = store.get_turn(thread_a, first_payload["managed_turn_id"])
+                second_turn = store.get_turn(
+                    thread_b, second_payload["managed_turn_id"]
+                )
+                if (
+                    first_turn is not None
+                    and second_turn is not None
+                    and first_turn.get("status") == "ok"
+                    and second_turn.get("status") == "ok"
+                ):
+                    break
+                await anyio.sleep(0.05)
+
+    first_thread_row = PmaThreadStore(hub_env.hub_root).get_thread(thread_a)
+    second_thread_row = PmaThreadStore(hub_env.hub_root).get_thread(thread_b)
+    assert first_thread_row is not None
+    assert second_thread_row is not None
+    assert first_thread_row["resource_kind"] == "agent_workspace"
+    assert second_thread_row["resource_kind"] == "agent_workspace"
+    assert first_thread_row["resource_id"] == workspace.id
+    assert second_thread_row["resource_id"] == workspace.id
+    assert (
+        PmaTranscriptStore(hub_env.hub_root)
+        .read_transcript(first_payload["managed_turn_id"])["content"]
+        .strip()
+        == "zeroclaw-output:zeroclaw-session-1"
+    )
+    assert (
+        PmaTranscriptStore(hub_env.hub_root)
+        .read_transcript(second_payload["managed_turn_id"])["content"]
+        .strip()
+        == "zeroclaw-output:zeroclaw-session-2"
+    )
+
+
 def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

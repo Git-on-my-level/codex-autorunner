@@ -9,7 +9,13 @@ CAR supports multiple AI agents through a registry and capability model. Each ag
 - **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
 - **Registry**: Central registration with capabilities
 
-If an external runtime does not expose a documented public thread/session API, do not claim that it satisfies CAR's durable-thread contract. You may keep a narrow CAR-owned wrapper around the documented surface for experimental use, but leave `durable_threads` and the related orchestration capabilities absent until the runtime exposes a real resumable handle. The current ZeroClaw adapter is the reference example for this downgrade path.
+If an external runtime does not expose a documented public thread/session API,
+do not claim that it satisfies CAR's durable-thread contract unless CAR can
+prove equivalent semantics with its own managed wrapper. The current ZeroClaw
+adapter is the reference example for this narrower path: CAR-managed
+workspaces can honestly advertise durable threads, but only with explicit
+caveats around shared workspace memory, one active turn per session, and the
+absence of optional capabilities such as `interrupt` and `review`.
 
 ## Prerequisites
 
