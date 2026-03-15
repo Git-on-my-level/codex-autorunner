@@ -558,9 +558,9 @@ class PmaThreadStore:
         status: Optional[str] = None,
         normalized_status: Optional[str] = None,
         repo_id: Optional[str] = None,
-        limit: int = 200,
+        limit: Optional[int] = 200,
     ) -> list[dict[str, Any]]:
-        if limit <= 0:
+        if limit is not None and limit <= 0:
             return []
 
         query = """
@@ -582,8 +582,9 @@ class PmaThreadStore:
             query += " AND repo_id = ?"
             params.append(repo_id)
         query += " ORDER BY updated_at DESC, created_at DESC, thread_target_id DESC"
-        query += " LIMIT ?"
-        params.append(limit)
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
 
         with self._read_conn() as conn:
             rows = conn.execute(query, params).fetchall()

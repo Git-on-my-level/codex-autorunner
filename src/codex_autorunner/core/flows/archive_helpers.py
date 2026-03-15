@@ -54,7 +54,7 @@ def _contextspace_source(car_root: Path) -> Path:
 
 def _find_hub_root(repo_root: Path) -> Path:
     current = repo_root.resolve()
-    for _ in range(5):
+    while True:
         manifest_path = current / ".codex-autorunner" / "manifest.yml"
         if manifest_path.exists():
             return current
@@ -93,7 +93,7 @@ def _archive_ticket_flow_pma_threads(repo_root: Path, run_id: str) -> dict[str, 
     repo_id = _resolve_repo_id(repo_root, hub_root)
     archived_thread_ids: list[str] = []
 
-    for thread in store.list_threads(status="active", limit=2000):
+    for thread in store.list_threads(status="active", limit=None):
         managed_thread_id = thread.get("managed_thread_id")
         if not isinstance(managed_thread_id, str) or not managed_thread_id.strip():
             continue

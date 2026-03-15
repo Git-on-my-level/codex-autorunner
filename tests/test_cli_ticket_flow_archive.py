@@ -340,6 +340,85 @@ def test_ticket_flow_archive_tolerates_pma_archive_failures(
     )
 
 
+def test_ticket_flow_archive_searches_full_ancestor_chain_for_hub_manifest(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    repo_root = hub_root / "a" / "b" / "c" / "d" / "e" / "f" / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    run_id = "90909090-9090-9090-9090-909090909090"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    store = PmaThreadStore(hub_root)
+    thread = store.create_thread(
+        "codex",
+        repo_root.resolve(),
+        name="ticket-flow:codex",
+        metadata={
+            "thread_kind": "ticket_flow",
+            "flow_type": "ticket_flow",
+            "run_id": run_id,
+        },
+    )
+
+    payload = archive_flow_run_artifacts(
+        repo_root,
+        run_id=run_id,
+        force=False,
+        delete_run=True,
+    )
+
+    assert payload["archived_pma_threads"] == 1
+    assert payload["archived_pma_threads_skipped"] is None
+    assert payload["archived_pma_thread_ids"] == [thread["managed_thread_id"]]
+
+
+def test_ticket_flow_archive_scans_all_active_threads(
+    tmp_path: Path,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    run_id = "91919191-9191-9191-9191-919191919191"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    store = PmaThreadStore(tmp_path)
+    for index in range(2005):
+        store.create_thread(
+            "codex",
+            repo_root.resolve(),
+            repo_id="repo",
+            name=f"pma:codex:{index}",
+        )
+    matching = store.create_thread(
+        "codex",
+        repo_root.resolve(),
+        repo_id="repo",
+        name="ticket-flow:codex",
+        metadata={
+            "thread_kind": "ticket_flow",
+            "flow_type": "ticket_flow",
+            "run_id": run_id,
+        },
+    )
+
+    payload = archive_flow_run_artifacts(
+        repo_root,
+        run_id=run_id,
+        force=False,
+        delete_run=True,
+    )
+
+    assert payload["archived_pma_threads"] == 1
+    assert payload["archived_pma_thread_ids"] == [matching["managed_thread_id"]]
+
+
 def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
     repo_root = _setup_repo(tmp_path)
 
