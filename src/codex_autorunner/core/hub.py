@@ -1546,10 +1546,6 @@ class HubSupervisor:
                 archive_note=archive_note,
                 force=force_archive,
             )
-        self._archive_bound_pma_threads(
-            worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
-        )
 
         repos_by_id = {repo.id: repo for repo in manifest.repos}
         effective_destination = resolve_effective_repo_destination(entry, repos_by_id)
@@ -1615,6 +1611,10 @@ class HubSupervisor:
 
         manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
+        )
         return {"status": "ok", "docker_cleanup": docker_cleanup}
 
     def _has_active_chat_binding(self, repo_id: str) -> bool:

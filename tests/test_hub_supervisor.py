@@ -1780,6 +1780,51 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
     assert thread["lifecycle_status"] == "archived"
 
 
+def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-guard-failure",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    original_run_git = hub_module.run_git
+
+    def _failing_run_git(args, cwd, **kwargs):
+        if list(args[:2]) == ["worktree", "remove"]:
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=1,
+                stdout="",
+                stderr="fatal: cleanup blocked",
+            )
+        return original_run_git(args, cwd, **kwargs)
+
+    monkeypatch.setattr(hub_module, "run_git", _failing_run_git)
+
+    with pytest.raises(ValueError, match="git worktree remove failed:"):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "active"
+    assert worktree.path.exists()
+
+
 def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
