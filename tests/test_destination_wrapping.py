@@ -98,3 +98,24 @@ def test_wrap_command_for_destination_runs_profile_preflight_for_full_dev(
         str(path).endswith("/.codex/auth.json")
         for path in preflight["required_readable_files"]
     )
+
+
+def test_wrap_command_for_destination_supports_custom_exec_workdir_and_env(
+    tmp_path: Path,
+) -> None:
+    runtime = _FakeDockerRuntime()
+    destination = DockerDestination(image="busybox:latest")
+    runtime_workspace = tmp_path / "workspace"
+
+    wrap_command_for_destination(
+        command=["zeroclaw", "agent"],
+        destination=destination,
+        repo_root=tmp_path,
+        command_workdir=runtime_workspace,
+        extra_env={"ZEROCLAW_WORKSPACE": str(runtime_workspace)},
+        docker_runtime=runtime,  # type: ignore[arg-type]
+    )
+
+    exec_call = runtime.exec_calls[0]
+    assert exec_call["workdir"] == str(runtime_workspace)
+    assert exec_call["env"]["ZEROCLAW_WORKSPACE"] == str(runtime_workspace)

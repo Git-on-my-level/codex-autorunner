@@ -119,3 +119,136 @@ def test_apply_orchestration_migrations_is_idempotent_at_latest_version(
     assert version == ORCHESTRATION_SCHEMA_VERSION
     assert int(first_run_count["count"] or 0) == 1
     assert int(second_run_count["count"] or 0) == 1
+
+
+def test_apply_orchestration_migrations_backfills_resource_owner_columns(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_thread_targets (
+                thread_target_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                backend_thread_id TEXT,
+                repo_id TEXT,
+                workspace_root TEXT,
+                display_name TEXT,
+                lifecycle_status TEXT,
+                runtime_status TEXT,
+                status_reason TEXT,
+                status_turn_id TEXT,
+                last_execution_id TEXT,
+                last_message_preview TEXT,
+                compact_seed TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                status_updated_at TEXT,
+                status_terminal INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_bindings (
+                binding_id TEXT PRIMARY KEY,
+                surface_kind TEXT NOT NULL,
+                surface_key TEXT NOT NULL,
+                target_kind TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                agent_id TEXT,
+                repo_id TEXT,
+                mode TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                disabled_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id,
+                agent_id,
+                repo_id,
+                workspace_root,
+                created_at,
+                updated_at
+            ) VALUES ('thread-1', 'codex', 'repo-1', '/tmp/repo-1', '2026-03-14T00:00:00Z', '2026-03-14T00:00:00Z')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_bindings (
+                binding_id,
+                surface_kind,
+                surface_key,
+                target_kind,
+                target_id,
+                agent_id,
+                repo_id,
+                mode,
+                metadata_json,
+                created_at,
+                updated_at,
+                disabled_at
+            ) VALUES ('binding-1', 'discord', 'chan-1', 'thread', 'thread-1', 'codex', 'repo-1', 'reuse', '{}', '2026-03-14T00:00:00Z', '2026-03-14T00:00:00Z', NULL)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (5, 'enforce_active_binding_uniqueness', '2026-03-14T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        thread_row = conn.execute(
+            """
+            SELECT repo_id, resource_kind, resource_id
+              FROM orch_thread_targets
+             WHERE thread_target_id = 'thread-1'
+            """
+        ).fetchone()
+        binding_row = conn.execute(
+            """
+            SELECT repo_id, resource_kind, resource_id
+              FROM orch_bindings
+             WHERE binding_id = 'binding-1'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert thread_row is not None
+    assert thread_row["repo_id"] == "repo-1"
+    assert thread_row["resource_kind"] == "repo"
+    assert thread_row["resource_id"] == "repo-1"
+    assert binding_row is not None
+    assert binding_row["repo_id"] == "repo-1"
+    assert binding_row["resource_kind"] == "repo"
+    assert binding_row["resource_id"] == "repo-1"

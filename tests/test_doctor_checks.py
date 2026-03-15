@@ -18,6 +18,7 @@ from codex_autorunner.core.runtime import (
     hub_worktree_doctor_checks,
     pma_doctor_checks,
     summarize_opencode_lifecycle,
+    zeroclaw_doctor_checks,
 )
 from codex_autorunner.integrations.chat.doctor import chat_doctor_checks
 from codex_autorunner.integrations.chat.parity_checker import ParityCheckResult
@@ -825,6 +826,147 @@ def test_hub_destination_doctor_checks_reports_invalid_destination(tmp_path: Pat
         (not check.passed) and "requires non-empty 'image'" in check.message
         for check in checks
     )
+
+
+def test_hub_destination_doctor_checks_reports_agent_workspace_destination(
+    tmp_path: Path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos: []",
+                "agent_workspaces:",
+                "  - id: zc-main",
+                "    runtime: zeroclaw",
+                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
+                "    enabled: true",
+                "    destination:",
+                "      kind: docker",
+                "      image: ghcr.io/acme/zeroclaw:latest",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.probe_docker_readiness",
+        lambda: DockerReadiness(
+            binary_available=True,
+            daemon_reachable=True,
+            detail="docker daemon reachable",
+        ),
+    )
+    checks = hub_destination_doctor_checks(hub_config)
+    assert any(
+        "zc-main: effective destination 'docker' (source=agent_workspace)"
+        in check.message
+        for check in checks
+    )
+    assert any(
+        check.check_id == "hub.destination.docker.daemon"
+        and "agent_workspace:zc-main" in check.message
+        for check in checks
+    )
+
+
+def test_hub_destination_doctor_checks_reports_invalid_agent_workspace_destination(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos: []",
+                "agent_workspaces:",
+                "  - id: zc-main",
+                "    runtime: zeroclaw",
+                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
+                "    enabled: true",
+                "    destination:",
+                "      kind: docker",
+                "      image: ''",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    checks = hub_destination_doctor_checks(hub_config)
+    assert any(
+        "zc-main: effective destination 'local' (source=default)" in check.message
+        for check in checks
+    )
+    assert any(
+        (not check.passed) and "requires non-empty 'image'" in check.message
+        for check in checks
+    )
+
+
+def test_zeroclaw_doctor_checks_report_missing_binary_for_enabled_workspaces(
+    tmp_path: Path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos: []",
+                "agent_workspaces:",
+                "  - id: zc-main",
+                "    runtime: zeroclaw",
+                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
+                "    enabled: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.resolve_executable",
+        lambda _binary: None,
+    )
+
+    checks = zeroclaw_doctor_checks(hub_config)
+
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.check_id == "hub.zeroclaw.binary"
+    assert check.passed is False
+    assert check.severity == "error"
+    assert "zc-main" in check.message
+    assert "Install ZeroClaw" in (check.fix or "")
+
+
+def test_zeroclaw_doctor_checks_skip_default_binary_without_workspaces(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    hub_config = load_hub_config(hub_root)
+
+    assert zeroclaw_doctor_checks(hub_config) == []
 
 
 def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):

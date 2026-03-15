@@ -316,12 +316,125 @@ def _request_json_with_status(
     return response.status_code, data
 
 
+def _normalize_agent_option(agent: Optional[str]) -> Optional[str]:
+    if agent is None:
+        return None
+    normalized = agent.strip().lower()
+    if not normalized:
+        return None
+    allowed = {"codex", "opencode", "zeroclaw"}
+    if normalized not in allowed:
+        typer.echo("--agent must be one of: codex, opencode, zeroclaw", err=True)
+        raise typer.Exit(code=1) from None
+    return normalized
+
+
+def _normalize_resource_owner_options(
+    *,
+    repo_id: Optional[str],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    workspace_root: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    normalized_repo_id = (
+        repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
+    )
+    normalized_resource_kind = (
+        resource_kind.strip().lower()
+        if isinstance(resource_kind, str) and resource_kind.strip()
+        else None
+    )
+    normalized_resource_id = (
+        resource_id.strip()
+        if isinstance(resource_id, str) and resource_id.strip()
+        else None
+    )
+    normalized_workspace_root = (
+        workspace_root.strip()
+        if isinstance(workspace_root, str) and workspace_root.strip()
+        else None
+    )
+    repo_present = normalized_repo_id is not None
+    resource_present = (
+        normalized_resource_kind is not None or normalized_resource_id is not None
+    )
+    workspace_present = normalized_workspace_root is not None
+
+    if normalized_resource_id and normalized_resource_kind is None:
+        typer.echo(
+            "--resource-kind is required when --resource-id is provided", err=True
+        )
+        raise typer.Exit(code=1) from None
+    if normalized_resource_kind and normalized_resource_id is None:
+        typer.echo(
+            "--resource-id is required when --resource-kind is provided", err=True
+        )
+        raise typer.Exit(code=1) from None
+    if normalized_resource_kind not in {None, "repo", "agent_workspace"}:
+        typer.echo("--resource-kind must be one of: repo, agent_workspace", err=True)
+        raise typer.Exit(code=1) from None
+    if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
+        typer.echo(
+            "--repo cannot be combined with a non-repo --resource-kind",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    if (
+        normalized_repo_id
+        and normalized_resource_id
+        and normalized_resource_id != normalized_repo_id
+    ):
+        typer.echo("--repo must match --resource-id for repo-backed requests", err=True)
+        raise typer.Exit(code=1) from None
+    if (
+        sum(
+            1
+            for present in (repo_present, resource_present, workspace_present)
+            if present
+        )
+        > 1
+    ):
+        typer.echo(
+            "Choose exactly one of --repo, --resource-kind/--resource-id, or --workspace-root",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    if normalized_repo_id and normalized_resource_kind is None:
+        normalized_resource_kind = "repo"
+        normalized_resource_id = normalized_repo_id
+
+    return (
+        normalized_repo_id,
+        normalized_resource_kind,
+        normalized_resource_id,
+        normalized_workspace_root,
+    )
+
+
+def _format_resource_owner_label(item: dict[str, Any]) -> str:
+    resource_kind = str(item.get("resource_kind") or "").strip()
+    resource_id = str(item.get("resource_id") or "").strip()
+    repo_id = str(item.get("repo_id") or "").strip()
+    if resource_kind and resource_id:
+        if resource_kind == "repo":
+            return f"repo={resource_id}"
+        return f"owner={resource_kind}:{resource_id}"
+    if repo_id:
+        return f"repo={repo_id}"
+    workspace_root = str(item.get("workspace_root") or "").strip()
+    if workspace_root:
+        return f"workspace={workspace_root}"
+    return "owner=-"
+
+
 def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
-    thread = data.get("thread") if isinstance(data.get("thread"), dict) else {}
-    turn = data.get("turn") if isinstance(data.get("turn"), dict) else {}
+    raw_thread = data.get("thread")
+    thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
+    raw_turn = data.get("turn")
+    turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
     managed_thread_id = str(data.get("managed_thread_id") or "")
     agent = str(thread.get("agent") or "-")
-    repo_id = str(thread.get("repo_id") or "-")
+    owner = _format_resource_owner_label(thread)
     thread_state = str(data.get("status") or thread.get("status") or "-")
     lifecycle_state = str(thread.get("lifecycle_status") or "-")
     status_reason = str(data.get("status_reason") or thread.get("status_reason") or "-")
@@ -336,7 +449,7 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
             [
                 f"id={managed_thread_id}",
                 f"agent={agent}",
-                f"repo={repo_id}",
+                owner,
                 f"thread={thread_state}",
                 f"lifecycle={lifecycle_state}",
                 f"alive={alive}",
@@ -838,11 +951,17 @@ def pma_models(
 @thread_app.command("spawn")
 @thread_app.command("create")
 def pma_thread_spawn(
-    agent: str = typer.Option(
-        ..., "--agent", help="Thread agent to use (codex|opencode)"
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Thread agent to use (codex|opencode|zeroclaw)"
     ),
     repo_id: Optional[str] = typer.Option(
         None, "--repo", help="Hub repo id for the target workspace"
+    ),
+    resource_kind: Optional[str] = typer.Option(
+        None, "--resource-kind", help="Managed resource kind (repo|agent_workspace)"
+    ),
+    resource_id: Optional[str] = typer.Option(
+        None, "--resource-id", help="Managed resource id"
     ),
     workspace_root: Optional[str] = typer.Option(
         None, "--workspace-root", help="Absolute or hub-relative workspace path"
@@ -868,11 +987,42 @@ def pma_thread_spawn(
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """Create a managed PMA thread."""
-    if agent not in {"codex", "opencode"}:
-        typer.echo("--agent must be one of: codex, opencode", err=True)
+    normalized_agent = _normalize_agent_option(agent)
+    (
+        normalized_repo_id,
+        normalized_resource_kind,
+        normalized_resource_id,
+        normalized_workspace_root,
+    ) = _normalize_resource_owner_options(
+        repo_id=repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        workspace_root=workspace_root,
+    )
+    owner_present = (
+        normalized_resource_kind is not None and normalized_resource_id is not None
+    )
+    if (
+        sum(
+            1
+            for present in (
+                owner_present,
+                normalized_workspace_root is not None,
+            )
+            if present
+        )
+        != 1
+    ):
+        typer.echo(
+            "Exactly one of --repo, --resource-kind/--resource-id, or --workspace-root is required",
+            err=True,
+        )
         raise typer.Exit(code=1) from None
-    if bool(repo_id) == bool(workspace_root):
-        typer.echo("Exactly one of --repo or --workspace-root is required", err=True)
+    if normalized_agent is None and normalized_resource_kind != "agent_workspace":
+        typer.echo(
+            "--agent is required unless --resource-kind agent_workspace is used",
+            err=True,
+        )
         raise typer.Exit(code=1) from None
 
     hub_root = _resolve_hub_path(path)
@@ -883,11 +1033,11 @@ def pma_thread_spawn(
         raise typer.Exit(code=1) from None
 
     required_cap = _CAPABILITY_REQUIREMENTS.get("thread_spawn")
-    if required_cap:
+    if required_cap and normalized_agent is not None:
         capabilities = _fetch_agent_capabilities(config, path)
-        if not _check_capability(agent, required_cap, capabilities):
+        if not _check_capability(normalized_agent, required_cap, capabilities):
             typer.echo(
-                f"Agent '{agent}' does not support thread creation (missing capability: {required_cap})",
+                f"Agent '{normalized_agent}' does not support thread creation (missing capability: {required_cap})",
                 err=True,
             )
             raise typer.Exit(code=1) from None
@@ -898,9 +1048,11 @@ def pma_thread_spawn(
             "POST",
             _build_pma_url(config, "/threads"),
             {
-                "agent": agent,
-                "repo_id": repo_id,
-                "workspace_root": workspace_root,
+                "agent": normalized_agent,
+                "repo_id": normalized_repo_id,
+                "resource_kind": normalized_resource_kind,
+                "resource_id": normalized_resource_id,
+                "workspace_root": normalized_workspace_root,
                 "name": name,
                 "backend_thread_id": backend_id,
                 "notify_on": normalized_notify_on,
@@ -932,18 +1084,36 @@ def pma_thread_list(
     agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
     status: Optional[str] = typer.Option(None, "--status", help="Filter by status"),
     repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
+    resource_kind: Optional[str] = typer.Option(
+        None, "--resource-kind", help="Filter by managed resource kind"
+    ),
+    resource_id: Optional[str] = typer.Option(
+        None, "--resource-id", help="Filter by managed resource id"
+    ),
     limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """List managed PMA threads."""
     hub_root = _resolve_hub_path(path)
+    (
+        normalized_repo_id,
+        normalized_resource_kind,
+        normalized_resource_id,
+        _normalized_workspace_root,
+    ) = _normalize_resource_owner_options(
+        repo_id=repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+    )
     params = {
         key: value
         for key, value in {
             "agent": agent,
             "status": status,
-            "repo_id": repo_id,
+            "repo_id": normalized_repo_id,
+            "resource_kind": normalized_resource_kind,
+            "resource_id": normalized_resource_id,
             "limit": limit,
         }.items()
         if value is not None
@@ -981,7 +1151,7 @@ def pma_thread_list(
                     f"agent={thread.get('agent') or ''}",
                     f"status={thread.get('status') or ''}",
                     f"reason={thread.get('status_reason') or '-'}",
-                    f"repo={thread.get('repo_id') or '-'}",
+                    _format_resource_owner_label(thread),
                 ]
             ).strip()
         )
@@ -2014,6 +2184,12 @@ def pma_context_compact(
 def pma_binding_list(
     agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
     repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
+    resource_kind: Optional[str] = typer.Option(
+        None, "--resource-kind", help="Filter by managed resource kind"
+    ),
+    resource_id: Optional[str] = typer.Option(
+        None, "--resource-id", help="Filter by managed resource id"
+    ),
     surface_kind: Optional[str] = typer.Option(
         None, "--surface", help="Filter by surface kind (discord, telegram, etc.)"
     ),
@@ -2026,11 +2202,23 @@ def pma_binding_list(
 ):
     """List orchestration bindings for threads."""
     hub_root = _resolve_hub_path(path)
+    (
+        normalized_repo_id,
+        normalized_resource_kind,
+        normalized_resource_id,
+        _normalized_workspace_root,
+    ) = _normalize_resource_owner_options(
+        repo_id=repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+    )
     params = {
         key: value
         for key, value in {
             "agent": agent,
-            "repo_id": repo_id,
+            "repo_id": normalized_repo_id,
+            "resource_kind": normalized_resource_kind,
+            "resource_id": normalized_resource_id,
             "surface_kind": surface_kind,
             "include_disabled": include_disabled,
             "limit": limit,
@@ -2072,7 +2260,7 @@ def pma_binding_list(
                     f"key={binding.get('surface_key') or ''}",
                     f"thread={binding.get('thread_target_id') or ''}"[:20],
                     f"agent={binding.get('agent_id') or ''}",
-                    f"repo={binding.get('repo_id') or '-'}",
+                    _format_resource_owner_label(binding),
                 ]
             ).strip()
             + disabled
@@ -2124,17 +2312,35 @@ def pma_binding_active(
 def pma_binding_work(
     agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
     repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
+    resource_kind: Optional[str] = typer.Option(
+        None, "--resource-kind", help="Filter by managed resource kind"
+    ),
+    resource_id: Optional[str] = typer.Option(
+        None, "--resource-id", help="Filter by managed resource id"
+    ),
     limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """List busy-work summaries (threads with running or queued work)."""
     hub_root = _resolve_hub_path(path)
+    (
+        normalized_repo_id,
+        normalized_resource_kind,
+        normalized_resource_id,
+        _normalized_workspace_root,
+    ) = _normalize_resource_owner_options(
+        repo_id=repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+    )
     params = {
         key: value
         for key, value in {
             "agent": agent,
-            "repo_id": repo_id,
+            "repo_id": normalized_repo_id,
+            "resource_kind": normalized_resource_kind,
+            "resource_id": normalized_resource_id,
             "limit": limit,
         }.items()
         if value is not None
@@ -2167,7 +2373,7 @@ def pma_binding_work(
             continue
         thread_id = summary.get("thread_target_id", "")
         agent_id = summary.get("agent_id", "")
-        repo_id_val = summary.get("repo_id", "-")
+        owner = _format_resource_owner_label(summary)
         lifecycle = summary.get("lifecycle_status", "-")
         runtime = summary.get("runtime_status", "-")
         exec_status = summary.get("execution_status", "-")
@@ -2177,7 +2383,7 @@ def pma_binding_work(
         if preview:
             preview = preview[:50] + "..." if len(preview) > 50 else preview
         typer.echo(
-            f"{thread_id[:12]} agent={agent_id} repo={repo_id_val} "
+            f"{thread_id[:12]} agent={agent_id} {owner} "
             f"lifecycle={lifecycle} runtime={runtime} exec={exec_status} "
             f"bindings={bindings} surfaces={surfaces}"
         )

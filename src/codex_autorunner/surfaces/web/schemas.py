@@ -153,6 +153,38 @@ class HubRemoveRepoRequest(Payload):
     delete_worktrees: bool = False
 
 
+class HubCreateAgentWorkspaceRequest(Payload):
+    workspace_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("workspace_id", "workspaceId", "id"),
+    )
+    runtime: str
+    display_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("display_name", "displayName", "name"),
+    )
+
+
+class HubUpdateAgentWorkspaceRequest(Payload):
+    enabled: Optional[bool] = None
+    display_name: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("display_name", "displayName", "name"),
+    )
+
+
+class HubRemoveAgentWorkspaceRequest(Payload):
+    delete_dir: bool = Field(
+        default=False, validation_alias=AliasChoices("delete_dir", "deleteDir")
+    )
+
+
+class HubDeleteAgentWorkspaceRequest(Payload):
+    delete_dir: bool = Field(
+        default=True, validation_alias=AliasChoices("delete_dir", "deleteDir")
+    )
+
+
 class HubCreateWorktreeRequest(Payload):
     base_repo_id: str = Field(
         validation_alias=AliasChoices("base_repo_id", "baseRepoId")
@@ -231,11 +263,36 @@ class AppServerThreadArchiveRequest(Payload):
 
 
 class PmaManagedThreadCreateRequest(Payload):
-    agent: Literal["codex", "opencode"]
-    repo_id: Optional[str] = None
+    agent: Optional[Literal["codex", "opencode", "zeroclaw"]] = None
+    repo_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("repo_id", "repoId")
+    )
+    resource_kind: Optional[Literal["repo", "agent_workspace"]] = Field(
+        default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")
+    )
+    resource_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("resource_id", "resourceId")
+    )
     workspace_root: Optional[str] = None
     name: Optional[str] = None
     backend_thread_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_repo_owner_alias(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        repo_id = data.get("repo_id", data.get("repoId"))
+        resource_kind = data.get("resource_kind", data.get("resourceKind"))
+        resource_id = data.get("resource_id", data.get("resourceId"))
+        if repo_id is None:
+            return data
+        normalized = dict(data)
+        if resource_kind is None:
+            normalized["resource_kind"] = "repo"
+        if resource_id is None:
+            normalized["resource_id"] = repo_id
+        return normalized
 
 
 class SessionSettingsRequest(Payload):

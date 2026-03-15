@@ -17,6 +17,10 @@ SCHEMA_BINDINGS = {
         "python": "RepoSnapshot",
         "python_extra": {"mounted", "mount_error", "ticket_flow", "ticket_flow_display"},
     },
+    "AgentWorkspaceSnapshot": {
+        "typescript": "HubAgentWorkspace",
+        "python": "AgentWorkspaceSnapshot",
+    },
     "HubState": {"typescript": "HubData", "python": "HubState"},
 }
 

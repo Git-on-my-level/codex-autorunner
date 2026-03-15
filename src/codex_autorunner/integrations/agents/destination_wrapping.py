@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from ...core.destinations import (
     Destination,
@@ -41,6 +41,8 @@ def wrap_command_for_destination(
     command: Sequence[str],
     destination: Destination,
     repo_root: Path,
+    command_workdir: Optional[Path] = None,
+    extra_env: Optional[Mapping[str, str]] = None,
     docker_runtime: Optional[DockerRuntime] = None,
 ) -> WrappedCommand:
     if not command:
@@ -53,6 +55,9 @@ def wrap_command_for_destination(
 
     runtime = docker_runtime or DockerRuntime()
     repo_abs = repo_root.resolve()
+    exec_workdir = (
+        command_workdir.resolve() if isinstance(command_workdir, Path) else repo_abs
+    )
     container_name = destination.container_name or default_car_docker_container_name(
         repo_abs
     )
@@ -78,13 +83,19 @@ def wrap_command_for_destination(
             container_name,
             required_binaries=profile_contract.required_binaries,
             required_readable_files=required_auth_files,
-            workdir=spec.workdir,
+            workdir=str(exec_workdir),
         )
+    merged_env = dict(spec.env)
+    for key, value in (extra_env or {}).items():
+        normalized_key = str(key or "").strip()
+        if not normalized_key or value is None:
+            continue
+        merged_env[normalized_key] = str(value)
     wrapped = runtime.build_exec_command(
         container_name,
         command,
-        workdir=str(repo_abs),
-        env=spec.env,
+        workdir=str(exec_workdir),
+        env=merged_env,
     )
 
     # Docker destination runs inside repo mount, so keep supervisor state under repo state root.

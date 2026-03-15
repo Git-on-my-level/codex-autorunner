@@ -7,10 +7,11 @@ from codex_autorunner.core.destinations import (
     DockerMount,
     LocalDestination,
     parse_destination_config,
+    resolve_effective_agent_workspace_destination,
     resolve_effective_repo_destination,
     validate_destination_write_payload,
 )
-from codex_autorunner.manifest import ManifestRepo
+from codex_autorunner.manifest import ManifestAgentWorkspace, ManifestRepo
 
 
 def test_parse_destination_config_local() -> None:
@@ -207,4 +208,29 @@ def test_resolve_effective_repo_destination_reports_invalid_own_destination() ->
         "kind": "docker",
         "image": "ghcr.io/acme/base:latest",
     }
+    assert any("requires non-empty 'image'" in message for message in resolution.issues)
+
+
+def test_resolve_effective_agent_workspace_destination_defaults_to_local() -> None:
+    workspace = ManifestAgentWorkspace(
+        id="zc-main",
+        runtime="zeroclaw",
+        path=Path(".codex-autorunner/runtimes/zeroclaw/zc-main"),
+    )
+    resolution = resolve_effective_agent_workspace_destination(workspace)
+    assert resolution.source == "default"
+    assert resolution.to_dict() == {"kind": "local"}
+    assert resolution.issues == ()
+
+
+def test_resolve_effective_agent_workspace_destination_reports_invalid_config() -> None:
+    workspace = ManifestAgentWorkspace(
+        id="zc-main",
+        runtime="zeroclaw",
+        path=Path(".codex-autorunner/runtimes/zeroclaw/zc-main"),
+        destination={"kind": "docker", "image": ""},
+    )
+    resolution = resolve_effective_agent_workspace_destination(workspace)
+    assert resolution.source == "default"
+    assert resolution.to_dict() == {"kind": "local"}
     assert any("requires non-empty 'image'" in message for message in resolution.issues)

@@ -899,7 +899,9 @@ def _module_has_command_path_route(
     return False
 
 
-def _module_has_pma_subcommand_route(tree: ast.Module, subcommand: str) -> bool:
+def _module_has_pma_subcommand_route(tree: ast.Module | None, subcommand: str) -> bool:
+    if tree is None:
+        return False
     expected_functions = (
         "_handle_pma_command",
         "_handle_pma_command_from_normalized",

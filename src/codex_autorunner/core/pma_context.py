@@ -71,10 +71,11 @@ First-turn routine:
      - diagnose_or_restart: Run failed or stopped - suggest diagnose or restart.
    - Always include the item.open_url so the user can jump to the repo Inbox tab.
 3) BRANCH B - Managed threads vs ticket flows:
-   - If request is exploratory/review/debug/quick-fix work in one repo, prefer managed threads.
+   - If request is exploratory/review/debug/quick-fix work in one managed resource, prefer managed threads.
    - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
    - If no suitable thread exists, spawn one, run work, and keep it compact:
      - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
+     - `car pma thread spawn --resource-kind agent_workspace --resource-id <workspace_id> --name <label>`
      - `car pma thread send --id <managed_thread_id> --message "..." --watch`
      - `car pma thread send --id <managed_thread_id> --message "..." --notify-on terminal --notify-lane <lane_id>`
      - `car pma thread status --id <managed_thread_id>`
@@ -108,10 +109,10 @@ First-turn routine:
    - Prefer idempotency keys and lane-specific routing (`lane_id`) for chainable plans.
    - Consult `.codex-autorunner/pma/docs/ABOUT_CAR.md` section “PMA automation wake-ups” for recipes.
 6) If the request is new work (not inbox/file processing):
-   - Identify the target repo(s).
+   - Identify the target managed resource(s): repo(s) and/or agent workspace(s).
    - Prefer hub-owned worktrees for changes.
    - Prefer one-shot setup/repair commands: `car hub tickets setup-pack`, `car hub tickets fmt`, `car hub tickets doctor --fix`.
-   - Create/adjust repo tickets under each repo's `.codex-autorunner/tickets/`.
+   - Create/adjust repo tickets under each repo's `.codex-autorunner/tickets/` when the target resource is repo-backed.
 
 Web UI map (user perspective):
 - Hub root: `/` (repos list + global notifications).
@@ -352,6 +353,8 @@ def _snapshot_pma_threads(
                 "managed_thread_id": thread.get("managed_thread_id"),
                 "agent": thread.get("agent"),
                 "repo_id": thread.get("repo_id"),
+                "resource_kind": thread.get("resource_kind"),
+                "resource_id": thread.get("resource_id"),
                 "workspace_root": workspace_root,
                 "name": thread.get("name"),
                 "status": thread.get("normalized_status") or thread.get("status"),
@@ -431,6 +434,7 @@ def _build_snapshot_freshness_summary(
     generated_at: str,
     stale_threshold_seconds: int,
     repos: list[dict[str, Any]],
+    agent_workspaces: list[dict[str, Any]],
     inbox: list[dict[str, Any]],
     pma_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
@@ -445,6 +449,11 @@ def _build_snapshot_freshness_summary(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
                 extractor=_extract_entry_freshness,
+            ),
+            "agent_workspaces": summarize_section_freshness(
+                agent_workspaces,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
             ),
             "inbox": summarize_section_freshness(
                 inbox,
@@ -487,6 +496,46 @@ def _render_freshness_summary(payload: Any, *, max_field_chars: int) -> Optional
     if age_text:
         parts.append(f"age_seconds={age_text}")
     return " ".join(parts) if parts else None
+
+
+def _render_destination_summary(
+    destination: Any,
+    *,
+    max_field_chars: int,
+) -> str:
+    destination_payload = destination if isinstance(destination, Mapping) else {}
+    destination_kind = _truncate(
+        str(destination_payload.get("kind", "local")),
+        max_field_chars,
+    )
+    destination_text = destination_kind or "local"
+    if destination_kind == "docker":
+        image = _truncate(
+            str(destination_payload.get("image", "")),
+            max_field_chars,
+        )
+        destination_text = f"docker:{image}" if image else "docker:image-missing"
+    return destination_text
+
+
+def _render_resource_owner_summary(
+    item: Mapping[str, Any],
+    *,
+    max_field_chars: int,
+) -> str:
+    resource_kind = _truncate(str(item.get("resource_kind") or ""), max_field_chars)
+    resource_id = _truncate(str(item.get("resource_id") or ""), max_field_chars)
+    repo_id = _truncate(str(item.get("repo_id") or ""), max_field_chars)
+    if resource_kind and resource_id:
+        if resource_kind == "repo":
+            return f"repo_id={resource_id}"
+        return f"owner={resource_kind}:{resource_id}"
+    if repo_id:
+        return f"repo_id={repo_id}"
+    workspace_root = _truncate(str(item.get("workspace_root") or ""), max_field_chars)
+    if workspace_root:
+        return f"workspace_root={workspace_root}"
+    return "owner=unowned"
 
 
 def load_pma_prompt(hub_root: Path) -> str:
@@ -657,23 +706,10 @@ def _render_hub_snapshot(
             status = _truncate(str(repo.get("status", "")), max_field_chars)
             last_run_id = _truncate(str(repo.get("last_run_id", "")), max_field_chars)
             last_exit = _truncate(str(repo.get("last_exit_code", "")), max_field_chars)
-            destination = (
-                repo.get("effective_destination")
-                if isinstance(repo.get("effective_destination"), dict)
-                else {}
+            destination_text = _render_destination_summary(
+                repo.get("effective_destination"),
+                max_field_chars=max_field_chars,
             )
-            destination_kind = _truncate(
-                str(destination.get("kind", "local")), max_field_chars
-            )
-            destination_text = destination_kind or "local"
-            if destination_kind == "docker":
-                image = _truncate(
-                    str(destination.get("image", "")),
-                    max_field_chars,
-                )
-                destination_text = (
-                    f"docker:{image}" if image else "docker:image-missing"
-                )
             ticket_flow = _render_ticket_flow_summary(repo.get("ticket_flow"))
             run_state = repo.get("run_state") or {}
             state = _truncate(str(run_state.get("state", "")), max_field_chars)
@@ -710,13 +746,41 @@ def _render_hub_snapshot(
                 lines.append(f"  freshness: {freshness_summary}")
         lines.append("")
 
+    agent_workspaces = snapshot.get("agent_workspaces") or []
+    if agent_workspaces:
+        lines.append("Agent Workspaces:")
+        for workspace in list(agent_workspaces)[: max(0, max_repos)]:
+            workspace_id = _truncate(str(workspace.get("id", "")), max_field_chars)
+            display_name = _truncate(
+                str(workspace.get("display_name", "")),
+                max_field_chars,
+            )
+            runtime = _truncate(str(workspace.get("runtime", "")), max_field_chars)
+            enabled = str(bool(workspace.get("enabled"))).lower()
+            exists_on_disk = str(bool(workspace.get("exists_on_disk"))).lower()
+            destination_text = _render_destination_summary(
+                workspace.get("effective_destination"),
+                max_field_chars=max_field_chars,
+            )
+            lines.append(
+                f"- {workspace_id} ({display_name}): runtime={runtime} "
+                f"destination={destination_text} enabled={enabled} "
+                f"exists_on_disk={exists_on_disk}"
+            )
+            freshness_summary = _render_freshness_summary(
+                workspace.get("freshness"), max_field_chars=max_field_chars
+            )
+            if freshness_summary:
+                lines.append(f"  freshness: {freshness_summary}")
+        lines.append("")
+
     templates = snapshot.get("templates") or {}
     template_repos = templates.get("repos") or []
     template_scan = templates.get("last_scan")
     if templates.get("enabled") or template_repos or template_scan:
-        enabled = bool(templates.get("enabled"))
+        templates_enabled = bool(templates.get("enabled"))
         lines.append("Templates:")
-        lines.append(f"- enabled={str(enabled).lower()}")
+        lines.append(f"- enabled={str(templates_enabled).lower()}")
         if template_repos:
             items: list[str] = []
             for repo in list(template_repos)[: max(0, max_template_repos)]:
@@ -774,7 +838,10 @@ def _render_hub_snapshot(
                 str(thread.get("managed_thread_id", "")),
                 max_field_chars,
             )
-            repo_id = _truncate(str(thread.get("repo_id") or "-"), max_field_chars)
+            owner_summary = _render_resource_owner_summary(
+                thread,
+                max_field_chars=max_field_chars,
+            )
             agent = _truncate(str(thread.get("agent") or ""), max_field_chars)
             status = _truncate(str(thread.get("status") or ""), max_field_chars)
             lifecycle_status = _truncate(
@@ -791,7 +858,7 @@ def _render_hub_snapshot(
                 max_field_chars,
             )
             lines.append(
-                f"- {managed_thread_id} repo_id={repo_id} agent={agent} "
+                f"- {managed_thread_id} {owner_summary} agent={agent} "
                 f"status={status} lifecycle={lifecycle_status} "
                 f"reason={status_reason} name={name} last={preview}"
             )
@@ -1786,6 +1853,7 @@ async def build_hub_snapshot(
         return {
             "generated_at": generated_at,
             "repos": [],
+            "agent_workspaces": [],
             "inbox": [],
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
@@ -1804,6 +1872,7 @@ async def build_hub_snapshot(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
                 repos=[],
+                agent_workspaces=[],
                 inbox=[],
                 pma_threads=[],
                 pma_files_detail={"inbox": [], "outbox": []},
@@ -1812,6 +1881,14 @@ async def build_hub_snapshot(
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
     snapshots = sorted(snapshots, key=lambda snap: snap.id)
+    list_agent_workspaces = getattr(supervisor, "list_agent_workspaces", None)
+    if callable(list_agent_workspaces):
+        agent_workspace_snapshots = await asyncio.to_thread(list_agent_workspaces)
+    else:
+        agent_workspace_snapshots = []
+    agent_workspace_snapshots = sorted(
+        agent_workspace_snapshots, key=lambda snap: snap.id
+    )
     pma_config = supervisor.hub_config.pma if supervisor else None
     max_repos = (
         pma_config.max_repos
@@ -1876,6 +1953,23 @@ async def build_hub_snapshot(
             )
         repos.append(summary)
 
+    agent_workspaces: list[dict[str, Any]] = []
+    for workspace in agent_workspace_snapshots[:max_repos]:
+        if hub_root is not None:
+            summary = workspace.to_dict(hub_root)
+        else:
+            summary = {
+                "id": workspace.id,
+                "runtime": workspace.runtime,
+                "path": str(workspace.path),
+                "display_name": workspace.display_name,
+                "enabled": workspace.enabled,
+                "exists_on_disk": workspace.exists_on_disk,
+                "effective_destination": workspace.effective_destination,
+                "resource_kind": workspace.resource_kind,
+            }
+        agent_workspaces.append(summary)
+
     inbox = await asyncio.to_thread(
         _gather_inbox,
         supervisor,
@@ -1915,6 +2009,7 @@ async def build_hub_snapshot(
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
         repos=repos,
+        agent_workspaces=agent_workspaces,
         inbox=inbox,
         pma_threads=pma_threads,
         pma_files_detail=pma_files_detail,
@@ -1923,6 +2018,7 @@ async def build_hub_snapshot(
     return {
         "generated_at": generated_at,
         "repos": repos,
+        "agent_workspaces": agent_workspaces,
         "inbox": inbox,
         "templates": templates,
         "pma_files": pma_files,

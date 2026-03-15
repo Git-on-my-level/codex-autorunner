@@ -836,6 +836,8 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert first["managed_thread_id"] == managed_thread_id
     assert first["agent"] == "codex"
     assert first["repo_id"] == hub_env.repo_id
+    assert first["resource_kind"] == "repo"
+    assert first["resource_id"] == hub_env.repo_id
     assert first["status"] == "idle"
     assert first["lifecycle_status"] == "active"
     assert first["status_reason"] == "thread_created"
@@ -854,6 +856,35 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert "lifecycle=active" in rendered
     assert "reason=thread_created" in rendered
     assert "freshness: status=" in rendered
+
+
+def test_build_hub_snapshot_includes_agent_workspaces_section(hub_env) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        supervisor.create_agent_workspace(
+            workspace_id="zc-main",
+            runtime="zeroclaw",
+            display_name="ZeroClaw Main",
+        )
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    agent_workspaces = snapshot.get("agent_workspaces")
+    assert isinstance(agent_workspaces, list)
+    assert agent_workspaces
+    first = agent_workspaces[0]
+    assert first["id"] == "zc-main"
+    assert first["runtime"] == "zeroclaw"
+    assert first["resource_kind"] == "agent_workspace"
+
+    rendered = _render_hub_snapshot(snapshot)
+    assert "Agent Workspaces:" in rendered
+    assert "zc-main (ZeroClaw Main): runtime=zeroclaw" in rendered
 
 
 def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(

@@ -75,14 +75,18 @@ class ZeroClawClient:
         self,
         command: Sequence[str],
         *,
-        workspace_root: Path,
+        runtime_workspace_root: Path,
+        session_state_file: Path,
         logger: Optional[logging.Logger] = None,
         base_env: Optional[Mapping[str, str]] = None,
+        launch_provider: Optional[str] = None,
+        launch_model: Optional[str] = None,
     ) -> None:
         if not command:
             raise ValueError("ZeroClaw command must not be empty")
         self._command = [str(part) for part in command]
-        self._workspace_root = workspace_root
+        self._runtime_workspace_root = runtime_workspace_root
+        self._session_state_file = session_state_file
         self._logger = logger or logging.getLogger(__name__)
         self._base_env = base_env
         self._process: Optional[asyncio.subprocess.Process] = None
@@ -90,10 +94,18 @@ class ZeroClawClient:
         self._stderr_task: Optional[asyncio.Task[None]] = None
         self._ready = asyncio.get_running_loop().create_future()
         self._stderr_chunks: list[str] = []
-        self._launch_provider: Optional[str] = None
-        self._launch_model: Optional[str] = None
+        self._launch_provider: Optional[str] = launch_provider
+        self._launch_model: Optional[str] = launch_model
         self._active_turn: Optional[ZeroClawTurnState] = None
         self._turns: dict[str, ZeroClawTurnState] = {}
+
+    @property
+    def launch_provider(self) -> Optional[str]:
+        return self._launch_provider
+
+    @property
+    def launch_model(self) -> Optional[str]:
+        return self._launch_model
 
     async def ensure_ready(
         self,
@@ -101,15 +113,28 @@ class ZeroClawClient:
         provider: Optional[str] = None,
         model: Optional[str] = None,
     ) -> None:
-        if self._process is None:
-            await self._start_process(provider=provider, model=model)
-        elif provider is not None and provider != self._launch_provider:
+        if (
+            provider is not None
+            and self._launch_provider is not None
+            and provider != self._launch_provider
+        ):
             raise ZeroClawClientError(
                 "ZeroClaw session provider is fixed after the first turn"
             )
-        elif model is not None and model != self._launch_model:
+        if (
+            model is not None
+            and self._launch_model is not None
+            and model != self._launch_model
+        ):
             raise ZeroClawClientError(
                 "ZeroClaw session model is fixed after the first turn"
+            )
+        if self._process is None:
+            effective_provider = provider or self._launch_provider
+            effective_model = model or self._launch_model
+            await self._start_process(
+                provider=effective_provider,
+                model=effective_model,
             )
         await asyncio.wait_for(self._ready, timeout=_STARTUP_TIMEOUT_SECONDS)
 
@@ -185,15 +210,23 @@ class ZeroClawClient:
         provider: Optional[str],
         model: Optional[str],
     ) -> None:
-        launch_command = [*self._command, "agent"]
+        self._runtime_workspace_root.mkdir(parents=True, exist_ok=True)
+        self._session_state_file.parent.mkdir(parents=True, exist_ok=True)
+        launch_command = [
+            *self._command,
+            "agent",
+            "--session-state-file",
+            str(self._session_state_file),
+        ]
         if provider:
             launch_command.extend(["--provider", provider])
         if model:
             launch_command.extend(["--model", model])
         env = subprocess_env(base_env=self._base_env)
+        env["ZEROCLAW_WORKSPACE"] = str(self._runtime_workspace_root)
         self._process = await asyncio.create_subprocess_exec(
             *launch_command,
-            cwd=str(self._workspace_root),
+            cwd=str(self._runtime_workspace_root),
             env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

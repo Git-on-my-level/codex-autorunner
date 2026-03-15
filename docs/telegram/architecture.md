@@ -45,7 +45,8 @@ can further narrow root-chat vs topic behavior.
 1) `car telegram start --path <repo_or_hub>` starts the polling loop.
 2) `TelegramUpdatePoller` fetches updates from the Bot API.
 3) Updates are admitted through the shared collaboration policy, then routed by
-   chat/topic to a workspace/thread.
+   chat/topic to a consistent durable CAR thread under the selected resource
+   (repo workspace, PMA, or an agent-workspace-backed thread).
 4) Commands (`/bind`, `/new`, `/resume`, `/approvals`, `/interrupt`) run locally;
    normal messages are forwarded to the Codex app-server. `!<cmd>` runs a shell
    command in the bound workspace (if enabled).
@@ -53,9 +54,12 @@ can further narrow root-chat vs topic behavior.
 
 ## State and persistence
 
-Per-chat/topic state is stored in `.codex-autorunner/telegram_state.sqlite3` and
-records the workspace binding, active thread id, and approval mode. Each forum
-topic (or chat root when topics are disabled) has its own routing key.
+Per-chat/topic delivery state is stored in `.codex-autorunner/telegram_state.sqlite3`.
+Authoritative binding and durable-thread metadata live in hub
+`.codex-autorunner/orchestration.sqlite3`. Telegram keeps the transport-local
+state it still owns, such as delivery bookkeeping, approval mode, and cached
+topic routing details. Each forum topic (or chat root when topics are disabled)
+has its own routing key.
 
 ## Security and multi-user expectations
 

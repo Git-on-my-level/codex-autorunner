@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 
-DISCORD_STATE_SCHEMA_VERSION = 6
+DISCORD_STATE_SCHEMA_VERSION = 7
 _UNSET = object()
 
 
@@ -70,6 +70,8 @@ class DiscordStateStore:
         guild_id: str | None,
         workspace_path: str,
         repo_id: str | None,
+        resource_kind: str | None = None,
+        resource_id: str | None = None,
     ) -> None:
         await self._run(
             self._upsert_binding_sync,
@@ -77,6 +79,8 @@ class DiscordStateStore:
             guild_id,
             workspace_path,
             repo_id,
+            resource_kind,
+            resource_id,
         )
 
     async def get_binding(self, *, channel_id: str) -> Optional[dict[str, Any]]:
@@ -133,6 +137,8 @@ class DiscordStateStore:
         pma_enabled: bool,
         pma_prev_workspace_path: Optional[str] = None,
         pma_prev_repo_id: Optional[str] = None,
+        pma_prev_resource_kind: Optional[str] = None,
+        pma_prev_resource_id: Optional[str] = None,
     ) -> None:
         await self._run(
             self._update_pma_state_sync,
@@ -140,6 +146,8 @@ class DiscordStateStore:
             pma_enabled,
             pma_prev_workspace_path,
             pma_prev_repo_id,
+            pma_prev_resource_kind,
+            pma_prev_resource_id,
         )
 
     async def update_agent_state(
@@ -327,6 +335,18 @@ class DiscordStateStore:
             conn.execute(
                 "ALTER TABLE channel_bindings ADD COLUMN pma_prev_repo_id TEXT"
             )
+        if "resource_kind" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN resource_kind TEXT")
+        if "resource_id" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN resource_id TEXT")
+        if "pma_prev_resource_kind" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_resource_kind TEXT"
+            )
+        if "pma_prev_resource_id" not in names:
+            conn.execute(
+                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_resource_id TEXT"
+            )
         if "agent" not in names:
             conn.execute("ALTER TABLE channel_bindings ADD COLUMN agent TEXT")
         if "model_override" not in names:
@@ -362,6 +382,8 @@ class DiscordStateStore:
         guild_id: Optional[str],
         workspace_path: str,
         repo_id: Optional[str],
+        resource_kind: Optional[str],
+        resource_id: Optional[str],
     ) -> None:
         conn = self._connection_sync()
         with conn:
@@ -372,13 +394,17 @@ class DiscordStateStore:
                     guild_id,
                     workspace_path,
                     repo_id,
+                    resource_kind,
+                    resource_id,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(channel_id) DO UPDATE SET
                     guild_id=excluded.guild_id,
                     workspace_path=excluded.workspace_path,
                     repo_id=excluded.repo_id,
+                    resource_kind=excluded.resource_kind,
+                    resource_id=excluded.resource_id,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -386,6 +412,8 @@ class DiscordStateStore:
                     guild_id,
                     workspace_path,
                     repo_id,
+                    resource_kind,
+                    resource_id,
                     now_iso(),
                 ),
             )
@@ -450,6 +478,29 @@ class DiscordStateStore:
                 row["pma_prev_repo_id"]
                 if "pma_prev_repo_id" in row.keys()
                 and isinstance(row["pma_prev_repo_id"], str)
+                else None
+            ),
+            "resource_kind": (
+                row["resource_kind"]
+                if "resource_kind" in row.keys()
+                and isinstance(row["resource_kind"], str)
+                else None
+            ),
+            "resource_id": (
+                row["resource_id"]
+                if "resource_id" in row.keys() and isinstance(row["resource_id"], str)
+                else None
+            ),
+            "pma_prev_resource_kind": (
+                row["pma_prev_resource_kind"]
+                if "pma_prev_resource_kind" in row.keys()
+                and isinstance(row["pma_prev_resource_kind"], str)
+                else None
+            ),
+            "pma_prev_resource_id": (
+                row["pma_prev_resource_id"]
+                if "pma_prev_resource_id" in row.keys()
+                and isinstance(row["pma_prev_resource_id"], str)
                 else None
             ),
             "agent": agent_raw if isinstance(agent_raw, str) else None,
@@ -556,6 +607,8 @@ class DiscordStateStore:
         pma_enabled: bool,
         pma_prev_workspace_path: Optional[str],
         pma_prev_repo_id: Optional[str],
+        pma_prev_resource_kind: Optional[str],
+        pma_prev_resource_id: Optional[str],
     ) -> None:
         conn = self._connection_sync()
         with conn:
@@ -565,6 +618,8 @@ class DiscordStateStore:
                 SET pma_enabled = ?,
                     pma_prev_workspace_path = ?,
                     pma_prev_repo_id = ?,
+                    pma_prev_resource_kind = ?,
+                    pma_prev_resource_id = ?,
                     updated_at = ?
                 WHERE channel_id = ?
                 """,
@@ -572,6 +627,8 @@ class DiscordStateStore:
                     1 if pma_enabled else 0,
                     pma_prev_workspace_path,
                     pma_prev_repo_id,
+                    pma_prev_resource_kind,
+                    pma_prev_resource_id,
                     now_iso(),
                     channel_id,
                 ),

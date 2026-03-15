@@ -75,12 +75,31 @@ interface HubRepo {
   non_pma_chat_bound_thread_count?: number | null;
   cleanup_blocked_by_chat_binding?: boolean;
   has_car_state?: boolean;
+  resource_kind: "repo";
   ticket_flow?: HubTicketFlow | null;
   ticket_flow_display?: HubTicketFlowDisplay | null;
 }
 
+interface HubAgentWorkspace {
+  id: string;
+  runtime: string;
+  path: string;
+  display_name: string;
+  enabled: boolean;
+  exists_on_disk: boolean;
+  effective_destination: Record<string, unknown>;
+  resource_kind: "agent_workspace";
+}
+
+interface HubAgentWorkspaceDetail extends HubAgentWorkspace {
+  configured_destination: Record<string, unknown> | null;
+  source: string;
+  issues?: string[] | null;
+}
+
 interface HubData {
   repos: HubRepo[];
+  agent_workspaces: HubAgentWorkspace[];
   last_scan_at: string | null;
   pinned_parent_repo_ids?: string[];
 }
@@ -109,8 +128,12 @@ interface HubChannelEntry {
     status_reason_code?: string | null;
     thread_kind?: string | null;
     run_id?: string | null;
+    resource_kind?: string | null;
+    resource_id?: string | null;
   } | null;
   repo_id?: string | null;
+  resource_kind?: string | null;
+  resource_id?: string | null;
   workspace_path?: string | null;
   active_thread_id?: string | null;
   channel_status?: string | null;
@@ -240,6 +263,7 @@ const HUB_DEFAULT_VIEW_PREFS: HubViewPrefs = {
 
 let hubData: HubData = {
   repos: [],
+  agent_workspaces: [],
   last_scan_at: null,
   pinned_parent_repo_ids: [],
 };
@@ -256,6 +280,7 @@ const HUB_REFRESH_IDLE_MS = 30000;
 let lastHubAutoRefreshAt = 0;
 
 const repoListEl = document.getElementById("hub-repo-list");
+const agentWorkspaceListEl = document.getElementById("hub-agent-workspace-list");
 const lastScanEl = document.getElementById("hub-last-scan");
 const pmaLastScanEl = document.getElementById("pma-last-scan");
 const totalEl = document.getElementById("hub-count-total");
@@ -1058,6 +1083,46 @@ function buildActions(repo: HubRepo): RepoAction[] {
   return actions;
 }
 
+interface AgentWorkspaceAction {
+  key: string;
+  label: string;
+  kind: string;
+  title?: string;
+}
+
+function buildAgentWorkspaceActions(
+  workspace: HubAgentWorkspace
+): AgentWorkspaceAction[] {
+  return [
+    {
+      key: workspace.enabled ? "disable" : "enable",
+      label: workspace.enabled ? "Disable" : "Enable",
+      kind: workspace.enabled ? "ghost" : "primary",
+      title: workspace.enabled
+        ? "Disable this agent workspace"
+        : "Enable this agent workspace",
+    },
+    {
+      key: "set_destination",
+      label: "Destination",
+      kind: "ghost",
+      title: "Set agent workspace destination",
+    },
+    {
+      key: "remove",
+      label: "Remove",
+      kind: "ghost",
+      title: "Unregister this workspace but keep managed files",
+    },
+    {
+      key: "delete",
+      label: "Delete",
+      kind: "danger",
+      title: "Unregister and delete the managed workspace directory",
+    },
+  ];
+}
+
 async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -1384,6 +1449,8 @@ function channelSearchBlob(channel: HubChannelEntry): string {
     channel.display,
     channel.source,
     channel.repo_id,
+    channel.resource_kind,
+    channel.resource_id,
     channel.status_label || channel.channel_status,
     channel.workspace_path,
     JSON.stringify(channel.meta || {}),
@@ -1486,6 +1553,24 @@ function channelDisplayLabel(channel: HubChannelEntry): string {
   return channel.key;
 }
 
+function channelOwnerSummary(channel: HubChannelEntry): string {
+  const resourceKind = String(
+    channel.resource_kind || channel.provenance?.resource_kind || ""
+  )
+    .trim()
+    .toLowerCase();
+  const resourceId = String(
+    channel.resource_id || channel.provenance?.resource_id || ""
+  ).trim();
+  if (resourceKind === "agent_workspace" && resourceId) {
+    return `agent workspace ${resourceId}`;
+  }
+  if (typeof channel.repo_id === "string" && channel.repo_id.trim()) {
+    return `repo ${channel.repo_id.trim()}`;
+  }
+  return "owner unbound";
+}
+
 function channelMetaSummary(
   channel: HubChannelEntry,
   { includeRepo = true }: { includeRepo?: boolean } = {}
@@ -1517,11 +1602,7 @@ function channelMetaSummary(
     parts.push(diffPart);
   }
   if (includeRepo) {
-    if (typeof channel.repo_id === "string" && channel.repo_id.trim()) {
-      parts.push(`repo ${channel.repo_id.trim()}`);
-    } else {
-      parts.push("repo unbound");
-    }
+    parts.push(channelOwnerSummary(channel));
   }
   return parts.join(" · ");
 }
@@ -1603,6 +1684,29 @@ function channelsByRepoId(entries: HubChannelEntry[]): Map<string, HubChannelEnt
     });
   });
   return byRepo;
+}
+
+function channelsByAgentWorkspaceId(
+  entries: HubChannelEntry[]
+): Map<string, HubChannelEntry[]> {
+  const byWorkspace = new Map<string, HubChannelEntry[]>();
+  entries.forEach((entry) => {
+    const resourceKind = String(entry.resource_kind || "").trim().toLowerCase();
+    const resourceId = String(entry.resource_id || "").trim();
+    if (resourceKind !== "agent_workspace" || !resourceId) return;
+    if (!byWorkspace.has(resourceId)) {
+      byWorkspace.set(resourceId, []);
+    }
+    byWorkspace.get(resourceId)!.push(entry);
+  });
+  byWorkspace.forEach((workspaceEntries) => {
+    workspaceEntries.sort((a, b) => {
+      const seenDiff = channelSeenAtMs(b) - channelSeenAtMs(a);
+      if (seenDiff !== 0) return seenDiff;
+      return channelDisplayLabel(a).localeCompare(channelDisplayLabel(b));
+    });
+  });
+  return byWorkspace;
 }
 
 function buildRepoGroups(repos: HubRepo[]): {
@@ -2112,9 +2216,123 @@ function renderReposWithScroll(repos: HubRepo[]): void {
   }, { restoreOnNextFrame: true });
 }
 
+function renderAgentWorkspaces(agentWorkspaces: HubAgentWorkspace[]): void {
+  if (!agentWorkspaceListEl) return;
+  agentWorkspaceListEl.innerHTML = "";
+
+  if (!agentWorkspaces.length) {
+    agentWorkspaceListEl.innerHTML =
+      '<div class="hub-empty muted">No agent workspaces yet.</div>';
+    return;
+  }
+
+  const ordered = [...agentWorkspaces].sort((a, b) => {
+    const aLabel = String(a.display_name || a.id);
+    const bLabel = String(b.display_name || b.id);
+    return aLabel.localeCompare(bLabel) || String(a.id).localeCompare(String(b.id));
+  });
+  const workspaceChannels = channelsByAgentWorkspaceId(hubChannelEntries);
+
+  ordered.forEach((workspace) => {
+    const card = document.createElement("div");
+    card.className = "hub-repo-card";
+    card.dataset.agentWorkspaceId = workspace.id;
+
+    const actions = buildAgentWorkspaceActions(workspace)
+      .map(
+        (action) =>
+          `<button class="${action.kind} sm" data-agent-workspace="${escapeHtml(
+            workspace.id
+          )}" data-action="${escapeHtml(action.key)}"${
+            action.title ? ` title="${escapeHtml(action.title)}"` : ""
+          }>${escapeHtml(action.label)}</button>`
+      )
+      .join("");
+
+    const enabledBadge = workspace.enabled
+      ? '<span class="pill pill-small pill-success">enabled</span>'
+      : '<span class="pill pill-small pill-warn">disabled</span>';
+    const runtimeBadge = `<span class="pill pill-small pill-idle">${escapeHtml(
+      workspace.runtime
+    )}</span>`;
+    const destinationBadge = buildDestinationBadge(workspace.effective_destination);
+    const missingBadge = !workspace.exists_on_disk
+      ? '<span class="pill pill-small pill-warn">missing</span>'
+      : "";
+    const destinationSummary = formatDestinationSummary(
+      workspace.effective_destination
+    );
+    const infoSummary = [
+      `runtime ${workspace.runtime}`,
+      `destination ${destinationSummary}`,
+    ].join(" · ");
+    const pathSummary = escapeHtml(workspace.path);
+    const inlineChannels = workspaceChannels.get(workspace.id) || [];
+    const primaryChannel = inlineChannels[0] || null;
+    const infoSubline = primaryChannel
+      ? channelSummarySubline(primaryChannel, {
+          additionalCount: Math.max(0, inlineChannels.length - 1),
+        })
+      : `<div class="hub-repo-subline">
+          <span class="hub-repo-info-line">${escapeHtml(infoSummary)}</span>
+        </div>`;
+    const overflowChannelRows = inlineChannels
+      .slice(1)
+      .map((channel) => {
+        const label = channelDisplayLabel(channel);
+        const sourceBadge = channelSourceBadgeMarkup(channel);
+        return `
+          <div class="hub-chat-binding-row">
+            <div class="hub-chat-binding-main">
+              ${sourceBadge}
+              <span class="hub-chat-binding-label">${escapeHtml(label)}</span>
+            </div>
+            <div class="hub-chat-binding-meta muted small">${escapeHtml(
+              channelMetaSummary(channel, { includeRepo: false })
+            )}</div>
+          </div>
+        `;
+      })
+      .join("");
+    const inlineChannelBlock = overflowChannelRows
+      ? `<div class="hub-chat-binding-block">${overflowChannelRows}</div>`
+      : "";
+
+    card.innerHTML = `
+      <div class="hub-repo-row">
+        <div class="hub-repo-center">
+          <div class="hub-repo-mainline">
+            <span class="hub-repo-title">${escapeHtml(
+              workspace.display_name || workspace.id
+            )}</span>
+            <div class="hub-repo-meta-inline">
+              ${runtimeBadge}
+              ${enabledBadge}
+              ${destinationBadge}
+              ${missingBadge}
+            </div>
+          </div>
+          ${infoSubline}
+          <div class="hub-repo-subline">
+            <span class="hub-chat-binding-key">${pathSummary}</span>
+          </div>
+          ${inlineChannelBlock}
+        </div>
+        <div class="hub-repo-right">
+          ${actions}
+        </div>
+      </div>
+    `;
+    agentWorkspaceListEl.appendChild(card);
+  });
+}
+
 function applyHubData(data: HubData): void {
   hubData = {
     repos: Array.isArray(data?.repos) ? data.repos : [],
+    agent_workspaces: Array.isArray(data?.agent_workspaces)
+      ? data.agent_workspaces
+      : [],
     last_scan_at: data?.last_scan_at || null,
     pinned_parent_repo_ids: normalizePinnedParentRepoIds(
       data?.pinned_parent_repo_ids
@@ -2134,6 +2352,7 @@ async function refreshHub(): Promise<void> {
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(hubData.repos || []);
     renderReposWithScroll(hubData.repos || []);
+    renderAgentWorkspaces(hubData.agent_workspaces || []);
     loadHubUsage({ silent: true }).catch(() => {});
     loadHubChannelDirectory({ silent: true }).catch(() => {});
   } catch (err) {
@@ -2179,12 +2398,44 @@ async function createRepo(repoId: string | null, repoPath: string | null, gitIni
   }
 }
 
+async function createAgentWorkspace(
+  workspaceId: string | null,
+  runtime: string | null,
+  displayName: string | null
+): Promise<boolean> {
+  try {
+    const payload: Record<string, unknown> = {};
+    if (workspaceId) payload.id = workspaceId;
+    if (runtime) payload.runtime = runtime;
+    if (displayName) payload.display_name = displayName;
+    await startHubJob("/hub/jobs/agent-workspaces", {
+      body: payload,
+      startedMessage: "Agent workspace creation queued",
+    });
+    flash(`Created agent workspace: ${workspaceId || displayName || "workspace"}`, "success");
+    await refreshHub();
+    return true;
+  } catch (err) {
+    flash((err as Error).message || "Failed to create agent workspace", "error");
+    return false;
+  }
+}
+
 let closeCreateRepoModal: (() => void) | null = null;
+let closeCreateAgentWorkspaceModal: (() => void) | null = null;
 
 function hideCreateRepoModal(): void {
   if (closeCreateRepoModal) {
     const close = closeCreateRepoModal;
     closeCreateRepoModal = null;
+    close();
+  }
+}
+
+function hideCreateAgentWorkspaceModal(): void {
+  if (closeCreateAgentWorkspaceModal) {
+    const close = closeCreateAgentWorkspaceModal;
+    closeCreateAgentWorkspaceModal = null;
     close();
   }
 }
@@ -2212,6 +2463,33 @@ function showCreateRepoModal(): void {
   if (gitCheck) gitCheck.checked = true;
 }
 
+function showCreateAgentWorkspaceModal(): void {
+  const modal = document.getElementById("create-agent-workspace-modal");
+  if (!modal) return;
+  const triggerEl = document.activeElement;
+  hideCreateAgentWorkspaceModal();
+  const input = document.getElementById(
+    "create-agent-workspace-id"
+  ) as HTMLInputElement | null;
+  closeCreateAgentWorkspaceModal = openModal(modal, {
+    initialFocus: input || modal,
+    returnFocusTo: triggerEl as HTMLElement | null,
+    onRequestClose: hideCreateAgentWorkspaceModal,
+  });
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+  const runtimeInput = document.getElementById(
+    "create-agent-workspace-runtime"
+  ) as HTMLInputElement | null;
+  if (runtimeInput) runtimeInput.value = "";
+  const nameInput = document.getElementById(
+    "create-agent-workspace-name"
+  ) as HTMLInputElement | null;
+  if (nameInput) nameInput.value = "";
+}
+
 async function handleCreateRepoSubmit(): Promise<void> {
   const idInput = document.getElementById("create-repo-id") as HTMLInputElement | null;
   const pathInput = document.getElementById("create-repo-path") as HTMLInputElement | null;
@@ -2231,6 +2509,32 @@ async function handleCreateRepoSubmit(): Promise<void> {
   const ok = await createRepo(repoId, repoPath, gitInit, gitUrl);
   if (ok) {
     hideCreateRepoModal();
+  }
+}
+
+async function handleCreateAgentWorkspaceSubmit(): Promise<void> {
+  const idInput = document.getElementById(
+    "create-agent-workspace-id"
+  ) as HTMLInputElement | null;
+  const runtimeInput = document.getElementById(
+    "create-agent-workspace-runtime"
+  ) as HTMLInputElement | null;
+  const nameInput = document.getElementById(
+    "create-agent-workspace-name"
+  ) as HTMLInputElement | null;
+
+  const workspaceId = idInput?.value?.trim() || null;
+  const runtime = runtimeInput?.value?.trim() || null;
+  const displayName = nameInput?.value?.trim() || null;
+
+  if (!workspaceId || !runtime) {
+    flash("Workspace ID and runtime are required", "error");
+    return;
+  }
+
+  const ok = await createAgentWorkspace(workspaceId, runtime, displayName);
+  if (ok) {
+    hideCreateAgentWorkspaceModal();
   }
 }
 
@@ -2268,7 +2572,7 @@ async function setParentRepoPinned(repoId: string, pinned: boolean): Promise<voi
 type DestinationKind = "local" | "docker";
 
 async function chooseDestinationKind(
-  repo: HubRepo,
+  resourceLabel: string,
   currentKind: DestinationKind
 ): Promise<DestinationKind | null> {
   const overlay = document.createElement("div");
@@ -2284,7 +2588,7 @@ async function chooseDestinationKind(
   header.className = "modal-header";
   const title = document.createElement("span");
   title.className = "label";
-  title.textContent = `Set destination: ${repo.display_name || repo.id}`;
+  title.textContent = `Set destination: ${resourceLabel}`;
   header.appendChild(title);
 
   const body = document.createElement("div");
@@ -2343,17 +2647,20 @@ async function chooseDestinationKind(
   });
 }
 
-async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
-  const current = formatDestinationSummary(repo.effective_destination);
+async function promptForDestinationBody(
+  resourceLabel: string,
+  currentDestination: Record<string, unknown> | null | undefined
+): Promise<Record<string, unknown> | null> {
+  const current = formatDestinationSummary(currentDestination);
   const currentKind =
     current.startsWith("docker:") || current === "docker" ? "docker" : "local";
-  const kind = await chooseDestinationKind(repo, currentKind);
-  if (!kind) return false;
+  const kind = await chooseDestinationKind(resourceLabel, currentKind);
+  if (!kind) return null;
   const body: Record<string, unknown> = { kind };
   if (kind === "docker") {
     const currentImage =
-      typeof repo.effective_destination?.image === "string"
-        ? String(repo.effective_destination.image)
+      typeof currentDestination?.image === "string"
+        ? String(currentDestination.image)
         : "";
     const imageValue = await inputModal("Docker image:", {
       placeholder: "ghcr.io/acme/repo:tag",
@@ -2362,7 +2669,7 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
     });
     if (!imageValue) {
       flash("Docker destination requires an image", "error");
-      return false;
+      return null;
     }
     body.image = imageValue.trim();
     const configureAdvanced = await confirmModal(
@@ -2375,8 +2682,8 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
     );
     if (configureAdvanced) {
       const currentContainerName =
-        typeof repo.effective_destination?.container_name === "string"
-          ? String(repo.effective_destination.container_name)
+        typeof currentDestination?.container_name === "string"
+          ? String(currentDestination.container_name)
           : "";
       const containerNameValue = await inputModal(
         "Docker container name (optional):",
@@ -2387,7 +2694,7 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
           allowEmpty: true,
         }
       );
-      if (containerNameValue === null) return false;
+      if (containerNameValue === null) return null;
       const containerName = containerNameValue.trim();
       if (containerName) {
         body.container_name = containerName;
@@ -2395,11 +2702,11 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
 
       const profileValue = await inputModal("Docker profile (optional):", {
         placeholder: "full-dev",
-        defaultValue: currentDockerProfile(repo.effective_destination),
+        defaultValue: currentDockerProfile(currentDestination),
         confirmText: "Next",
         allowEmpty: true,
       });
-      if (profileValue === null) return false;
+      if (profileValue === null) return null;
       const profile = profileValue.trim();
       if (profile) {
         body.profile = profile;
@@ -2407,11 +2714,11 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
 
       const workdirValue = await inputModal("Docker workdir (optional):", {
         placeholder: "/workspace",
-        defaultValue: currentDockerWorkdir(repo.effective_destination),
+        defaultValue: currentDockerWorkdir(currentDestination),
         confirmText: "Next",
         allowEmpty: true,
       });
-      if (workdirValue === null) return false;
+      if (workdirValue === null) return null;
       const workdir = workdirValue.trim();
       if (workdir) {
         body.workdir = workdir;
@@ -2421,12 +2728,12 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
         "Docker env passthrough (optional, comma-separated):",
         {
           placeholder: "CAR_*, PATH",
-          defaultValue: currentDockerEnvPassthrough(repo.effective_destination),
+          defaultValue: currentDockerEnvPassthrough(currentDestination),
           confirmText: "Next",
           allowEmpty: true,
         }
       );
-      if (envPassthroughValue === null) return false;
+      if (envPassthroughValue === null) return null;
       const envPassthrough = splitCommaSeparated(envPassthroughValue);
       if (envPassthrough.length) {
         body.env_passthrough = envPassthrough;
@@ -2436,16 +2743,16 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
         "Docker explicit env map (optional, KEY=VALUE pairs, comma-separated):",
         {
           placeholder: "OPENAI_API_KEY=sk-..., CODEX_HOME=/workspace/.codex",
-          defaultValue: currentDockerExplicitEnv(repo.effective_destination),
+          defaultValue: currentDockerExplicitEnv(currentDestination),
           confirmText: "Next",
           allowEmpty: true,
         }
       );
-      if (envMapValue === null) return false;
+      if (envMapValue === null) return null;
       const parsedEnvMap = parseDockerEnvMap(envMapValue);
       if (parsedEnvMap.error) {
         flash(parsedEnvMap.error, "error");
-        return false;
+        return null;
       }
       if (Object.keys(parsedEnvMap.env).length) {
         body.env = parsedEnvMap.env;
@@ -2455,22 +2762,31 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
         "Docker mounts (optional, source:target[:ro] pairs, comma-separated):",
         {
           placeholder: "/host/path:/workspace/path, /cache:/cache:ro",
-          defaultValue: currentDockerMounts(repo.effective_destination),
+          defaultValue: currentDockerMounts(currentDestination),
           confirmText: "Save",
           allowEmpty: true,
         }
       );
-      if (mountsValue === null) return false;
+      if (mountsValue === null) return null;
       const parsedMounts = parseDockerMountList(mountsValue);
       if (parsedMounts.error) {
         flash(parsedMounts.error, "error");
-        return false;
+        return null;
       }
       if (parsedMounts.mounts.length) {
         body.mounts = parsedMounts.mounts;
       }
     }
   }
+  return body;
+}
+
+async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
+  const body = await promptForDestinationBody(
+    repo.display_name || repo.id,
+    repo.effective_destination
+  );
+  if (!body) return false;
 
   const payload = (await api(`/hub/repos/${encodeURIComponent(repo.id)}/destination`, {
     method: "POST",
@@ -2478,6 +2794,27 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
   })) as HubDestinationResponse;
   const effective = formatDestinationSummary(payload.effective_destination);
   flash(`Updated destination for ${repo.id}: ${effective}`, "success");
+  return true;
+}
+
+async function promptAndSetAgentWorkspaceDestination(
+  workspace: HubAgentWorkspace
+): Promise<boolean> {
+  const body = await promptForDestinationBody(
+    workspace.display_name || workspace.id,
+    workspace.effective_destination
+  );
+  if (!body) return false;
+
+  const payload = (await api(
+    `/hub/agent-workspaces/${encodeURIComponent(workspace.id)}/destination`,
+    {
+      method: "POST",
+      body,
+    }
+  )) as HubAgentWorkspaceDetail;
+  const effective = formatDestinationSummary(payload.effective_destination);
+  flash(`Updated destination for ${workspace.id}: ${effective}`, "success");
   return true;
 }
 
@@ -2568,6 +2905,75 @@ async function removeRepoWithChecks(repoId: string): Promise<void> {
   });
   flash(`Removed repo: ${repoId}`, "success");
   await refreshHub();
+}
+
+async function handleAgentWorkspaceAction(
+  workspaceId: string,
+  action: string
+): Promise<void> {
+  const buttons = agentWorkspaceListEl?.querySelectorAll(
+    `button[data-agent-workspace="${workspaceId}"][data-action="${action}"]`
+  );
+  buttons?.forEach((btn) => ((btn as HTMLButtonElement).disabled = true));
+  try {
+    const workspace = hubData.agent_workspaces.find((item) => item.id === workspaceId);
+    if (!workspace) {
+      flash(`Agent workspace not found: ${workspaceId}`, "error");
+      return;
+    }
+
+    if (action === "enable" || action === "disable") {
+      const enabled = action === "enable";
+      await api(`/hub/agent-workspaces/${encodeURIComponent(workspaceId)}`, {
+        method: "PATCH",
+        body: { enabled },
+      });
+      flash(`${enabled ? "Enabled" : "Disabled"}: ${workspaceId}`, "success");
+      await refreshHub();
+      return;
+    }
+
+    if (action === "set_destination") {
+      const updated = await promptAndSetAgentWorkspaceDestination(workspace);
+      if (updated) {
+        await refreshHub();
+      }
+      return;
+    }
+
+    if (action === "remove") {
+      const ok = await confirmModal(
+        `Remove agent workspace "${workspace.display_name || workspace.id}" from CAR?\n\nManaged files will stay on disk at:\n${workspace.path}`,
+        { confirmText: "Remove" }
+      );
+      if (!ok) return;
+      await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/remove`, {
+        body: { delete_dir: false },
+        startedMessage: "Agent workspace removal queued",
+      });
+      flash(`Removed agent workspace: ${workspaceId}`, "success");
+      await refreshHub();
+      return;
+    }
+
+    if (action === "delete") {
+      const ok = await confirmModal(
+        `Delete agent workspace "${workspace.display_name || workspace.id}"?\n\nCAR will unregister it and delete its managed directory:\n${workspace.path}`,
+        { confirmText: "Delete", danger: true }
+      );
+      if (!ok) return;
+      await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/delete`, {
+        body: { delete_dir: true },
+        startedMessage: "Agent workspace delete queued",
+      });
+      flash(`Deleted agent workspace: ${workspaceId}`, "success");
+      await refreshHub();
+    }
+  } catch (err) {
+    flash((err as Error).message || "Agent workspace action failed", "error");
+  } finally {
+    buttons?.forEach((btn) => ((btn as HTMLButtonElement).disabled = false));
+  }
 }
 
 async function handleRepoAction(repoId: string, action: string): Promise<void> {
@@ -2695,9 +3101,22 @@ function attachHubHandlers(): void {
   initHubSettings();
   const refreshBtn = document.getElementById("hub-refresh") as HTMLButtonElement | null;
   const newRepoBtn = document.getElementById("hub-new-repo") as HTMLButtonElement | null;
+  const newAgentBtn = document.getElementById("hub-new-agent") as HTMLButtonElement | null;
   const createCancelBtn = document.getElementById("create-repo-cancel") as HTMLButtonElement | null;
   const createSubmitBtn = document.getElementById("create-repo-submit") as HTMLButtonElement | null;
   const createRepoId = document.getElementById("create-repo-id") as HTMLInputElement | null;
+  const createAgentCancelBtn = document.getElementById(
+    "create-agent-workspace-cancel"
+  ) as HTMLButtonElement | null;
+  const createAgentSubmitBtn = document.getElementById(
+    "create-agent-workspace-submit"
+  ) as HTMLButtonElement | null;
+  const createAgentId = document.getElementById(
+    "create-agent-workspace-id"
+  ) as HTMLInputElement | null;
+  const createAgentRuntime = document.getElementById(
+    "create-agent-workspace-runtime"
+  ) as HTMLInputElement | null;
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => triggerHubScan());
   }
@@ -2713,11 +3132,20 @@ function attachHubHandlers(): void {
   if (newRepoBtn) {
     newRepoBtn.addEventListener("click", showCreateRepoModal);
   }
+  if (newAgentBtn) {
+    newAgentBtn.addEventListener("click", showCreateAgentWorkspaceModal);
+  }
   if (createCancelBtn) {
     createCancelBtn.addEventListener("click", hideCreateRepoModal);
   }
   if (createSubmitBtn) {
     createSubmitBtn.addEventListener("click", handleCreateRepoSubmit);
+  }
+  if (createAgentCancelBtn) {
+    createAgentCancelBtn.addEventListener("click", hideCreateAgentWorkspaceModal);
+  }
+  if (createAgentSubmitBtn) {
+    createAgentSubmitBtn.addEventListener("click", handleCreateAgentWorkspaceSubmit);
   }
 
   if (createRepoId) {
@@ -2725,6 +3153,22 @@ function attachHubHandlers(): void {
       if (e.key === "Enter") {
         e.preventDefault();
         handleCreateRepoSubmit();
+      }
+    });
+  }
+  if (createAgentId) {
+    createAgentId.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleCreateAgentWorkspaceSubmit();
+      }
+    });
+  }
+  if (createAgentRuntime) {
+    createAgentRuntime.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleCreateAgentWorkspaceSubmit();
       }
     });
   }
@@ -2783,6 +3227,23 @@ function attachHubHandlers(): void {
       }
     });
   }
+
+  if (agentWorkspaceListEl) {
+    agentWorkspaceListEl.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement;
+      const btn =
+        target instanceof HTMLElement
+          ? (target.closest("button[data-action]") as HTMLElement | null)
+          : null;
+      if (!btn) return;
+      event.stopPropagation();
+      const action = btn.dataset.action;
+      const workspaceId = btn.dataset.agentWorkspace;
+      if (action && workspaceId) {
+        handleAgentWorkspaceAction(workspaceId, action);
+      }
+    });
+  }
 }
 
 async function silentRefreshHub(): Promise<void> {
@@ -2793,6 +3254,7 @@ async function silentRefreshHub(): Promise<void> {
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(hubData.repos || []);
     renderReposWithScroll(hubData.repos || []);
+    renderAgentWorkspaces(hubData.agent_workspaces || []);
     await loadHubUsage({ silent: true, allowRetry: false });
     await loadHubChannelDirectory({ silent: true });
   } catch (err) {
@@ -2860,6 +3322,7 @@ export function initHub(): void {
     applyHubData(cachedHub);
     renderSummary(hubData.repos || []);
     renderReposWithScroll(hubData.repos || []);
+    renderAgentWorkspaces(hubData.agent_workspaces || []);
   }
   const cachedUsage = loadSessionCache<HubUsageData | null>(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
   if (cachedUsage) {
@@ -2885,6 +3348,7 @@ export function initHub(): void {
 
 export const __hubTest = {
   renderRepos,
+  renderAgentWorkspaces,
   setHubChannelEntries(entries: HubChannelEntry[]): void {
     hubChannelEntries = Array.isArray(entries) ? [...entries] : [];
   },

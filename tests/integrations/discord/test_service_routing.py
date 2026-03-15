@@ -294,6 +294,12 @@ def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) 
         repo_id="repo-1",
         display_name="discord:pma",
     )
+    unbound_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace,
+        repo_id="repo-1",
+        display_name="discord:unbound",
+    )
     orchestration_service.upsert_binding(
         surface_kind="discord",
         surface_key="repo-channel",
@@ -326,12 +332,14 @@ def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) 
         mode="pma",
     )
 
-    assert [thread_id for thread_id, _label in repo_items] == [
-        repo_thread.thread_target_id
-    ]
-    assert [thread_id for thread_id, _label in pma_items] == [
-        pma_thread.thread_target_id
-    ]
+    assert {thread_id for thread_id, _label in repo_items} == {
+        repo_thread.thread_target_id,
+        unbound_thread.thread_target_id,
+    }
+    assert {thread_id for thread_id, _label in pma_items} == {
+        pma_thread.thread_target_id,
+        unbound_thread.thread_target_id,
+    }
 
 
 def _interaction(
@@ -1187,8 +1195,8 @@ async def test_service_bind_partial_workspace_value_returns_path_candidate_picke
         outbox_manager=_FakeOutboxManager(),
     )
     service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
-        (None, str(engine_workspace.resolve())),
-        (None, str(misc_workspace.resolve())),
+        (None, None, str(engine_workspace.resolve())),
+        (None, None, str(misc_workspace.resolve())),
     ]
 
     try:
@@ -1272,7 +1280,7 @@ async def test_service_routes_bind_picker_component_interaction_for_path_candida
         outbox_manager=_FakeOutboxManager(),
     )
     service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
-        (None, str(workspace.resolve()))
+        (None, None, str(workspace.resolve()))
     ]
 
     try:
@@ -1316,7 +1324,7 @@ async def test_service_routes_bind_picker_component_interaction_for_tokenized_pa
         outbox_manager=_FakeOutboxManager(),
     )
     service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
-        (None, str(workspace.resolve()))
+        (None, None, str(workspace.resolve()))
     ]
 
     try:
@@ -2462,9 +2470,21 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
         agent: str,
         current_thread_id: str | None,
         mode: str,
+        repo_id: str | None = None,
+        resource_kind: str | None = None,
+        resource_id: str | None = None,
         limit: int = 25,
     ) -> list[tuple[str, str]]:
-        _ = workspace_root, agent, current_thread_id, mode, limit
+        _ = (
+            workspace_root,
+            agent,
+            current_thread_id,
+            mode,
+            repo_id,
+            resource_kind,
+            resource_id,
+            limit,
+        )
         return [
             ("thread-abc", "thread-abc"),
             ("thread-def", "thread-def"),
@@ -3001,9 +3021,21 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
         agent: str,
         current_thread_id: str | None,
         mode: str,
+        repo_id: str | None = None,
+        resource_kind: str | None = None,
+        resource_id: str | None = None,
         limit: int = 25,
     ) -> list[tuple[str, str]]:
-        _ = workspace_root, agent, current_thread_id, mode, limit
+        _ = (
+            workspace_root,
+            agent,
+            current_thread_id,
+            mode,
+            repo_id,
+            resource_kind,
+            resource_id,
+            limit,
+        )
         return [("thread-1", "thread-1 (current)"), ("thread-2", "thread-2")]
 
     service._list_discord_thread_targets_for_picker = _fake_list_threads  # type: ignore[assignment]

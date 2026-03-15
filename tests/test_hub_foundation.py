@@ -12,6 +12,7 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.discovery import discover_and_init
 from codex_autorunner.manifest import (
+    MANIFEST_VERSION,
     load_manifest,
     load_manifest_with_issues,
     sanitize_repo_id,
@@ -31,9 +32,10 @@ def test_manifest_creation_and_normalization(tmp_path: Path):
     save_manifest(manifest_path, manifest, hub_root)
 
     data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    assert data["version"] == 2
+    assert data["version"] == MANIFEST_VERSION
     assert data["repos"][0]["path"] == "projects/demo-repo"
     assert data["repos"][0]["kind"] == "base"
+    assert data["agent_workspaces"] == []
 
 
 def test_manifest_roundtrip_preserves_destination(tmp_path: Path):
@@ -55,11 +57,90 @@ def test_manifest_roundtrip_preserves_destination(tmp_path: Path):
     }
 
     data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    assert data["version"] == 2
+    assert data["version"] == MANIFEST_VERSION
     assert data["repos"][0]["destination"] == {
         "kind": "docker",
         "image": "ghcr.io/acme/demo:latest",
     }
+    assert data["agent_workspaces"] == []
+
+
+def test_manifest_v3_roundtrip_supports_mixed_repos_and_agent_workspaces(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest = load_manifest(manifest_path, hub_root)
+    repo_dir = hub_root / "projects" / "demo-repo"
+    repo_dir.mkdir(parents=True)
+    manifest.ensure_repo(hub_root, repo_dir, repo_id="demo")
+    workspace = manifest.ensure_agent_workspace(
+        hub_root,
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+        destination={"kind": "docker", "image": "ghcr.io/acme/zeroclaw:latest"},
+    )
+    save_manifest(manifest_path, manifest, hub_root)
+
+    loaded = load_manifest(manifest_path, hub_root)
+    loaded_workspace = loaded.get_agent_workspace(workspace.id)
+    assert loaded_workspace is not None
+    assert loaded_workspace.runtime == "zeroclaw"
+    assert loaded_workspace.path == Path(".codex-autorunner/runtimes/zeroclaw/zc-main")
+    assert loaded_workspace.destination == {
+        "kind": "docker",
+        "image": "ghcr.io/acme/zeroclaw:latest",
+    }
+
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert data["version"] == MANIFEST_VERSION
+    assert data["repos"][0]["id"] == "demo"
+    assert data["agent_workspaces"][0] == {
+        "id": "zc-main",
+        "runtime": "zeroclaw",
+        "path": ".codex-autorunner/runtimes/zeroclaw/zc-main",
+        "enabled": True,
+        "display_name": "ZeroClaw Main",
+        "destination": {
+            "kind": "docker",
+            "image": "ghcr.io/acme/zeroclaw:latest",
+        },
+    }
+
+
+def test_manifest_v2_loads_and_saves_forward_with_agent_workspaces_key(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 2",
+                "repos:",
+                "  - id: base",
+                "    path: workspace/base",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = load_manifest(manifest_path, hub_root)
+    assert manifest.version == MANIFEST_VERSION
+    assert manifest.get("base") is not None
+    assert manifest.agent_workspaces == []
+
+    save_manifest(manifest_path, manifest, hub_root)
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert data["version"] == MANIFEST_VERSION
+    assert data["repos"][0]["id"] == "base"
+    assert data["agent_workspaces"] == []
 
 
 def test_load_manifest_preserves_invalid_destination_mappings(tmp_path: Path):

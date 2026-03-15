@@ -13,6 +13,7 @@ from .components import DISCORD_SELECT_OPTION_MAX_OPTIONS
 MODEL_SEARCH_FETCH_LIMIT = 200
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
+AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "agent_workspace@"
 FLOW_ACTIONS_WITH_RUN_PICKER = {
     "status",
     "restart",
@@ -40,26 +41,35 @@ def workspace_autocomplete_value(workspace_path: str) -> str:
     return f"{WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX}{digest}"
 
 
+def agent_workspace_autocomplete_value(workspace_id: str) -> str:
+    normalized_id = workspace_id.strip()
+    if len(normalized_id) <= 100:
+        return normalized_id
+    digest = hashlib.sha256(normalized_id.encode("utf-8")).hexdigest()[:24]
+    return f"{AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX}{digest}"
+
+
 def resolve_workspace_from_token(
     token: str,
-    candidates: list[tuple[Optional[str], str]],
-) -> Optional[tuple[Optional[str], str]]:
+    candidates: list[tuple[Optional[str], Optional[str], str]],
+) -> Optional[tuple[Optional[str], Optional[str], str]]:
     normalized = token.strip()
     if not normalized:
         return None
 
-    for repo_id, workspace_path in candidates:
-        if repo_id == normalized or workspace_path == normalized:
-            return repo_id, workspace_path
+    for resource_kind, resource_id, workspace_path in candidates:
+        if resource_id == normalized or workspace_path == normalized:
+            return resource_kind, resource_id, workspace_path
 
     if normalized.startswith(REPO_AUTOCOMPLETE_TOKEN_PREFIX):
         digest = normalized[len(REPO_AUTOCOMPLETE_TOKEN_PREFIX) :]
         if digest:
             matches = [
-                (repo_id, workspace_path)
-                for repo_id, workspace_path in candidates
-                if isinstance(repo_id, str)
-                and hashlib.sha256(repo_id.encode("utf-8"))
+                (resource_kind, resource_id, workspace_path)
+                for resource_kind, resource_id, workspace_path in candidates
+                if resource_kind == "repo"
+                and isinstance(resource_id, str)
+                and hashlib.sha256(resource_id.encode("utf-8"))
                 .hexdigest()
                 .startswith(digest)
             ]
@@ -70,9 +80,24 @@ def resolve_workspace_from_token(
         digest = normalized[len(WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX) :]
         if digest:
             matches = [
-                (repo_id, workspace_path)
-                for repo_id, workspace_path in candidates
+                (resource_kind, resource_id, workspace_path)
+                for resource_kind, resource_id, workspace_path in candidates
                 if hashlib.sha256(workspace_path.encode("utf-8"))
+                .hexdigest()
+                .startswith(digest)
+            ]
+            if len(matches) == 1:
+                return matches[0]
+
+    if normalized.startswith(AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX):
+        digest = normalized[len(AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX) :]
+        if digest:
+            matches = [
+                (resource_kind, resource_id, workspace_path)
+                for resource_kind, resource_id, workspace_path in candidates
+                if resource_kind == "agent_workspace"
+                and isinstance(resource_id, str)
+                and hashlib.sha256(resource_id.encode("utf-8"))
                 .hexdigest()
                 .startswith(digest)
             ]

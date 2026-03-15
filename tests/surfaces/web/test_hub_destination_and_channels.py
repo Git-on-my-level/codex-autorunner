@@ -88,6 +88,8 @@ def _write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                     guild_id TEXT,
                     workspace_path TEXT,
                     repo_id TEXT,
+                    resource_kind TEXT,
+                    resource_id TEXT,
                     pma_enabled INTEGER,
                     agent TEXT,
                     updated_at TEXT
@@ -102,15 +104,19 @@ def _write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                         guild_id,
                         workspace_path,
                         repo_id,
+                        resource_kind,
+                        resource_id,
                         pma_enabled,
                         agent,
                         updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(channel_id) DO UPDATE SET
                         guild_id=excluded.guild_id,
                         workspace_path=excluded.workspace_path,
                         repo_id=excluded.repo_id,
+                        resource_kind=excluded.resource_kind,
+                        resource_id=excluded.resource_id,
                         pma_enabled=excluded.pma_enabled,
                         agent=excluded.agent,
                         updated_at=excluded.updated_at
@@ -120,6 +126,8 @@ def _write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                         row.get("guild_id"),
                         row.get("workspace_path"),
                         row.get("repo_id"),
+                        row.get("resource_kind"),
+                        row.get("resource_id"),
                         row.get("pma_enabled"),
                         row.get("agent"),
                         row.get("updated_at"),
@@ -1036,6 +1044,54 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     assert telegram_clean["status_label"] == "clean"
 
 
+def test_hub_channel_directory_route_surfaces_agent_workspace_binding_metadata(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    workspace = supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    store = ChannelDirectoryStore(hub_root)
+    store.record_seen("discord", "chan-zc", None, "ZeroClaw / #main", {})
+
+    _write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-zc",
+                "guild_id": None,
+                "workspace_path": str(workspace.path.resolve()),
+                "repo_id": None,
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+                "pma_enabled": 0,
+                "agent": "codex",
+                "updated_at": "2026-01-01T00:00:01Z",
+            }
+        ],
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/chat/channels")
+    assert response.status_code == 200
+
+    row = next(
+        entry
+        for entry in response.json()["entries"]
+        if entry["key"] == "discord:chan-zc"
+    )
+    assert row["workspace_path"] == str(workspace.path.resolve())
+    assert row.get("repo_id") is None
+    assert row.get("resource_kind") == "agent_workspace"
+    assert row.get("resource_id") == workspace.id
+    assert row["provenance"]["resource_kind"] == "agent_workspace"
+    assert row["provenance"]["resource_id"] == workspace.id
+
+
 def test_hub_channel_directory_route_includes_pma_managed_threads(
     tmp_path: Path,
 ) -> None:
@@ -1097,6 +1153,9 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     ).read_text(encoding="utf-8")
     assert 'id="hub-repo-search"' in index_html
     assert 'id="hub-refresh"' in index_html
+    assert 'id="hub-new-agent"' in index_html
+    assert 'id="hub-agent-workspace-list"' in index_html
+    assert 'id="create-agent-workspace-modal"' in index_html
     assert 'id="hub-scan"' not in index_html
     assert 'id="hub-quick-scan"' not in index_html
     assert 'id="hub-channel-query"' not in index_html
@@ -1110,6 +1169,19 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     ).read_text(encoding="utf-8")
     assert "set_destination" in hub_source
     assert "/hub/repos/${encodeURIComponent(repo.id)}/destination" in hub_source
+    assert "/hub/jobs/agent-workspaces" in hub_source
+    assert (
+        "/hub/agent-workspaces/${encodeURIComponent(workspace.id)}/destination"
+        in hub_source
+    )
+    assert (
+        "/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/remove"
+        in hub_source
+    )
+    assert (
+        "/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/delete"
+        in hub_source
+    )
     assert "/hub/chat/channels" in hub_source
     assert "container_name" in hub_source
     assert "profile" in hub_source
@@ -1120,6 +1192,7 @@ def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     assert "read_only" in hub_source
     assert "hubRepoSearchInput" in hub_source
     assert "hub-chat-binding-row" in hub_source
+    assert "renderAgentWorkspaces" in hub_source
     assert 'header.textContent = "Channels"' not in hub_source
     assert "copy_channel_key" not in hub_source
     assert "Copied channel ref" not in hub_source

@@ -35,6 +35,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.channel_messages: list[dict[str, Any]] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
@@ -55,6 +56,7 @@ class _FakeRest:
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        self.channel_messages.append({"channel_id": channel_id, "payload": payload})
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
 
     async def bulk_overwrite_application_commands(
@@ -210,6 +212,12 @@ def _flow_component_interaction(custom_id: str) -> dict[str, Any]:
     }
 
 
+def _latest_status_message(rest: _FakeRest) -> dict[str, Any]:
+    payload = rest.interaction_responses[-1]["payload"]
+    data = payload.get("data")
+    return data if isinstance(data, dict) else payload
+
+
 def _create_run(
     workspace: Path,
     run_id: str,
@@ -296,8 +304,10 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 2
-        status_payload = rest.interaction_responses[0]["payload"]["data"]["content"]
+        status_data = rest.interaction_responses[0]["payload"]["data"]
+        status_payload = status_data["content"]
         runs_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
+        assert "flags" not in status_data
 
         assert f"Run: {paused_run_id}" in status_payload
         assert "Status: paused" in status_payload
@@ -369,6 +379,7 @@ async def test_flow_status_without_run_id_uses_latest_run_and_includes_picker(
         payload = rest.interaction_responses[0]["payload"]["data"]
         content = payload["content"]
         components = payload["components"]
+        assert "flags" not in payload
 
         assert f"Run: {paused_run_id}" in content
         assert "Status: paused" in content
@@ -430,7 +441,7 @@ async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> No
 
     try:
         await service.run_forever()
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        content = _latest_status_message(rest)["content"]
         assert "Status: completed" in content
         assert "Elapsed: 2h 30m" in content
     finally:
@@ -497,6 +508,7 @@ async def test_flow_refresh_button_updates_existing_status_message(
         refresh_payload = rest.interaction_responses[1]["payload"]
 
         assert initial_payload["type"] == 4
+        assert "flags" not in initial_payload["data"]
         assert "Status: running" in initial_payload["data"]["content"]
 
         assert refresh_payload["type"] == 7

@@ -10,6 +10,20 @@ Currently supported plugin type:
 
 - **Agent backends**: add a new agent implementation (harness + supervisor).
 
+## Choose The Right CAR Resource
+
+External runtimes do not always map to repos.
+
+- Use repo semantics when the agent's durable identity is a project worktree and
+  CAR should execute against that code checkout.
+- Use `agent_workspace` semantics when the durable identity is runtime-managed
+  memory/config/session state that should live under
+  `<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`.
+
+CAR does not install runtimes for plugins. A plugin may detect or launch a
+configured binary, but the operator remains responsible for making that runtime
+available on the host.
+
 ## Versioning
 
 Plugins MUST declare compatibility with the current plugin API version:
@@ -80,7 +94,13 @@ async def wait_for_turn(...) -> TerminalTurnResult
 - Cannot resume a previous conversation
 - Do not expose a session/conversation ID
 
-If your runtime does not expose a documented public thread/session API, do not advertise the durable-thread contract anyway. Any CAR-owned wrapper around a volatile CLI/process surface must leave `durable_threads` and related orchestration capabilities absent, and should be described as experimental until the runtime exposes a real resumable handle. The current ZeroClaw adapter is the reference example for this downgrade path.
+If your runtime does not expose a documented public thread/session API, do not
+advertise the durable-thread contract unless CAR can prove equivalent
+relaunch/resume semantics with a first-class CAR-managed `agent_workspace`.
+ZeroClaw is the reference example for this narrower path: CAR proves
+`durable_threads` and `message_turns` only for CAR-managed agent workspaces,
+with shared workspace memory, per-session state files, and explicit capability
+limits.
 
 ## Capability Model
 
@@ -121,6 +141,10 @@ The harness automatically gates optional helper methods:
 
 ## Reference Implementations
 
-- **ZeroClaw**: Experimental volatile wrapper around the interactive CLI surface. It is intentionally not advertised as a CAR v1 durable-thread orchestration target until ZeroClaw exposes a documented resumable session primitive.
+- **ZeroClaw**: Detect-only CAR-managed `agent_workspace` adapter. Supports
+  `durable_threads`, `message_turns`, `active_thread_discovery`, and
+  `event_streaming` for CAR-managed agent workspaces. Caveats remain explicit:
+  workspace memory is shared across threads, one active turn is allowed per
+  ZeroClaw session, and `interrupt`/`review` are not advertised.
 - **Codex**: Full-featured, supports all optional capabilities
 - **OpenCode**: Full-featured except `approvals`

@@ -15,6 +15,7 @@ from .managed_thread_status import (
     transition_managed_thread_status,
 )
 from .orchestration.migrate_legacy_state import backfill_legacy_thread_state
+from .orchestration.models import normalize_resource_owner_fields
 from .orchestration.sqlite import open_orchestration_sqlite
 from .sqlite_utils import open_sqlite
 from .time_utils import now_iso
@@ -146,6 +147,8 @@ def _ensure_schema(conn: Any) -> None:
                 managed_thread_id TEXT PRIMARY KEY,
                 agent TEXT NOT NULL,
                 repo_id TEXT,
+                resource_kind TEXT,
+                resource_id TEXT,
                 workspace_root TEXT NOT NULL,
                 name TEXT,
                 backend_thread_id TEXT,
@@ -204,6 +207,14 @@ def _ensure_schema(conn: Any) -> None:
     thread_columns = _table_columns(conn, "pma_managed_threads")
     for statement in (
         (
+            "resource_kind",
+            "ALTER TABLE pma_managed_threads ADD COLUMN resource_kind TEXT",
+        ),
+        (
+            "resource_id",
+            "ALTER TABLE pma_managed_threads ADD COLUMN resource_id TEXT",
+        ),
+        (
             "normalized_status",
             "ALTER TABLE pma_managed_threads ADD COLUMN normalized_status TEXT",
         ),
@@ -254,6 +265,12 @@ def _ensure_schema(conn: Any) -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_repo_id
             ON pma_managed_threads(repo_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_resource
+            ON pma_managed_threads(resource_kind, resource_id)
             """
         )
         conn.execute(
@@ -370,10 +387,17 @@ class PmaThreadStore:
 
     @staticmethod
     def _thread_row_to_record(row: Any) -> dict[str, Any]:
+        resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
+            resource_kind=row["resource_kind"],
+            resource_id=row["resource_id"],
+            repo_id=row["repo_id"],
+        )
         record = {
             "managed_thread_id": row["thread_target_id"],
             "agent": row["agent_id"],
-            "repo_id": row["repo_id"],
+            "repo_id": repo_id,
+            "resource_kind": resource_kind,
+            "resource_id": resource_id,
             "workspace_root": row["workspace_root"],
             "name": row["display_name"],
             "backend_thread_id": row["backend_thread_id"],
@@ -482,6 +506,8 @@ class PmaThreadStore:
         workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -491,6 +517,13 @@ class PmaThreadStore:
         workspace = workspace_root
         if not workspace.is_absolute():
             raise ValueError("workspace_root must be absolute")
+        normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
+            normalize_resource_owner_fields(
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                repo_id=repo_id,
+            )
+        )
 
         snapshot = build_managed_thread_status_snapshot(
             reason=ManagedThreadStatusReason.THREAD_CREATED,
@@ -505,6 +538,8 @@ class PmaThreadStore:
                         agent_id,
                         backend_thread_id,
                         repo_id,
+                        resource_kind,
+                        resource_id,
                         workspace_root,
                         display_name,
                         lifecycle_status,
@@ -519,13 +554,15 @@ class PmaThreadStore:
                         updated_at,
                         status_updated_at,
                         status_terminal
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         managed_thread_id,
                         agent,
                         backend_thread_id,
-                        repo_id,
+                        normalized_repo_id,
+                        normalized_resource_kind,
+                        normalized_resource_id,
                         str(workspace),
                         name,
                         "active",
@@ -558,6 +595,8 @@ class PmaThreadStore:
         status: Optional[str] = None,
         normalized_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: Optional[int] = 200,
     ) -> list[dict[str, Any]]:
         if limit is not None and limit <= 0:
@@ -578,9 +617,22 @@ class PmaThreadStore:
         if normalized_status is not None:
             query += " AND runtime_status = ?"
             params.append(normalized_status)
-        if repo_id is not None:
+        normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
+            normalize_resource_owner_fields(
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                repo_id=repo_id,
+            )
+        )
+        if normalized_resource_kind is not None:
+            query += " AND resource_kind = ?"
+            params.append(normalized_resource_kind)
+        if normalized_resource_id is not None:
+            query += " AND resource_id = ?"
+            params.append(normalized_resource_id)
+        if normalized_repo_id is not None and normalized_resource_kind is None:
             query += " AND repo_id = ?"
-            params.append(repo_id)
+            params.append(normalized_repo_id)
         query += " ORDER BY updated_at DESC, created_at DESC, thread_target_id DESC"
         if limit is not None:
             query += " LIMIT ?"
@@ -1437,6 +1489,8 @@ class PmaThreadStore:
                             managed_thread_id,
                             agent,
                             repo_id,
+                            resource_kind,
+                            resource_id,
                             workspace_root,
                             name,
                             backend_thread_id,
@@ -1448,16 +1502,18 @@ class PmaThreadStore:
                             status_turn_id,
                             last_turn_id,
                             last_message_preview,
-                        compact_seed,
-                        metadata_json,
-                        created_at,
-                        updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            compact_seed,
+                            metadata_json,
+                            created_at,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             legacy["managed_thread_id"],
                             legacy["agent"],
                             legacy["repo_id"],
+                            legacy["resource_kind"],
+                            legacy["resource_id"],
                             legacy["workspace_root"],
                             legacy["name"],
                             legacy["backend_thread_id"],

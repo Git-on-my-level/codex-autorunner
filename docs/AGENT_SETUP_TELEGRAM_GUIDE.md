@@ -151,7 +151,8 @@ In Telegram, verify this sequence:
 
 1. `/help` responds.
 2. `/ids` shows expected chat/user/thread values and a copy-paste collaboration snippet.
-3. `/bind <repo_id|path>` binds the topic/chat to a workspace.
+3. `/bind <repo_id|path>` binds the topic/chat to a repo workspace root and lets
+   CAR keep a consistent durable thread for that destination.
 4. `/status` shows the effective collaboration mode and plain-text trigger for the current root chat or topic.
 5. `/new` starts a fresh thread.
 6. Send a normal non-command message and confirm agent output.

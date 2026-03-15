@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 const dom = new JSDOM(
   `<!doctype html><html><body>
     <div id="hub-repo-list"></div>
+    <div id="hub-agent-workspace-list"></div>
     <div id="hub-last-scan"></div>
     <div id="pma-last-scan"></div>
     <div id="hub-count-total"></div>
@@ -200,4 +201,32 @@ test("repo cards collapse ticket-flow pma threads into a compact summary row", (
   assert.match(text, /Ticket flow threads/);
   assert.match(text, /2 threads/);
   assert.doesNotMatch(text, /ticket-flow:codex/);
+});
+
+test("agent workspace cards render runtime, managed path, and lifecycle actions", () => {
+  __hubTest.renderAgentWorkspaces([
+    {
+      id: "zc-main",
+      runtime: "zeroclaw",
+      path: ".codex-autorunner/runtimes/zeroclaw/zc-main",
+      display_name: "ZeroClaw Main",
+      enabled: false,
+      exists_on_disk: true,
+      effective_destination: {
+        kind: "docker",
+        image: "ghcr.io/acme/zeroclaw:latest",
+      },
+      resource_kind: "agent_workspace",
+    },
+  ]);
+
+  const text =
+    document.getElementById("hub-agent-workspace-list")?.textContent || "";
+  assert.match(text, /ZeroClaw Main/);
+  assert.match(text, /zeroclaw/);
+  assert.match(text, /disabled/);
+  assert.match(text, /Destination/);
+  assert.match(text, /Remove/);
+  assert.match(text, /Delete/);
+  assert.match(text, /zc-main/);
 });

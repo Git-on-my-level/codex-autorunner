@@ -110,6 +110,8 @@ async def notify_managed_thread_terminal_transition(
     await _notify_hub_automation_transition(
         request,
         repo_id=normalize_optional_text(thread.get("repo_id")),
+        resource_kind=normalize_optional_text(thread.get("resource_kind")),
+        resource_id=normalize_optional_text(thread.get("resource_id")),
         run_id=None,
         thread_id=managed_thread_id,
         from_state="running",
@@ -132,6 +134,8 @@ async def _notify_hub_automation_transition(
     request: Request,
     *,
     repo_id: Optional[str] = None,
+    resource_kind: Optional[str] = None,
+    resource_id: Optional[str] = None,
     run_id: Optional[str] = None,
     thread_id: Optional[str] = None,
     from_state: str,
@@ -149,10 +153,16 @@ async def _notify_hub_automation_transition(
         "timestamp": normalize_optional_text(timestamp) or now_iso(),
     }
     normalized_repo_id = normalize_optional_text(repo_id)
+    normalized_resource_kind = normalize_optional_text(resource_kind)
+    normalized_resource_id = normalize_optional_text(resource_id)
     normalized_run_id = normalize_optional_text(run_id)
     normalized_thread_id = normalize_optional_text(thread_id)
     if normalized_repo_id:
         payload["repo_id"] = normalized_repo_id
+    if normalized_resource_kind:
+        payload["resource_kind"] = normalized_resource_kind
+    if normalized_resource_id:
+        payload["resource_id"] = normalized_resource_id
     if normalized_run_id:
         payload["run_id"] = normalized_run_id
     if normalized_thread_id:
@@ -563,6 +573,8 @@ def build_managed_thread_runtime_routes(
                     "managed_thread_id": managed_thread_id,
                     "managed_turn_id": current_turn_id,
                     "repo_id": current_thread_row.get("repo_id"),
+                    "resource_kind": current_thread_row.get("resource_kind"),
+                    "resource_id": current_thread_row.get("resource_id"),
                     "workspace_root": str(started.workspace_root),
                     "agent": current_thread_row.get("agent"),
                     "backend_thread_id": resolved_backend_thread_id,

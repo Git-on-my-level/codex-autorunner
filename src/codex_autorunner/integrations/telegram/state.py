@@ -184,10 +184,14 @@ class ThreadSummary:
 @dataclass
 class TelegramTopicRecord:
     repo_id: Optional[str] = None
+    resource_kind: Optional[str] = None
+    resource_id: Optional[str] = None
     workspace_path: Optional[str] = None
     workspace_id: Optional[str] = None
     pma_enabled: bool = False
     pma_prev_repo_id: Optional[str] = None
+    pma_prev_resource_kind: Optional[str] = None
+    pma_prev_resource_id: Optional[str] = None
     pma_prev_workspace_path: Optional[str] = None
     pma_prev_workspace_id: Optional[str] = None
     pma_prev_active_thread_id: Optional[str] = None
@@ -216,6 +220,12 @@ class TelegramTopicRecord:
         repo_id = payload.get("repo_id") or payload.get("repoId")
         if not isinstance(repo_id, str):
             repo_id = None
+        resource_kind = payload.get("resource_kind") or payload.get("resourceKind")
+        if not isinstance(resource_kind, str):
+            resource_kind = None
+        resource_id = payload.get("resource_id") or payload.get("resourceId")
+        if not isinstance(resource_id, str):
+            resource_id = None
         workspace_path = payload.get("workspace_path") or payload.get("workspacePath")
         if not isinstance(workspace_path, str):
             workspace_path = None
@@ -230,6 +240,16 @@ class TelegramTopicRecord:
         )
         if not isinstance(pma_prev_repo_id, str):
             pma_prev_repo_id = None
+        pma_prev_resource_kind = payload.get("pma_prev_resource_kind") or payload.get(
+            "pmaPrevResourceKind"
+        )
+        if not isinstance(pma_prev_resource_kind, str):
+            pma_prev_resource_kind = None
+        pma_prev_resource_id = payload.get("pma_prev_resource_id") or payload.get(
+            "pmaPrevResourceId"
+        )
+        if not isinstance(pma_prev_resource_id, str):
+            pma_prev_resource_id = None
         pma_prev_workspace_path = payload.get("pma_prev_workspace_path") or payload.get(
             "pmaPrevWorkspacePath"
         )
@@ -329,10 +349,14 @@ class TelegramTopicRecord:
             last_terminal_run_id = None
         return cls(
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             workspace_path=workspace_path,
             workspace_id=workspace_id,
             pma_enabled=pma_enabled,
             pma_prev_repo_id=pma_prev_repo_id,
+            pma_prev_resource_kind=pma_prev_resource_kind,
+            pma_prev_resource_id=pma_prev_resource_id,
             pma_prev_workspace_path=pma_prev_workspace_path,
             pma_prev_workspace_id=pma_prev_workspace_id,
             pma_prev_active_thread_id=pma_prev_active_thread_id,
@@ -358,10 +382,14 @@ class TelegramTopicRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "repo_id": self.repo_id,
+            "resource_kind": self.resource_kind,
+            "resource_id": self.resource_id,
             "workspace_path": self.workspace_path,
             "workspace_id": self.workspace_id,
             "pma_enabled": self.pma_enabled,
             "pma_prev_repo_id": self.pma_prev_repo_id,
+            "pma_prev_resource_kind": self.pma_prev_resource_kind,
+            "pma_prev_resource_id": self.pma_prev_resource_id,
             "pma_prev_workspace_path": self.pma_prev_workspace_path,
             "pma_prev_workspace_id": self.pma_prev_workspace_id,
             "pma_prev_active_thread_id": self.pma_prev_active_thread_id,
@@ -799,7 +827,14 @@ class TelegramStateStore:
         await self._run(self._set_topic_scope_sync, key, scope)
 
     async def bind_topic(
-        self, key: str, workspace_path: str, *, repo_id: Optional[str] = None
+        self,
+        key: str,
+        workspace_path: str,
+        *,
+        repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
     ) -> TelegramTopicRecord:
         if not isinstance(workspace_path, str) or not workspace_path:
             raise ValueError("workspace_path is required")
@@ -807,9 +842,13 @@ class TelegramStateStore:
         def apply(record: TelegramTopicRecord) -> None:
             # Switching workspaces should restart the app-server thread in the new repo.
             record.workspace_path = workspace_path
-            record.workspace_id = None
+            record.workspace_id = workspace_id
             if repo_id is not None:
                 record.repo_id = repo_id
+            else:
+                record.repo_id = None
+            record.resource_kind = resource_kind
+            record.resource_id = resource_id
             record.active_thread_id = None
             record.thread_ids = []
             record.thread_summaries = {}
@@ -2253,10 +2292,20 @@ class TopicRouter:
         workspace_path: str,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
         scope: Optional[str] = None,
     ) -> TelegramTopicRecord:
         key = await self.topic_key(chat_id, thread_id, scope=scope)
-        return await self._store.bind_topic(key, workspace_path, repo_id=repo_id)
+        return await self._store.bind_topic(
+            key,
+            workspace_path,
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            workspace_id=workspace_id,
+        )
 
     async def set_active_thread(
         self,

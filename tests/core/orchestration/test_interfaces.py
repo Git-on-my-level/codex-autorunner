@@ -43,6 +43,8 @@ class _FakeStore:
         workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget:
@@ -58,6 +60,8 @@ class _FakeStore:
         lifecycle_status: Optional[str] = None,
         runtime_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ThreadTarget]:
         return [self.thread]
@@ -260,6 +264,8 @@ class _FakeService:
         lifecycle_status: Optional[str] = None,
         runtime_status: Optional[str] = None,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> list[ThreadTarget]:
         return self.store.list_thread_targets(
@@ -267,6 +273,8 @@ class _FakeService:
             lifecycle_status=lifecycle_status,
             runtime_status=runtime_status,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             limit=limit,
         )
 
@@ -280,6 +288,8 @@ class _FakeService:
         workspace_root: Path,
         *,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget:
@@ -287,6 +297,8 @@ class _FakeService:
             agent_id,
             workspace_root,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
         )
@@ -312,6 +324,8 @@ class _FakeService:
         agent_id: str,
         workspace_root: Path,
         repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
     ) -> ThreadTarget:
@@ -321,6 +335,8 @@ class _FakeService:
             agent_id,
             workspace_root,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
         )

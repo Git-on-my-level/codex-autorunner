@@ -9,17 +9,37 @@ CAR supports multiple AI agents through a registry and capability model. Each ag
 - **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
 - **Registry**: Central registration with capabilities
 
-If an external runtime does not expose a documented public thread/session API, do not claim that it satisfies CAR's durable-thread contract. You may keep a narrow CAR-owned wrapper around the documented surface for experimental use, but leave `durable_threads` and the related orchestration capabilities absent until the runtime exposes a real resumable handle. The current ZeroClaw adapter is the reference example for this downgrade path.
+## Choose The Right Resource Model
+
+Before writing code, decide what CAR is actually managing:
+
+- Use repo semantics when the agent works against project code in a repo/worktree.
+- Use `agent_workspace` semantics when the durable thing is runtime state rather
+  than project code.
+
+`agent_workspace` resources are first-class hub resources stored under
+`<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`. CAR threads
+live under that workspace, and chat surfaces bind to those durable CAR threads,
+not directly to shared workspace memory.
+
+If an external runtime does not expose a documented public thread/session API,
+do not claim that it satisfies CAR's durable-thread contract unless CAR can
+prove equivalent semantics with a first-class CAR-managed `agent_workspace`.
+The current ZeroClaw adapter is the reference example for this narrower path:
+CAR-managed workspaces can honestly advertise durable threads, but only with
+explicit caveats around shared workspace memory, one active turn per session,
+and the absence of optional capabilities such as `interrupt` and `review`.
 
 ## Prerequisites
 
 Before adding a new agent, ensure:
 1. The agent binary/CLI is available and callable
-2. The agent has a documented protocol or API (JSON-RPC, HTTP, etc.)
+2. The agent has either a documented protocol/API or a CAR-proven
+   `agent_workspace` contract for durable state
 3. The agent supports durable thread/session operations: create, resume, and execute turns
 4. You have tested the agent works independently of CAR
 
-**Important**: Single-session or wrapper-managed volatile runtimes are out of scope for CAR v1 orchestration. See "Single-Session Runtimes (Out of Scope for v1)" below.
+**Important**: CAR detects configured runtimes; it does not install them. Single-session or volatile wrapper-only runtimes are out of scope for CAR v1 orchestration. See "Single-Session Runtimes (Out of Scope for v1)" below.
 
 ## Step 1: Create the Harness
 
@@ -346,9 +366,9 @@ All agents should support these core capabilities:
 
 - **`durable_threads`**: List, create, and resume conversations that persist across CAR restarts
 - **`message_turns`**: Start and execute turns within durable threads
-- **`model_listing`**: Return available models
 
 Optional capabilities:
+- **`model_listing`**: Return available models
 - **`review`**: Run code review operations
 - **`event_streaming`**: Stream turn events in real-time
 - **`approvals`**: Support approval/workflow mechanisms
@@ -363,6 +383,12 @@ CAR v1 orchestration requires agents to implement a **durable thread/session mod
 1. **Threads persist beyond a single interaction**: Creating a conversation produces a session ID that remains valid across CAR restarts
 2. **Threads support resume**: Given a thread/session ID, the agent can resume from where it left off
 3. **Turns are atomic**: Each turn has a clear start and terminal state
+
+For repo-backed agents, `workspace_root` points at the repo/worktree CAR is
+operating on. For non-repo runtimes, `workspace_root` should be the managed
+`agent_workspace` root. In that case the durable identity remains:
+
+- `runtime binary -> agent workspace -> CAR thread -> live process`
 
 The must-support core interface is:
 
