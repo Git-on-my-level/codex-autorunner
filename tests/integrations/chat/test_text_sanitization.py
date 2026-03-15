@@ -25,3 +25,19 @@ def test_collapse_local_markdown_links_preserves_fenced_code_examples() -> None:
     result = collapse_local_markdown_links(text)
 
     assert result == text
+
+
+def test_collapse_local_markdown_links_hides_workspace_paths() -> None:
+    text = "Open [repo](/workspace/codex-autorunner/README.md) next."
+
+    result = collapse_local_markdown_links(text)
+
+    assert result == "Open repo next."
+
+
+def test_collapse_local_markdown_links_handles_parentheses_in_paths() -> None:
+    text = "Check [f](/Users/me/My Folder (old)/file.py) for details."
+
+    result = collapse_local_markdown_links(text)
+
+    assert result == "Check f for details."
