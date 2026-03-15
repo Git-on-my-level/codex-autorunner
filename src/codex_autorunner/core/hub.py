@@ -66,6 +66,7 @@ from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
 from .pma_reactive import PmaReactiveStore
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
+from .pma_thread_store import PmaThreadStore
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
@@ -1230,6 +1231,42 @@ class HubSupervisor:
             )
             return result
 
+    def _archive_bound_pma_threads(
+        self,
+        *,
+        worktree_repo_id: str,
+        worktree_path: Path,
+    ) -> list[str]:
+        store = PmaThreadStore(self.hub_config.root)
+        archived_thread_ids: list[str] = []
+        seen_ids: set[str] = set()
+        canonical_worktree = worktree_path.resolve()
+
+        for thread in store.list_threads(status="active", limit=None):
+            managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+            if not managed_thread_id or managed_thread_id in seen_ids:
+                continue
+
+            thread_repo_id = str(thread.get("repo_id") or "").strip()
+            workspace_root = str(thread.get("workspace_root") or "").strip()
+            matches_repo = thread_repo_id == worktree_repo_id
+            matches_workspace = False
+            if workspace_root:
+                try:
+                    matches_workspace = (
+                        Path(workspace_root).resolve() == canonical_worktree
+                    )
+                except Exception:
+                    matches_workspace = False
+            if not matches_repo and not matches_workspace:
+                continue
+
+            store.archive_thread(managed_thread_id)
+            archived_thread_ids.append(managed_thread_id)
+            seen_ids.add(managed_thread_id)
+
+        return archived_thread_ids
+
     def _ensure_worktree_clean_for_archive(
         self, *, worktree_repo_id: str, worktree_path: Path
     ) -> None:
@@ -1509,6 +1546,10 @@ class HubSupervisor:
                 archive_note=archive_note,
                 force=force_archive,
             )
+        self._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
+        )
 
         repos_by_id = {repo.id: repo for repo in manifest.repos}
         effective_destination = resolve_effective_repo_destination(entry, repos_by_id)
@@ -1610,6 +1651,10 @@ class HubSupervisor:
             archive_note=archive_note,
             force=False,
         )
+        self._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
+        )
         if result is None:
             raise ValueError("Archive failed unexpectedly")
         return {
@@ -1658,6 +1703,10 @@ class HubSupervisor:
             worktree_of=entry.worktree_of,
             note=archive_note,
             source_path=entry.path,
+        )
+        self._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
         )
         return {
             "snapshot_id": result.snapshot_id,

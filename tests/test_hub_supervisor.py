@@ -626,6 +626,8 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
     dispatch_dir = worktree_car / "runs" / "run-1" / "dispatch"
     dispatch_dir.mkdir(parents=True, exist_ok=True)
     (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     app = create_hub_app(hub_root)
     client = TestClient(app)
@@ -661,6 +663,9 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
         item for item in repos_after_resp.json()["repos"] if item["id"] == worktree.id
     )
     assert worktree_after["has_car_state"] is False
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "archived"
 
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
@@ -1766,10 +1771,50 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
         start_point="HEAD",
     )
     store = PmaThreadStore(hub_root)
-    store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
     assert not worktree.path.exists()
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "archived"
+
+
+def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/archive-pma-threads",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    repo_bound = store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    workspace_bound = store.create_thread("opencode", worktree.path)
+    other = store.create_thread("codex", base.path, repo_id=base.id)
+
+    payload = supervisor.archive_worktree(worktree_repo_id=worktree.id)
+
+    assert payload["status"] in {"complete", "partial"}
+    archived_repo_bound = store.get_thread(repo_bound["managed_thread_id"])
+    archived_workspace_bound = store.get_thread(workspace_bound["managed_thread_id"])
+    untouched = store.get_thread(other["managed_thread_id"])
+    assert archived_repo_bound is not None
+    assert archived_repo_bound["lifecycle_status"] == "archived"
+    assert archived_workspace_bound is not None
+    assert archived_workspace_bound["lifecycle_status"] == "archived"
+    assert untouched is not None
+    assert untouched["lifecycle_status"] == "active"
 
 
 def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):

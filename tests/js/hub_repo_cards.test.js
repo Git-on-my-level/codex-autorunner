@@ -129,7 +129,7 @@ test("worktree cards show archive state action when CAR state is present", () =>
   assert.match(text, /Cleanup/);
 });
 
-test("repo cards collapse ticket-flow pma threads into a compact summary row", () => {
+test("repo cards collapse pma-managed threads into a compact summary row", () => {
   const now = new Date().toISOString();
   __hubTest.setHubChannelEntries([
     {
@@ -155,12 +155,12 @@ test("repo cards collapse ticket-flow pma threads into a compact summary row", (
       key: "pma_thread:two",
       repo_id: "stablecoin-engine",
       source: "pma_thread",
-      display: "ticket-flow:codex",
+      display: "pma:codex",
       seen_at: now,
       provenance: {
         source: "pma_thread",
         managed_thread_id: "two",
-        thread_kind: "ticket_flow",
+        thread_kind: "interactive",
       },
     },
   ]);
@@ -198,9 +198,10 @@ test("repo cards collapse ticket-flow pma threads into a compact summary row", (
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
   assert.match(text, /Personal Workspace \/ #car-1/);
-  assert.match(text, /Ticket flow threads/);
+  assert.match(text, /PMA threads/);
   assert.match(text, /2 threads/);
   assert.doesNotMatch(text, /ticket-flow:codex/);
+  assert.doesNotMatch(text, /pma:codex/);
 });
 
 test("agent workspace cards render runtime, managed path, and lifecycle actions", () => {

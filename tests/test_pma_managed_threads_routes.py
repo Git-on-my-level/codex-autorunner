@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import ActiveWorkSummary, ThreadTarget
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_threads
 from tests.conftest import write_test_config
@@ -243,6 +244,40 @@ def test_list_managed_threads_supports_normalized_status_filter(hub_env) -> None
     assert len(ready_resp.json()["threads"]) == 1
     assert active_resp.status_code == 200
     assert len(active_resp.json()["threads"]) == 1
+
+
+def test_list_managed_threads_includes_ticket_flow_threads_for_repo(hub_env) -> None:
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="ticket-flow:codex",
+        metadata={
+            "thread_kind": "ticket_flow",
+            "flow_type": "ticket_flow",
+            "run_id": "run-123",
+        },
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        list_resp = client.get(
+            "/hub/pma/threads",
+            params={"repo_id": hub_env.repo_id, "limit": 200},
+        )
+
+    assert list_resp.status_code == 200
+    threads = list_resp.json()["threads"]
+    thread = next(
+        item
+        for item in threads
+        if item["managed_thread_id"] == created["managed_thread_id"]
+    )
+    assert thread["name"] == "ticket-flow:codex"
+    assert thread["repo_id"] == hub_env.repo_id
+    assert thread["resource_kind"] == "repo"
+    assert thread["resource_id"] == hub_env.repo_id
 
 
 def test_get_managed_thread_returns_created_thread(hub_env) -> None:

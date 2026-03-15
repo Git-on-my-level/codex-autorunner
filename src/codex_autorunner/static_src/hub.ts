@@ -1531,19 +1531,8 @@ function channelPmaDetails(channel: HubChannelEntry): string {
   return parts.join(" · ");
 }
 
-function channelThreadKind(channel: HubChannelEntry): string {
-  return String(
-    channel.provenance?.thread_kind || channel.meta?.thread_kind || ""
-  )
-    .trim()
-    .toLowerCase();
-}
-
-function isTicketFlowPmaChannel(channel: HubChannelEntry): boolean {
-  if (channelSource(channel) !== "pma_thread") return false;
-  if (channelThreadKind(channel) === "ticket_flow") return true;
-  const label = channelDisplayLabel(channel).toLowerCase();
-  return label.startsWith("ticket-flow:");
+function isManagedPmaChannel(channel: HubChannelEntry): boolean {
+  return channelSource(channel) === "pma_thread";
 }
 
 function channelDisplayLabel(channel: HubChannelEntry): string {
@@ -1632,7 +1621,7 @@ function channelSummarySubline(
   </div>`;
 }
 
-function ticketFlowPmaSummaryMarkup(
+function pmaSummaryMarkup(
   channels: HubChannelEntry[],
   { lastActivity = "" }: { lastActivity?: string } = {}
 ): string {
@@ -1653,7 +1642,7 @@ function ticketFlowPmaSummaryMarkup(
     <div class="hub-chat-binding-row hub-chat-binding-row-compact">
       <div class="hub-chat-binding-main">
         ${channelSourceBadgeMarkup(channels[0])}
-        <span class="hub-chat-binding-label">Ticket flow threads</span>
+        <span class="hub-chat-binding-label">PMA threads</span>
       </div>
       <div class="hub-chat-binding-meta muted small">${escapeHtml(metaParts.join(" · "))}</div>
     </div>
@@ -1966,11 +1955,11 @@ function renderRepos(repos: HubRepo[]): void {
     const lastActivity = formatLastActivity(repo);
     const runDuration =
       repo.last_run_finished_at ? formatRunDuration(repo.last_run_duration_seconds) : "";
-    const ticketFlowPmaChannels = inlineChannels.filter((channel) =>
-      isTicketFlowPmaChannel(channel)
+    const pmaChannels = inlineChannels.filter((channel) =>
+      isManagedPmaChannel(channel)
     );
     const visibleChannels = inlineChannels.filter(
-      (channel) => !isTicketFlowPmaChannel(channel)
+      (channel) => !isManagedPmaChannel(channel)
     );
     const primaryChannel = visibleChannels[0] || null;
     const infoItems: string[] = [];
@@ -1998,8 +1987,8 @@ function renderRepos(repos: HubRepo[]): void {
           lastActivity,
           additionalCount: Math.max(0, visibleChannels.length - 1),
         })
-      : ticketFlowPmaChannels.length > 0
-      ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels, { lastActivity })
+      : pmaChannels.length > 0
+      ? pmaSummaryMarkup(pmaChannels, { lastActivity })
       : infoItems.length > 0
       ? `<div class="hub-repo-subline"><span class="hub-repo-info-line">${escapeHtml(
           infoItems.join(" · ")
@@ -2023,11 +2012,11 @@ function renderRepos(repos: HubRepo[]): void {
         `;
       })
       .join("");
-    const ticketFlowPmaBlock = primaryChannel && ticketFlowPmaChannels.length > 0
-      ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels)
+    const pmaBlock = primaryChannel && pmaChannels.length > 0
+      ? pmaSummaryMarkup(pmaChannels)
       : "";
-    const inlineChannelBlock = overflowChannelRows || ticketFlowPmaBlock
-      ? `<div class="hub-chat-binding-block">${ticketFlowPmaBlock}${overflowChannelRows}</div>`
+    const inlineChannelBlock = overflowChannelRows || pmaBlock
+      ? `<div class="hub-chat-binding-block">${pmaBlock}${overflowChannelRows}</div>`
       : "";
 
     const setupBadge =

@@ -1166,18 +1166,8 @@ function channelPmaDetails(channel) {
     }
     return parts.join(" · ");
 }
-function channelThreadKind(channel) {
-    return String(channel.provenance?.thread_kind || channel.meta?.thread_kind || "")
-        .trim()
-        .toLowerCase();
-}
-function isTicketFlowPmaChannel(channel) {
-    if (channelSource(channel) !== "pma_thread")
-        return false;
-    if (channelThreadKind(channel) === "ticket_flow")
-        return true;
-    const label = channelDisplayLabel(channel).toLowerCase();
-    return label.startsWith("ticket-flow:");
+function isManagedPmaChannel(channel) {
+    return channelSource(channel) === "pma_thread";
 }
 function channelDisplayLabel(channel) {
     if (typeof channel.display === "string" && channel.display.trim()) {
@@ -1245,7 +1235,7 @@ function channelSummarySubline(channel, { lastActivity = "", additionalCount = 0
     ${activityMarkup}
   </div>`;
 }
-function ticketFlowPmaSummaryMarkup(channels, { lastActivity = "" } = {}) {
+function pmaSummaryMarkup(channels, { lastActivity = "" } = {}) {
     if (!channels.length)
         return "";
     const count = channels.length;
@@ -1263,7 +1253,7 @@ function ticketFlowPmaSummaryMarkup(channels, { lastActivity = "" } = {}) {
     <div class="hub-chat-binding-row hub-chat-binding-row-compact">
       <div class="hub-chat-binding-main">
         ${channelSourceBadgeMarkup(channels[0])}
-        <span class="hub-chat-binding-label">Ticket flow threads</span>
+        <span class="hub-chat-binding-label">PMA threads</span>
       </div>
       <div class="hub-chat-binding-meta muted small">${escapeHtml(metaParts.join(" · "))}</div>
     </div>
@@ -1503,8 +1493,8 @@ function renderRepos(repos) {
         const runSummary = formatRunSummary(repo);
         const lastActivity = formatLastActivity(repo);
         const runDuration = repo.last_run_finished_at ? formatRunDuration(repo.last_run_duration_seconds) : "";
-        const ticketFlowPmaChannels = inlineChannels.filter((channel) => isTicketFlowPmaChannel(channel));
-        const visibleChannels = inlineChannels.filter((channel) => !isTicketFlowPmaChannel(channel));
+        const pmaChannels = inlineChannels.filter((channel) => isManagedPmaChannel(channel));
+        const visibleChannels = inlineChannels.filter((channel) => !isManagedPmaChannel(channel));
         const primaryChannel = visibleChannels[0] || null;
         const infoItems = [];
         if (!primaryChannel) {
@@ -1529,8 +1519,8 @@ function renderRepos(repos) {
                 lastActivity,
                 additionalCount: Math.max(0, visibleChannels.length - 1),
             })
-            : ticketFlowPmaChannels.length > 0
-                ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels, { lastActivity })
+            : pmaChannels.length > 0
+                ? pmaSummaryMarkup(pmaChannels, { lastActivity })
                 : infoItems.length > 0
                     ? `<div class="hub-repo-subline"><span class="hub-repo-info-line">${escapeHtml(infoItems.join(" · "))}</span></div>`
                     : "";
@@ -1550,11 +1540,11 @@ function renderRepos(repos) {
         `;
         })
             .join("");
-        const ticketFlowPmaBlock = primaryChannel && ticketFlowPmaChannels.length > 0
-            ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels)
+        const pmaBlock = primaryChannel && pmaChannels.length > 0
+            ? pmaSummaryMarkup(pmaChannels)
             : "";
-        const inlineChannelBlock = overflowChannelRows || ticketFlowPmaBlock
-            ? `<div class="hub-chat-binding-block">${ticketFlowPmaBlock}${overflowChannelRows}</div>`
+        const inlineChannelBlock = overflowChannelRows || pmaBlock
+            ? `<div class="hub-chat-binding-block">${pmaBlock}${overflowChannelRows}</div>`
             : "";
         const setupBadge = (repo.worktree_setup_commands || []).length > 0 && repo.kind === "base"
             ? '<span class="pill pill-small pill-success">setup</span>'
