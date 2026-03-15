@@ -53,6 +53,8 @@ class RuntimeThreadRunEventState:
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
     message_roles_seen: bool = False
+    opencode_tool_status: dict[str, str] = field(default_factory=dict)
+    opencode_patch_hashes: set[str] = field(default_factory=set)
 
     def note_stream_text(self, text: str) -> None:
         if isinstance(text, str) and text:
@@ -266,10 +268,7 @@ def _normalize_message_event(
         return _assistant_stream_events(params, state)
 
     if method == "message.part.updated":
-        content = _extract_output_delta(params)
-        if not content:
-            return []
-        return state.note_message_part_text(_extract_part_message_id(params), content)
+        return _normalize_message_part_updated(params, state)
 
     if method in _APPROVAL_METHODS:
         request_id = _request_id_for_event(method, params)
@@ -395,6 +394,49 @@ def _assistant_stream_events(
     ]
 
 
+def _normalize_message_part_updated(
+    params: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    part = _extract_message_part(params)
+    if not part:
+        content = _extract_output_delta(params)
+        if not content:
+            return []
+        return state.note_message_part_text(_extract_part_message_id(params), content)
+
+    if bool(part.get("ignored")):
+        return []
+
+    part_type = str(part.get("type") or "").strip().lower()
+    if part_type in {"", "text"}:
+        content = _extract_output_delta(params)
+        if not content:
+            return []
+        return state.note_message_part_text(_extract_part_message_id(params), content)
+
+    if part_type == "reasoning":
+        content = _extract_opencode_reasoning_text(params, part, state)
+        if not content:
+            return []
+        return [RunNotice(timestamp=now_iso(), kind="thinking", message=content)]
+
+    if part_type == "tool":
+        return _normalize_opencode_tool_part(part, state)
+
+    if part_type == "patch":
+        return _normalize_opencode_patch_part(part, state)
+
+    if part_type == "usage":
+        usage = _extract_opencode_usage_part(part)
+        if usage is None:
+            return []
+        state.token_usage = dict(usage)
+        return [TokenUsage(timestamp=now_iso(), usage=dict(usage))]
+
+    return []
+
+
 def _output_delta_events(
     method: str,
     params: dict[str, Any],
@@ -429,6 +471,17 @@ def _coerce_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _extract_message_part(params: dict[str, Any]) -> dict[str, Any]:
+    properties = _coerce_dict(params.get("properties"))
+    part = properties.get("part")
+    if isinstance(part, dict):
+        return part
+    part = params.get("part")
+    if isinstance(part, dict):
+        return part
+    return {}
+
+
 def _extract_output_delta(params: dict[str, Any]) -> str:
     for key in ("content", "delta", "text", "output"):
         value = params.get(key)
@@ -451,6 +504,51 @@ def _extract_output_delta(params: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_output_delta_only(params: dict[str, Any]) -> str:
+    for key in ("content", "delta", "text", "output"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            nested_text = value.get("text")
+            if isinstance(nested_text, str) and nested_text:
+                return nested_text
+    properties = _coerce_dict(params.get("properties"))
+    delta = _coerce_dict(properties.get("delta"))
+    delta_text = delta.get("text")
+    if isinstance(delta_text, str) and delta_text:
+        return delta_text
+    return ""
+
+
+def _extract_opencode_reasoning_text(
+    params: dict[str, Any],
+    part: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+) -> str:
+    key = None
+    for candidate in ("id", "partId"):
+        value = part.get(candidate)
+        if isinstance(value, str) and value:
+            key = value
+            break
+
+    full_text = part.get("text")
+    if isinstance(full_text, str) and full_text:
+        if key:
+            state.reasoning_buffers[key] = full_text
+        return full_text
+
+    delta_text = _extract_output_delta_only(params)
+    if not delta_text:
+        return ""
+    if key:
+        combined = f"{state.reasoning_buffers.get(key, '')}{delta_text}"
+        state.reasoning_buffers[key] = combined
+        return combined
+    return delta_text
+
+
 def _output_delta_type_for_method(method: str) -> str:
     normalized = method.strip().lower()
     if normalized in {
@@ -459,6 +557,139 @@ def _output_delta_type_for_method(method: str) -> str:
     }:
         return RUN_EVENT_DELTA_TYPE_LOG_LINE
     return RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
+
+
+def _normalize_opencode_tool_part(
+    part: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    tool_name = part.get("tool") or part.get("name") or ""
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        return []
+
+    tool_id = part.get("callID") or part.get("id") or tool_name
+    tool_id_text = str(tool_id).strip() if tool_id is not None else tool_name.strip()
+    state_payload = _coerce_dict(part.get("state"))
+    status = state_payload.get("status")
+    status_text = str(status).strip().lower() if isinstance(status, str) else ""
+    last_status = state.opencode_tool_status.get(tool_id_text)
+
+    input_payload: dict[str, Any] = {}
+    for key in ("input", "command", "cmd", "script"):
+        value = part.get(key)
+        if isinstance(value, str) and value.strip():
+            input_payload[key] = value.strip()
+            break
+    if not input_payload:
+        args = part.get("args") or part.get("arguments") or part.get("params")
+        if isinstance(args, dict):
+            for key in ("command", "cmd", "script", "input"):
+                value = args.get(key)
+                if isinstance(value, str) and value.strip():
+                    input_payload[key] = value.strip()
+                    break
+        elif isinstance(args, str) and args.strip():
+            input_payload["input"] = args.strip()
+
+    events: list[RunEvent] = []
+    if last_status is None or status_text in {"running", "pending"}:
+        if last_status != status_text:
+            events.append(
+                ToolCall(
+                    timestamp=now_iso(),
+                    tool_name=tool_name.strip(),
+                    tool_input=input_payload,
+                )
+            )
+
+    if status_text == "completed" and last_status != status_text:
+        exit_code = state_payload.get("exitCode")
+        if exit_code is not None:
+            events.append(
+                OutputDelta(
+                    timestamp=now_iso(),
+                    content=f"exit {exit_code}",
+                    delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
+                )
+            )
+    elif status_text in {"error", "failed"} and last_status != status_text:
+        error = state_payload.get("error")
+        if isinstance(error, dict):
+            error = error.get("message") or error.get("error")
+        if isinstance(error, str) and error.strip():
+            events.append(
+                OutputDelta(
+                    timestamp=now_iso(),
+                    content=f"error: {error.strip()}",
+                    delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
+                )
+            )
+
+    if status_text:
+        state.opencode_tool_status[tool_id_text] = status_text
+    return events
+
+
+def _normalize_opencode_patch_part(
+    part: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+) -> list[RunEvent]:
+    patch_hash = part.get("hash")
+    if isinstance(patch_hash, str) and patch_hash:
+        if patch_hash in state.opencode_patch_hashes:
+            return []
+        state.opencode_patch_hashes.add(patch_hash)
+
+    lines: list[str] = []
+    files = part.get("files")
+    if isinstance(files, list) and files:
+        lines.append("file update")
+        for entry in files:
+            if isinstance(entry, dict):
+                path = entry.get("path") or entry.get("file")
+                action = entry.get("status") or "M"
+                if isinstance(path, str) and path:
+                    lines.append(f"{action} {path}")
+            elif isinstance(entry, str) and entry:
+                lines.append(f"M {entry}")
+    elif isinstance(files, str) and files:
+        lines.extend(["file update", f"M {files}"])
+
+    return [
+        OutputDelta(
+            timestamp=now_iso(),
+            content=line,
+            delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
+        )
+        for line in lines
+    ]
+
+
+def _extract_opencode_usage_part(part: dict[str, Any]) -> Optional[dict[str, Any]]:
+    usage: dict[str, Any] = {}
+
+    total_tokens = part.get("totalTokens")
+    if isinstance(total_tokens, int):
+        usage["totalTokens"] = total_tokens
+    input_tokens = part.get("inputTokens")
+    if isinstance(input_tokens, int):
+        usage["inputTokens"] = input_tokens
+    cached_tokens = part.get("cachedInputTokens")
+    if isinstance(cached_tokens, int):
+        usage["cachedInputTokens"] = cached_tokens
+    output_tokens = part.get("outputTokens")
+    if isinstance(output_tokens, int):
+        usage["outputTokens"] = output_tokens
+    reasoning_tokens = part.get("reasoningTokens")
+    if isinstance(reasoning_tokens, int):
+        usage["reasoningTokens"] = reasoning_tokens
+    context_window = part.get("modelContextWindow")
+    if isinstance(context_window, int):
+        usage["modelContextWindow"] = context_window
+
+    if usage:
+        return usage
+    return None
 
 
 def _normalize_tool_name(

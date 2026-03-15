@@ -196,6 +196,146 @@ async def test_normalize_runtime_thread_raw_event_handles_opencode_message_part_
     assert state.best_assistant_text() == "OK"
 
 
+async def test_normalize_runtime_thread_raw_event_maps_opencode_reasoning_parts_to_thinking() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "reason-1",
+                                "type": "reasoning",
+                                "text": "thinking through the repo",
+                            },
+                            "delta": {"text": "thinking through the repo"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], RunNotice)
+    assert output[0].kind == "thinking"
+    assert output[0].message == "thinking through the repo"
+    assert state.best_assistant_text() == ""
+
+
+async def test_normalize_runtime_thread_raw_event_maps_opencode_tool_parts_to_tool_calls() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "tool": "bash",
+                                "input": "pwd",
+                                "state": {"status": "running"},
+                            }
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], ToolCall)
+    assert output[0].tool_name == "bash"
+    assert output[0].tool_input == {"input": "pwd"}
+
+
+async def test_normalize_runtime_thread_raw_event_maps_opencode_patch_parts_to_log_lines() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "patch-1",
+                                "type": "patch",
+                                "hash": "abc123",
+                                "files": ["src/example.py"],
+                            }
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 2
+    assert all(isinstance(event, OutputDelta) for event in output)
+    assert output[0].delta_type == "log_line"
+    assert output[0].content == "file update"
+    assert output[1].content == "M src/example.py"
+
+
+async def test_normalize_runtime_thread_raw_event_maps_opencode_usage_parts_to_token_usage() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "usage-1",
+                                "type": "usage",
+                                "totalTokens": 12,
+                                "inputTokens": 3,
+                                "outputTokens": 9,
+                            }
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], TokenUsage)
+    assert output[0].usage == {
+        "totalTokens": 12,
+        "inputTokens": 3,
+        "outputTokens": 9,
+    }
+    assert state.token_usage == output[0].usage
+
+
 async def test_normalize_runtime_thread_raw_event_ignores_user_message_part_updates() -> (
     None
 ):
