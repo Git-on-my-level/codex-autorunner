@@ -154,8 +154,6 @@ def list_unseen_ticket_flow_dispatches(
         workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
     )
     seq_dirs = list(reversed(_iter_dispatch_history_dirs(paths.dispatch_history_dir)))
-    if not seq_dirs:
-        return []
 
     last_seen_seq: Optional[int] = None
     if last_run_id == latest.id and isinstance(last_dispatch_seq, str):
@@ -163,8 +161,25 @@ def list_unseen_ticket_flow_dispatches(
         if raw_seq.isdigit():
             last_seen_seq = int(raw_seq)
 
-    snapshots: list[TicketFlowDispatchSnapshot] = []
     run_is_paused = latest.status == FlowRunStatus.PAUSED
+    if not seq_dirs:
+        if not run_is_paused:
+            return []
+        if last_run_id == latest.id and last_dispatch_seq == "paused":
+            return []
+        return [
+            TicketFlowDispatchSnapshot(
+                run_id=latest.id,
+                dispatch_seq="paused",
+                dispatch_markdown=format_pause_reason(latest),
+                dispatch_dir=None,
+                mode="pause",
+                is_handoff=True,
+                allow_resume_hint=True,
+            )
+        ]
+
+    snapshots: list[TicketFlowDispatchSnapshot] = []
     for dispatch_dir in seq_dirs:
         seq = dispatch_dir.name
         if last_seen_seq is not None and int(seq) <= last_seen_seq:

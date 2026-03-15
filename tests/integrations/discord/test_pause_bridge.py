@@ -457,6 +457,61 @@ async def test_pause_bridge_surfaces_latest_invalid_dispatch_notice(
 
 
 @pytest.mark.anyio
+async def test_pause_bridge_keeps_reason_fallback_when_history_is_empty(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    db_path = workspace / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        if store.get_flow_run(run_id) is None:
+            store.create_flow_run(
+                run_id,
+                "ticket_flow",
+                input_data={},
+                state={"ticket_engine": {"reason": "Waiting for the user to reply."}},
+            )
+        store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._scan_and_enqueue_pause_notifications()
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) == 1
+        content = str(queued[0].payload_json.get("content", ""))
+        assert f"Ticket flow paused (run {run_id}). Latest dispatch #paused:" in content
+        assert "Reason: Waiting for the user to reply." in content
+        assert "Use `/car flow resume` to continue." in content
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["last_dispatch_run_id"] == run_id
+        assert binding["last_dispatch_seq"] == "paused"
+        assert binding["last_pause_run_id"] == run_id
+        assert binding["last_pause_dispatch_seq"] == "paused"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
     tmp_path: Path,
 ) -> None:
