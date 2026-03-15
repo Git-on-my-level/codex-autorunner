@@ -7,19 +7,16 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...core.ports.run_event import (
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
-    RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
-    ApprovalRequested,
-    Completed,
-    Failed,
-    OutputDelta,
-    RunNotice,
     TokenUsage,
-    ToolCall,
 )
 from ...core.state import now_iso
 from ...core.text_delta_coalescer import TextDeltaCoalescer
+from ..chat.managed_thread_progress import (
+    ProgressRuntimeState,
+    apply_run_event_to_progress_tracker,
+    progress_item_id_for_log_line,
+)
 from .constants import (
     PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
     STREAM_PREVIEW_PREFIX,
@@ -435,9 +432,9 @@ class TelegramNotificationHandlers:
         is_log_line = delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE
         if not is_log_line and not has_explicit_delta_type and method == "outputDelta":
             # Older emitters may omit deltaType; preserve in-place token usage updates.
-            is_log_line = _progress_item_id_for_log_line(delta) is not None
+            is_log_line = progress_item_id_for_log_line(delta) is not None
         if is_log_line:
-            item_id = _progress_item_id_for_log_line(delta)
+            item_id = progress_item_id_for_log_line(delta)
             if item_id:
                 if not tracker.update_action_by_item_id(
                     item_id,
@@ -505,87 +502,6 @@ class TelegramNotificationHandlers:
         if tracker is None:
             return
 
-        if isinstance(run_event, OutputDelta):
-            if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
-                return
-            delta = run_event.content
-            if not isinstance(delta, str) or not delta.strip():
-                return
-            if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:
-                latest_output = tracker.latest_output_text().strip()
-                incoming_output = delta.strip()
-                if latest_output and (
-                    incoming_output == latest_output
-                    or incoming_output.startswith(latest_output)
-                ):
-                    tracker.note_output(delta)
-                else:
-                    tracker.note_output(delta, new_segment=True)
-                tracker.end_output_segment()
-            elif run_event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
-                item_id = _progress_item_id_for_log_line(delta)
-                if item_id:
-                    if not tracker.update_action_by_item_id(
-                        item_id,
-                        delta,
-                        "update",
-                        label="output",
-                    ):
-                        tracker.add_action(
-                            "output",
-                            delta,
-                            "update",
-                            item_id=item_id,
-                            normalize_text=False,
-                        )
-                else:
-                    tracker.note_output(delta, new_segment=True)
-                    tracker.end_output_segment()
-            else:
-                tracker.note_output(delta)
-            await self._schedule_progress_edit(turn_key)
-            return
-
-        if isinstance(run_event, ToolCall):
-            tool_name = run_event.tool_name.strip() if run_event.tool_name else ""
-            tracker.note_tool(tool_name or "Tool call")
-            await self._schedule_progress_edit(turn_key)
-            return
-
-        if isinstance(run_event, ApprovalRequested):
-            summary = run_event.description.strip() if run_event.description else ""
-            tracker.note_approval(summary or "Approval requested")
-            await self._schedule_progress_edit(turn_key)
-            return
-
-        if isinstance(run_event, RunNotice):
-            notice = run_event.message.strip() if run_event.message else ""
-            if not notice:
-                notice = run_event.kind.strip() if run_event.kind else "notice"
-            if run_event.kind in {"thinking", "reasoning"}:
-                tracker.note_thinking(notice)
-                await self._schedule_progress_edit(turn_key)
-                return
-            if run_event.kind == "interrupted":
-                tracker.note_error(notice or "Interrupted")
-                tracker.clear_transient_action()
-                tracker.set_label("cancelled")
-                tracker.finalized = True
-                await self._emit_progress_edit(turn_key, force=True)
-                self._clear_turn_progress(turn_key)
-                return
-            if run_event.kind == "failed":
-                tracker.note_error(notice or "Turn failed")
-                tracker.clear_transient_action()
-                tracker.set_label("failed")
-                tracker.finalized = True
-                await self._emit_progress_edit(turn_key, force=True)
-                self._clear_turn_progress(turn_key)
-                return
-            tracker.add_action("notice", notice, "update")
-            await self._schedule_progress_edit(turn_key)
-            return
-
         if isinstance(run_event, TokenUsage):
             usage_payload = run_event.usage
             if isinstance(usage_payload, dict):
@@ -595,28 +511,23 @@ class TelegramNotificationHandlers:
                 await self._schedule_progress_edit(turn_key)
             return
 
-        if isinstance(run_event, Completed):
-            final_text = run_event.final_message or ""
-            if final_text:
-                tracker.drop_terminal_output_if_duplicate(final_text)
-            tracker.clear_transient_action()
-            tracker.set_label("done")
+        outcome = apply_run_event_to_progress_tracker(
+            tracker,
+            run_event,
+            runtime_state=ProgressRuntimeState(),
+        )
+        if not outcome.changed:
+            return
+        if outcome.terminal:
             tracker.finalized = True
-            await self._emit_progress_edit(turn_key, force=True, render_mode="final")
+            await self._emit_progress_edit(
+                turn_key,
+                force=outcome.force,
+                render_mode=outcome.render_mode,
+            )
             self._clear_turn_progress(turn_key)
             return
-
-        if isinstance(run_event, Failed):
-            message = run_event.error_message or "Turn failed"
-            tracker.note_error(message)
-            tracker.clear_transient_action()
-            if "interrupt" in message.lower():
-                tracker.set_label("cancelled")
-            else:
-                tracker.set_label("failed")
-            tracker.finalized = True
-            await self._emit_progress_edit(turn_key, force=True)
-            self._clear_turn_progress(turn_key)
+        await self._schedule_progress_edit(turn_key)
 
     async def _ensure_turn_progress_lock(
         self, turn_key: tuple[str, str]
@@ -781,12 +692,3 @@ def _extract_turn_completed_final_text(params: dict[str, Any]) -> str:
             if isinstance(value, str) and value.strip():
                 return value
     return ""
-
-
-def _progress_item_id_for_log_line(content: str) -> Optional[str]:
-    normalized = " ".join(content.split()).strip().lower()
-    if normalized.startswith("tokens used"):
-        return "opencode:token-usage"
-    if normalized.startswith("context window:"):
-        return "opencode:context-window"
-    return None

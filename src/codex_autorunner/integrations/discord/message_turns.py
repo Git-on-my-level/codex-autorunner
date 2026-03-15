@@ -48,8 +48,6 @@ from ...core.pma_transcripts import PmaTranscriptStore
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-    RUN_EVENT_DELTA_TYPE_LOG_LINE,
-    RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     ApprovalRequested,
     Completed,
     Failed,
@@ -64,6 +62,10 @@ from ...integrations.chat.collaboration_policy import CollaborationEvaluationRes
 from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
 from ...integrations.chat.models import ChatMessageEvent
+from ..chat.managed_thread_progress import (
+    ProgressRuntimeState,
+    apply_run_event_to_progress_tracker,
+)
 from ..chat.progress_primitives import TurnProgressTracker, render_progress_text
 from ..chat.turn_metrics import (
     _extract_context_usage_percent,
@@ -92,108 +94,13 @@ class DiscordMessageTurnResult:
     elapsed_seconds: Optional[float] = None
 
 
-@dataclass
-class _DiscordProgressRuntimeState:
-    final_message: str = ""
-    error_message: Optional[str] = None
-
-
-def _progress_item_id_for_log_line(content: str) -> Optional[str]:
-    normalized = " ".join(content.split()).strip().lower()
-    if normalized.startswith("tokens used"):
-        return "opencode:token-usage"
-    if normalized.startswith("context window:"):
-        return "opencode:context-window"
-    return None
-
-
 async def _apply_discord_progress_run_event(
     tracker: TurnProgressTracker,
     run_event: Any,
     *,
-    runtime_state: _DiscordProgressRuntimeState,
+    runtime_state: ProgressRuntimeState,
     edit_progress: Any,
 ) -> None:
-    if isinstance(run_event, OutputDelta):
-        if run_event.delta_type == RUN_EVENT_DELTA_TYPE_USER_MESSAGE:
-            return
-        if isinstance(run_event.content, str) and run_event.content.strip():
-            if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:
-                latest_output = tracker.latest_output_text().strip()
-                incoming_output = run_event.content.strip()
-                if latest_output and (
-                    incoming_output == latest_output
-                    or incoming_output.startswith(latest_output)
-                ):
-                    tracker.note_output(run_event.content)
-                else:
-                    tracker.note_output(run_event.content, new_segment=True)
-                tracker.end_output_segment()
-            elif run_event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
-                item_id = _progress_item_id_for_log_line(run_event.content)
-                if item_id:
-                    if not tracker.update_action_by_item_id(
-                        item_id,
-                        run_event.content,
-                        "update",
-                        label="output",
-                    ):
-                        tracker.add_action(
-                            "output",
-                            run_event.content,
-                            "update",
-                            item_id=item_id,
-                            normalize_text=False,
-                        )
-                else:
-                    tracker.note_output(run_event.content, new_segment=True)
-                    tracker.end_output_segment()
-            else:
-                tracker.note_output(run_event.content)
-            await edit_progress()
-        return
-
-    if isinstance(run_event, ToolCall):
-        tool_name = run_event.tool_name.strip() if run_event.tool_name else ""
-        tracker.note_tool(tool_name or "Tool call")
-        await edit_progress()
-        return
-
-    if isinstance(run_event, ApprovalRequested):
-        summary = run_event.description.strip() if run_event.description else ""
-        tracker.note_approval(summary or "Approval requested")
-        await edit_progress()
-        return
-
-    if isinstance(run_event, RunNotice):
-        notice = run_event.message.strip() if run_event.message else ""
-        if not notice:
-            notice = run_event.kind.strip() if run_event.kind else "notice"
-        if run_event.kind in {"thinking", "reasoning"}:
-            tracker.note_thinking(notice)
-        elif run_event.kind == "interrupted":
-            if tracker.label == "done" and runtime_state.final_message:
-                return
-            runtime_state.error_message = notice or "Turn interrupted"
-            tracker.note_error(runtime_state.error_message)
-            tracker.clear_transient_action()
-            tracker.set_label("cancelled")
-            await edit_progress(force=True, remove_components=True)
-            return
-        elif run_event.kind == "failed":
-            if tracker.label == "done" and runtime_state.final_message:
-                return
-            runtime_state.error_message = notice or "Turn failed"
-            tracker.note_error(runtime_state.error_message)
-            tracker.clear_transient_action()
-            tracker.set_label("failed")
-            await edit_progress(force=True, remove_components=True)
-            return
-        else:
-            tracker.add_action("notice", notice, "update")
-        await edit_progress()
-        return
-
     if isinstance(run_event, TokenUsage):
         usage_payload = run_event.usage
         if isinstance(usage_payload, dict):
@@ -201,33 +108,18 @@ async def _apply_discord_progress_run_event(
                 usage_payload
             )
         return
-
-    if isinstance(run_event, Completed):
-        runtime_state.final_message = (
-            run_event.final_message or runtime_state.final_message
-        )
-        if runtime_state.final_message.strip():
-            tracker.drop_terminal_output_if_duplicate(runtime_state.final_message)
-        tracker.clear_transient_action()
-        tracker.set_label("done")
-        await edit_progress(
-            force=True,
-            remove_components=True,
-            render_mode="final",
-        )
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        run_event,
+        runtime_state=runtime_state,
+    )
+    if not outcome.changed:
         return
-
-    if isinstance(run_event, Failed):
-        if tracker.label == "done" and runtime_state.final_message:
-            return
-        runtime_state.error_message = run_event.error_message or "Turn failed"
-        tracker.note_error(runtime_state.error_message)
-        tracker.clear_transient_action()
-        if "interrupt" in runtime_state.error_message.lower():
-            tracker.set_label("cancelled")
-        else:
-            tracker.set_label("failed")
-        await edit_progress(force=True, remove_components=True)
+    await edit_progress(
+        force=outcome.force,
+        remove_components=outcome.remove_components,
+        render_mode=outcome.render_mode,
+    )
 
 
 async def resolve_bound_workspace_root(
@@ -1529,7 +1421,7 @@ async def _run_discord_orchestrated_turn_for_message(
     progress_rendered: Optional[str] = None
     progress_last_updated = 0.0
     progress_heartbeat_task: Optional[asyncio.Task[None]] = None
-    runtime_state = _DiscordProgressRuntimeState()
+    runtime_state = ProgressRuntimeState()
     active_progress_labels = {"working", "queued", "running", "review"}
 
     async def _edit_progress(
