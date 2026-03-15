@@ -116,7 +116,16 @@ if [ -f src/codex_autorunner/static/assets.json ]; then
 fi
 
 echo "Running tests (pytest)..."
-"$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto
+FAST_TEST_JUNIT="$(mktemp)"
+cleanup_fast_test_junit() {
+  rm -f "$FAST_TEST_JUNIT"
+}
+trap cleanup_fast_test_junit EXIT
+"$PYTHON_BIN" -m pytest -m "not integration and not slow" -n auto --junitxml "$FAST_TEST_JUNIT"
+"$PYTHON_BIN" scripts/report_fast_test_budget.py \
+  "$FAST_TEST_JUNIT" \
+  --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-0.5}" \
+  --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
 
 echo "Dead-code check (heuristic)..."
 "$PYTHON_BIN" scripts/deadcode.py --check

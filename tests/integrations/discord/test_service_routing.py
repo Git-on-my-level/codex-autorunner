@@ -2740,6 +2740,7 @@ async def test_component_interaction_model_select_prompts_effort_for_codex(
 @pytest.mark.anyio
 async def test_component_interaction_model_effort_select_updates_model(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2765,6 +2766,17 @@ async def test_component_interaction_model_effort_select_updates_model(
     )
     service._pending_model_effort["channel-1:user-1"] = "gpt-5.3-codex"
     service._pending_model_effort["channel-1:user-2"] = "openai/gpt-4o"
+
+    async def _list_model_items_for_binding_stub(
+        **_kwargs: Any,
+    ) -> list[tuple[str, str]]:
+        return [("gpt-5.3-codex", "gpt-5.3-codex")]
+
+    monkeypatch.setattr(
+        service,
+        "_list_model_items_for_binding",
+        _list_model_items_for_binding_stub,
+    )
 
     try:
         await service.run_forever()
