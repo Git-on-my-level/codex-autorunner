@@ -311,6 +311,23 @@ class TestCheckOpenCodeHealth:
 
 
 class TestCheckZeroClawHealth:
+    def test_supervisor_short_circuits_preflight(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class ContextWithSupervisor:
+            zeroclaw_supervisor = object()
+            config = object()
+
+        def _unexpected_preflight(_config):
+            raise AssertionError("preflight should not run when supervisor exists")
+
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+            _unexpected_preflight,
+        )
+
+        assert _check_zeroclaw_health(ContextWithSupervisor()) is True
+
     def test_preflight_ready_context(
         self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
     ) -> None:

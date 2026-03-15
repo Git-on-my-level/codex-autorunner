@@ -96,12 +96,12 @@ def _make_zeroclaw_harness(ctx: Any) -> AgentHarness:
 
 
 def _check_zeroclaw_health(ctx: Any) -> bool:
-    config = getattr(ctx, "config", None)
-    if config is not None:
-        return zeroclaw_runtime_preflight(config).status == "ready"
     supervisor = getattr(ctx, "zeroclaw_supervisor", None)
     if supervisor is not None:
         return True
+    config = getattr(ctx, "config", None)
+    if config is not None:
+        return zeroclaw_runtime_preflight(config).status == "ready"
     binary = getattr(ctx, "zeroclaw_binary", None)
     if isinstance(binary, str) and binary.strip():
         return zeroclaw_binary_available(
