@@ -381,6 +381,7 @@ def test_ticket_flow_archive_searches_full_ancestor_chain_for_hub_manifest(
 
 def test_ticket_flow_archive_scans_all_active_threads(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = _setup_repo(tmp_path)
     run_id = "91919191-9191-9191-9191-919191919191"
@@ -388,25 +389,53 @@ def test_ticket_flow_archive_scans_all_active_threads(
     run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    store = PmaThreadStore(tmp_path)
-    for index in range(2005):
-        store.create_thread(
-            "codex",
-            repo_root.resolve(),
-            repo_id="repo",
-            name=f"pma:codex:{index}",
-        )
-    matching = store.create_thread(
-        "codex",
-        repo_root.resolve(),
-        repo_id="repo",
-        name="ticket-flow:codex",
-        metadata={
-            "thread_kind": "ticket_flow",
-            "flow_type": "ticket_flow",
-            "run_id": run_id,
-        },
-    )
+    observed: dict[str, object] = {}
+    archived_thread_ids: list[str] = []
+    matching_thread_id = "matching-thread"
+
+    def fake_list_threads(
+        self: PmaThreadStore,
+        *,
+        agent: str | None = None,
+        status: str | None = None,
+        normalized_status: str | None = None,
+        repo_id: str | None = None,
+        limit: int | None = 200,
+    ) -> list[dict[str, object]]:
+        observed["agent"] = agent
+        observed["status"] = status
+        observed["normalized_status"] = normalized_status
+        observed["repo_id"] = repo_id
+        observed["limit"] = limit
+        return [
+            {
+                "managed_thread_id": "non-ticket-flow-thread",
+                "workspace_root": str(repo_root.resolve()),
+                "repo_id": None,
+                "name": "pma:codex:0",
+                "metadata": {},
+            },
+            {
+                "managed_thread_id": matching_thread_id,
+                "workspace_root": str(repo_root.resolve()),
+                "repo_id": None,
+                "name": "ticket-flow:codex",
+                "metadata": {
+                    "thread_kind": "ticket_flow",
+                    "flow_type": "ticket_flow",
+                    "run_id": run_id,
+                },
+            },
+        ]
+
+    def fake_archive_thread(
+        self: PmaThreadStore,
+        managed_thread_id: str,
+    ) -> None:
+        archived_thread_ids.append(managed_thread_id)
+
+    monkeypatch.setattr(PmaThreadStore, "list_threads", fake_list_threads)
+    monkeypatch.setattr(PmaThreadStore, "archive_thread", fake_archive_thread)
 
     payload = archive_flow_run_artifacts(
         repo_root,
@@ -415,8 +444,11 @@ def test_ticket_flow_archive_scans_all_active_threads(
         delete_run=True,
     )
 
+    assert observed["status"] == "active"
+    assert observed["limit"] is None
     assert payload["archived_pma_threads"] == 1
-    assert payload["archived_pma_thread_ids"] == [matching["managed_thread_id"]]
+    assert payload["archived_pma_thread_ids"] == [matching_thread_id]
+    assert archived_thread_ids == [matching_thread_id]
 
 
 def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
