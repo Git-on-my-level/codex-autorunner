@@ -167,3 +167,30 @@ async def test_normalize_runtime_thread_raw_event_deduplicates_identical_stream_
     )
 
     assert state.assistant_stream_text == "partial reply"
+
+
+async def test_normalize_runtime_thread_raw_event_handles_opencode_message_part_updates() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {"type": "text", "text": "OK"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert isinstance(output[0], OutputDelta)
+    assert output[0].content == "OK"
+    assert state.best_assistant_text() == "OK"

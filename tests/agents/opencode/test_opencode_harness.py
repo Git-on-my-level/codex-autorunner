@@ -94,3 +94,61 @@ async def test_opencode_harness_wait_for_turn_reports_errors() -> None:
     assert result.status == "error"
     assert result.assistant_text == ""
     assert result.errors == ["stream failed"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_collects_message_part_updates() -> None:
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"type":"text","text":"OK"}}}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "OK"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_merges_cumulative_message_part_updates() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"type":"text","text":"Hello"}}}',
+                    ),
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"type":"text","text":"Hello world"}}}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "Hello world"
+    assert result.errors == []

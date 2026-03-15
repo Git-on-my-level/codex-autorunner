@@ -184,6 +184,9 @@ def _normalize_message_event(
     if method == "item/agentMessage/delta":
         return _assistant_stream_events(params, state)
 
+    if method == "message.part.updated":
+        return _assistant_stream_events(params, state)
+
     if method in _APPROVAL_METHODS:
         request_id = _request_id_for_event(method, params)
         summary = _approval_summary(method, params)
@@ -341,6 +344,20 @@ def _extract_output_delta(params: dict[str, Any]) -> str:
         value = params.get(key)
         if isinstance(value, str) and value:
             return value
+        if isinstance(value, dict):
+            nested_text = value.get("text")
+            if isinstance(nested_text, str) and nested_text:
+                return nested_text
+    properties = _coerce_dict(params.get("properties"))
+    delta = _coerce_dict(properties.get("delta"))
+    delta_text = delta.get("text")
+    if isinstance(delta_text, str) and delta_text:
+        return delta_text
+    part = _coerce_dict(properties.get("part"))
+    if part.get("type") == "text":
+        part_text = part.get("text")
+        if isinstance(part_text, str) and part_text:
+            return part_text
     return ""
 
 

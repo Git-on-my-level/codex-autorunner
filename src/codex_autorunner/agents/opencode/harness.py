@@ -56,6 +56,18 @@ def _extract_delta_text(params: dict[str, Any]) -> Optional[str]:
         text = _normalize_message_text(params.get(key))
         if text:
             return text
+    properties = params.get("properties")
+    if isinstance(properties, dict):
+        delta = properties.get("delta")
+        if isinstance(delta, dict):
+            text = _normalize_message_text(delta)
+            if text:
+                return text
+        part = properties.get("part")
+        if isinstance(part, dict) and part.get("type") == "text":
+            text = _normalize_message_text(part.get("text"))
+            if text:
+                return text
     message = params.get("message")
     if isinstance(message, dict):
         return _extract_delta_text(message)
@@ -101,18 +113,41 @@ def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any
 
 
 def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[str]]:
-    output_chunks: list[str] = []
+    output_text = ""
     completed_message: Optional[str] = None
     errors: list[str] = []
+
+    def _merge_stream(current: str, incoming: str) -> str:
+        if not incoming:
+            return current
+        if not current:
+            return incoming
+        if incoming == current:
+            return current
+        if len(incoming) > len(current) and incoming.startswith(current):
+            return incoming
+        max_overlap = min(len(current), max(len(incoming) - 1, 0))
+        for overlap in range(max_overlap, 0, -1):
+            if current[-overlap:] == incoming[:overlap]:
+                return f"{current}{incoming[overlap:]}"
+        return f"{current}{incoming}"
+
     for payload in payloads:
         method, params = _unwrap_harness_payload(payload)
         method_lower = method.lower()
 
-        if method in {"message.delta", "message.updated", "message.completed"}:
+        if method in {
+            "message.delta",
+            "message.updated",
+            "message.completed",
+            "message.part.updated",
+        }:
             text = _extract_delta_text(params) or _extract_completed_text(params)
             if text:
                 if method == "message.delta":
-                    output_chunks.append(text)
+                    output_text = _merge_stream(output_text, text)
+                elif method == "message.part.updated":
+                    output_text = _merge_stream(output_text, text)
                 else:
                     completed_message = text
             continue
@@ -120,13 +155,13 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
         if method == "item/agentMessage/delta" or method == "turn/streamDelta":
             text = _extract_delta_text(params)
             if text:
-                output_chunks.append(text)
+                output_text = _merge_stream(output_text, text)
             continue
 
         if "outputdelta" in method_lower:
             text = _extract_delta_text(params)
             if text:
-                output_chunks.append(text)
+                output_text = _merge_stream(output_text, text)
             continue
 
         if method == "item/completed":
@@ -142,7 +177,7 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             if error:
                 errors.append(error)
 
-    assistant_text = (completed_message or "".join(output_chunks)).strip()
+    assistant_text = (completed_message or output_text).strip()
     return assistant_text, errors
 
 
